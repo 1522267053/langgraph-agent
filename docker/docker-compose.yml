@@ -1,0 +1,38 @@
+version: '3'
+services:
+  langgraph_agent_env:
+    image: langgraph_agent_env
+    container_name: langgraph_agent_env
+    build:
+      context: ..
+      dockerfile: ./docker/python_env/Dockerfile
+    environment:
+      TZ: Asia/Shanghai
+    networks:
+      - langgraph_agent_network
+
+  langgraph_agent:
+    image: langgraph_agent
+    container_name: langgraph_agent
+    volumes:
+      - /home/langgraph_agent/upload:/app/upload
+    build:
+      context: ..
+      dockerfile: ./docker/server/Dockerfile
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "18000:8000"
+    restart: no
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - langgraph_agent_env
+    networks:
+      - langgraph_agent_network
+
+# 使用docker-compose-env.yml的网络
+networks:
+  langgraph_agent_network:
+    name: langgraph_agent_network
+    external: true

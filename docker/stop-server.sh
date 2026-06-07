@@ -1,0 +1,3 @@
+docker stop langgraph_agent
+docker rm langgraph_agent
+docker rmi langgraph_agent

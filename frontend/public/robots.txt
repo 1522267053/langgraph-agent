@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /openapi.json
+Disallow: /docs
+Disallow: /redoc
+
+Sitemap: https://agent.wuguobang.site/sitemap.xml

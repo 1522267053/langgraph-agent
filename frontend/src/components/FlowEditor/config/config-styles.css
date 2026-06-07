@@ -1,0 +1,53 @@
+.config-section {
+  margin-bottom: 16px;
+}
+
+.section-title {
+  font-size: 13px;
+  color: #606266;
+  margin-bottom: 12px;
+  font-weight: 500;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.config-hint {
+  margin-top: 12px;
+  padding: 8px;
+  background: #fdf6ec;
+  border-radius: 4px;
+}
+
+.input-variables,
+.output-variables {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.input-variable,
+.output-variable {
+  background: #f5f7fa;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.variable-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.variable-index {
+  font-size: 12px;
+  font-weight: 500;
+  color: #409eff;
+}
+
+.unit-label {
+  margin-left: 8px;
+  color: #909399;
+  font-size: 12px;
+}

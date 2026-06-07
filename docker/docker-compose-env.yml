@@ -1,0 +1,44 @@
+version: '3'
+services:
+  redis:
+    image: library/redis:6
+    container_name: redis
+    volumes:
+      # 把容器里的data映射到本地机器的/home/redis/data目录中
+      - /home/redis/data:/data
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass your_password_here
+    environment:
+      TZ: Asia/Shanghai
+    restart: always
+    networks:
+      - langgraph_agent_network
+
+  mysql8:
+    image: library/mysql:8
+    container_name: mysql8
+    volumes:
+      - /home/mysql8/data:/var/lib/mysql
+      - /home/mysql8/conf:/etc/mysql/conf.d
+      - /home/mysql8/logs:/var/log/mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: langgraph_agent
+      MYSQL_USER: langgraph_agent
+      MYSQL_PASSWORD: your_password_here
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_connections=1000
+    restart: always
+    networks:
+      - langgraph_agent_network
+
+networks:
+  langgraph_agent_network:
+    name: langgraph_agent_network
+    driver: bridge
