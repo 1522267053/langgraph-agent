@@ -27,6 +27,16 @@ else:
 
 engine = create_async_engine(settings.database_url, **_engine_kwargs)
 
+if settings.is_sqlite:
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_wal(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.close()
+
+
 # 创建异步会话工厂
 AsyncSessionLocal = async_sessionmaker(
     engine,
