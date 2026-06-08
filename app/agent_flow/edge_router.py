@@ -32,12 +32,12 @@ def wire_edges(
         iteration_guard: 是否启用迭代保护（主图为 True，子图为 False）
     """
     edges_by_source: dict[str, list[FlowEdge]] = {}
-    seen_edges: set[tuple[str, str]] = set()
+    seen_edges: set[tuple[str, str, str]] = set()
 
     for edge in edges:
         source = edge.source_node_key
         target = edge.target_node_key
-        edge_id = (source, target)
+        edge_id = (source, target, getattr(edge, "source_handle", None) or "")
         if edge_id in seen_edges:
             continue
         seen_edges.add(edge_id)
