@@ -7,7 +7,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -98,8 +98,8 @@ class AgentApi:
                 data=AgentFlowResponse.model_validate(flow), msg="查询成功"
             )
 
-        @self.router.get(
-            "/{id}/sessions",
+        @self.router.post(
+            "/{id}/sessions/page",
             response_model=ApiResponse[AgentSessionListResponse],
             summary="获取会话列表",
         )
@@ -170,8 +170,8 @@ class AgentApi:
                 data={"content": deleted_content}, msg="删除成功"
             )
 
-        @self.router.get(
-            "/{id}/sessions/{session_id}/messages",
+        @self.router.post(
+            "/{id}/sessions/{session_id}/messages/page",
             response_model=ApiResponse[AgentMessageListResponse],
             summary="获取消息历史",
         )
@@ -179,7 +179,7 @@ class AgentApi:
             id: int,
             session_id: int,
             before_id: Optional[int] = None,
-            limit: int = Query(default=20, ge=1, le=100),
+            limit: int = 20,
             db: AsyncSession = Depends(get_db),
         ):
             """获取会话的消息历史，支持分页加载"""
