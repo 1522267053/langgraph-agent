@@ -193,7 +193,7 @@ class ExecutionApi(
                 ):
                     yield event
 
-            return await create_sse_response(stream())
+            return await create_sse_response(stream(), detach_on_disconnect=True)
 
         @self.router.post(
             "/human-input-stream/{execution_id}", summary="流式恢复执行(SSE)"
@@ -210,7 +210,7 @@ class ExecutionApi(
                 ):
                     yield event
 
-            return await create_sse_response(stream())
+            return await create_sse_response(stream(), detach_on_disconnect=True)
 
         @self.router.get("/wait-status/{execution_id}", summary="获取等待状态详情")
         async def get_wait_status(

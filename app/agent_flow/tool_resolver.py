@@ -148,32 +148,9 @@ def filter_tools_by_intent(
         if logic == "or":
             if any(match_results):
                 result.append((tool_node, edge))
-            else:
-                logger.debug(
-                    "工具边过滤: [%s→%s] intent_filters=%s 不匹配, actual=%s, logic=or",
-                    edge.source_node_key,
-                    edge.target_node_key,
-                    intent_filters,
-                    {
-                        k: state.get_variable(f"_intent_route_{k}", "")
-                        for k in intent_filters
-                    },
-                )
         else:
             if all(match_results):
                 result.append((tool_node, edge))
-            else:
-                logger.debug(
-                    "工具边过滤: [%s→%s] intent_filters=%s 不匹配, "
-                    "actual=%s, logic=and",
-                    edge.source_node_key,
-                    edge.target_node_key,
-                    intent_filters,
-                    {
-                        k: state.get_variable(f"_intent_route_{k}", "")
-                        for k in intent_filters
-                    },
-                )
 
     return result
 

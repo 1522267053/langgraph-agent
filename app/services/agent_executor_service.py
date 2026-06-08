@@ -44,6 +44,7 @@ class AgentExecutorService(BaseExecutorService):
         super().__init__()
         self._compressing_sessions: set[int] = set()
         self._running_sessions: set[int] = set()
+        self._pending_save_sessions: set[int] = set()
 
     def _validate_agent_flow(self, flow: Flow) -> None:
         """
@@ -465,7 +466,6 @@ class AgentExecutorService(BaseExecutorService):
 
     async def chat_stream(
         self,
-        db: AsyncSession,
         session_id: int,
         user_message: str,
         params: dict | None = None,
@@ -474,13 +474,21 @@ class AgentExecutorService(BaseExecutorService):
         执行Agent对话（流式）
 
         Args:
-            db: 数据库会话
             session_id: 会话ID
             user_message: 用户消息
+            params: 额外参数
 
         Yields:
             SSE事件字典
         """
+        from app.config.database import AsyncSessionLocal
+
+        db: AsyncSession | None = None
+        try:
+            db = AsyncSessionLocal()
+        except Exception as e:
+            yield FlowEventFactory.error(f"数据库连接失败: {e}")
+            return
         # 获取会话
         session = await self._get_session(db, session_id)
         if not session:
@@ -566,6 +574,11 @@ class AgentExecutorService(BaseExecutorService):
 
                 stream_mode_type, event_data = event
 
+                # 检查用户是否主动中断
+                if interrupt_service.is_agent_interrupted(session_id):
+                    logger.info(f"Agent会话被中断: session_id={session_id}")
+                    break
+
                 # 处理 custom 事件（流式输出）
                 if stream_mode_type == "custom":
                     if hasattr(event_data, "to_dict"):
@@ -637,10 +650,11 @@ class AgentExecutorService(BaseExecutorService):
                 await self._update_session_title(db, session_id, title)
 
             # 发送完成事件
+            is_interrupted = interrupt_service.is_agent_interrupted(session_id)
             yield FlowEventFactory.flow_done(
                 execution_id=session_id,
                 output_data={"content": llm_content},
-                status="success",
+                status="cancelled" if is_interrupted else "success",
             )
             interrupt_service.clear_agent_interrupted(session_id)
 
@@ -651,6 +665,7 @@ class AgentExecutorService(BaseExecutorService):
             interrupt_service.clear_agent_interrupted(session_id)
         finally:
             self._running_sessions.discard(session_id)
+            self._pending_save_sessions.discard(session_id)
             from app.services.tool_approval_service import tool_approval_service
 
             tool_approval_service.cancel(session_id)
@@ -658,6 +673,11 @@ class AgentExecutorService(BaseExecutorService):
                 await self._cleanup_thread_checkpoint(session_id)
             except Exception as cleanup_err:
                 logger.warning(f"清理checkpoint失败: {cleanup_err}")
+            if db is not None:
+                try:
+                    await db.close()
+                except Exception:
+                    pass
 
     async def _update_session_title(
         self, db: AsyncSession, session_id: int, title: str
@@ -703,19 +723,26 @@ class AgentExecutorService(BaseExecutorService):
         )
 
     async def resume_stream(
-        self, db: AsyncSession, session_id: int, human_input: str
+        self, session_id: int, human_input: str
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         恢复Agent执行（流式）
 
         Args:
-            db: 数据库会话
             session_id: 会话ID
             human_input: 人工输入
 
         Yields:
             SSE事件字典
         """
+        from app.config.database import AsyncSessionLocal
+
+        db: AsyncSession | None = None
+        try:
+            db = AsyncSessionLocal()
+        except Exception as e:
+            yield FlowEventFactory.error(f"数据库连接失败: {e}")
+            return
         # 获取会话
         session = await self._get_session(db, session_id)
         if not session:
@@ -755,6 +782,11 @@ class AgentExecutorService(BaseExecutorService):
                     continue
 
                 stream_mode_type, event_data = event
+
+                # 检查用户是否主动中断
+                if interrupt_service.is_agent_interrupted(session_id):
+                    logger.info(f"Agent会话恢复被中断: session_id={session_id}")
+                    break
 
                 # 处理 custom 事件
                 if stream_mode_type == "custom":
@@ -806,10 +838,11 @@ class AgentExecutorService(BaseExecutorService):
                     )
 
             # 发送完成事件
+            is_interrupted = interrupt_service.is_agent_interrupted(session_id)
             yield FlowEventFactory.flow_done(
                 execution_id=session_id,
                 output_data={"content": llm_content},
-                status="success",
+                status="cancelled" if is_interrupted else "success",
             )
             interrupt_service.clear_agent_interrupted(session_id)
 
@@ -819,6 +852,7 @@ class AgentExecutorService(BaseExecutorService):
             yield FlowEventFactory.error(f"执行失败: {error_msg}")
             interrupt_service.clear_agent_interrupted(session_id)
         finally:
+            self._pending_save_sessions.discard(session_id)
             from app.services.tool_approval_service import tool_approval_service
 
             tool_approval_service.cancel(session_id)
@@ -826,12 +860,31 @@ class AgentExecutorService(BaseExecutorService):
                 await self._cleanup_thread_checkpoint(session_id)
             except Exception as cleanup_err:
                 logger.warning(f"清理checkpoint失败: {cleanup_err}")
+            if db is not None:
+                try:
+                    await db.close()
+                except Exception:
+                    pass
 
     COMPRESS_MARKER = "[上下文压缩]"
 
     async def is_compressing_session(self, db: AsyncSession, session_id: int) -> bool:
         """检查指定会话是否正在压缩上下文"""
         return session_id in self._compressing_sessions
+
+    def is_pending_save(self, session_id: int) -> bool:
+        """检查指定会话是否正在等待中断后的消息保存完成"""
+        return session_id in self._pending_save_sessions
+
+    async def _run_compress_background(self, session_id: int) -> None:
+        """后台压缩任务，独立于 HTTP 请求生命周期，前端通过轮询 /compressing 检测完成"""
+        from app.config.database import AsyncSessionLocal
+
+        try:
+            async with AsyncSessionLocal() as db:
+                await self.compress_session(db, session_id)
+        except Exception as e:
+            logger.error(f"后台压缩会话上下文失败: session_id={session_id}, error={e}")
 
     async def compress_session(
         self, db: AsyncSession, session_id: int

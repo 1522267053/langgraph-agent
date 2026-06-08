@@ -23,9 +23,30 @@ _DISCONNECT_ERRORS = (
 )
 
 
+async def _pump_to_queue(
+    gen: AsyncGenerator,
+    queue: asyncio.Queue,
+    end_event_types: tuple,
+) -> None:
+    """将 generator 事件泵入 queue，用于 detach 模式下后台继续执行"""
+    try:
+        async for event in gen:
+            event_type = event.get("type", "unknown")
+            await queue.put(event)
+            if event_type in end_event_types:
+                return
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.warning("后台 generator 执行异常", exc_info=True)
+    finally:
+        await queue.put(None)
+
+
 async def create_sse_response(
     stream_generator: AsyncGenerator[dict, None],
     end_event_types: tuple = DEFAULT_END_EVENT_TYPES,
+    detach_on_disconnect: bool = False,
 ) -> EventSourceResponse:
     """
     创建 SSE 响应
@@ -33,6 +54,7 @@ async def create_sse_response(
     Args:
         stream_generator: 异步事件生成器，yield 格式为 {"type": "xxx", "data": {...}}
         end_event_types: 结束事件类型列表，遇到这些事件后停止
+        detach_on_disconnect: SSE 断开时不中断 generator，让其在后台继续执行
 
     Returns:
         EventSourceResponse: SSE 响应对象
@@ -49,32 +71,52 @@ async def create_sse_response(
     """
 
     async def event_generator():
-        try:
-            async for event in stream_generator:
-                event_type = event.get("type", "unknown")
-                event_data = event.get("data", {})
+        if detach_on_disconnect:
+            queue: asyncio.Queue = asyncio.Queue()
+            asyncio.create_task(
+                _pump_to_queue(stream_generator, queue, end_event_types)
+            )
+            try:
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    event_type = event.get("type", "unknown")
+                    event_data = event.get("data", {})
+                    yield {
+                        "event": event_type,
+                        "data": json.dumps(event_data, ensure_ascii=False),
+                    }
+            except asyncio.CancelledError:
+                pass
 
+        else:
+            try:
+                async for event in stream_generator:
+                    event_type = event.get("type", "unknown")
+                    event_data = event.get("data", {})
+                    yield {
+                        "event": event_type,
+                        "data": json.dumps(event_data, ensure_ascii=False),
+                    }
+                    if event_type in end_event_types:
+                        break
+            except asyncio.CancelledError:
+                await stream_generator.aclose()
+            except _DISCONNECT_ERRORS:
+                try:
+                    await stream_generator.aclose()
+                except Exception:
+                    pass
+                logger.debug("SSE 客户端已断开连接")
+            except Exception as e:
+                from app.agent_flow.flow_event import FlowEventFactory
+
+                error_event = FlowEventFactory.error(str(e))
                 yield {
-                    "event": event_type,
-                    "data": json.dumps(event_data, ensure_ascii=False),
+                    "event": error_event["type"],
+                    "data": json.dumps(error_event["data"], ensure_ascii=False),
                 }
-
-                if event_type in end_event_types:
-                    break
-
-        except asyncio.CancelledError:
-            await stream_generator.aclose()
-        except _DISCONNECT_ERRORS:
-            await stream_generator.aclose()
-            logger.debug("SSE 客户端已断开连接")
-        except Exception as e:
-            from app.agent_flow.flow_event import FlowEventFactory
-
-            error_event = FlowEventFactory.error(str(e))
-            yield {
-                "event": error_event["type"],
-                "data": json.dumps(error_event["data"], ensure_ascii=False),
-            }
 
     return EventSourceResponse(
         event_generator(), ping=30, ping_message_factory=lambda: {"comment": "ping"}

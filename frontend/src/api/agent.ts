@@ -165,6 +165,15 @@ export const agentApi = {
    */
   compressStatus(agentId: number, sessionId: number) {
     return get<{ compressing: boolean }>(`/agent/${agentId}/sessions/${sessionId}/compressing`)
+  },
+
+  /**
+   * 查询会话是否正在等待中断后的消息保存
+   * @param agentId Agent ID
+   * @param sessionId 会话ID
+   */
+  saveStatus(agentId: number, sessionId: number) {
+    return get<{ saving: boolean }>(`/agent/${agentId}/sessions/${sessionId}/saving`)
   }
 }
 

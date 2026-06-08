@@ -3,6 +3,7 @@ Agent API 路由
 处理Agent相关的路由定义
 """
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -27,7 +28,6 @@ from app.schemas.agent_schema import (
     AgentResumeRequest,
     AgentFlowResponse,
     AgentFlowListResponse,
-    AgentCompressResponse,
 )
 from app.schemas.base_schema import ApiResponse
 
@@ -201,7 +201,6 @@ class AgentApi:
             id: int,
             session_id: int,
             request: AgentChatRequest,
-            db: AsyncSession = Depends(get_db),
         ):
             """
             发送消息（Server-Sent Events）
@@ -219,28 +218,27 @@ class AgentApi:
 
             async def stream():
                 async for event in agent_executor_service.chat_stream(
-                    db, session_id, request.content, request.params
+                    session_id, request.content, request.params
                 ):
                     yield event
 
-            return await create_sse_response(stream())
+            return await create_sse_response(stream(), detach_on_disconnect=True)
 
         @self.router.post("/{id}/sessions/{session_id}/resume", summary="恢复执行(SSE)")
         async def resume(
             id: int,
             session_id: int,
             request: AgentResumeRequest,
-            db: AsyncSession = Depends(get_db),
         ):
             """恢复执行（人工输入后）"""
 
             async def stream():
                 async for event in agent_executor_service.resume_stream(
-                    db, session_id, request.human_input
+                    session_id, request.human_input
                 ):
                     yield event
 
-            return await create_sse_response(stream())
+            return await create_sse_response(stream(), detach_on_disconnect=True)
 
         @self.router.post("/{id}/sessions/{session_id}/cancel", summary="中断会话执行")
         async def cancel_session(
@@ -253,6 +251,7 @@ class AgentApi:
 
             interrupt_service.set_agent_interrupted(session_id)
             tool_approval_service.cancel(session_id)
+            agent_executor_service._pending_save_sessions.add(session_id)
             # 同步清理 checkpoint，防止与 DB 消息不同步
             try:
                 await agent_executor_service._cleanup_thread_checkpoint(session_id)
@@ -274,20 +273,33 @@ class AgentApi:
 
         @self.router.post(
             "/{id}/sessions/{session_id}/compress",
-            response_model=ApiResponse[AgentCompressResponse],
             summary="压缩会话上下文",
         )
         async def compress_session(
             id: int, session_id: int, db: AsyncSession = Depends(get_db)
         ):
-            """用LLM总结旧对话，保留最近10条消息"""
+            """启动后台压缩任务，前端通过轮询 /compressing 检测完成"""
             session = await agent_executor_service._get_session(db, session_id)
             if not session:
                 return ApiResponse.error(msg="会话不存在")
-            result = await agent_executor_service.compress_session(db, session_id)
-            if result.get("error"):
-                return ApiResponse.error(msg=result["error"])
-            return ApiResponse.success(data=result, msg="压缩完成")
+            if session_id in agent_executor_service._compressing_sessions:
+                return ApiResponse.error(msg="正在压缩中，请稍后再试")
+            asyncio.create_task(
+                agent_executor_service._run_compress_background(session_id)
+            )
+            return ApiResponse.success(msg="开始压缩")
+
+        @self.router.get(
+            "/{id}/sessions/{session_id}/saving",
+            response_model=ApiResponse,
+            summary="查询会话是否正在等待中断后的消息保存",
+        )
+        async def check_saving(
+            id: int, session_id: int
+        ):
+            """前端中断后轮询此接口，等待后端 save_to_db 完成后再刷新消息"""
+            saving = agent_executor_service.is_pending_save(session_id)
+            return ApiResponse.success(data={"saving": saving})
 
         @self.router.get(
             "/{id}/sessions/{session_id}/compressing",

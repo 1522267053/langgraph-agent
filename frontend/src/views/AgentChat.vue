@@ -183,6 +183,7 @@ onUnmounted(() => {
   store.cancelStream()
   store.resetState()
   store.stopCompressPolling()
+  store.stopSavePolling()
   loadMoreObserver?.disconnect()
   loadMoreObserver = null
 })
@@ -349,11 +350,9 @@ async function handleCompress() {
     return
   }
   try {
-    const result = await store.compressSession(agentId.value, store.currentSession.id)
-    if (result && result.removed_count > 0) {
-      ElMessage.success(`已压缩 ${result.removed_count} 条消息`)
-    } else {
-      ElMessage.info('消息不足，无需压缩')
+    const started = await store.compressSession(agentId.value, store.currentSession.id)
+    if (started) {
+      ElMessage.info('正在压缩上下文...')
     }
   } catch {
     // store.compressSession handles error internally
@@ -518,7 +517,7 @@ function handleRejectTools() {
         />
         <template #footer>
           <div style="display: flex; justify-content: space-between; width: 100%">
-            <el-button @click="handleStop">取消执行</el-button>
+            <el-button :disabled="store.isStopping" @click="handleStop">取消执行</el-button>
             <el-button type="primary" @click="handleHumanInputSubmit">提交并继续</el-button>
           </div>
         </template>
@@ -565,6 +564,7 @@ function handleRejectTools() {
         v-model:input-message="inputMessage"
         :fields="dynamicFields"
         :is-streaming="store.isStreaming"
+        :is-stopping="store.isStopping"
         :is-waiting-human="store.isWaitingHuman || store.isWaitingToolApproval"
         :total-tokens="store.totalSessionTokens"
         :latest-prompt-tokens="store.latestPromptTokens"

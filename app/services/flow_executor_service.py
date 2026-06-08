@@ -501,12 +501,8 @@ class FlowExecutorService(BaseExecutorService):
             )
 
         except asyncio.CancelledError:
-            logger.info(f"流程执行被取消: execution_id={execution_id}")
-            try:
-                await asyncio.shield(self._cancel_running_nodes(execution_id))
-            except asyncio.CancelledError:
-                pass
-            interrupt_service.clear_flow_interrupted(execution_id)
+            logger.info(f"流程执行收到 CancelledError（SSE 断开 detach）: execution_id={execution_id}")
+            raise
 
         except Exception as e:
             error_msg = str(e)

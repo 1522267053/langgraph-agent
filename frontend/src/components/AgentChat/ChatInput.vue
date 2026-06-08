@@ -9,6 +9,7 @@ import FilePickerDialog from '@/components/common/FilePickerDialog.vue'
 const props = defineProps<{
   fields: FlowIOField[]
   isStreaming: boolean
+  isStopping?: boolean
   isWaitingHuman: boolean
   totalTokens?: number
   latestPromptTokens?: number
@@ -249,9 +250,15 @@ function handleStop() {
               </template>
               <span class="token-unit">token</span>
             </div>
-            <button v-if="isStreaming" class="stop-btn" @click="handleStop">
+            <button
+              v-if="isStreaming"
+              class="stop-btn"
+              :class="{ disabled: isStopping }"
+              :disabled="isStopping"
+              @click="handleStop"
+            >
               <el-icon :size="16" class="is-loading"><Loading /></el-icon>
-              <span>停止</span>
+              <span>{{ isStopping ? '正在停止中...' : '停止' }}</span>
             </button>
             <button
               v-else
