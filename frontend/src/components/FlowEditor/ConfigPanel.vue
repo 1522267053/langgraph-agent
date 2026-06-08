@@ -28,6 +28,7 @@ import {
   MediaGenConfigComponent,
   IntentRouterConfigComponent
 } from './config'
+import ToolEdgeCondition from './components/ToolEdgeCondition.vue'
 
 import type {
   LlmConfig,
@@ -694,8 +695,35 @@ function updateStartInputSchema(fields: FlowIOField[]): void {
 }
 
 function updateEdgeLabel(): void {
-  if (selectedEdge.value) {
-    selectedEdge.value.label = edgeLabel.value
+  if (!selectedEdge.value) return
+  const storeEdge = store.edges.find(e => e.id === selectedEdge.value!.id)
+  if (storeEdge) {
+    storeEdge.label = edgeLabel.value
+  }
+  selectedEdge.value.label = edgeLabel.value
+}
+
+// 工具边条件（intent_filters）的双向绑定
+const edgeCondition = computed(() => {
+  const edgeId = store.selectedEdge?.id
+  if (!edgeId) return null
+  const storeEdge = store.edges.find(e => e.id === edgeId)
+  const data = storeEdge?.data
+  if (data && typeof data === 'object') {
+    return data as Record<string, unknown>
+  }
+  return null
+})
+
+function updateEdgeCondition(val: Record<string, unknown> | null): void {
+  const edgeId = store.selectedEdge?.id
+  if (!edgeId) return
+  const storeEdge = store.edges.find(e => e.id === edgeId)
+  if (storeEdge) {
+    storeEdge.data = val as Record<string, unknown> | undefined
+  }
+  if (store.selectedEdge) {
+    store.selectedEdge.data = val as Record<string, unknown> | undefined
   }
 }
 
@@ -974,6 +1002,11 @@ async function handleToggleCard(val: boolean | string): Promise<void> {
               <el-input v-model="edgeLabel" @blur="updateEdgeLabel" />
             </el-form-item>
           </el-form>
+          <!-- 工具边条件配置 -->
+          <ToolEdgeCondition
+            :model-value="edgeCondition"
+            @update:model-value="updateEdgeCondition"
+          />
         </div>
       </div>
 
