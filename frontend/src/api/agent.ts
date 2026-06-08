@@ -41,7 +41,7 @@ export const agentApi = {
    * @param pageSize 每页数量
    */
   getSessions(agentId: number, page: number = 1, pageSize: number = 20) {
-    return get<ListResponse<AgentSession>>(`/agent/${agentId}/sessions`, {
+    return post<ListResponse<AgentSession>>(`/agent/${agentId}/sessions/page`, {
       page,
       page_size: pageSize
     })
@@ -86,8 +86,8 @@ export const agentApi = {
   getMessages(agentId: number, sessionId: number, beforeId?: number, limit: number = 20) {
     const params: Record<string, number> = { limit }
     if (beforeId !== undefined) params.before_id = beforeId
-    return get<ListResponse<AgentMessage>>(
-      `/agent/${agentId}/sessions/${sessionId}/messages`,
+    return post<ListResponse<AgentMessage>>(
+      `/agent/${agentId}/sessions/${sessionId}/messages/page`,
       params
     )
   },
