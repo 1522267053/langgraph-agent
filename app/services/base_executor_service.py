@@ -179,9 +179,13 @@ class BaseExecutorService:
         non_loop_node_keys = {n.node_key for n in flow.nodes if "__" not in n.node_key}
 
         deduplicated_edges: List[FlowEdge] = []
-        seen_edge_ids: set[tuple[str, str]] = set()
+        seen_edge_ids: set[tuple[str, str, str]] = set()
         for edge in flow.edges:
-            edge_id = (edge.source_node_key, edge.target_node_key)
+            edge_id = (
+                edge.source_node_key,
+                edge.target_node_key,
+                getattr(edge, "source_handle", None) or "",
+            )
             if edge_id in seen_edge_ids:
                 continue
             seen_edge_ids.add(edge_id)

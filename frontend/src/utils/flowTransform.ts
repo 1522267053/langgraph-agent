@@ -108,7 +108,7 @@ export function vueFlowGraphToBackend(
 } {
   const existingNodeMap = new Map(existingNodes.map(n => [n.node_key, n]))
   const existingEdgeMap = new Map(
-    existingEdges.map(e => [`${e.source_node_key}_${e.target_node_key}`, e])
+    existingEdges.map(e => [`${e.source_node_key}_${e.target_node_key}_${e.source_handle || ''}`, e])
   )
 
   const nodesToCreate: FlowNodeCreate[] = []
@@ -131,10 +131,10 @@ export function vueFlowGraphToBackend(
 
   const edgesToCreate: FlowEdgeCreate[] = []
   const edgesToUpdate: FlowEdgeUpdate[] = []
-  const edgeKeys = new Set(edges.map(e => `${e.source}_${e.target}`))
+  const edgeKeys = new Set(edges.map(e => `${e.source}_${e.target}_${e.sourceHandle || ''}`))
 
   edges.forEach(edge => {
-    const key = `${edge.source}_${edge.target}`
+    const key = `${edge.source}_${edge.target}_${edge.sourceHandle || ''}`
     const existing = existingEdgeMap.get(key)
     if (existing?.id) {
       edgesToUpdate.push(vueFlowEdgeToBackend(edge, flowId, existing.id) as FlowEdgeUpdate)
@@ -145,7 +145,7 @@ export function vueFlowGraphToBackend(
 
   const edgesToDelete = existingEdges
     .filter(e => {
-      const key = `${e.source_node_key}_${e.target_node_key}`
+      const key = `${e.source_node_key}_${e.target_node_key}_${e.source_handle || ''}`
       return !edgeKeys.has(key)
     })
     .map(e => e.id!)

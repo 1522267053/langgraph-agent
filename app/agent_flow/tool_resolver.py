@@ -4,10 +4,13 @@
 解析流程中节点之间的工具连接关系，为LLM节点获取可用的工具
 """
 
+import logging
 import re
 
 from app.agent_flow.flow_context import FlowState
 from app.models.flow_node import FlowNode, NodeType
+
+logger = logging.getLogger(__name__)
 
 
 class FlowLike:
@@ -145,9 +148,32 @@ def filter_tools_by_intent(
         if logic == "or":
             if any(match_results):
                 result.append((tool_node, edge))
+            else:
+                logger.debug(
+                    "工具边过滤: [%s→%s] intent_filters=%s 不匹配, actual=%s, logic=or",
+                    edge.source_node_key,
+                    edge.target_node_key,
+                    intent_filters,
+                    {
+                        k: state.get_variable(f"_intent_route_{k}", "")
+                        for k in intent_filters
+                    },
+                )
         else:
             if all(match_results):
                 result.append((tool_node, edge))
+            else:
+                logger.debug(
+                    "工具边过滤: [%s→%s] intent_filters=%s 不匹配, "
+                    "actual=%s, logic=and",
+                    edge.source_node_key,
+                    edge.target_node_key,
+                    intent_filters,
+                    {
+                        k: state.get_variable(f"_intent_route_{k}", "")
+                        for k in intent_filters
+                    },
+                )
 
     return result
 
