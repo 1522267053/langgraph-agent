@@ -6,6 +6,7 @@
 
 import re
 
+from app.agent_flow.flow_context import FlowState
 from app.models.flow_node import FlowNode, NodeType
 
 
@@ -45,7 +46,25 @@ def get_connected_tool_nodes(flow: FlowLike, llm_node_key: str) -> list[FlowNode
     Returns:
         工具节点列表
     """
-    tool_nodes = []
+    return [node for node, _ in get_connected_tool_edges(flow, llm_node_key)]
+
+
+def get_connected_tool_edges(
+    flow: FlowLike, llm_node_key: str
+) -> list[tuple[FlowNode, object]]:
+    """
+    获取连接到LLM节点的所有工具节点及其边
+
+    按 edge.condition.intent_filters 过滤，仅返回当前意图匹配的工具。
+
+    Args:
+        flow: 流程对象
+        llm_node_key: LLM节点key
+
+    Returns:
+        (工具节点, 边对象) 列表，已按意图条件过滤
+    """
+    tool_edge_pairs: list[tuple[FlowNode, object]] = []
     node_map = {n.node_key: n for n in flow.nodes}
 
     base_key = re.sub(r"_iter_\d+$", "", llm_node_key)
@@ -63,9 +82,74 @@ def get_connected_tool_nodes(flow: FlowLike, llm_node_key: str) -> list[FlowNode
         source_node = node_map.get(edge.source_node_key)
         node_type_list = [member.value for member in NodeType]
         if source_node and source_node.node_type in node_type_list:
-            tool_nodes.append(source_node)
+            tool_edge_pairs.append((source_node, edge))
 
-    return tool_nodes
+    return tool_edge_pairs
+
+
+def filter_tools_by_intent(
+    tool_edge_pairs: list[tuple[FlowNode, object]],
+    state: FlowState,
+) -> list[tuple[FlowNode, object]]:
+    """
+    根据边上的 intent_filters 条件过滤工具节点
+
+    边 condition 格式：
+        {
+            "intent_filters": {
+                "router_node_key_1": ["intent_a", "intent_b"],
+                "router_node_key_2": ["intent_c"]
+            },
+            "filter_logic": "and"  # 或 "or"，默认 "and"
+        }
+
+    - 同一路由器的多个 intent key 之间是 OR 关系
+    - 不同路由器之间由 filter_logic 控制（AND / OR）
+    - intent_filters 为空 / condition 为 null → 不过滤（始终启用）
+
+    Args:
+        tool_edge_pairs: (工具节点, 边) 列表
+        state: 当前流程状态
+
+    Returns:
+        过滤后的 (工具节点, 边) 列表
+    """
+    result: list[tuple[FlowNode, object]] = []
+
+    for tool_node, edge in tool_edge_pairs:
+        condition = getattr(edge, "condition", None)
+        if not condition or not isinstance(condition, dict):
+            result.append((tool_node, edge))
+            continue
+
+        intent_filters = condition.get("intent_filters")
+        if not intent_filters:
+            result.append((tool_node, edge))
+            continue
+
+        logic = condition.get("filter_logic", "and")
+        match_results: list[bool] = []
+
+        for router_key, allowed_values in intent_filters.items():
+            if not allowed_values:
+                continue
+            var_name = f"_intent_route_{router_key}"
+            actual = state.get_variable(var_name, "")
+            match_results.append(actual in allowed_values)
+
+        if not match_results:
+            # 所有过滤器都为空列表 → 不过滤
+            result.append((tool_node, edge))
+            continue
+
+        if logic == "or":
+            if any(match_results):
+                result.append((tool_node, edge))
+        else:
+            if all(match_results):
+                result.append((tool_node, edge))
+
+    return result
 
 
 def is_tool_edge(edge) -> bool:

@@ -267,6 +267,32 @@ POST /api/ai/flow/{id}/edges/batch
 - 启用 LLM 层需有效 `provider/model/api_key`；仅规则层可省略
 - 多分支可汇聚同一 end 节点
 - 输出：`intent`/`raw_response`/`metadata`
+- 路由结果写入两个变量：`variables._intent_route`（通用）+ `variables._intent_route_{node_key}`（节点级）
+
+### 工具边意图过滤
+
+工具边（`source_handle="tools"`）可通过 `condition` 字段控制工具在不同意图下的可见性：
+
+```json
+{
+  "source_node_key": "knowledge_1",
+  "target_node_key": "llm",
+  "source_handle": "tools",
+  "target_handle": "tools",
+  "condition": {
+    "intent_filters": {
+      "intent_router": ["pre_sales", "after_sales"]
+    },
+    "filter_logic": "and"
+  }
+}
+```
+
+- **`intent_filters`**：`{路由器节点key: [意图key列表]}`，同一路由器内多个 key 为 OR 关系
+- **`filter_logic`**：`"and"`（默认）或 `"or"`，控制多路由器间的关系
+- `condition` 为 `null` 或不含 `intent_filters` → 工具始终启用
+- 后端读取 `variables._intent_route_{router_key}` 进行匹配
+- 典型场景：意图路由 → 不同知识库/API 按意图自动切换
 
 ### Loop（内联子节点）
 - 子节点 key 带 `{loop_key}__` 前缀（双下划线），在**同一 flow** 内创建

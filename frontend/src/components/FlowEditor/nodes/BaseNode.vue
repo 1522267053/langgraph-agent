@@ -41,7 +41,8 @@ const label = computed(() => props.data?.label || props.defaultLabel)
 const borderStyle = computed(() => {
   return {
     borderColor: props.color,
-    '--node-color': props.color
+    '--node-color': props.color,
+    ...(nodeMinHeight.value ? { minHeight: nodeMinHeight.value } : {})
   }
 })
 
@@ -66,7 +67,9 @@ const labelColorMap: Record<'green' | 'blue' | 'orange' | 'red', string> = {
   red: '#f56c6c'
 }
 
-const HANDLE_GAP = 30
+const HANDLE_GAP_MAX = 30
+const SAFE_RANGE = 90
+const MIN_PX_GAP = 22
 
 interface HandleOffset {
   handle: HandleConfig
@@ -88,10 +91,11 @@ const handlesWithOffsets = computed<HandleOffset[]>(() => {
   for (const side of ['left', 'right'] as const) {
     const group = sides[side]
     const total = group.length
+    const gap = total > 1 ? Math.min(HANDLE_GAP_MAX, SAFE_RANGE / (total - 1)) : HANDLE_GAP_MAX
     for (let i = 0; i < total; i++) {
       offsetMap.set(
         group[i].globalIndex,
-        `${50 - ((total - 1) * HANDLE_GAP) / 2 + i * HANDLE_GAP}%`
+        `${50 - ((total - 1) * gap) / 2 + i * gap}%`
       )
     }
   }
@@ -99,6 +103,20 @@ const handlesWithOffsets = computed<HandleOffset[]>(() => {
     handle: h,
     top: offsetMap.get(gi) ?? '50%'
   }))
+})
+
+const nodeMinHeight = computed(() => {
+  const sides: Record<string, number> = { left: 0, right: 0 }
+  for (const h of props.handles) {
+    if (h.position === 'left' || h.position === 'right') {
+      sides[h.position]++
+    }
+  }
+  const maxHandles = Math.max(sides.left, sides.right)
+  if (maxHandles <= 1) return undefined
+  const gap = Math.min(HANDLE_GAP_MAX, SAFE_RANGE / (maxHandles - 1))
+  const minHeight = Math.ceil(MIN_PX_GAP * 100 / gap)
+  return minHeight > 70 ? `${minHeight}px` : undefined
 })
 
 function getHandleStyle(

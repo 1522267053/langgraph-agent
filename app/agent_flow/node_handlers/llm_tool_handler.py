@@ -67,7 +67,10 @@ from app.agent_flow.node_handlers.base_handler import (
     BaseNodeConfig,
     NodeVariable,
 )
-from app.agent_flow.tool_resolver import get_connected_tool_nodes
+from app.agent_flow.tool_resolver import (
+    filter_tools_by_intent,
+    get_connected_tool_edges,
+)
 from app.agent_flow.ai_provider import create_provider
 from app.agent_flow.message_buffer import MessageBuffer
 
@@ -451,7 +454,10 @@ class LlmToolNodeHandler(BaseNodeHandler):
         if not self.flow or not self.db_session_factory:
             return tools, [h for _, _, h in prompt_hints]
 
-        tool_nodes = get_connected_tool_nodes(self.flow, node.node_key)
+        # 获取工具节点 + 边对，按意图条件过滤
+        tool_edge_pairs = get_connected_tool_edges(self.flow, node.node_key)
+        tool_edge_pairs = filter_tools_by_intent(tool_edge_pairs, state)
+
         llm_config = {
             "model": cfg.model,
             "api_key": cfg.api_key,
@@ -460,7 +466,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
             "context_length": cfg.context_length,
         }
 
-        for idx, tool_node in enumerate(tool_nodes):
+        for idx, (tool_node, _edge) in enumerate(tool_edge_pairs):
             handler = self.handler_registry.get(tool_node.node_type)
             if not handler:
                 continue

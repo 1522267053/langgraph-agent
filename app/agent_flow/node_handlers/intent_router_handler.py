@@ -195,6 +195,8 @@ class IntentRouterHandler(BaseNodeHandler):
         # ---- 写状态 ----
         route_key = chosen or "default"
         state.set_variable("_intent_route", route_key)
+        # 写入节点级别变量，供工具边按路由器过滤工具可见性
+        state.set_variable(f"_intent_route_{node_key}", route_key)
         state.set_node_variable(node_key, "intent", chosen)
         state.set_node_variable(
             node_key,
