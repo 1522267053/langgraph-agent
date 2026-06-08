@@ -35,7 +35,7 @@ from typing import Optional, List, Any, AsyncGenerator, Dict
 
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import AsyncSessionLocal
@@ -339,13 +339,29 @@ class FlowExecutorService(BaseExecutorService):
                 yield FlowEventFactory.error("当前执行不在等待人工输入状态")
                 return
 
-            human_inputs = execution.human_inputs or {}
-            human_inputs[f"human_input_{len(human_inputs)}"] = human_input
-            execution.human_inputs = human_inputs
-
-            execution.status = ExecutionStatus.RUNNING.value
-            execution.wait_for = None
-            execution.wait_data = None
+            # 乐观锁：CAS 更新，防止并发 resume
+            stmt = (
+                update(FlowExecution)
+                .where(
+                    FlowExecution.id == execution_id,
+                    FlowExecution.status == ExecutionStatus.WAITING_HUMAN.value,
+                )
+                .values(
+                    status=ExecutionStatus.RUNNING.value,
+                    wait_for=None,
+                    wait_data=None,
+                )
+            )
+            result = await db.execute(stmt)
+            if result.rowcount == 0:
+                yield FlowEventFactory.error("执行已被其他请求抢占，请刷新后重试")
+                return
+            await db.refresh(execution)
+            # 追加 human_input 到 human_inputs
+            execution.human_inputs = execution.human_inputs or {}
+            execution.human_inputs[f"human_input_{len(execution.human_inputs)}"] = (
+                human_input
+            )
             await db.commit()
 
             flow = await self._get_flow_with_details(
@@ -501,7 +517,9 @@ class FlowExecutorService(BaseExecutorService):
             )
 
         except asyncio.CancelledError:
-            logger.info(f"流程执行收到 CancelledError（SSE 断开 detach）: execution_id={execution_id}")
+            logger.info(
+                f"流程执行收到 CancelledError（SSE 断开 detach）: execution_id={execution_id}"
+            )
             raise
 
         except Exception as e:

@@ -489,180 +489,193 @@ class AgentExecutorService(BaseExecutorService):
         except Exception as e:
             yield FlowEventFactory.error(f"数据库连接失败: {e}")
             return
-        # 获取会话
-        session = await self._get_session(db, session_id)
-        if not session:
-            yield FlowEventFactory.error("会话不存在")
-            return
 
-        if session_id in self._compressing_sessions:
-            yield FlowEventFactory.error("正在压缩上下文，请稍后再发送消息")
-            return
-
-        if session_id in self._running_sessions:
-            yield FlowEventFactory.error("会话正在执行中，请稍后再发送消息")
-            return
-        self._running_sessions.add(session_id)
-
-        # 获取Flow
-        flow = await self._get_flow_with_details(db, session.flow_id, FlowType.AGENT)
-        if not flow:
-            yield FlowEventFactory.error("Agent不存在")
-            return
-
-        # 验证流程
         try:
-            self._validate_agent_flow(flow)
-        except ValueError as e:
-            yield FlowEventFactory.error(str(e))
-            logger.exception(e)
-            return
+            # 获取会话
+            session = await self._get_session(db, session_id)
+            if not session:
+                yield FlowEventFactory.error("会话不存在")
+                return
 
-        # 检查是否首次对话（用于自动生成标题）
-        existing_messages = await self._get_messages(db, session_id, 1)
-        is_first_message = len(existing_messages) == 0
+            if session_id in self._compressing_sessions:
+                yield FlowEventFactory.error("正在压缩上下文，请稍后再发送消息")
+                return
 
-        # 构建图
-        graph = self._build_graph(
-            flow, 0, agent_conversation_service, session_id=session_id
-        )
-        config = {
-            "configurable": {"thread_id": f"agent_{session_id}", "scope_type": "agent"}
-        }
+            # check-then-act: asyncio 单线程下 in/add 间无 await，不会被抢占
+            if session_id in self._running_sessions:
+                yield FlowEventFactory.error("会话正在执行中，请稍后再发送消息")
+                return
+            self._running_sessions.add(session_id)
 
-        # 初始化上下文
-        input_data: dict = {}
-
-        # 统一通过 input_schema 解析所有参数（包括 message）
-        pending_files = []
-        if flow.input_schema:
-            all_params = dict(params) if params else {}
-            all_params["message"] = user_message
-            pending_files = await self._resolve_input_params(
-                db, all_params, flow.input_schema, input_data
+            # 获取Flow
+            flow = await self._get_flow_with_details(
+                db, session.flow_id, FlowType.AGENT
             )
-        else:
-            input_data["message"] = user_message
+            if not flow:
+                yield FlowEventFactory.error("Agent不存在")
+                return
 
-        if pending_files:
-            agent_conversation_service.set_pending_files(pending_files)
+            # 验证流程
+            try:
+                self._validate_agent_flow(flow)
+            except ValueError as e:
+                yield FlowEventFactory.error(str(e))
+                logger.exception(e)
+                return
 
-        context = FlowContext(
-            flow_id=flow.id,
-            execution_id=0,  # Agent不使用execution_id
-            input_data=input_data,
-        )
-        context.start()
+            # 检查是否首次对话（用于自动生成标题）
+            existing_messages = await self._get_messages(db, session_id, 1)
+            is_first_message = len(existing_messages) == 0
 
-        # 清除可能残留的中断状态，发送流程开始事件
-        interrupt_service.clear_agent_interrupted(session_id)
-        yield FlowEventFactory.flow_start(flow_id=flow.id, execution_id=session_id)
+            # 构建图
+            graph = self._build_graph(
+                flow, 0, agent_conversation_service, session_id=session_id
+            )
+            config = {
+                "configurable": {
+                    "thread_id": f"agent_{session_id}",
+                    "scope_type": "agent",
+                }
+            }
 
-        # 收集LLM响应内容
-        llm_content = ""
-        llm_thinking = ""
+            # 初始化上下文
+            input_data: dict = {}
 
-        try:
-            # 执行图
-            async for event in graph.astream(
-                input=context.state.model_dump(),
-                config=config,
-                stream_mode=["updates", "custom"],
-            ):
-                if not isinstance(event, tuple) or len(event) != 2:
-                    continue
+            # 统一通过 input_schema 解析所有参数（包括 message）
+            pending_files = []
+            if flow.input_schema:
+                all_params = dict(params) if params else {}
+                all_params["message"] = user_message
+                pending_files = await self._resolve_input_params(
+                    db, all_params, flow.input_schema, input_data
+                )
+            else:
+                input_data["message"] = user_message
 
-                stream_mode_type, event_data = event
+            if pending_files:
+                agent_conversation_service.set_pending_files(pending_files)
 
-                # 检查用户是否主动中断
-                if interrupt_service.is_agent_interrupted(session_id):
-                    logger.info(f"Agent会话被中断: session_id={session_id}")
-                    break
+            context = FlowContext(
+                flow_id=flow.id,
+                execution_id=0,  # Agent不使用execution_id
+                input_data=input_data,
+            )
+            context.start()
 
-                # 处理 custom 事件（流式输出）
-                if stream_mode_type == "custom":
-                    if hasattr(event_data, "to_dict"):
-                        event_dict = event_data.to_dict()
-                        yield event_dict
+            # 清除可能残留的中断状态，发送流程开始事件
+            interrupt_service.clear_agent_interrupted(session_id)
+            yield FlowEventFactory.flow_start(flow_id=flow.id, execution_id=session_id)
 
-                        # 收集LLM内容
-                        if event_dict.get("type") == "node_content":
-                            llm_content += event_dict.get("data", {}).get("content", "")
-                        elif event_dict.get("type") == "node_thinking":
-                            llm_thinking += event_dict.get("data", {}).get(
-                                "content", ""
-                            )
-                    continue
+            # 收集LLM响应内容
+            llm_content = ""
+            llm_thinking = ""
 
-                # 处理 updates 事件（节点更新）
-                if stream_mode_type != "updates":
-                    continue
-
-                for node_key, result in event_data.items():
-                    # 处理 interrupt
-                    if node_key == "__interrupt__":
-                        interrupt_data = result[0].value if result else {}
-                        yield await self._handle_interrupt(
-                            db, session_id, interrupt_data
-                        )
-                        return
-
-                    node = next((n for n in flow.nodes if n.node_key == node_key), None)
-                    if not node:
+            try:
+                # 执行图
+                async for event in graph.astream(
+                    input=context.state.model_dump(),
+                    config=config,
+                    stream_mode=["updates", "custom"],
+                ):
+                    if not isinstance(event, tuple) or len(event) != 2:
                         continue
 
-                    # 更新上下文状态
-                    if isinstance(result, dict):
-                        if "variables" in result:
-                            for k, v in result.get("variables", {}).items():
-                                context.state.set_variable(k, v)
-                        if "output_data" in result:
-                            context.state.output_data.update(
-                                result.get("output_data", {})
+                    stream_mode_type, event_data = event
+
+                    # 检查用户是否主动中断
+                    if interrupt_service.is_agent_interrupted(session_id):
+                        logger.info(f"Agent会话被中断: session_id={session_id}")
+                        break
+
+                    # 处理 custom 事件（流式输出）
+                    if stream_mode_type == "custom":
+                        if hasattr(event_data, "to_dict"):
+                            event_dict = event_data.to_dict()
+                            yield event_dict
+
+                            # 收集LLM内容
+                            if event_dict.get("type") == "node_content":
+                                llm_content += event_dict.get("data", {}).get(
+                                    "content", ""
+                                )
+                            elif event_dict.get("type") == "node_thinking":
+                                llm_thinking += event_dict.get("data", {}).get(
+                                    "content", ""
+                                )
+                        continue
+
+                    # 处理 updates 事件（节点更新）
+                    if stream_mode_type != "updates":
+                        continue
+
+                    for node_key, result in event_data.items():
+                        # 处理 interrupt
+                        if node_key == "__interrupt__":
+                            interrupt_data = result[0].value if result else {}
+                            yield await self._handle_interrupt(
+                                db, session_id, interrupt_data
                             )
-                        if "errors" in result:
-                            context.state.errors.extend(result.get("errors", []))
+                            return
 
-                    # 发送节点事件
-                    yield FlowEventFactory.node_start(
-                        node_key=node.node_key,
-                        node_type=node.node_type,
-                        node_name=node.node_name,
-                    )
+                        node = next(
+                            (n for n in flow.nodes if n.node_key == node_key), None
+                        )
+                        if not node:
+                            continue
 
-                    node_error = None
-                    for err in context.state.errors:
-                        if err.get("node_key") == node.node_key:
-                            node_error = err.get("message")
-                            break
+                        # 更新上下文状态
+                        if isinstance(result, dict):
+                            if "variables" in result:
+                                for k, v in result.get("variables", {}).items():
+                                    context.state.set_variable(k, v)
+                            if "output_data" in result:
+                                context.state.output_data.update(
+                                    result.get("output_data", {})
+                                )
+                            if "errors" in result:
+                                context.state.errors.extend(result.get("errors", []))
 
-                    yield FlowEventFactory.node_done(
-                        node_key=node.node_key,
-                        node_type=node.node_type,
-                        error=node_error,
-                    )
+                        # 发送节点事件
+                        yield FlowEventFactory.node_start(
+                            node_key=node.node_key,
+                            node_type=node.node_type,
+                            node_name=node.node_name,
+                        )
 
-            # 首次对话时自动生成标题
-            if is_first_message and llm_content:
-                title = user_message[:50]
-                if len(user_message) > 50:
-                    title += "..."
-                await self._update_session_title(db, session_id, title)
+                        node_error = None
+                        for err in context.state.errors:
+                            if err.get("node_key") == node.node_key:
+                                node_error = err.get("message")
+                                break
 
-            # 发送完成事件
-            is_interrupted = interrupt_service.is_agent_interrupted(session_id)
-            yield FlowEventFactory.flow_done(
-                execution_id=session_id,
-                output_data={"content": llm_content},
-                status="cancelled" if is_interrupted else "success",
-            )
-            interrupt_service.clear_agent_interrupted(session_id)
+                        yield FlowEventFactory.node_done(
+                            node_key=node.node_key,
+                            node_type=node.node_type,
+                            error=node_error,
+                        )
 
-        except Exception as e:
-            error_msg = str(e)
-            logger.exception(f"Agent执行失败: {e}")
-            yield FlowEventFactory.error(f"执行失败: {error_msg}")
-            interrupt_service.clear_agent_interrupted(session_id)
+                # 首次对话时自动生成标题
+                if is_first_message and llm_content:
+                    title = user_message[:50]
+                    if len(user_message) > 50:
+                        title += "..."
+                    await self._update_session_title(db, session_id, title)
+
+                # 发送完成事件
+                is_interrupted = interrupt_service.is_agent_interrupted(session_id)
+                yield FlowEventFactory.flow_done(
+                    execution_id=session_id,
+                    output_data={"content": llm_content},
+                    status="cancelled" if is_interrupted else "success",
+                )
+                interrupt_service.clear_agent_interrupted(session_id)
+
+            except Exception as e:
+                error_msg = str(e)
+                logger.exception(f"Agent执行失败: {e}")
+                yield FlowEventFactory.error(f"执行失败: {error_msg}")
+                interrupt_service.clear_agent_interrupted(session_id)
+
         finally:
             self._running_sessions.discard(session_id)
             self._pending_save_sessions.discard(session_id)
@@ -743,114 +756,123 @@ class AgentExecutorService(BaseExecutorService):
         except Exception as e:
             yield FlowEventFactory.error(f"数据库连接失败: {e}")
             return
-        # 获取会话
-        session = await self._get_session(db, session_id)
-        if not session:
-            yield FlowEventFactory.error("会话不存在")
-            return
-
-        # 获取Flow
-        flow = await self._get_flow_with_details(db, session.flow_id, FlowType.AGENT)
-        if not flow:
-            yield FlowEventFactory.error("Agent不存在")
-            return
-
-        # 构建图
-        graph = self._build_graph(
-            flow, 0, agent_conversation_service, session_id=session_id
-        )
-        config = {
-            "configurable": {
-                "thread_id": f"agent_{session_id}",
-                "scope_type": "agent",
-                "_human_resume_input": human_input,
-            }
-        }
-
-        # 收集LLM响应内容
-        llm_content = ""
-        llm_thinking = ""
 
         try:
-            # 使用Command(resume=...)恢复执行
-            async for event in graph.astream(
-                input=Command(resume=human_input),
-                config=config,
-                stream_mode=["updates", "custom"],
-            ):
-                if not isinstance(event, tuple) or len(event) != 2:
-                    continue
+            # 获取会话
+            session = await self._get_session(db, session_id)
+            if not session:
+                yield FlowEventFactory.error("会话不存在")
+                return
 
-                stream_mode_type, event_data = event
+            # 获取Flow
+            flow = await self._get_flow_with_details(
+                db, session.flow_id, FlowType.AGENT
+            )
+            if not flow:
+                yield FlowEventFactory.error("Agent不存在")
+                return
 
-                # 检查用户是否主动中断
-                if interrupt_service.is_agent_interrupted(session_id):
-                    logger.info(f"Agent会话恢复被中断: session_id={session_id}")
-                    break
+            # 构建图
+            graph = self._build_graph(
+                flow, 0, agent_conversation_service, session_id=session_id
+            )
+            config = {
+                "configurable": {
+                    "thread_id": f"agent_{session_id}",
+                    "scope_type": "agent",
+                    "_human_resume_input": human_input,
+                }
+            }
 
-                # 处理 custom 事件
-                if stream_mode_type == "custom":
-                    if hasattr(event_data, "to_dict"):
-                        event_dict = event_data.to_dict()
-                        yield event_dict
-                        if event_dict.get("type") == "node_content":
-                            llm_content += event_dict.get("data", {}).get("content", "")
-                        elif event_dict.get("type") == "node_thinking":
-                            llm_thinking += event_dict.get("data", {}).get(
-                                "content", ""
-                            )
-                    continue
+            # 收集LLM响应内容
+            llm_content = ""
+            llm_thinking = ""
 
-                # 处理 updates 事件
-                if stream_mode_type != "updates":
-                    continue
-
-                for node_key, result in event_data.items():
-                    # 处理再次interrupt
-                    if node_key == "__interrupt__":
-                        interrupt_data = result[0].value if result else {}
-                        yield await self._handle_interrupt(
-                            db, session_id, interrupt_data
-                        )
-                        return
-
-                    node = next((n for n in flow.nodes if n.node_key == node_key), None)
-                    if not node:
+            try:
+                # 使用Command(resume=...)恢复执行
+                async for event in graph.astream(
+                    input=Command(resume=human_input),
+                    config=config,
+                    stream_mode=["updates", "custom"],
+                ):
+                    if not isinstance(event, tuple) or len(event) != 2:
                         continue
 
-                    yield FlowEventFactory.node_start(
-                        node_key=node.node_key,
-                        node_type=node.node_type,
-                        node_name=node.node_name,
-                    )
+                    stream_mode_type, event_data = event
 
-                    node_error = None
-                    if isinstance(result, dict) and "errors" in result:
-                        for err in result.get("errors", []):
-                            if err.get("node_key") == node_key:
-                                node_error = err.get("message")
-                                break
+                    # 检查用户是否主动中断
+                    if interrupt_service.is_agent_interrupted(session_id):
+                        logger.info(f"Agent会话恢复被中断: session_id={session_id}")
+                        break
 
-                    yield FlowEventFactory.node_done(
-                        node_key=node.node_key,
-                        node_type=node.node_type,
-                        error=node_error,
-                    )
+                    # 处理 custom 事件
+                    if stream_mode_type == "custom":
+                        if hasattr(event_data, "to_dict"):
+                            event_dict = event_data.to_dict()
+                            yield event_dict
+                            if event_dict.get("type") == "node_content":
+                                llm_content += event_dict.get("data", {}).get(
+                                    "content", ""
+                                )
+                            elif event_dict.get("type") == "node_thinking":
+                                llm_thinking += event_dict.get("data", {}).get(
+                                    "content", ""
+                                )
+                        continue
 
-            # 发送完成事件
-            is_interrupted = interrupt_service.is_agent_interrupted(session_id)
-            yield FlowEventFactory.flow_done(
-                execution_id=session_id,
-                output_data={"content": llm_content},
-                status="cancelled" if is_interrupted else "success",
-            )
-            interrupt_service.clear_agent_interrupted(session_id)
+                    # 处理 updates 事件
+                    if stream_mode_type != "updates":
+                        continue
 
-        except Exception as e:
-            error_msg = str(e)
-            logger.exception(f"Agent恢复执行失败: {e}")
-            yield FlowEventFactory.error(f"执行失败: {error_msg}")
-            interrupt_service.clear_agent_interrupted(session_id)
+                    for node_key, result in event_data.items():
+                        # 处理再次interrupt
+                        if node_key == "__interrupt__":
+                            interrupt_data = result[0].value if result else {}
+                            yield await self._handle_interrupt(
+                                db, session_id, interrupt_data
+                            )
+                            return
+
+                        node = next(
+                            (n for n in flow.nodes if n.node_key == node_key), None
+                        )
+                        if not node:
+                            continue
+
+                        yield FlowEventFactory.node_start(
+                            node_key=node.node_key,
+                            node_type=node.node_type,
+                            node_name=node.node_name,
+                        )
+
+                        node_error = None
+                        if isinstance(result, dict) and "errors" in result:
+                            for err in result.get("errors", []):
+                                if err.get("node_key") == node_key:
+                                    node_error = err.get("message")
+                                    break
+
+                        yield FlowEventFactory.node_done(
+                            node_key=node.node_key,
+                            node_type=node.node_type,
+                            error=node_error,
+                        )
+
+                # 发送完成事件
+                is_interrupted = interrupt_service.is_agent_interrupted(session_id)
+                yield FlowEventFactory.flow_done(
+                    execution_id=session_id,
+                    output_data={"content": llm_content},
+                    status="cancelled" if is_interrupted else "success",
+                )
+                interrupt_service.clear_agent_interrupted(session_id)
+
+            except Exception as e:
+                error_msg = str(e)
+                logger.exception(f"Agent恢复执行失败: {e}")
+                yield FlowEventFactory.error(f"执行失败: {error_msg}")
+                interrupt_service.clear_agent_interrupted(session_id)
+
         finally:
             self._pending_save_sessions.discard(session_id)
             from app.services.tool_approval_service import tool_approval_service
