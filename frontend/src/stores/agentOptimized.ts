@@ -148,8 +148,8 @@ export const useAgentStore = defineStore('agent', () => {
     try {
       const res = await agentApi.createSession(agentId)
       if (res.data.code === 1) {
+        await loadSessions(agentId, 1)
         const session = res.data.data
-        sessions.value.unshift(session)
         return session
       }
     } catch {
@@ -164,12 +164,12 @@ export const useAgentStore = defineStore('agent', () => {
   async function deleteSession(agentId: number, sessionId: number) {
     try {
       await agentApi.deleteSession(agentId, sessionId)
-      sessions.value = sessions.value.filter(s => s.id !== sessionId)
       if (currentSession.value?.id === sessionId) {
         currentSession.value = null
         messages.value = []
         clearMessages()
       }
+      await loadSessions(agentId, 1)
     } catch {
       // error handled by interceptor
     }
