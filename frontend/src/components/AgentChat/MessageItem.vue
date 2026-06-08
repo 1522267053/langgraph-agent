@@ -247,10 +247,12 @@ export default {
   padding: 12px 18px;
   border-radius: 16px 4px 16px 16px;
   display: inline-block;
+  max-width: 100%;
   text-align: left;
   font-size: 14px;
   line-height: 1.6;
-  word-break: break-all;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .token-info {

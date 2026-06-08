@@ -406,9 +406,16 @@ class LlmToolNodeHandler(BaseNodeHandler):
             await msg_buf.save_to_db()
         except asyncio.CancelledError:
             logger.info(
-                f"LLM节点被取消, 跳过DB保存（保持checkpoint同步）, "
-                f"node_key={node.node_key}"
+                f"LLM节点被取消, node_key={node.node_key}"
             )
+            try:
+                await asyncio.shield(msg_buf.save_to_db())
+            except Exception as e:
+                logger.warning(f"取消时保存消息失败: {e}")
+            if self.session_id:
+                from app.services.agent_executor_service import agent_executor_service
+
+                agent_executor_service._pending_save_sessions.discard(self.session_id)
             state.set_interrupted()
             if last_content:
                 state.set_node_variable(node.node_key, result_name, last_content)
@@ -420,9 +427,17 @@ class LlmToolNodeHandler(BaseNodeHandler):
             raise
         except Exception as e:
             logger.info(
-                f"LLM节点异常, 跳过DB保存（保持checkpoint同步）, "
-                f"node_key={node.node_key}, error={type(e).__name__}: {e}"
+                f"LLM节点异常, node_key={node.node_key}, "
+                f"error={type(e).__name__}: {e}"
             )
+            try:
+                await msg_buf.save_to_db()
+            except Exception:
+                pass
+            if self.session_id:
+                from app.services.agent_executor_service import agent_executor_service
+
+                agent_executor_service._pending_save_sessions.discard(self.session_id)
             state.add_error(node.node_key, f"LLM调用失败: {str(e)}")
             state.set_conversation_messages(node.node_key, list(msg_buf.messages))
             raise

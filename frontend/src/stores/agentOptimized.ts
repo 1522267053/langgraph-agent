@@ -83,6 +83,10 @@ export const useAgentStore = defineStore('agent', () => {
   const isCompressing = ref(false)
   let compressPollTimer: ReturnType<typeof setInterval> | null = null
 
+  // ========== 中断保存状态 ==========
+  const isStopping = ref(false)
+  let savePollTimer: ReturnType<typeof setTimeout> | null = null
+
   // ========== 中断函数引用 ==========
   let streamAbort: (() => void) | null = null
   let wasFirstMessage = false
@@ -638,8 +642,9 @@ export const useAgentStore = defineStore('agent', () => {
 
   /**
    * 取消流式输出（仅断开SSE连接）
+   * @param waitForSave 是否等待后端 save_to_db 完成后刷新消息（仅中断场景传 true）
    */
-  function cancelStream() {
+  function cancelStream(waitForSave = false) {
     if (streamAbort) {
       streamAbort()
       streamAbort = null
@@ -651,14 +656,59 @@ export const useAgentStore = defineStore('agent', () => {
     pendingToolCalls.value = []
     pendingApprovalNeeded.value = []
     stopApprovalCountdown()
-    // 异步刷新 DB 消息（仅当 session 未切换时）
-    if (currentAgent.value && currentSession.value) {
-      const aid = currentAgent.value.id
-      const sid = currentSession.value.id
+    stopSavePolling()
+    if (waitForSave && currentAgent.value && currentSession.value) {
+      startSavePolling(currentAgent.value.id, currentSession.value.id)
+    }
+  }
+
+  /**
+   * 轮询等待后端中断后的消息保存完成，然后刷新消息
+   */
+  function startSavePolling(agentId: number, sessionId: number) {
+    stopSavePolling()
+    const startTime = Date.now()
+    const timeout = 5000
+    const onDone = () => {
+      isStopping.value = false
+      ElMessage.success('停止成功')
+    }
+    const poll = async () => {
+      if (!currentAgent.value || currentSession.value?.id !== sessionId) {
+        stopSavePolling()
+        isStopping.value = false
+        return
+      }
+      try {
+        const res = await agentApi.saveStatus(agentId, sessionId)
+        if (res.data.code === 1 && res.data.data?.saving) {
+          if (Date.now() - startTime >= timeout) {
+            stopSavePolling()
+            refreshMessages(agentId, sessionId)
+            onDone()
+          } else {
+            savePollTimer = setTimeout(poll, 200)
+          }
+        } else {
+          stopSavePolling()
+          refreshMessages(agentId, sessionId)
+          onDone()
+        }
+      } catch {
+        stopSavePolling()
+        refreshMessages(agentId, sessionId)
+        onDone()
+      }
+    }
+    poll()
+  }
+
+  function refreshMessages(agentId: number, sessionId: number) {
+    if (currentSession.value?.id === sessionId) {
       agentApi
-        .getMessages(aid, sid)
+        .getMessages(agentId, sessionId)
         .then(res => {
-          if (res.data.code === 1 && currentSession.value?.id === sid) {
+          if (res.data.code === 1 && currentSession.value?.id === sessionId) {
             messages.value = res.data.data?.list || []
             messageTotal.value = res.data.data?.total || 0
             rebuildChatMessages()
@@ -668,14 +718,23 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
+  function stopSavePolling() {
+    if (savePollTimer) {
+      clearTimeout(savePollTimer)
+      savePollTimer = null
+    }
+  }
+
   /**
    * 中断执行（通知后端停止并断开SSE）
    */
   async function interruptExecution() {
+    if (isStopping.value) return
+    isStopping.value = true
     if (currentAgent.value && currentSession.value) {
       await agentApi.cancel(currentAgent.value.id, currentSession.value.id)
     }
-    cancelStream()
+    cancelStream(true)
   }
 
   /**
@@ -728,20 +787,19 @@ export const useAgentStore = defineStore('agent', () => {
   async function compressSession(
     agentId: number,
     sessionId: number
-  ): Promise<{ summary: string | null; kept_count: number; removed_count: number } | null> {
+  ): Promise<boolean> {
     isCompressing.value = true
     try {
       const res = await agentApi.compress(agentId, sessionId)
       if (res.data.code === 1) {
-        await selectSession(agentId, currentSession.value!)
-        return res.data.data
+        startCompressPolling(agentId, sessionId)
+        return true
       }
-      return null
-    } catch {
-      // error handled by interceptor
-      return null
-    } finally {
       isCompressing.value = false
+      return false
+    } catch {
+      isCompressing.value = false
+      return false
     }
   }
 
@@ -808,6 +866,7 @@ export const useAgentStore = defineStore('agent', () => {
     pendingApprovalNeeded,
     approvalCountdown,
     isCompressing,
+    isStopping,
     // 消息分页
     hasMoreMessages,
     loadingMoreMessages,
@@ -829,6 +888,7 @@ export const useAgentStore = defineStore('agent', () => {
     deleteMessagesFrom,
     compressSession,
     startCompressPolling,
-    stopCompressPolling
+    stopCompressPolling,
+    stopSavePolling
   }
 })

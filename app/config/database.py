@@ -104,6 +104,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     try:
         yield session
     except asyncio.CancelledError:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
         raise
     except Exception:
         await session.rollback()
