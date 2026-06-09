@@ -2,9 +2,9 @@
 流程边相关数据模型
 """
 
-from typing import List, Optional
+from typing import Optional
 
-from pydantic import Field, BaseModel
+from pydantic import Field
 
 from app.schemas.base_schema import BaseView
 
@@ -35,10 +35,3 @@ class FlowEdgeUpdate(FlowEdgeBase):
     """更新流程边"""
 
     pass
-
-
-class FlowEdgeBatchSaveReq(BaseModel):
-    """批量保存边请求（合并创建和更新）"""
-
-    create: List[FlowEdgeCreate] = Field(default_factory=list, description="待创建的边")
-    update: List[FlowEdgeUpdate] = Field(default_factory=list, description="待更新的边")

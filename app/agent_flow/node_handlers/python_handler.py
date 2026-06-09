@@ -380,10 +380,6 @@ class PythonNodeHandler(BaseNodeHandler):
     def allow_multiple_tool_connections(cls) -> bool:
         return True
 
-    @classmethod
-    def get_tool_singleton_config_field(cls) -> Optional[str]:
-        return "use_preset_for_tool"
-
     async def get_tool(self, node: FlowNode) -> Optional[StructuredTool]:
         """
         返回Python执行工具
@@ -462,7 +458,7 @@ class PythonNodeHandler(BaseNodeHandler):
                 )
 
         return StructuredTool(
-            name="python_executor",
+            name=f"python_executor_{node.node_key}",
             description=description,
             func=None,
             coroutine=execute_python,
@@ -511,7 +507,7 @@ class PythonNodeHandler(BaseNodeHandler):
             .lower()
             .replace(" ", "_")
             .replace("-", "_")
-        )
+        ) + f"_{node.node_key}"
         description = (
             cfg.description or f"执行 {node.node_name or node.node_key} Python代码"
         )

@@ -167,30 +167,6 @@ class NodeHandlerRegistry:
         return singleton_types
 
     @classmethod
-    def get_config_singleton_types(cls) -> dict[str, str]:
-        """
-        获取单例约束取决于节点配置的工具类型
-
-        遍历所有已注册的处理器，收集 get_tool_singleton_config_field() 非 None 的类型。
-        返回值为 {节点类型: base_config 字段名} 的映射。
-
-        Returns:
-            配置级单例类型字典，key 为节点类型，value 为控制字段名
-        """
-        config_types: dict[str, str] = {}
-        for node_type, handler_class in cls._handlers.items():
-            field = handler_class.get_tool_singleton_config_field()
-            if field is not None:
-                config_types[node_type] = field
-        for node_type in cls._factories:
-            factory_class = cls._get_factory_handler_class(node_type)
-            if factory_class:
-                field = factory_class.get_tool_singleton_config_field()
-                if field is not None:
-                    config_types[node_type] = field
-        return config_types
-
-    @classmethod
     def clear(cls):
         """清空注册表（主要用于测试）"""
         cls._handlers.clear()

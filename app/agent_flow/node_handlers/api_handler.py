@@ -102,10 +102,6 @@ class ApiNodeHandler(BaseNodeHandler):
     def allow_multiple_tool_connections(cls) -> bool:
         return True
 
-    @classmethod
-    def get_tool_singleton_config_field(cls) -> Optional[str]:
-        return "use_preset_for_tool"
-
     async def execute(
         self,
         node: FlowNode,
@@ -604,7 +600,7 @@ class ApiNodeHandler(BaseNodeHandler):
             )
 
         return StructuredTool(
-            name="api_call_tool",
+            name=f"api_call_tool_{node.node_key}",
             description="API调用",
             func=None,
             coroutine=call_api,
@@ -651,7 +647,7 @@ class ApiNodeHandler(BaseNodeHandler):
             .lower()
             .replace(" ", "_")
             .replace("-", "_")
-        )
+        ) + f"_{node.node_key}"
         description = cfg.description or f"调用 {node.node_name or node.node_key} API"
 
         async def call_preset_api(**kwargs) -> str:

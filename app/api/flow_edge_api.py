@@ -5,21 +5,14 @@
 
 from typing import Union
 
-from fastapi import HTTPException, Depends
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.base_api import BaseApi, RouteConfig
 from app.agent_flow.handler_registry import NodeHandlerRegistry
-from app.config.database import get_db
 from app.models.flow_edge import FlowEdge
-from app.schemas.base_schema import ApiResponse
 from app.services.flow_service import flow_service
-from app.schemas.flow_edge_schema import (
-    FlowEdgeBase,
-    FlowEdgeCreate,
-    FlowEdgeUpdate,
-    FlowEdgeBatchSaveReq,
-)
+from app.schemas.flow_edge_schema import FlowEdgeBase, FlowEdgeCreate, FlowEdgeUpdate
 
 
 class FlowEdgeApi(
@@ -39,15 +32,9 @@ class FlowEdgeApi(
                 enable_update=True,
                 enable_delete=True,
                 enable_batch_delete=False,
-                enable_batch_create=False,
-                enable_batch_update=False,
+                enable_batch_create=True,
+                enable_batch_update=True,
             ),
-        )
-        self.router.add_api_route(
-            "/batch-save",
-            self.batch_save,
-            methods=["POST"],
-            summary="批量保存边（合并创建和更新）",
         )
 
     @staticmethod
@@ -98,7 +85,6 @@ class FlowEdgeApi(
                 flow_id,
                 edges,
                 NodeHandlerRegistry.get_singleton_tool_types(),
-                NodeHandlerRegistry.get_config_singleton_types(),
             )
             if tool_error:
                 raise HTTPException(status_code=400, detail=tool_error)
@@ -125,19 +111,24 @@ class FlowEdgeApi(
         """删除边"""
         await flow_service.delete_edge(db, id)
 
-    async def batch_save(
-        self, data: FlowEdgeBatchSaveReq, db: AsyncSession = Depends(get_db)
-    ):
-        """批量保存边（合并创建和更新，一次性校验全量数据）"""
-        all_edges: list[Union[FlowEdgeCreate, FlowEdgeUpdate]] = (
-            data.create + data.update
-        )
-        if not all_edges:
-            return ApiResponse.success(msg="无数据")
-        flow_id = data.create[0].flow_id if data.create else data.update[0].flow_id
-        await self._validate_edges(db, flow_id, all_edges)
-        await flow_service.batch_save_edges(db, flow_id, data.create, data.update)
-        return ApiResponse.success(msg="保存成功")
+    async def batch_create(
+        self, db: AsyncSession, data_list: list[FlowEdgeCreate]
+    ) -> None:
+        """批量创建边"""
+        if not data_list:
+            return
+        await self._validate_edges(db, data_list[0].flow_id, data_list)
+        await flow_service.batch_create_edges(db, data_list[0].flow_id, data_list)
+
+    async def batch_update(
+        self, db: AsyncSession, data_list: list[FlowEdgeUpdate]
+    ) -> None:
+        """批量更新边"""
+        if not data_list:
+            return
+        await self._validate_edges(db, data_list[0].flow_id, data_list)
+        for data in data_list:
+            await flow_service.update_edge(db, data)
 
 
 flow_edge_api = FlowEdgeApi()
