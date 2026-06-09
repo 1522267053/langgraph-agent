@@ -11,7 +11,7 @@ import json
 import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
-from typing import Optional
+from typing import Any, Optional
 
 from RestrictedPython import compile_restricted_exec
 from RestrictedPython.Guards import (
@@ -23,7 +23,7 @@ from RestrictedPython.Guards import (
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.types import StreamWriter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.exceptions import NodeExecutionError
@@ -39,6 +39,8 @@ from app.models.flow_node import FlowNode
 class PythonNodeConfig(BaseNodeConfig):
     code: str = ""
     timeout: int = 30
+    description: Optional[str] = None
+    use_preset_for_tool: bool = False
     output_variables: list[NodeVariable] = [
         NodeVariable(name="result", type="python_result"),
     ]
@@ -376,22 +378,23 @@ class PythonNodeHandler(BaseNodeHandler):
 
     @classmethod
     def allow_multiple_tool_connections(cls) -> bool:
-        """固定工具名 python_executor，同一 LLM 只需连接一个"""
-        return False
+        return True
 
     async def get_tool(self, node: FlowNode) -> Optional[StructuredTool]:
         """
-        返回Python执行工具，参数由LLM填写
+        返回Python执行工具
 
-        Args:
-            node: 节点对象
-
-        Returns:
-            Python执行工具
+        use_preset_for_tool=True 时：使用节点已配置的 code，LLM 只需提供
+        input_variables 定义的业务参数，不暴露代码细节。
+        use_preset_for_tool=False 时：通用 python_executor，LLM 填写全部参数。
         """
         handler = self
         cfg = self._get_config(node)
         timeout = cfg.timeout
+
+        if cfg.use_preset_for_tool:
+            return self._build_preset_tool(node, cfg, handler, timeout)
+
         input_variables = cfg.input_variables
 
         param_desc_list = []
@@ -460,4 +463,74 @@ class PythonNodeHandler(BaseNodeHandler):
             func=None,
             coroutine=execute_python,
             args_schema=PythonToolInput,
+        )
+
+    def _build_preset_tool(
+        self,
+        node: FlowNode,
+        cfg: PythonNodeConfig,
+        handler,
+        timeout: float,
+    ) -> Optional[StructuredTool]:
+        """构建预设代码的Python工具，LLM 只提供业务参数"""
+        code = cfg.code
+        input_variables = cfg.input_variables
+
+        # ---- 动态构建 args_schema ----
+        fields: dict[str, tuple[type, Any]] = {}
+        for var in input_variables:
+            name = var.get("name", "")
+            if not name:
+                continue
+            var_type = var.get("type", "string")
+            if var_type == "number":
+                py_type = float
+                default = Field(default=0.0, description=name)
+            elif var_type == "boolean":
+                py_type = bool
+                default = Field(default=False, description=name)
+            else:
+                py_type = str
+                default = Field(default="", description=name)
+            fields[name] = (py_type, default)
+
+        if not fields:
+            fields["_dummy"] = (str, Field(default="", description="忽略"))
+
+        ToolInput = create_model(
+            f"{node.node_key}_python_input", __base__=BaseModel, **fields
+        )
+
+        tool_name = (
+            (node.node_name or node.node_key)
+            .strip()
+            .lower()
+            .replace(" ", "_")
+            .replace("-", "_")
+        )
+        description = (
+            cfg.description or f"执行 {node.node_name or node.node_key} Python代码"
+        )
+
+        async def execute_preset_python(**kwargs) -> str:
+            input_vars = {k: v for k, v in kwargs.items() if k != "_dummy"}
+            try:
+                result = await handler._execute_python(code, input_vars, timeout)
+                return json.dumps(result, ensure_ascii=False)
+            except asyncio.TimeoutError:
+                return json.dumps(
+                    {"error": f"执行超时（{timeout}秒）", "success": False},
+                    ensure_ascii=False,
+                )
+            except Exception as e:
+                return json.dumps(
+                    {"error": str(e), "success": False}, ensure_ascii=False
+                )
+
+        return StructuredTool(
+            name=tool_name,
+            description=description,
+            func=None,
+            coroutine=execute_preset_python,
+            args_schema=ToolInput,
         )

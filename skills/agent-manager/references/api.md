@@ -111,9 +111,15 @@ SSE 事件: `flow_start` → `node_start` → `node_thinking` / `node_content` /
 |------|------|------|------|
 | `code` | string | `""` | 必须定义 `main()` 函数 |
 | `timeout` | number | `30` | 5-300 |
+| `use_preset_for_tool` | bool | `false` | 工具预设模式：true 时 LLM 不接触代码，只提供 input_variables 参数 |
+| `description` | string | `""` | 工具描述，预设模式下 LLM 据此判断何时调用该工具 |
 
 ⚠️ 返回值被包装为 `{stdout, stderr, result, success}`，引用为 `nodes.<key>.result.<field>`。
-RestrictedPython 沙箱，不支持网络。
+RestrictedPython 沙箱，支持 `requests`/`json`/`time`/`hashlib`/`openpyxl` 等模块。**支持网络请求**。
+
+**工具模式行为**：
+- `use_preset_for_tool: true` → 工具名 = 节点名称(小写下划线)，参数 = input_variables，LLM 看不到代码
+- `use_preset_for_tool: false` → 通用 `python_executor`，LLM 自行编写完整代码
 
 ### shell
 
@@ -149,14 +155,20 @@ RestrictedPython 沙箱，不支持网络。
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `api_url` | string | `""` | 支持 `{{var}}` |
+| `api_url` | string | `""` | 支持 `{{var}}` 模板 |
 | `method` | string | `"GET"` | GET/POST/PUT/DELETE |
-| `headers` | string | `""` | JSON 字符串 |
-| `body` | string | `""` | JSON 字符串 |
-| `content_type` | string | `"application/json"` | |
-| `file_config` | object | — | `{upload_fields, download}` |
+| `headers` | string | `""` | JSON 字符串，支持 `{{var}}` 模板 |
+| `body` | string | `""` | JSON 字符串，支持 `{{var}}` 模板 |
+| `content_type` | string | `"application/json"` | 请求内容类型 |
+| `file_config` | object | — | `{upload_fields, download}` 文件上传/下载配置 |
+| `use_preset_for_tool` | bool | `false` | 工具预设模式：true 时 LLM 不接触 URL/Method/Headers/Body，只提供 input_variables 参数 |
+| `description` | string | `""` | 工具描述，预设模式下 LLM 据此判断何时调用该工具 |
 
 输出：`{status_code, headers, data, success}`
+
+**工具模式行为**：
+- `use_preset_for_tool: true` → 工具名 = 节点名称(小写下划线)，参数 = input_variables，模板 `{{var}}` 自动用 LLM 传入值渲染；LLM 看不到 URL/Method/Headers/Body
+- `use_preset_for_tool: false` → 通用 `api_call_tool`，LLM 自行提供完整 URL/Method/Headers/Body
 
 ### mcp / skill / memory / todo
 

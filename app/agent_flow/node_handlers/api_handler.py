@@ -19,7 +19,7 @@ import httpx
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.types import StreamWriter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from app.models.flow_node import FlowNode
 from app.agent_flow.flow_context import FlowState
@@ -58,6 +58,7 @@ class ApiNodeConfig(BaseNodeConfig):
     content_type: str = "application/json"
     form_fields: list[dict] = []
     description: Optional[str] = None
+    use_preset_for_tool: bool = False
 
 
 class ApiCallInput(BaseModel):
@@ -99,8 +100,7 @@ class ApiNodeHandler(BaseNodeHandler):
 
     @classmethod
     def allow_multiple_tool_connections(cls) -> bool:
-        """API 节点使用固定工具名，不允许同一 LLM 连接多个 API 节点"""
-        return False
+        return True
 
     async def execute(
         self,
@@ -569,14 +569,17 @@ class ApiNodeHandler(BaseNodeHandler):
 
     def get_tool(self, node: FlowNode) -> Optional[StructuredTool]:
         """
-        返回API调用工具，参数由LLM填写
+        返回API调用工具
 
-        Args:
-            node: 节点对象
-
-        Returns:
-            API调用工具
+        use_preset_for_tool=True 时：使用节点已配置的 api_url/method/headers/body，
+        LLM 只需提供 input_variables 定义的业务参数，看不到技术细节。
+        use_preset_for_tool=False 时：通用 api_call_tool，LLM 填写全部参数。
         """
+        cfg = self._get_config(node)
+
+        if cfg.use_preset_for_tool:
+            return self._build_preset_tool(node, cfg)
+
         handler = self
 
         async def call_api(
@@ -602,6 +605,80 @@ class ApiNodeHandler(BaseNodeHandler):
             func=None,
             coroutine=call_api,
             args_schema=ApiCallInput,
+        )
+
+    def _build_preset_tool(
+        self, node: FlowNode, cfg: ApiNodeConfig
+    ) -> Optional[StructuredTool]:
+        """构建预设参数的API工具，LLM 只提供业务参数"""
+        import re
+
+        handler = self
+        input_variables = cfg.input_variables
+
+        # ---- 动态构建 args_schema ----
+        fields: dict[str, tuple[type, Any]] = {}
+        for var in input_variables:
+            name = var.get("name", "")
+            if not name:
+                continue
+            var_type = var.get("type", "string")
+            if var_type == "number":
+                py_type = float
+                default = Field(default=0.0, description=name)
+            elif var_type == "boolean":
+                py_type = bool
+                default = Field(default=False, description=name)
+            else:
+                py_type = str
+                default = Field(default="", description=name)
+            fields[name] = (py_type, default)
+
+        if not fields:
+            fields["_dummy"] = (str, Field(default="", description="忽略"))
+
+        ToolInput = create_model(
+            f"{node.node_key}_api_input", __base__=BaseModel, **fields
+        )
+
+        tool_name = (
+            (node.node_name or node.node_key)
+            .strip()
+            .lower()
+            .replace(" ", "_")
+            .replace("-", "_")
+        )
+        description = cfg.description or f"调用 {node.node_name or node.node_key} API"
+
+        async def call_preset_api(**kwargs) -> str:
+            context = {k: v for k, v in kwargs.items() if k != "_dummy"}
+
+            def _simple_render(template: str) -> str:
+                if not template:
+                    return template
+
+                def replacer(match):
+                    key = match.group(1).strip()
+                    return str(context.get(key, match.group(0)))
+
+                return re.sub(r"\{\{(\w+)\}\}", replacer, template)
+
+            rendered_url = _simple_render(cfg.api_url or "")
+            rendered_headers = _simple_render(cfg.headers or "")
+            rendered_body = _simple_render(cfg.body or "")
+            return await handler._call_api_json(
+                rendered_url,
+                cfg.method or "GET",
+                rendered_headers,
+                rendered_body,
+            )
+
+        return StructuredTool(
+            name=tool_name,
+            description=description,
+            func=None,
+            coroutine=call_preset_api,
+            args_schema=ToolInput,
         )
 
     async def _call_api_json(

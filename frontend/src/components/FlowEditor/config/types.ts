@@ -138,6 +138,8 @@ export interface ApiConfig {
     upload_fields: ApiUploadField[]
     download: ApiFileDownloadConfig
   }
+  description?: string
+  use_preset_for_tool?: boolean
 }
 
 /** MCP节点配置 */
@@ -174,6 +176,8 @@ export interface PythonConfig {
   timeout: number
   input_variables: NodeVariable[]
   output_variables: NodeVariable[]
+  description?: string
+  use_preset_for_tool?: boolean
 }
 
 /** Shell节点配置 */

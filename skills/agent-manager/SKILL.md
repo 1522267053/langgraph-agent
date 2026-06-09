@@ -240,9 +240,14 @@ POST /api/ai/flow/{id}/edges/batch
 
 ### Python (`python`)
 - 用直接参数签名：`def main(message): ...`，不用 `**kwargs`
-- RestrictedPython 沙箱，不支持网络
-- 输出变量：`result`（自动管理）
+- RestrictedPython 沙箱，支持 `requests` / `json` / `time` / `hashlib` 等模块，**支持网络请求**
+- `timeout`: 默认 30s，5-300
+- 输出变量：`result`（自动管理为 `{stdout, stderr, result, success}`）
 - ⚠️ 返回值被包装，引用为 `nodes.<key>.result.<field>`
+- **工具模式**：
+  - `use_preset_for_tool: true` 开启预设模式：LLM 不接触代码，只提供 input_variables 定义的业务参数
+  - `description`: 工具描述，LLM 据此判断何时调用
+  - 关闭时：LLM 需自行编写完整的 Python 代码
 
 ### Shell (`shell`)
 - `command` + `timeout`。输出：`stdout`/`stderr`/`exit_code`
@@ -251,7 +256,12 @@ POST /api/ai/flow/{id}/edges/batch
 - `knowledge_base_id` + `knowledge_base_name` + `top_k`。输出：`result`
 
 ### API (`api`)
-- `api_url`/`method`/`headers`/`body`。作为工具时 LLM 动态指定。输出：`body`/`status_code`/`headers`
+- `api_url`/`method`/`headers`/`body`，支持 `{{var}}` 模板
+- 输出：`body`/`status_code`/`headers`，下载模式输出 `downloaded_file`
+- **工具模式**：
+  - `use_preset_for_tool: true` 开启预设模式：LLM 不接触 URL/Headers/Body，只提供 input_variables 定义的业务参数；模板 `{{var}}` 自动用 LLM 传入值渲染
+  - `description`: 工具描述，LLM 据此判断何时调用
+  - 关闭时：通用 `api_call_tool`，LLM 需自行提供完整 URL/Method/Headers/Body
 
 ### MCP / Skill / Memory / Todo
 - MCP：`mcp_server_ids` | Skill：`skill_ids` | Memory/Todo：无需配置，连到 LLM 即可
