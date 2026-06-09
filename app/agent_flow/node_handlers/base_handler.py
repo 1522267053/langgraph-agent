@@ -481,6 +481,22 @@ class BaseNodeHandler(ABC):
         return True
 
     @classmethod
+    def get_tool_singleton_config_field(cls) -> Optional[str]:
+        """
+        返回控制单例行为的 base_config 字段名
+
+        当工具节点的单例约束取决于节点配置（而非类型本身）时，
+        返回 base_config 中控制该行为的字段名。字段值为 False 的节点
+        视为单例（同一 LLM 只能连接一个），字段值为 True 的节点不受限制。
+
+        默认返回 None，表示该类型的单例行为完全由 allow_multiple_tool_connections() 决定。
+
+        Returns:
+            base_config 字段名，或 None
+        """
+        return None
+
+    @classmethod
     def get_tool_config(cls, node: FlowNode, config: "LlmToolConfig") -> bool:
         """
         将节点工具配置合并到 LlmToolConfig

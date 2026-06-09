@@ -343,11 +343,11 @@ export const useFlowStore = defineStore('flow', () => {
       if (nodesToUpdate.length > 0) {
         await flowNodeApi.batchUpdate(nodesToUpdate)
       }
-      if (edgesToCreate.length > 0) {
-        await flowEdgeApi.batchCreate(edgesToCreate)
-      }
-      if (edgesToUpdate.length > 0) {
-        await flowEdgeApi.batchUpdate(edgesToUpdate)
+      if (edgesToCreate.length > 0 || edgesToUpdate.length > 0) {
+        await flowEdgeApi.batchSave({
+          create: edgesToCreate,
+          update: edgesToUpdate
+        })
       }
 
       ElMessage.success('保存成功')
