@@ -102,6 +102,10 @@ class ApiNodeHandler(BaseNodeHandler):
     def allow_multiple_tool_connections(cls) -> bool:
         return True
 
+    @classmethod
+    def get_tool_singleton_config_field(cls) -> Optional[str]:
+        return "use_preset_for_tool"
+
     async def execute(
         self,
         node: FlowNode,
@@ -567,7 +571,7 @@ class ApiNodeHandler(BaseNodeHandler):
 
     # ---- 工具模式（LLM 调用）----
 
-    def get_tool(self, node: FlowNode) -> Optional[StructuredTool]:
+    async def get_tool(self, node: FlowNode) -> Optional[StructuredTool]:
         """
         返回API调用工具
 

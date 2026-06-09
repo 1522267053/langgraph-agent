@@ -103,11 +103,7 @@ export const flowEdgeApi = {
     return get<void>(`/flow-edge/delete/${id}`)
   },
 
-  batchCreate(edges: FlowEdgeCreate[]) {
-    return request.post<ApiResponse<void>>('/flow-edge/batch-create', edges)
-  },
-
-  batchUpdate(edges: FlowEdgeUpdate[]) {
-    return request.post<ApiResponse<void>>('/flow-edge/batch-update', edges)
+  batchSave(data: { create: FlowEdgeCreate[]; update: FlowEdgeUpdate[] }) {
+    return request.post<ApiResponse<void>>('/flow-edge/batch-save', data)
   }
 }
