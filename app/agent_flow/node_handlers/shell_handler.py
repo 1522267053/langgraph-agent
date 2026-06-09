@@ -27,7 +27,7 @@ from app.agent_flow.node_handlers.base_handler import (
     BaseNodeConfig,
     NodeVariable,
 )
-from app.config.build_utils import BASE_DIR
+from app.config.build_utils import BASE_DIR, get_temp_dir
 from app.models.flow_node import FlowNode
 
 
@@ -227,6 +227,9 @@ FORBIDDEN_PATH_PATTERNS = [
 
 MAX_FILE_SIZE = 50 * 1024 * 1024
 MAX_CONTENT_SIZE = 50 * 1024 * 1024
+MAX_FILE_READ_LINES = 100
+MAX_TOOL_OUTPUT_LINES = 500
+MAX_TOOL_OUTPUT_BYTES = 10240
 
 
 def _validate_file_path(file_path: str) -> tuple[bool, str]:
@@ -315,7 +318,10 @@ class FileReadInput(BaseModel):
     offset: Optional[int] = Field(
         None, description="起始行号（从1开始），不传则从头读取"
     )
-    limit: Optional[int] = Field(None, description="读取行数，不传则读取到文件末尾")
+    limit: Optional[int] = Field(
+        None,
+        description="读取行数，单次最多 100 行，不传则读取 100 行",
+    )
 
 
 class TextEditInput(BaseModel):
@@ -371,6 +377,97 @@ def _decode_output(data: bytes) -> str:
                 except UnicodeDecodeError:
                     decoded.append(line.decode("gbk", errors="replace"))
             return "\n".join(decoded)
+
+
+def _truncate_tool_output(
+    text: str,
+    max_lines: int = MAX_TOOL_OUTPUT_LINES,
+    max_bytes: int = MAX_TOOL_OUTPUT_BYTES,
+) -> dict:
+    """截断过长的工具输出，超限时将完整内容写入临时文件并返回预览
+
+    Returns:
+        {"text": 截断/原文, "truncated": bool, "saved_to": Optional[路径], "total_lines": int}
+    """
+    lines = text.splitlines()
+    total_lines = len(lines)
+    text_bytes = len(text.encode("utf-8"))
+
+    if total_lines <= max_lines and text_bytes <= max_bytes:
+        return {
+            "text": text,
+            "truncated": False,
+            "saved_to": None,
+            "total_lines": total_lines,
+        }
+
+    temp_dir = get_temp_dir()
+    temp_filename = f"tool_output_{uuid.uuid4().hex[:8]}.log"
+    temp_path = temp_dir / temp_filename
+    temp_path.write_text(text, encoding="utf-8")
+
+    head_count = max_lines // 2
+    head_lines = lines[:head_count]
+    preview = "\n".join(head_lines)
+    if text_bytes > max_bytes and len(preview.encode("utf-8")) > max_bytes:
+        byte_head = preview.encode("utf-8")[: max_bytes // 2]
+        preview = byte_head.decode("utf-8", errors="ignore")
+
+    preview += (
+        f"\n\n[输出已截断，共 {total_lines} 行。"
+        f"完整内容已保存到: {temp_path}，可用 file_read 读取]"
+    )
+
+    return {
+        "text": preview,
+        "truncated": True,
+        "saved_to": str(temp_path),
+        "total_lines": total_lines,
+    }
+
+
+def _apply_output_truncation(result: dict, stdout: str, stderr: str) -> None:
+    """对 shell 工具返回的 stdout/stderr 应用截断，就地修改 result dict"""
+    if stdout:
+        stdout_info = _truncate_tool_output(stdout)
+        result["stdout"] = stdout_info["text"]
+        if stdout_info["truncated"]:
+            result["_stdout_truncated"] = True
+            result["_stdout_saved_to"] = stdout_info["saved_to"]
+            result["_stdout_total_lines"] = stdout_info["total_lines"]
+    if stderr:
+        stderr_info = _truncate_tool_output(stderr)
+        result["stderr"] = stderr_info["text"]
+        if stderr_info["truncated"]:
+            result["_stderr_truncated"] = True
+            result["_stderr_saved_to"] = stderr_info["saved_to"]
+            result["_stderr_total_lines"] = stderr_info["total_lines"]
+
+
+def _diff_preview(
+    old_string: str, new_string: str, max_lines: int = 6, max_line_width: int = 240
+) -> str:
+    """生成 text_editor 的 diff 预览，返回 -/+ 格式的紧凑摘要"""
+    old_lines = old_string.splitlines()
+    new_lines = new_string.splitlines()
+    shown_old = old_lines[:max_lines]
+    shown_new = new_lines[:max_lines]
+    diff_lines = []
+    for line in shown_old:
+        truncated = (
+            line[:max_line_width] + "..." if len(line) > max_line_width else line
+        )
+        diff_lines.append(f"-{truncated}")
+    if len(old_lines) > max_lines:
+        diff_lines.append("-...")
+    for line in shown_new:
+        truncated = (
+            line[:max_line_width] + "..." if len(line) > max_line_width else line
+        )
+        diff_lines.append(f"+{truncated}")
+    if len(new_lines) > max_lines:
+        diff_lines.append("+...")
+    return "\n".join(diff_lines)
 
 
 @dataclass
@@ -739,19 +836,18 @@ class ShellNodeHandler(BaseNodeHandler):
 
             if monitor in done:
                 _background_tasks.pop(task.task_id, None)
-                return json.dumps(
-                    {"success": True, **task.to_dict()}, ensure_ascii=False
-                )
+                result = {"success": True, **task.to_dict()}
+                _apply_output_truncation(result, task.stdout, task.stderr)
+                return json.dumps(result, ensure_ascii=False)
 
-            return json.dumps(
-                {
-                    "success": True,
-                    "async": True,
-                    "message": f"命令仍在执行中，请使用 shell_task_status 工具查询进度（task_id: {task.task_id}）",
-                    **task.to_dict(),
-                },
-                ensure_ascii=False,
-            )
+            result = {
+                "success": True,
+                "async": True,
+                "message": f"命令仍在执行中，请使用 shell_task_status 工具查询进度（task_id: {task.task_id}）",
+                **task.to_dict(),
+            }
+            _apply_output_truncation(result, task.stdout, task.stderr)
+            return json.dumps(result, ensure_ascii=False)
 
         shell_tool = StructuredTool(
             name="shell_executor",
@@ -782,7 +878,10 @@ class ShellNodeHandler(BaseNodeHandler):
                 and not task._monitor_task.done()
             ):
                 await asyncio.wait({task._monitor_task}, timeout=async_wait)
-            return json.dumps({"success": True, **task.to_dict()}, ensure_ascii=False)
+            result = {"success": True, **task.to_dict()}
+            if task.stdout or task.stderr:
+                _apply_output_truncation(result, task.stdout, task.stderr)
+            return json.dumps(result, ensure_ascii=False)
 
         shell_task_status_tool = StructuredTool(
             name="shell_task_status",
@@ -958,31 +1057,33 @@ class ShellNodeHandler(BaseNodeHandler):
 
             lines = raw.splitlines()
             total_lines = len(lines)
+            actual_limit = (
+                min(limit, MAX_FILE_READ_LINES) if limit else MAX_FILE_READ_LINES
+            )
             start = (offset - 1) if offset and offset >= 1 else 0
-            end = (start + limit) if limit else len(lines)
-            end = min(end, len(lines))
+            end = min(start + actual_limit, len(lines))
             selected = lines[start:end]
 
             content = "\n".join(
                 f"{start + i + 1}: {line}" for i, line in enumerate(selected)
             )
-            return json.dumps(
-                {
-                    "success": True,
-                    "file_path": str(path),
-                    "total_lines": total_lines,
-                    "offset": start + 1,
-                    "limit": len(selected),
-                    "content": content,
-                },
-                ensure_ascii=False,
-            )
+            result: dict = {
+                "success": True,
+                "file_path": str(path),
+                "total_lines": total_lines,
+                "offset": start + 1,
+                "limit": len(selected),
+                "content": content,
+            }
+            if end < total_lines:
+                result["has_more"] = True
+            return json.dumps(result, ensure_ascii=False)
 
         file_read_tool = StructuredTool(
             name="file_read",
             description=(
                 "读取文件内容，返回带行号的文本(格式如 ```12: 文件内容的一行```)。"
-                "支持指定起始行号和行数来分段读取大文件。"
+                "单次最多读取 100 行，大文件请多次调用并指定 offset 分段读取。"
                 "读取前无需校验文件是否存在，工具会自动处理。"
             ),
             func=None,
@@ -1008,6 +1109,15 @@ class ShellNodeHandler(BaseNodeHandler):
             if not path.exists():
                 return json.dumps(
                     {"error": f"文件不存在: {file_path}", "success": False},
+                    ensure_ascii=False,
+                )
+
+            if old_string == new_string:
+                return json.dumps(
+                    {
+                        "error": "old_string 与 new_string 相同，无需替换",
+                        "success": False,
+                    },
                     ensure_ascii=False,
                 )
 
@@ -1062,12 +1172,14 @@ class ShellNodeHandler(BaseNodeHandler):
                 )
 
             replaced_count = count if replace_all else 1
+            diff = _diff_preview(old_string, new_string)
             return json.dumps(
                 {
                     "success": True,
                     "file_path": str(path),
                     "replaced_count": replaced_count,
                     "message": f"成功替换 {replaced_count} 处文本",
+                    "diff": diff,
                 },
                 ensure_ascii=False,
             )
@@ -1106,6 +1218,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 )
 
             path = Path(file_path).resolve()
+            existed = path.exists()
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 _atomic_write(path, content, encoding="utf-8")
@@ -1115,11 +1228,13 @@ class ShellNodeHandler(BaseNodeHandler):
                     ensure_ascii=False,
                 )
 
+            action = "覆盖" if existed else "新建"
             return json.dumps(
                 {
                     "success": True,
                     "file_path": str(path),
-                    "message": "文件写入成功",
+                    "existed": existed,
+                    "message": f"文件{action}成功",
                 },
                 ensure_ascii=False,
             )
@@ -1148,11 +1263,15 @@ class ShellNodeHandler(BaseNodeHandler):
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
         """返回临时文件目录说明和文件工具使用指南，追加到 LLM system_prompt"""
-        temp_dir = BASE_DIR / "temp"
+        temp_dir = get_temp_dir()
         current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        temp_dir.mkdir(parents=True, exist_ok=True)
         return (
             "\n\n## Shell 与文件操作\n"
-            "你已连接 Shell 执行节点。修改文件时先用 file_read 读取，再用 text_editor 精确替换；创建新文件用 file_write"
+            "你已连接 Shell 执行节点。修改文件时先用 file_read 读取，再用 text_editor 精确替换；创建新文件用 file_write\n"
+            "### 输出控制（重要）\n"
+            "- 执行命令前先评估可能的输出量，大量输出务必用 | head、| tail、| grep 等管道过滤\n"
+            "- 如果命令输出被截断（返回 _truncated 标记），完整内容已自动保存到临时文件，需要时用 file_read 读取\n"
+            "- file_read 单次最多读取 100 行，大文件用 offset 参数分段读取\n"
+            "- 禁止用 cat 读取大文件，始终使用 file_read\n"
             f"\n临时文件输出目录: `{temp_dir}`，当前时间: {current_time_str}"
         )

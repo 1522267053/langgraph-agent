@@ -81,3 +81,10 @@ def get_env_file() -> Path:
 
 
 BASE_DIR = get_base_dir()
+
+
+def get_temp_dir() -> Path:
+    """获取临时文件目录（BASE_DIR/temp/），不存在则自动创建"""
+    temp_dir = BASE_DIR / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return temp_dir
