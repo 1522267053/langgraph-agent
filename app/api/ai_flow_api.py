@@ -340,7 +340,6 @@ class AiFlowApi:
                     flow_id,
                     edges_create,
                     NodeHandlerRegistry.get_singleton_tool_types(),
-                    NodeHandlerRegistry.get_config_singleton_types(),
                 )
                 if tool_error:
                     return ApiResponse.error(msg=tool_error)
@@ -351,8 +350,8 @@ class AiFlowApi:
             if agent_error:
                 return ApiResponse.error(msg=agent_error)
 
-            created_edges = await flow_service.batch_save_edges(
-                db, flow_id, edges_create, []
+            created_edges = await flow_service.batch_create_edges(
+                db, flow_id, edges_create
             )
 
             cond_error = await flow_service.validate_condition_edges(db, flow_id)

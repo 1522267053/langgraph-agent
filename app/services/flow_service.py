@@ -594,25 +594,18 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         flow_id: int,
         edges_data: List[FlowEdgeCreate] | List[FlowEdgeUpdate],
         singleton_types: Set[str],
-        config_singleton_types: Optional[dict[str, str]] = None,
     ) -> Optional[str]:
         """
         校验工具边的唯一性约束
 
-        将本次提交的 tools 边与数据库已有的 tools 边合并后统一校验，
-        避免前端分 batch_create / batch_update 两次提交时各自只看到部分数据。
-
-        两层校验：
-        1. 类型级单例：singleton_types 中的节点类型，同一 LLM 只能连接一个
-        2. 配置级单例：config_singleton_types 中的节点类型，base_config[field] 为 False
-           的节点视为单例，同一 LLM 只能连接一个；字段为 True 的不受限制
+        检查 source_handle="tools" 的边中，属于 singleton_types 的节点类型
+        是否有多个连接到同一个目标 LLM 节点。
 
         Args:
             db: 数据库异步会话
             flow_id: 流程ID
             edges_data: 待保存的边数据列表
             singleton_types: 不允许重复连接的节点类型集合
-            config_singleton_types: 配置级单例类型映射 {节点类型: base_config字段名}
 
         Returns:
             错误信息字符串，校验通过返回 None
@@ -634,36 +627,11 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         nodes_result = await db.execute(nodes_query)
         key_to_type = {row[0]: row[1] for row in nodes_result.fetchall()}
 
-        # ---- 合并数据库已有 tools 边 ----
-        # 本次提交的 (source_key, target_key) 集合，用于去重
-        submitted_pairs: set[tuple[str, str]] = {
-            (e.source_node_key, e.target_node_key) for e in tool_edges
-        }
-        # 已有边中排除与本次提交重复的（batch_update 时边已包含在 edges_data 中）
-        existing_edges_query = select(
-            FlowEdge.source_node_key, FlowEdge.target_node_key
-        ).where(
-            FlowEdge.flow_id == flow_id,
-            FlowEdge.is_delete == 0,
-            FlowEdge.source_handle == "tools",
-        )
-        existing_result = await db.execute(existing_edges_query)
-        existing_tool_pairs: set[tuple[str, str]] = set()
-        for row in existing_result.fetchall():
-            pair = (row[0], row[1])
-            if pair not in submitted_pairs:
-                existing_tool_pairs.add(pair)
-
-        # ---- 类型级单例校验 ----
+        # 按 (target_node_key, node_type) 分组，找出 singleton 类型重复连接
         target_type_counts: dict[tuple[str, str], list[str]] = defaultdict(list)
         for edge_data in tool_edges:
             source_key = edge_data.source_node_key
             target_key = edge_data.target_node_key
-            node_type = key_to_type.get(source_key, "")
-            if node_type in singleton_types:
-                target_type_counts[(target_key, node_type)].append(source_key)
-
-        for source_key, target_key in existing_tool_pairs:
             node_type = key_to_type.get(source_key, "")
             if node_type in singleton_types:
                 target_type_counts[(target_key, node_type)].append(source_key)
@@ -675,51 +643,6 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
                     f"节点类型「{node_type}」只允许连接一个到同一 LLM 节点，"
                     f"当前 LLM 节点「{target_key}」连接了多个：{node_names}"
                 )
-
-        # ---- 配置级单例校验 ----
-        if config_singleton_types:
-            config_node_types = set(config_singleton_types.keys())
-            config_nodes_query = select(
-                FlowNode.node_key, FlowNode.node_type, FlowNode.base_config
-            ).where(
-                FlowNode.flow_id == flow_id,
-                FlowNode.is_delete == 0,
-                FlowNode.node_type.in_(config_node_types),
-            )
-            config_nodes_result = await db.execute(config_nodes_query)
-            key_to_config: dict[str, tuple[str, dict]] = {}
-            for row in config_nodes_result.fetchall():
-                key_to_config[row[0]] = (row[1], row[2] or {})
-
-            def _is_config_singleton(source_key: str) -> bool:
-                if source_key not in key_to_config:
-                    return False
-                node_type, base_config = key_to_config[source_key]
-                config_field = config_singleton_types[node_type]
-                return not base_config.get(config_field, False)
-
-            config_target_counts: dict[tuple[str, str], list[str]] = defaultdict(list)
-
-            for edge_data in tool_edges:
-                source_key = edge_data.source_node_key
-                target_key = edge_data.target_node_key
-                if _is_config_singleton(source_key):
-                    node_type = key_to_config[source_key][0]
-                    config_target_counts[(target_key, node_type)].append(source_key)
-
-            for source_key, target_key in existing_tool_pairs:
-                if _is_config_singleton(source_key):
-                    node_type = key_to_config[source_key][0]
-                    config_target_counts[(target_key, node_type)].append(source_key)
-
-            for (target_key, node_type), source_keys in config_target_counts.items():
-                if len(source_keys) > 1:
-                    node_names = "、".join(source_keys)
-                    label = NODE_TYPE_LABELS.get(node_type, node_type)
-                    return (
-                        f"未启用预设工具的「{label}」节点只允许连接一个到同一 LLM 节点，"
-                        f"当前 LLM 节点「{target_key}」连接了多个：{node_names}"
-                    )
 
         return None
 
@@ -1025,52 +948,6 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         for edge in edges:
             await db.refresh(edge)
         return edges
-
-    async def batch_save_edges(
-        self,
-        db: AsyncSession,
-        flow_id: int,
-        create_data: List[FlowEdgeCreate],
-        update_data: List[FlowEdgeUpdate],
-    ) -> List[FlowEdge]:
-        """
-        批量保存边（合并创建和更新）
-
-        先创建新边，再逐条更新已有边，最终返回新创建的边列表。
-
-        Args:
-            db: 数据库异步会话
-            flow_id: 流程ID
-            create_data: 待创建的边列表
-            update_data: 待更新的边列表
-
-        Returns:
-            List[FlowEdge]: 新创建的边对象列表
-        """
-        # 批量创建新边
-        created = []
-        for edge_data in create_data:
-            edge_data.flow_id = flow_id
-            edge = edge_data.to_model(FlowEdge)
-            created.append(edge)
-            db.add(edge)
-        if created:
-            await db.commit()
-            for edge in created:
-                await db.refresh(edge)
-
-        # 逐条更新已有边
-        for edge_data in update_data:
-            edge = await db.get(FlowEdge, edge_data.id)
-            if not edge:
-                continue
-            update_fields = edge_data.model_dump(exclude={"id"}, exclude_unset=True)
-            for field, value in update_fields.items():
-                setattr(edge, field, value)
-        if update_data:
-            await db.commit()
-
-        return created
 
     async def delete_with_cascade(self, db: AsyncSession, flow_id: int) -> None:
         """

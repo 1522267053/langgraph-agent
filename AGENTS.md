@@ -261,11 +261,6 @@ class MyNodeHandler(BaseNodeHandler):
   - 返回 `False` 的类型（如 `skill`、`memory`）在保存边时会校验，同一 LLM 只能连接一个该类型节点
   - 适用于使用固定工具名的节点，避免多实例导致工具名冲突
   - `NodeHandlerRegistry.get_singleton_tool_types()` 自动收集所有返回 `False` 的类型
-- `get_tool_singleton_config_field()`: 返回控制单例行为的 `base_config` 字段名（默认 `None`）
-  - 当工具节点的单例约束取决于节点配置时使用，如 `api`、`python` 返回 `"use_preset_for_tool"`
-  - 字段值为 `False`（或不存在）的节点视为单例，同一 LLM 只能连接一个；字段值为 `True` 的不受限制
-  - `NodeHandlerRegistry.get_config_singleton_types()` 自动收集所有返回非 `None` 的类型，返回 `{节点类型: 字段名}` 映射
-  - `validate_tool_edges` 接收 `config_singleton_types` 参数，查询节点 `base_config` 后按字段值过滤校验
 - `get_default_config()`: 从 `ConfigClass` 自动生成默认配置字典（`model_construct().model_dump()`），供 AI 创建节点和前端新建节点时使用
 - `get_config_schema()`: 从 `ConfigClass` 的 JSON Schema 提取字段描述，供前端 `/api/ai/flow/config-schemas` 接口返回
   - **Pydantic v2 注意**: `default_factory` 字段在 `model_json_schema()` 中不含 `"default"` 键，`_schema_from_pydantic` 已通过回查 `model_fields[name].default_factory()` 补偿。新增 `default_factory` 字段无需额外处理
@@ -310,22 +305,19 @@ class MyNodeHandler(BaseNodeHandler):
 17. **LLM 配置注入**: `LlmToolNodeHandler` 在工具收集阶段会将 `model/api_key/base_url` 注入到 `handler._llm_config`（记忆节点 AI 总结需要）
 18. **记忆搜索范围**: `memory_search` 默认搜索 warm/cold 层级，hot 层已通过 `get_system_prompt_hint` 全量注入；可指定 `tier='hot'` 搜索热记忆详细内容；`memory_get` 可通过 ID 精确获取记忆完整内容
 19. **工具节点单实例约束**: `skill`、`memory` 等使用固定工具名的节点，同一 LLM 只能连接一个该类型节点（`allow_multiple_tool_connections()=False`），保存边时在 `flow_edge_api` 和 `ai_flow_api` 校验
-20. **配置级单实例约束**: `api`、`python` 等工具节点，未开启 `use_preset_for_tool` 时使用固定工具名，同一 LLM 只能连接一个；开启后工具名基于节点名生成，允许多个。通过 `get_tool_singleton_config_field()` 返回控制字段名，`validate_tool_edges` 查询节点 `base_config` 后按字段值过滤校验
-21. **工具边校验合并已有边**: `validate_tool_edges` 会查询数据库中已有的 `source_handle="tools"` 边，与本次提交的边合并后统一校验（通过 `(source_key, target_key)` 去重），兼容 `batch_save`（全量提交）和 `batch_create`（增量提交）两种调用方式
-22. **边批量保存接口**: 前端 `saveFlow` 通过 `POST /api/flow-edge/batch-save` 将 `edgesToCreate` 和 `edgesToUpdate` 合并为一次请求发送，后端一次性校验全量边数据后执行创建和更新
-23. **知识库系统提示词**: `KnowledgeNodeHandler` 实现 `get_system_prompt_hint`，作为工具连接到 LLM 时自动注入知识库名称、简介和使用规则
-24. **文档异步处理**: 上传只存文件立即返回，APScheduler 定时任务轮询处理（解析→分段→向量化），`processing_status` 状态流转（0待处理→1处理中→2已完成→3失败）
-25. **循环嵌套禁止**: 循环节点内不能嵌套另一个循环节点（直接或通过能力卡片间接），前端 NodePanel 在循环子视图中隐藏循环节点，后端 `flow_node_api` 的 `create/update/batch_create/batch_update` 四个路径均校验
-26. **循环嵌套跨 flow 检查**: `_check_nested_loop` 查询所有 card 节点的 `base_config.ref_flow_id`，找到引用当前 flow 的 card 后检查其 node_key 祖先是否有 loop
-27. **卡片循环嵌套检查**: `_check_card_loop_nesting` 当 card 节点在 loop 内时，检查其 `ref_flow_id` 对应的 flow 是否含 loop 节点
-28. **子图基础设施**: `BaseSubgraphBuilder`（3 个可重写钩子：`_collect_nodes`、`_prepare_node`、`_get_event_meta`）、`SubgraphRunner.stream()`（NodeExecution CRUD）、`edge_router.wire_edges(iteration_guard=False)`（子图用 False 禁用循环保护）
-29. **边路由互斥分支处理**: `wire_edges()` 默认对同一目标的多个入边创建 `NamedBarrierValue` 屏障（等待所有前驱完成）。当所有入边源来自同一个条件路由器（condition/intent_router/表达式条件边）时为互斥分支，此时逐条 `add_edge` 而非创建屏障，避免屏障永远无法满足导致流程卡死
-30. **子视图节点面板**: 循环子视图中隐藏循环节点但显示条件节点，卡片子视图中所有节点均可使用
-31. **能力卡片子视图添加**: `addFlowCardNode` 接受可选 `parentId` 参数，在子视图中自动加 `parentId__` 前缀到节点 id
-32. **MySQL Checkpointer**: ormsgpack 序列化 + gzip 压缩，自动检测 gzip 魔数解压
-33. **删除历史必须同步清理 checkpoint**: 对话历史采用双写机制（LangGraph checkpoint + DB），删除/修改 DB 消息后必须同步清理 checkpoint，否则下次对话时 checkpoint 中的旧消息会通过增量写入重新回填 DB。统一使用 `_cleanup_thread_checkpoint(session_id)` 方法清理
-34. **变量解析优先级**: `variable_resolver.py` 统一解析变量，无前缀时按 context（input_variables 映射）> input（state.input_data）> variables（state.variables）顺序查找
-35. **消息缓冲区**: `message_buffer.py` 管理对话消息的完整生命周期（加载历史→追加→压缩→持久化到 DB），SSE 流式方法中自动管理
+20. **知识库系统提示词**: `KnowledgeNodeHandler` 实现 `get_system_prompt_hint`，作为工具连接到 LLM 时自动注入知识库名称、简介和使用规则
+21. **文档异步处理**: 上传只存文件立即返回，APScheduler 定时任务轮询处理（解析→分段→向量化），`processing_status` 状态流转（0待处理→1处理中→2已完成→3失败）
+22. **循环嵌套禁止**: 循环节点内不能嵌套另一个循环节点（直接或通过能力卡片间接），前端 NodePanel 在循环子视图中隐藏循环节点，后端 `flow_node_api` 的 `create/update/batch_create/batch_update` 四个路径均校验
+23. **循环嵌套跨 flow 检查**: `_check_nested_loop` 查询所有 card 节点的 `base_config.ref_flow_id`，找到引用当前 flow 的 card 后检查其 node_key 祖先是否有 loop
+24. **卡片循环嵌套检查**: `_check_card_loop_nesting` 当 card 节点在 loop 内时，检查其 `ref_flow_id` 对应的 flow 是否含 loop 节点
+25. **子图基础设施**: `BaseSubgraphBuilder`（3 个可重写钩子：`_collect_nodes`、`_prepare_node`、`_get_event_meta`）、`SubgraphRunner.stream()`（NodeExecution CRUD）、`edge_router.wire_edges(iteration_guard=False)`（子图用 False 禁用循环保护）
+26. **边路由互斥分支处理**: `wire_edges()` 默认对同一目标的多个入边创建 `NamedBarrierValue` 屏障（等待所有前驱完成）。当所有入边源来自同一个条件路由器（condition/intent_router/表达式条件边）时为互斥分支，此时逐条 `add_edge` 而非创建屏障，避免屏障永远无法满足导致流程卡死
+27. **子视图节点面板**: 循环子视图中隐藏循环节点但显示条件节点，卡片子视图中所有节点均可使用
+28. **能力卡片子视图添加**: `addFlowCardNode` 接受可选 `parentId` 参数，在子视图中自动加 `parentId__` 前缀到节点 id
+29. **MySQL Checkpointer**: ormsgpack 序列化 + gzip 压缩，自动检测 gzip 魔数解压
+30. **删除历史必须同步清理 checkpoint**: 对话历史采用双写机制（LangGraph checkpoint + DB），删除/修改 DB 消息后必须同步清理 checkpoint，否则下次对话时 checkpoint 中的旧消息会通过增量写入重新回填 DB。统一使用 `_cleanup_thread_checkpoint(session_id)` 方法清理
+31. **变量解析优先级**: `variable_resolver.py` 统一解析变量，无前缀时按 context（input_variables 映射）> input（state.input_data）> variables（state.variables）顺序查找
+32. **消息缓冲区**: `message_buffer.py` 管理对话消息的完整生命周期（加载历史→追加→压缩→持久化到 DB），SSE 流式方法中自动管理
 
 ### 前端
 
