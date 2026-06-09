@@ -79,6 +79,20 @@ class AgentResumeRequest(BaseModel):
     human_input: str = Field(..., description="人工输入内容")
 
 
+class AgentSessionPageRequest(BaseModel):
+    """会话列表分页请求"""
+
+    page: int = Field(1, ge=1, description="页码")
+    page_size: int = Field(20, ge=1, le=100, description="每页条数")
+
+
+class AgentMessagePageRequest(BaseModel):
+    """消息列表分页请求"""
+
+    before_id: Optional[int] = Field(None, description="分页游标，获取此ID之前的消息")
+    limit: int = Field(20, ge=1, le=100, description="每页条数")
+
+
 class AgentSessionListResponse(BaseModel):
     """Agent会话列表响应"""
 

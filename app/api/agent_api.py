@@ -5,7 +5,6 @@ Agent API 路由
 
 import asyncio
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -22,8 +21,10 @@ from app.utils.sse import create_sse_response
 from app.schemas.agent_schema import (
     AgentSessionResponse,
     AgentSessionListResponse,
+    AgentSessionPageRequest,
     AgentMessageResponse,
     AgentMessageListResponse,
+    AgentMessagePageRequest,
     AgentChatRequest,
     AgentResumeRequest,
     AgentFlowResponse,
@@ -105,13 +106,12 @@ class AgentApi:
         )
         async def get_sessions(
             id: int,
-            page: int = 1,
-            page_size: int = 20,
+            req: AgentSessionPageRequest,
             db: AsyncSession = Depends(get_db),
         ):
             """获取Agent的会话列表"""
             sessions, total = await agent_executor_service.get_sessions(
-                db, id, page, page_size
+                db, id, req.page, req.page_size
             )
             session_list = [AgentSessionResponse.model_validate(s) for s in sessions]
             return ApiResponse.success(
@@ -178,13 +178,12 @@ class AgentApi:
         async def get_messages(
             id: int,
             session_id: int,
-            before_id: Optional[int] = None,
-            limit: int = 20,
+            req: AgentMessagePageRequest,
             db: AsyncSession = Depends(get_db),
         ):
             """获取会话的消息历史，支持分页加载"""
             messages, total = await agent_executor_service.get_messages(
-                db, session_id, limit=limit, before_id=before_id
+                db, session_id, limit=req.limit, before_id=req.before_id
             )
             message_list = []
             for m in messages:

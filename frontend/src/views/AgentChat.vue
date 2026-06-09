@@ -289,18 +289,24 @@ function initLoadMoreObserver() {
 async function handleLoadMore() {
   if (!agentId.value || isLoadingMore.value) return
   isLoadingMore.value = true
+  // 加载期间取消观察，避免重复触发
+  if (loadMoreObserver && loadMoreSentinel.value) {
+    loadMoreObserver.unobserve(loadMoreSentinel.value)
+  }
   try {
     const prevScrollHeight = messagesContainer.value?.scrollHeight || 0
-    const addedCount = await store.loadMoreMessages(agentId.value)
-    if (addedCount && addedCount > 0 && messagesContainer.value) {
-      await nextTick()
-      const newHeight = messagesContainer.value.scrollHeight
+    await store.loadMoreMessages(agentId.value)
+    await nextTick()
+    const newHeight = messagesContainer.value?.scrollHeight || 0
+    if (newHeight > prevScrollHeight && messagesContainer.value) {
       messagesContainer.value.scrollTop = newHeight - prevScrollHeight
     }
   } finally {
-    setTimeout(() => {
-      isLoadingMore.value = false
-    }, 300)
+    isLoadingMore.value = false
+    // 加载完毕后重新观察
+    if (loadMoreObserver && loadMoreSentinel.value) {
+      loadMoreObserver.observe(loadMoreSentinel.value)
+    }
   }
 }
 
@@ -467,7 +473,7 @@ function handleRejectTools() {
         </div>
       </template>
       <div v-show="!store.messagesLoading">
-        <div ref="loadMoreSentinel" class="load-more-sentinel">
+        <div v-if="store.hasMoreMessages" ref="loadMoreSentinel" class="load-more-sentinel">
           <div v-show="isLoadingMore" class="load-more-dots">
             <span></span>
             <span></span>
