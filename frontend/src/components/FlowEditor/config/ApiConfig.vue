@@ -35,6 +35,8 @@ function ensureDefaults(): void {
   if (!c.content_type) c.content_type = 'application/json'
   if (!c.form_fields) c.form_fields = []
   if (!c.input_variables) c.input_variables = []
+  if (c.use_preset_for_tool === undefined) c.use_preset_for_tool = false
+  if (!c.description) c.description = ''
   if (!c.file_config) {
     c.file_config = {
       upload_fields: [],
@@ -339,6 +341,38 @@ function updateFormField(): void {
           </template>
         </el-text>
       </div>
+    </div>
+
+    <div class="config-section">
+      <div class="section-title">工具模式</div>
+      <el-form label-width="100px" size="small">
+        <el-form-item label="使用预设参数">
+          <el-switch
+            :model-value="localConfig.use_preset_for_tool"
+            active-text="开"
+            inactive-text="关"
+            @change="
+              (val: boolean | string) => {
+                localConfig.use_preset_for_tool = !!val
+                if (!val) localConfig.description = ''
+                updateConfig()
+              }
+            "
+          />
+          <el-text size="small" type="info" style="margin-left: 12px">
+            开启后作为工具时使用已配置的URL/方法/请求体，LLM 只提供输入变量值
+          </el-text>
+        </el-form-item>
+        <el-form-item v-if="localConfig.use_preset_for_tool" label="工具描述">
+          <el-input
+            v-model="localConfig.description"
+            type="textarea"
+            :rows="2"
+            placeholder="描述工具的用途，LLM 据此判断何时调用（如：向 eLink 会话发送文本消息）"
+            @blur="updateConfig"
+          />
+        </el-form-item>
+      </el-form>
     </div>
 
     <div class="config-section">
