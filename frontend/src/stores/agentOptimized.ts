@@ -27,7 +27,7 @@ export const useAgentStore = defineStore('agent', () => {
 
   // ========== 消息分页状态 ==========
   const messageTotal = ref(0)
-  const hasMoreMessages = computed(() => chatMessages.value.length < messageTotal.value)
+  const hasMoreMessages = computed(() => messages.value.length < messageTotal.value)
   const loadingMoreMessages = ref(false)
 
   // ========== 会话分页状态 ==========
@@ -209,38 +209,32 @@ export const useAgentStore = defineStore('agent', () => {
   /**
    * 加载更多历史消息（向上翻页）
    */
-  async function loadMoreMessages(agentId: number, depth = 0) {
-    if (!currentSession.value || loadingMoreMessages.value || !hasMoreMessages.value) return
-    if (depth > 5) return 0
+  async function loadMoreMessages(agentId: number) {
+    if (!currentSession.value || loadingMoreMessages.value || !hasMoreMessages.value) return 0
     const firstMsgId = messages.value[0]?.id
-    if (!firstMsgId) return
+    if (!firstMsgId) return 0
 
     loadingMoreMessages.value = true
-    let added = 0
-    let hasData = false
     try {
       const res = await agentApi.getMessages(agentId, currentSession.value.id, firstMsgId)
       if (res.data.code === 1) {
         const olderMessages = res.data.data?.list || []
         if (olderMessages.length > 0) {
-          hasData = true
           messageTotal.value = res.data.data?.total || messageTotal.value
           messages.value = [...olderMessages, ...messages.value]
-          const prevCount = chatMessages.value.length
           rebuildChatMessages()
           await nextTick()
-          added = chatMessages.value.length - prevCount
+          return olderMessages.length
         }
+        // 返回空说明已到顶，修正 total 防止 hasMoreMessages 永远为 true
+        messageTotal.value = messages.value.length
       }
     } catch (e) {
       console.error('[loadMoreMessages] error', e)
     } finally {
       loadingMoreMessages.value = false
     }
-    if (hasData && added === 0 && hasMoreMessages.value) {
-      return await loadMoreMessages(agentId, depth + 1)
-    }
-    return added
+    return 0
   }
 
   // ========== 消息处理 ==========
