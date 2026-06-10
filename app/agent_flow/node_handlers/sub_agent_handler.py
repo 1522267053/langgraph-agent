@@ -1,7 +1,7 @@
 """
 子Agent节点处理器
 
-将已发布的Agent作为工具提供给父Agent调用。
+将Agent作为工具提供给父Agent调用。
 阻塞模式执行，执行期间通过 writer 发送心跳事件保持 SSE 连接。
 """
 
@@ -10,17 +10,15 @@ import json
 import logging
 import re
 import uuid
-from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from langchain_core.tools import StructuredTool
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
-from pydantic import BaseModel, Field
+from pydantic import Field, create_model
 
 from app.config.build_utils import get_temp_dir
 from app.config.database import AsyncSessionLocal
-from app.models.flow import FlowStatus
 from app.models.flow_node import FlowNode
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.node_handlers.base_handler import BaseNodeHandler, BaseNodeConfig
@@ -35,28 +33,20 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_OUTPUT_LINES = 500
 MAX_TOOL_OUTPUT_BYTES = 10240
-MAX_FILE_READ_LINES = 100
 HEARTBEAT_INTERVAL = 20
+
+_TYPE_MAP = {
+    "string": str,
+    "number": float,
+    "integer": int,
+    "boolean": bool,
+}
 
 
 class SubAgentNodeConfig(BaseNodeConfig):
     """子Agent节点配置"""
 
-    agent_id: int = Field(..., description="引用的已发布Agent ID")
-
-
-class AskSubAgentInput(BaseModel):
-    """ask 工具输入参数"""
-
-    task: str = Field(..., description="要委派给子Agent执行的任务描述")
-
-
-class ReadAgentFileInput(BaseModel):
-    """read_agent_file 工具输入参数"""
-
-    file_path: str = Field(..., description="要读取的文件路径")
-    offset: int = Field(default=1, description="起始行号（从1开始）")
-    limit: int = Field(default=100, description="读取行数，最多100行")
+    agent_id: int = Field(..., description="引用的Agent ID")
 
 
 def _truncate_output(text: str) -> dict:
@@ -111,11 +101,62 @@ def _sanitize_tool_name(name: str) -> str:
     return sanitized[:30] if sanitized else "agent"
 
 
+def _build_ask_tool_schema(agent_name: str, input_schema: dict | None):
+    """根据子Agent的input_schema动态构建ask工具的参数模型
+
+    Returns:
+        (Pydantic模型类, file_list字段名集合)
+    """
+    tool_prefix = _sanitize_tool_name(agent_name)
+    model_name = f"Ask{tool_prefix}Input"
+
+    fields_def: dict[str, tuple] = {
+        "task": (str, Field(..., description="要委派给子Agent执行的任务描述")),
+    }
+
+    file_list_fields: set[str] = set()
+    schema_fields: list[dict] = []
+
+    if input_schema:
+        schema_fields = input_schema.get("fields") or []
+        for sf in schema_fields:
+            name = sf.get("name")
+            field_type = sf.get("type", "string")
+            description = sf.get("description", "")
+            required = sf.get("required", False)
+
+            if not name or name == "message":
+                continue
+
+            if field_type == "file_list":
+                file_list_fields.add(name)
+                desc = (
+                    f"{description}（逗号分隔的文件ID，例如 '1,2,3'）"
+                    if description
+                    else "逗号分隔的文件ID，例如 '1,2,3'"
+                )
+                py_type = str
+            else:
+                py_type = _TYPE_MAP.get(field_type, str)
+                desc = description
+
+            if required:
+                fields_def[name] = (py_type, Field(..., description=desc))
+            else:
+                fields_def[name] = (
+                    Optional[py_type],
+                    Field(default=None, description=desc),
+                )
+
+    model = create_model(model_name, **fields_def)
+    return model, file_list_fields
+
+
 @NodeHandlerRegistry.register("sub_agent")
 class SubAgentNodeHandler(BaseNodeHandler):
     """子Agent节点处理器
 
-    将已发布的Agent作为工具提供给父Agent调用。
+    将Agent作为工具提供给父Agent调用。
     阻塞模式执行子Agent，期间通过 writer 心跳保持 SSE 活跃。
     取消由父Agent的中断机制传播（CancelledError）。
     """
@@ -157,12 +198,23 @@ class SubAgentNodeHandler(BaseNodeHandler):
         async with AsyncSessionLocal() as db:
             agent = await flow_service.get_by_id(db, agent_id, raise_not_found=False)
 
-        if not agent or agent.status != FlowStatus.PUBLISHED.value:
+        if not agent:
             return []
 
         agent_name = agent.name or f"agent_{agent_id}"
         tool_prefix = _sanitize_tool_name(agent_name)
         description = agent.description or ""
+
+        input_schema = None
+        if hasattr(agent, "input_schema") and agent.input_schema:
+            input_schema = agent.input_schema
+            if isinstance(input_schema, str):
+                try:
+                    input_schema = json.loads(input_schema)
+                except (json.JSONDecodeError, TypeError):
+                    input_schema = None
+
+        ask_schema, file_list_fields = _build_ask_tool_schema(agent_name, input_schema)
 
         tools: list[StructuredTool] = []
 
@@ -176,9 +228,27 @@ class SubAgentNodeHandler(BaseNodeHandler):
         handler_ref = self
         _agent_id = agent_id
         _agent_name = agent_name
+        _file_list_fields = file_list_fields
 
-        async def ask_agent(task: str) -> str:
+        async def ask_agent(**kwargs) -> dict:
             from app.services.agent_executor_service import agent_executor_service
+
+            task = kwargs.get("task", "")
+            extra_params: dict = {
+                k: v for k, v in kwargs.items() if k != "task" and v is not None
+            }
+
+            # 将 file_list 字段从逗号分隔字符串转为 int 列表
+            for fname in _file_list_fields:
+                if fname in extra_params and isinstance(extra_params[fname], str):
+                    try:
+                        extra_params[fname] = [
+                            int(x.strip())
+                            for x in extra_params[fname].split(",")
+                            if x.strip()
+                        ]
+                    except ValueError:
+                        pass
 
             session_id = 0
             try:
@@ -193,7 +263,9 @@ class SubAgentNodeHandler(BaseNodeHandler):
                     await db.commit()
 
                 # 在后台执行子Agent
-                agent_task = asyncio.create_task(_run_sub_agent(session_id, task))
+                agent_task = asyncio.create_task(
+                    _run_sub_agent(session_id, task, extra_params)
+                )
 
                 # 阻塞等待，定期发心跳保持 SSE
                 while True:
@@ -225,9 +297,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
 
             except Exception as e:
                 logger.error(f"子Agent执行失败: {e}", exc_info=True)
-                return json.dumps(
-                    {"error": f"子Agent执行失败: {str(e)}"}, ensure_ascii=False
-                )
+                return {"error": f"子Agent执行失败: {str(e)}"}
 
         tools.append(
             StructuredTool(
@@ -235,79 +305,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
                 description=ask_desc,
                 func=None,
                 coroutine=ask_agent,
-                args_schema=AskSubAgentInput,
-            )
-        )
-
-        # ---- read_agent_file 通用工具 ----
-        read_desc = (
-            "读取子Agent被截断的输出文件。"
-            "当子Agent返回结果提示「可用 read_agent_file 读取」时，使用此工具读取完整内容。"
-            "每次最多读取100行。"
-        )
-
-        async def read_agent_file(
-            file_path: str, offset: int = 1, limit: int = 100
-        ) -> str:
-            try:
-                path = Path(file_path).resolve()
-
-                if ".." in Path(file_path).parts:
-                    return json.dumps(
-                        {"error": "文件路径不允许包含 '..'"}, ensure_ascii=False
-                    )
-
-                temp_dir = get_temp_dir().resolve()
-                if not str(path).startswith(str(temp_dir)):
-                    return json.dumps(
-                        {"error": "只能读取子Agent输出目录中的文件"}, ensure_ascii=False
-                    )
-
-                if not path.exists():
-                    return json.dumps(
-                        {"error": f"文件不存在: {file_path}"}, ensure_ascii=False
-                    )
-
-                content = path.read_text(encoding="utf-8")
-                all_lines = content.splitlines()
-                total_lines = len(all_lines)
-
-                actual_offset = max(1, offset)
-                actual_limit = min(limit, MAX_FILE_READ_LINES)
-
-                start_idx = actual_offset - 1
-                end_idx = min(start_idx + actual_limit, total_lines)
-
-                selected_lines = all_lines[start_idx:end_idx]
-                numbered = [
-                    f"{i + actual_offset}: {line}"
-                    for i, line in enumerate(selected_lines)
-                ]
-                has_more = end_idx < total_lines
-
-                return json.dumps(
-                    {
-                        "file_path": file_path,
-                        "total_lines": total_lines,
-                        "offset": actual_offset,
-                        "limit": actual_limit,
-                        "content": "\n".join(numbered),
-                        "has_more": has_more,
-                    },
-                    ensure_ascii=False,
-                )
-            except Exception as e:
-                return json.dumps(
-                    {"error": f"读取文件失败: {str(e)}"}, ensure_ascii=False
-                )
-
-        tools.append(
-            StructuredTool(
-                name="read_agent_file",
-                description=read_desc,
-                func=None,
-                coroutine=read_agent_file,
-                args_schema=ReadAgentFileInput,
+                args_schema=ask_schema,
             )
         )
 
@@ -328,21 +326,23 @@ class SubAgentNodeHandler(BaseNodeHandler):
         return False
 
 
-async def _run_sub_agent(session_id: int, task: str) -> str:
+async def _run_sub_agent(
+    session_id: int, task: str, params: dict | None = None
+) -> dict:
     """执行子Agent并返回结果"""
     from app.services.agent_executor_service import agent_executor_service
 
     content = ""
-    async for event in agent_executor_service.chat_stream(session_id, task, {}):
+    async for event in agent_executor_service.chat_stream(
+        session_id, task, params or {}
+    ):
         event_type = event.get("type", "")
         if event_type == "flow_done":
             output = event.get("data", {}).get("output_data", {})
             content = output.get("content", "") if isinstance(output, dict) else ""
         elif event_type == "error":
             error_msg = event.get("data", {}).get("message", "未知错误")
-            return json.dumps(
-                {"error": f"子Agent执行出错: {error_msg}"}, ensure_ascii=False
-            )
+            return {"error": f"子Agent执行出错: {error_msg}"}
 
     truncated = _truncate_output(content)
-    return truncated["text"]
+    return truncated

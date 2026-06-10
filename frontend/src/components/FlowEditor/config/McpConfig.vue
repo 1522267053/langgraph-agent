@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { inject, ref, watch, type Ref } from 'vue'
+import { ref, watch } from 'vue'
+import { mcpServerApi } from '@/api/mcpServer'
 import type { McpConfig } from './types'
 
 const props = defineProps<{
@@ -11,10 +12,24 @@ const emit = defineEmits<{
   (e: 'update:config', value: McpConfig): void
 }>()
 
-const mcpServers = inject<Ref<{ id: number; name: string; description?: string }[]>>(
-  'mcpServers',
-  ref([])
-)
+const mcpServers = ref<{ id: number; name: string; description?: string }[]>([])
+const loading = ref(false)
+
+async function loadMcpServers(): Promise<void> {
+  if (mcpServers.value.length || loading.value) return
+  loading.value = true
+  try {
+    const res = await mcpServerApi.list()
+    if (res.data.code === 1 && res.data.data) {
+      mcpServers.value = res.data.data
+    }
+  } catch {
+    mcpServers.value = []
+  } finally {
+    loading.value = false
+  }
+}
+loadMcpServers()
 
 function cloneConfig(c: McpConfig): McpConfig {
   return { ...c, mcp_server_ids: [...(c.mcp_server_ids ?? [])] }
@@ -52,6 +67,7 @@ function updateConfig(): void {
             v-model="localConfig.mcp_server_ids"
             placeholder="选择MCP服务器"
             style="width: 100%"
+            :loading="loading"
             multiple
             collapse-tags
             collapse-tags-tooltip

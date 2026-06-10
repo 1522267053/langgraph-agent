@@ -5,6 +5,7 @@ Agent API 路由
 
 import asyncio
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -77,9 +78,13 @@ class AgentApi:
             response_model=ApiResponse[AgentFlowListResponse],
             summary="获取Agent列表",
         )
-        async def get_agent_list(db: AsyncSession = Depends(get_db)):
-            """获取所有Agent（flow_type=agent的Flow）"""
-            flows, total = await flow_service.get_by_flow_type(db, FlowType.AGENT.value)
+        async def get_agent_list(
+            exclude_id: Optional[int] = None, db: AsyncSession = Depends(get_db)
+        ):
+            """获取所有Agent（flow_type=agent的Flow），可排除指定ID"""
+            flows, total = await flow_service.get_by_flow_type(
+                db, FlowType.AGENT.value, exclude_id=exclude_id
+            )
             agents = [AgentFlowResponse.model_validate(f) for f in flows]
             return ApiResponse.success(
                 data=AgentFlowListResponse(total=total, list=agents), msg="查询成功"

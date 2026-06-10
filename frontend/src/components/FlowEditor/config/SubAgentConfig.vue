@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { inject, ref, watch, type Ref } from 'vue'
+import { ref, watch } from 'vue'
+import { agentApi } from '@/api/agent'
+import { useFlowStore } from '@/stores/flowStore'
 import type { SubAgentConfig } from './types'
 
 const props = defineProps<{
@@ -12,10 +14,10 @@ const emit = defineEmits<{
   (e: 'update:label', value: string): void
 }>()
 
-const agents = inject<Ref<{ id: number; name: string; description?: string }[]>>(
-  'agents',
-  ref([])
-)
+const store = useFlowStore()
+const agents = ref<{ id: number; name: string; description?: string }[]>([])
+const loaded = ref(false)
+const loading = ref(false)
 
 const localConfig = ref<SubAgentConfig>({ agent_id: null })
 
@@ -28,6 +30,24 @@ watch(
   },
   { deep: true, immediate: true }
 )
+
+async function loadAgents(): Promise<void> {
+  if (loaded.value || loading.value) return
+  loading.value = true
+  try {
+    const currentId = store.flowInfo.value?.id
+    const res = await agentApi.list(currentId)
+    if (res.data.code === 1 && res.data.data) {
+      agents.value = res.data.data.list || []
+    }
+    loaded.value = true
+  } catch {
+    agents.value = []
+  } finally {
+    loading.value = false
+  }
+}
+loadAgents()
 
 function updateConfig(): void {
   const selectedAgent = agents.value.find(a => a.id === localConfig.value.agent_id)
@@ -46,9 +66,10 @@ function updateConfig(): void {
         <el-form-item label="选择Agent">
           <el-select
             v-model="localConfig.agent_id"
-            placeholder="选择已发布的Agent"
+            placeholder="选择Agent"
             style="width: 100%"
             filterable
+            :loading="loading"
             @change="updateConfig"
           >
             <el-option
@@ -56,21 +77,14 @@ function updateConfig(): void {
               :key="agent.id"
               :label="agent.name"
               :value="agent.id"
-            >
-              <div class="agent-option">
-                <span class="agent-name">{{ agent.name }}</span>
-                <span v-if="agent.description" class="agent-desc">
-                  {{ agent.description }}
-                </span>
-              </div>
-            </el-option>
+            />
           </el-select>
         </el-form-item>
       </el-form>
       <div class="config-hint">
         <el-text size="small" type="info">
           子Agent节点需通过工具连接到LLM节点使用。
-          被引用的Agent必须已发布且填写了描述。
+          被引用的Agent必须填写了描述。
         </el-text>
       </div>
     </div>
@@ -92,23 +106,5 @@ function updateConfig(): void {
 .config-hint {
   margin-top: 8px;
   line-height: 1.5;
-}
-
-.agent-option {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.agent-name {
-  font-size: 13px;
-}
-
-.agent-desc {
-  font-size: 11px;
-  color: #94a3b8;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 </style>

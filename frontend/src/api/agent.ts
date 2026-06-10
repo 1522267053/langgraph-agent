@@ -21,9 +21,12 @@ export type AgentWaitData = SSEWaitData
 export const agentApi = {
   /**
    * 获取Agent列表
+   * @param excludeId 排除的Agent ID（防止选择自身）
    */
-  list() {
-    return get<ListResponse<AgentFlow>>('/agent/list')
+  list(excludeId?: number) {
+    const params: Record<string, number> = {}
+    if (excludeId !== undefined) params.exclude_id = excludeId
+    return get<ListResponse<AgentFlow>>('/agent/list', params)
   },
 
   /**

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent_flow.exceptions import FlowValidationError
 from app.api.base_api import BaseApi, RouteConfig
 from app.constants.node_types import NODE_TYPE_LABELS
-from app.models.flow import Flow, FlowStatus, FlowType
+from app.models.flow import Flow, FlowType
 from app.models.flow_node import (
     AGENT_ALLOWED_NODE_TYPES,
     AGENT_UNIQUE_NODE_TYPES,
@@ -271,8 +271,6 @@ class FlowNodeApi(
             raise FlowValidationError("被引用的Agent不存在")
         if agent.flow_type != FlowType.AGENT.value:
             raise FlowValidationError("子Agent节点只能引用智能体(Agent)类型的流程")
-        if agent.status != FlowStatus.PUBLISHED.value:
-            raise FlowValidationError("只能引用已发布的Agent")
         if not agent.description or not agent.description.strip():
             raise FlowValidationError(
                 "被引用的Agent必须填写描述(description)，以便父Agent了解其能力"

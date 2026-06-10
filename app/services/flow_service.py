@@ -551,7 +551,12 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         return list(result.scalars().all())
 
     async def get_by_flow_type(
-        self, db: AsyncSession, flow_type: str, page: int = 1, page_size: int = 20
+        self,
+        db: AsyncSession,
+        flow_type: str,
+        page: int = 1,
+        page_size: int = 20,
+        exclude_id: Optional[int] = None,
     ) -> tuple[List[Flow], int]:
         """
         根据流程类型获取流程列表
@@ -566,10 +571,13 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             tuple[List[Flow], int]: 流程列表和总数
         """
         # 计算总数
+        conditions = [Flow.flow_type == flow_type, Flow.is_delete == 0]
+        if exclude_id is not None:
+            conditions.append(Flow.id != exclude_id)
         count_query = (
             select(func.count())
             .select_from(Flow)
-            .where(Flow.flow_type == flow_type, Flow.is_delete == 0)
+            .where(*conditions)
         )
         count_result = await db.execute(count_query)
         total = count_result.scalar() or 0
@@ -578,7 +586,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         offset = (page - 1) * page_size
         query = (
             select(Flow)
-            .where(Flow.flow_type == flow_type, Flow.is_delete == 0)
+            .where(*conditions)
             .order_by(Flow.id.desc())
             .offset(offset)
             .limit(page_size)
