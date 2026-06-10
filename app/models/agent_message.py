@@ -22,6 +22,9 @@ class AgentMessage(DbBaseModel):
         String(20), nullable=False, comment="system/user/assistant/tool"
     )
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="消息内容")
+    original_content: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, comment="原始用户消息内容（未渲染模板的）"
+    )
     thinking: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, comment="思考内容"
     )

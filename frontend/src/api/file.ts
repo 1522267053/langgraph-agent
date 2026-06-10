@@ -47,6 +47,6 @@ export const fileApi = {
   },
 
   batchDelete(ids: number[]) {
-    return post<ApiResponse>('/file/deleteBatch', ids)
+    return post<ApiResponse>('/file/delete-batch', ids)
   }
 }

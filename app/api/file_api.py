@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,9 +66,9 @@ class FileApi(BaseApi[FileModel, FileBase, FileCondition, FileView, FileView]):
             await file_service.delete_with_physical(db, file_id)
             return ApiResponse.success(msg="删除成功")
 
-        @self.router.post("/deleteBatch", summary="批量删除文件")
+        @self.router.post("/delete-batch", summary="批量删除文件")
         async def batch_delete_files(
-            ids: list[int] = Body(..., embed=True), db: AsyncSession = Depends(get_db)
+            ids: list[int], db: AsyncSession = Depends(get_db)
         ):
             for fid in ids:
                 await file_service.delete_with_physical(db, fid)

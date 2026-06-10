@@ -405,9 +405,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
             state.set_conversation_messages(node.node_key, list(msg_buf.messages))
             await msg_buf.save_to_db()
         except asyncio.CancelledError:
-            logger.info(
-                f"LLM节点被取消, node_key={node.node_key}"
-            )
+            logger.info(f"LLM节点被取消, node_key={node.node_key}")
             try:
                 await asyncio.shield(msg_buf.save_to_db())
             except Exception as e:
@@ -427,8 +425,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
             raise
         except Exception as e:
             logger.info(
-                f"LLM节点异常, node_key={node.node_key}, "
-                f"error={type(e).__name__}: {e}"
+                f"LLM节点异常, node_key={node.node_key}, error={type(e).__name__}: {e}"
             )
             try:
                 await msg_buf.save_to_db()
@@ -906,7 +903,14 @@ class LlmToolNodeHandler(BaseNodeHandler):
             content = build_multimodal_content(prompt_text, media_blocks)
         else:
             content = prompt_text
-        messages.append(HumanMessage(content=content))
+        messages.append(
+            HumanMessage(
+                content=content,
+                additional_kwargs={
+                    "_raw_user_content": state.input_data.get("message", "")
+                },
+            )
+        )
 
     # ---- 流式 LLM 调用 ----
 

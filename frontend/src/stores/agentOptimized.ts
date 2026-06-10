@@ -266,8 +266,8 @@ export const useAgentStore = defineStore('agent', () => {
         result.push({
           id: `msg-${msg.id}`,
           role: 'user',
-          content: msg.content,
-          segments: [{ type: 'content', content: msg.content }],
+          content: msg.original_content || msg.content,
+          segments: [{ type: 'content', content: msg.original_content || msg.content }],
           files: msg.files as MessageFile[] | undefined,
           createdAt: new Date(msg.created_at || Date.now())
         })
