@@ -5,9 +5,11 @@ import { useFlowStore } from '@/stores/flowStore'
 import { DArrowLeft, DArrowRight, CircleClose } from '@element-plus/icons-vue'
 import { skillApi } from '@/api/skill'
 import { knowledgeBaseApi } from '@/api/knowledge'
+import { agentApi } from '@/api/agent'
 import { useNodeSchema } from '@/composables/useNodeSchema'
 import type { Skill } from '@/types/skill'
 import type { KnowledgeBase } from '@/types/knowledge'
+import type { AgentFlow } from '@/types/agent'
 
 import {
   LlmConfigComponent,
@@ -26,7 +28,8 @@ import {
   MemoryConfigComponent,
   TodoConfigComponent,
   MediaGenConfigComponent,
-  IntentRouterConfigComponent
+  IntentRouterConfigComponent,
+  SubAgentConfigComponent
 } from './config'
 import ToolEdgeCondition from './components/ToolEdgeCondition.vue'
 
@@ -48,6 +51,7 @@ import type {
   TodoConfig,
   MediaGenNodeConfig,
   IntentRouterConfig,
+  SubAgentConfig,
   FlowIOField,
   FieldType,
   NodeVariable
@@ -109,12 +113,15 @@ const isMemoryNode = computed(() => selectedNode.value?.type === 'memory')
 const isTodoNode = computed(() => selectedNode.value?.type === 'todo')
 const isMediaGenNode = computed(() => selectedNode.value?.type === 'media_gen')
 const isIntentRouterNode = computed(() => selectedNode.value?.type === 'intent_router')
+const isSubAgentNode = computed(() => selectedNode.value?.type === 'sub_agent')
 
 const skills = ref<Skill[]>([])
 const knowledgeBases = ref<KnowledgeBase[]>([])
+const agents = ref<AgentFlow[]>([])
 
 provide('skills', skills)
 provide('knowledgeBases', knowledgeBases)
+provide('agents', agents)
 
 const flowConfig = ref({
   name: '',
@@ -287,6 +294,8 @@ const intentRouterConfig = ref<IntentRouterConfig>({
   intents: []
 })
 
+const subAgentConfig = ref<SubAgentConfig>({ agent_id: null })
+
 watch(
   () => store.flowInfo,
   info => {
@@ -323,6 +332,20 @@ async function loadKnowledgeBases(): Promise<void> {
   }
 }
 loadKnowledgeBases()
+
+async function loadAgents(): Promise<void> {
+  try {
+    const res = await agentApi.list()
+    if (res.data.code === 1 && res.data.data) {
+      agents.value = (res.data.data.list || []).filter(
+        (a: AgentFlow) => a.status === 1
+      )
+    }
+  } catch {
+    agents.value = []
+  }
+}
+loadAgents()
 
 function migrateOutputVariable(name: string, thinkingName?: string): NodeVariable[] {
   const vars: NodeVariable[] = [{ name, source: '', type: undefined }]
@@ -514,6 +537,10 @@ watch(selectedNode, async node => {
     todoConfig.value = {}
   }
 
+  if (node?.type === 'sub_agent') {
+    subAgentConfig.value = rawConfig as unknown as SubAgentConfig
+  }
+
   if (node?.type === 'media_gen' && node.data?.config) {
     mediaGenConfig.value = rawConfig as unknown as MediaGenNodeConfig
     mediaGenConfig.value.input_variables = resolveInputVars(rawConfig, 'media_gen')
@@ -651,6 +678,19 @@ function updateIntentRouterConfig(config: IntentRouterConfig): void {
   if (selectedNode.value && isIntentRouterNode.value) {
     intentRouterConfig.value = config
     store.updateNodeData(selectedNode.value.id, { config: { ...config } })
+  }
+}
+
+function updateSubAgentConfig(config: SubAgentConfig, label?: string): void {
+  if (selectedNode.value && isSubAgentNode.value) {
+    subAgentConfig.value = config
+    if (label) {
+      nodeLabel.value = label
+    }
+    store.updateNodeData(selectedNode.value.id, {
+      config: { ...config },
+      label: label || nodeLabel.value
+    })
   }
 }
 
@@ -920,6 +960,19 @@ async function handleToggleCard(val: boolean | string): Promise<void> {
           :config="intentRouterConfig"
           :current-node-id="selectedNode.id"
           @update:config="updateIntentRouterConfig"
+        />
+
+        <SubAgentConfigComponent
+          v-if="isSubAgentNode"
+          :config="subAgentConfig"
+          :node-id="selectedNode.id"
+          @update:config="(config: SubAgentConfig) => updateSubAgentConfig(config)"
+          @update:label="
+            (label: string) => {
+              nodeLabel = label
+              store.updateNodeData(selectedNode!.id, { label })
+            }
+          "
         />
 
         <EndConfigComponent

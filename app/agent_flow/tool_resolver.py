@@ -36,6 +36,8 @@ class LlmToolConfig:
         self.skill_configs: dict[str, dict] = {}
         self.memory_node_keys: list[str] = []
         self.memory_configs: dict[str, dict] = {}
+        self.sub_agent_node_keys: list[str] = []
+        self.sub_agent_configs: dict[str, dict] = {}
 
 
 def get_connected_tool_nodes(flow: FlowLike, llm_node_key: str) -> list[FlowNode]:

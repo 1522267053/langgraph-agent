@@ -26,7 +26,8 @@ import {
   List,
   Operation,
   PictureFilled,
-  Aim
+  Aim,
+  Avatar
 } from '@element-plus/icons-vue'
 
 const store = useFlowStore()
@@ -108,6 +109,13 @@ const cardNodes: {
     icon: PictureFilled,
     color: '#a855f7',
     bgColor: '#faf5ff'
+  },
+  {
+    type: 'sub_agent',
+    label: '子Agent',
+    icon: Avatar,
+    color: '#3b82f6',
+    bgColor: '#eff6ff'
   }
 ]
 
@@ -120,7 +128,8 @@ const agentToolTypes: Set<CardNodeType> = new Set([
   'shell',
   'memory',
   'todo',
-  'media_gen'
+  'media_gen',
+  'sub_agent'
 ])
 
 const filteredCardNodes = computed(() => {

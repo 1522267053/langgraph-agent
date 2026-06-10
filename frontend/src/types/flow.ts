@@ -21,6 +21,7 @@ export type CardNodeType =
   | 'memory'
   | 'todo'
   | 'media_gen'
+  | 'sub_agent'
 
 /** 所有节点类型 */
 export type AllNodeType = NodeType | CardNodeType
