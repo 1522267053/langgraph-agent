@@ -42,6 +42,9 @@ class AgentMessageBase(BaseModel):
 
     role: str = Field(..., description="system/user/assistant/tool")
     content: str = Field(..., description="消息内容")
+    original_content: Optional[str] = Field(
+        None, description="原始用户消息（未渲染模板）"
+    )
     thinking: Optional[str] = Field(None, description="思考内容")
     tool_calls: Optional[List[dict]] = Field(None, description="工具调用列表")
     tool_call_id: Optional[str] = Field(None, description="工具调用ID")

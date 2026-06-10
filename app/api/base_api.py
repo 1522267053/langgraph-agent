@@ -6,7 +6,7 @@
 """
 
 from typing import TypeVar, Generic, Optional, get_args, Sequence
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
@@ -59,7 +59,7 @@ class BaseApi(Generic[M, V, Q, C, U]):
     - POST /create - 创建（可选）
     - POST /update - 更新（可选）
     - GET /delete/{id} - 删除（可选）
-    - POST /deleteBatch - 批量删除（可选）
+    - POST /delete-batch - 批量删除（可选）
     - POST /batch-create - 批量创建（可选）
     - POST /batch-update - 批量更新（可选）
 
@@ -246,10 +246,8 @@ class BaseApi(Generic[M, V, Q, C, U]):
     def _register_batch_delete_route(self):
         """注册批量删除路由"""
 
-        @self.router.post("/deleteBatch", response_model=ApiResponse)
-        async def delete_batch(
-            ids: list[int] = Body(..., embed=True), db: AsyncSession = Depends(get_db)
-        ):
+        @self.router.post("/delete-batch", response_model=ApiResponse)
+        async def delete_batch(ids: list[int], db: AsyncSession = Depends(get_db)):
             """批量删除"""
             await self.batch_delete(db, ids)
             return ApiResponse.success(msg="删除成功")

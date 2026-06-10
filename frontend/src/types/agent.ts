@@ -52,6 +52,8 @@ export interface AgentMessage extends BaseEntity {
   role: string
   /** 消息内容 */
   content: string
+  /** 原始用户消息（未渲染模板，仅 agent 模式 human 消息有值） */
+  original_content?: string
   /** 思考过程 */
   thinking?: string
   /** 工具调用信息 */

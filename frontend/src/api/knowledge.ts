@@ -37,7 +37,7 @@ export const knowledgeBaseApi = {
   },
 
   deleteBatch(ids: number[]) {
-    return request.post<ApiResponse<void>>('/knowledge/base/deleteBatch', ids)
+    return request.post<ApiResponse<void>>('/knowledge/base/delete-batch', ids)
   }
 }
 
@@ -66,7 +66,7 @@ export const knowledgeDocumentApi = {
   },
 
   deleteBatch(ids: number[]) {
-    return request.post<ApiResponse<void>>('/knowledge/document/deleteBatch', ids)
+    return request.post<ApiResponse<void>>('/knowledge/document/delete-batch', ids)
   },
 
   upload(file: File, knowledgeBaseId: number) {

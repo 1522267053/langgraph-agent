@@ -24,7 +24,7 @@ export const skillApi = {
   },
 
   deleteBatch(ids: number[]) {
-    return request.post<ApiResponse<void>>('/skill/deleteBatch', ids)
+    return request.post<ApiResponse<void>>('/skill/delete-batch', ids)
   },
 
   search(keyword: string, limit: number = 10) {

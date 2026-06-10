@@ -82,6 +82,9 @@ class AgentConversationService:
                 "content": serialize_content(msg.content),
                 "sequence": start_sequence + i,
             }
+            raw_user = msg.additional_kwargs.get("_raw_user_content")
+            if raw_user and role == "human":
+                kwargs["original_content"] = raw_user
             if thinking:
                 kwargs["thinking"] = thinking
             if tool_calls is not None:

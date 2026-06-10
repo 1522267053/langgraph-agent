@@ -66,7 +66,7 @@ export const memoryApi = {
   },
 
   deleteBatch(ids: number[]) {
-    return request.post<ApiResponse<void>>('/memory/deleteBatch', ids)
+    return request.post<ApiResponse<void>>('/memory/delete-batch', ids)
   },
 
   revectorize(agentId: number, ids: number[]) {

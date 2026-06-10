@@ -6,7 +6,7 @@ Agent Skill API 路由
 
 import asyncio
 
-from fastapi import Body, Depends, File, UploadFile
+from fastapi import Depends, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
@@ -157,7 +157,7 @@ class SkillApi(BaseApi[Skill, SkillBase, SkillQuery, SkillCreate, SkillUpdate]):
             summary="批量重新加载Skill文件信息",
         )
         async def batch_reload_skills(
-            ids: list[int] = Body(..., embed=True), db: AsyncSession = Depends(get_db)
+            ids: list[int], db: AsyncSession = Depends(get_db)
         ):
             """批量从磁盘文件重新加载，单个失败不中断"""
             result = await skill_service.bulk_reload_from_file(db, ids)

@@ -40,7 +40,7 @@ export const flowApi = {
   },
 
   deleteBatch(ids: number[]) {
-    return request.post<ApiResponse<void>>('/flow/deleteBatch', ids)
+    return request.post<ApiResponse<void>>('/flow/delete-batch', ids)
   },
 
   saveAsCard(id: number) {
