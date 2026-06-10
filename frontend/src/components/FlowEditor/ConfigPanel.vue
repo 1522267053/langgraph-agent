@@ -3,13 +3,9 @@ import { computed, provide, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flowStore'
 import { DArrowLeft, DArrowRight, CircleClose } from '@element-plus/icons-vue'
-import { skillApi } from '@/api/skill'
 import { knowledgeBaseApi } from '@/api/knowledge'
-import { agentApi } from '@/api/agent'
 import { useNodeSchema } from '@/composables/useNodeSchema'
-import type { Skill } from '@/types/skill'
 import type { KnowledgeBase } from '@/types/knowledge'
-import type { AgentFlow } from '@/types/agent'
 
 import {
   LlmConfigComponent,
@@ -115,13 +111,9 @@ const isMediaGenNode = computed(() => selectedNode.value?.type === 'media_gen')
 const isIntentRouterNode = computed(() => selectedNode.value?.type === 'intent_router')
 const isSubAgentNode = computed(() => selectedNode.value?.type === 'sub_agent')
 
-const skills = ref<Skill[]>([])
 const knowledgeBases = ref<KnowledgeBase[]>([])
-const agents = ref<AgentFlow[]>([])
 
-provide('skills', skills)
 provide('knowledgeBases', knowledgeBases)
-provide('agents', agents)
 
 const flowConfig = ref({
   name: '',
@@ -309,18 +301,6 @@ watch(
   { immediate: true }
 )
 
-async function loadSkills(): Promise<void> {
-  try {
-    const res = await skillApi.list()
-    if (res.data.code === 1 && res.data.data) {
-      skills.value = res.data.data
-    }
-  } catch {
-    skills.value = []
-  }
-}
-loadSkills()
-
 async function loadKnowledgeBases(): Promise<void> {
   try {
     const res = await knowledgeBaseApi.page({ page: 1, page_size: 100, condition: { status: 1 } })
@@ -332,20 +312,6 @@ async function loadKnowledgeBases(): Promise<void> {
   }
 }
 loadKnowledgeBases()
-
-async function loadAgents(): Promise<void> {
-  try {
-    const res = await agentApi.list()
-    if (res.data.code === 1 && res.data.data) {
-      agents.value = (res.data.data.list || []).filter(
-        (a: AgentFlow) => a.status === 1
-      )
-    }
-  } catch {
-    agents.value = []
-  }
-}
-loadAgents()
 
 function migrateOutputVariable(name: string, thinkingName?: string): NodeVariable[] {
   const vars: NodeVariable[] = [{ name, source: '', type: undefined }]

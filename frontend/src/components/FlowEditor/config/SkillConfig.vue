@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { inject, ref, watch, type Ref } from 'vue'
+import { ref, watch } from 'vue'
+import { skillApi } from '@/api/skill'
 import type { SkillConfig } from './types'
 
 const props = defineProps<{
@@ -12,7 +13,24 @@ const emit = defineEmits<{
   // (e: 'update:label', value: string): void
 }>()
 
-const skills = inject<Ref<{ id: number; name: string }[]>>('skills', ref([]))
+const skills = ref<{ id: number; name: string }[]>([])
+const loading = ref(false)
+
+async function loadSkills(): Promise<void> {
+  if (skills.value.length || loading.value) return
+  loading.value = true
+  try {
+    const res = await skillApi.list()
+    if (res.data.code === 1 && res.data.data) {
+      skills.value = res.data.data
+    }
+  } catch {
+    skills.value = []
+  } finally {
+    loading.value = false
+  }
+}
+loadSkills()
 
 const localConfig = ref<SkillConfig>({ skill_ids: [] })
 
@@ -45,6 +63,7 @@ function updateConfig(): void {
             v-model="localConfig.skill_ids"
             placeholder="选择技能（可多选）"
             style="width: 100%"
+            :loading="loading"
             multiple
             collapse-tags
             collapse-tags-tooltip

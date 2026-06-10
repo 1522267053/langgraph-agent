@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, provide } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flowStore'
 import { executionApi } from '@/api/execution'
@@ -63,22 +63,6 @@ const configPanelCollapsed = ref(false)
 const { isMobile } = useIsMobile()
 const mobileNodePanelOpen = ref(false)
 const mobileConfigPanelOpen = ref(false)
-
-const mcpServers = ref<{ id: number; name: string; description?: string }[]>([])
-provide('mcpServers', mcpServers)
-
-async function loadMcpServers(): Promise<void> {
-  try {
-    const { mcpServerApi } = await import('@/api/mcpServer')
-    const res = await mcpServerApi.list()
-    if (res.data.code === 1 && res.data.data) {
-      mcpServers.value = res.data.data
-    }
-  } catch {
-    mcpServers.value = []
-  }
-}
-loadMcpServers()
 
 function openMobileNodePanel() {
   mobileNodePanelOpen.value = true
