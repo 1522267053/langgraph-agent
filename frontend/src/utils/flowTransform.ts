@@ -11,7 +11,7 @@ import type {
 import { ALL_NODE_TYPES } from '@/constants/nodeTypes'
 
 export function generateId(type?: string): string {
-  const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+  const suffix = Math.random().toString(36).slice(2, 8)
   return type ? `${type}_${suffix}` : `node_${suffix}`
 }
 
