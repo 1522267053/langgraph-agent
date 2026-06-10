@@ -31,6 +31,7 @@ class NodeType(str, Enum):
     LOOP = "loop"
     MEDIA_GEN = "media_gen"
     INTENT_ROUTER = "intent_router"
+    SUB_AGENT = "sub_agent"
 
 
 BASIC_NODE_TYPES: List[NodeType] = [
@@ -50,6 +51,7 @@ BASIC_NODE_TYPES: List[NodeType] = [
     NodeType.TODO,
     NodeType.MEDIA_GEN,
     NodeType.INTENT_ROUTER,
+    NodeType.SUB_AGENT,
 ]
 
 AGENT_ALLOWED_NODE_TYPES: List[str] = [
@@ -67,6 +69,7 @@ AGENT_ALLOWED_NODE_TYPES: List[str] = [
     NodeType.MEDIA_GEN.value,
     NodeType.CONDITION.value,
     NodeType.INTENT_ROUTER.value,
+    NodeType.SUB_AGENT.value,
 ]
 
 AGENT_TOOL_NODE_TYPES: set[str] = {
@@ -79,6 +82,7 @@ AGENT_TOOL_NODE_TYPES: set[str] = {
     NodeType.TODO.value,
     NodeType.API.value,
     NodeType.MEDIA_GEN.value,
+    NodeType.SUB_AGENT.value,
 }
 
 TOOL_ONLY_NODE_TYPES: set[str] = {
@@ -86,6 +90,7 @@ TOOL_ONLY_NODE_TYPES: set[str] = {
     NodeType.MCP.value,
     NodeType.MEMORY.value,
     NodeType.TODO.value,
+    NodeType.SUB_AGENT.value,
 }
 
 NODE_SOURCE_HANDLES: dict[str, set[str]] = {
@@ -107,6 +112,7 @@ NODE_SOURCE_HANDLES: dict[str, set[str]] = {
     NodeType.MEDIA_GEN.value: {"default", "tools"},
     # 意图路由：default + 每个意图 key 动态生成 handle（前端动态生成）
     NodeType.INTENT_ROUTER.value: {"default"},
+    NodeType.SUB_AGENT.value: {"tools"},
 }
 
 NODE_TARGET_HANDLES: dict[str, set[str]] = {
@@ -127,6 +133,7 @@ NODE_TARGET_HANDLES: dict[str, set[str]] = {
     NodeType.TODO.value: set(),
     NodeType.MEDIA_GEN.value: {"default"},
     NodeType.INTENT_ROUTER.value: {"default"},
+    NodeType.SUB_AGENT.value: set(),
 }
 
 AGENT_UNIQUE_NODE_TYPES: set[str] = {

@@ -16,6 +16,7 @@ import MemoryNode from './MemoryNode.vue'
 import TodoNode from './TodoNode.vue'
 import MediaGenNode from './MediaGenNode.vue'
 import IntentRouterNode from './IntentRouterNode.vue'
+import SubAgentNode from './SubAgentNode.vue'
 
 export const nodeTypes = {
   start: markRaw(StartNode),
@@ -34,7 +35,8 @@ export const nodeTypes = {
   memory: markRaw(MemoryNode),
   todo: markRaw(TodoNode),
   media_gen: markRaw(MediaGenNode),
-  intent_router: markRaw(IntentRouterNode)
+  intent_router: markRaw(IntentRouterNode),
+  sub_agent: markRaw(SubAgentNode)
 }
 
 export {
@@ -54,5 +56,6 @@ export {
   MemoryNode,
   TodoNode,
   MediaGenNode,
-  IntentRouterNode
+  IntentRouterNode,
+  SubAgentNode
 }

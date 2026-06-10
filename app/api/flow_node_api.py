@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent_flow.exceptions import FlowValidationError
 from app.api.base_api import BaseApi, RouteConfig
 from app.constants.node_types import NODE_TYPE_LABELS
-from app.models.flow import Flow, FlowType
+from app.models.flow import Flow, FlowStatus, FlowType
 from app.models.flow_node import (
     AGENT_ALLOWED_NODE_TYPES,
     AGENT_UNIQUE_NODE_TYPES,
@@ -21,6 +21,7 @@ from app.models.flow_node import (
 from app.services.flow_service import flow_service
 from app.services.global_config_service import global_config_service
 from app.schemas.flow_node_schema import FlowNodeBase, FlowNodeCreate, FlowNodeUpdate
+from app.utils.flow_utils import flow_contains_nodes
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +234,7 @@ class FlowNodeApi(
         ref_flow_id: int | None,
         base_config: dict | None,
     ) -> None:
-        """统一的节点校验：循环嵌套 + 卡片循环嵌套 + 卡片循环引用。"""
+        """统一的节点校验：循环嵌套 + 卡片循环嵌套 + 卡片循环引用 + 子Agent嵌套。"""
         if node_type == "loop":
             await self._check_nested_loop(db, flow_id, node_key)
         if node_type == "card":
@@ -249,6 +250,35 @@ class FlowNodeApi(
                 ref_flow_id=ref_flow_id,
                 base_config=base_config,
             )
+        if node_type == "sub_agent":
+            await self._check_nested_sub_agent(db, flow_id, base_config)
+
+    async def _check_nested_sub_agent(
+        self,
+        db: AsyncSession,
+        flow_id: int,
+        base_config: dict | None,
+    ) -> None:
+        """校验子Agent节点引用的Agent必须已发布、描述非空、且不含sub_agent节点"""
+        agent_id = (
+            base_config.get("agent_id") if isinstance(base_config, dict) else None
+        )
+        if not agent_id:
+            return
+
+        agent = await flow_service.get_by_id(db, agent_id, raise_not_found=False)
+        if not agent:
+            raise FlowValidationError("被引用的Agent不存在")
+        if agent.flow_type != FlowType.AGENT.value:
+            raise FlowValidationError("子Agent节点只能引用智能体(Agent)类型的流程")
+        if agent.status != FlowStatus.PUBLISHED.value:
+            raise FlowValidationError("只能引用已发布的Agent")
+        if not agent.description or not agent.description.strip():
+            raise FlowValidationError(
+                "被引用的Agent必须填写描述(description)，以便父Agent了解其能力"
+            )
+        if await flow_contains_nodes(db, agent_id, {"sub_agent"}):
+            raise FlowValidationError("子Agent节点引用的Agent不能包含子Agent节点")
 
     @staticmethod
     async def _inject_llm_defaults(

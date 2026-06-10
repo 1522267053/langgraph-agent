@@ -203,6 +203,14 @@ export const TOOL_NODE_TYPES: NodeTypeOption[] = [
         params: {}
       }
     }
+  },
+  {
+    value: 'sub_agent',
+    label: '子Agent',
+    icon: 'Avatar',
+    description: '调用已发布的Agent作为子任务执行器',
+    category: 'tool',
+    defaultConfig: { agent_id: null }
   }
 ]
 

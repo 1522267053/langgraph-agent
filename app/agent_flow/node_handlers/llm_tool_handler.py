@@ -521,7 +521,15 @@ class LlmToolNodeHandler(BaseNodeHandler):
         # 按优先级排序：静态内容靠前，动态内容（如记忆）靠后，利于 LLM 缓存命中
         prompt_hints.sort(key=lambda x: (x[0], x[1]))
 
-        return tools, [h for _, _, h in prompt_hints]
+        # 去重：同名工具只保留第一个（子Agent等节点可能产生重复的通用工具）
+        seen_names = set()
+        unique_tools = []
+        for tool in tools:
+            if tool.name not in seen_names:
+                seen_names.add(tool.name)
+                unique_tools.append(tool)
+
+        return unique_tools, [h for _, _, h in prompt_hints]
 
     # ---- ReAct 循环 ----
 

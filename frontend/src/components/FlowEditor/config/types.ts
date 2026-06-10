@@ -226,6 +226,11 @@ export interface MediaGenNodeConfig {
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface TodoConfig {}
 
+/** 子Agent节点配置 */
+export interface SubAgentConfig {
+  agent_id: number | null
+}
+
 /** 卡片节点配置 */
 export interface CardConfig {
   ref_flow_id: number
