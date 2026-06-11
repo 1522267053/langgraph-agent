@@ -163,6 +163,10 @@ class SubAgentNodeHandler(BaseNodeHandler):
 
     ConfigClass = SubAgentNodeConfig
 
+    def __init__(self):
+        super().__init__()
+        self._writer: Optional[StreamWriter] = None
+
     async def execute(
         self,
         node: FlowNode,
@@ -262,9 +266,16 @@ class SubAgentNodeHandler(BaseNodeHandler):
                     session.title = title
                     await db.commit()
 
-                # 在后台执行子Agent
+                # 在后台执行子Agent（传入 handler_ref 以转发工具审批事件）
                 agent_task = asyncio.create_task(
-                    _run_sub_agent(session_id, task, extra_params)
+                    _run_sub_agent(
+                        session_id,
+                        task,
+                        extra_params,
+                        handler_ref=handler_ref,
+                        agent_id=_agent_id,
+                        agent_name=_agent_name,
+                    )
                 )
 
                 # 阻塞等待，定期发心跳保持 SSE
@@ -288,11 +299,13 @@ class SubAgentNodeHandler(BaseNodeHandler):
                                 pass
 
             except asyncio.CancelledError:
-                # 父Agent被取消 → 中断子Agent
+                # 父Agent被取消 → 中断子Agent + 取消子Agent的工具审批等待
                 if session_id:
                     from app.services.interrupt_service import interrupt_service
+                    from app.services.tool_approval_service import tool_approval_service
 
                     interrupt_service.set_agent_interrupted(session_id)
+                    tool_approval_service.cancel(session_id)
                 raise
 
             except Exception as e:
@@ -327,10 +340,21 @@ class SubAgentNodeHandler(BaseNodeHandler):
 
 
 async def _run_sub_agent(
-    session_id: int, task: str, params: dict | None = None
+    session_id: int,
+    task: str,
+    params: dict | None = None,
+    handler_ref: Optional["SubAgentNodeHandler"] = None,
+    agent_id: int = 0,
+    agent_name: str = "",
 ) -> dict:
-    """执行子Agent并返回结果"""
+    """执行子Agent并返回结果
+
+    当子Agent产生 tool_approval_required 事件时，通过父Agent的 writer 转发到父SSE流，
+    附加 is_sub_agent / sub_agent_id / sub_session_id 上下文，供前端路由到正确的审批端点。
+    转发后 await future.event.wait() 阻塞，直到前端完成审批。
+    """
     from app.services.agent_executor_service import agent_executor_service
+    from app.services.tool_approval_service import tool_approval_service
 
     content = ""
     async for event in agent_executor_service.chat_stream(
@@ -343,6 +367,28 @@ async def _run_sub_agent(
         elif event_type == "error":
             error_msg = event.get("data", {}).get("message", "未知错误")
             return {"error": f"子Agent执行出错: {error_msg}"}
+        elif event_type == "tool_approval_required":
+            if handler_ref and hasattr(handler_ref, "_writer") and handler_ref._writer:
+                from app.agent_flow.flow_event import SubAgentToolApprovalEvent
+
+                event_data = event.get("data", {})
+                handler_ref._writer(
+                    SubAgentToolApprovalEvent(
+                        node_key=event_data.get("node_key", ""),
+                        tool_calls=event_data.get("tool_calls", []),
+                        approval_needed=event_data.get("approval_needed", []),
+                        sub_agent_id=agent_id,
+                        sub_session_id=session_id,
+                        sub_agent_name=agent_name,
+                    )
+                )
+
+            future = tool_approval_service.get_pending(session_id)
+            if future:
+                try:
+                    await asyncio.wait_for(future.event.wait(), timeout=300)
+                except asyncio.TimeoutError:
+                    tool_approval_service.remove(session_id)
 
     truncated = _truncate_output(content)
     return truncated

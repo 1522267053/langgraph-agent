@@ -156,6 +156,15 @@ class ToolApprovalEvent(FlowEvent):
         return FlowEventType.TOOL_APPROVAL_REQUIRED
 
 
+class SubAgentToolApprovalEvent(ToolApprovalEvent):
+    """子Agent工具审批转发事件（通过父Agent的SSE流转发到前端）"""
+
+    is_sub_agent: bool = Field(True, description="是否来自子Agent")
+    sub_agent_id: int = Field(0, description="子Agent ID")
+    sub_session_id: int = Field(0, description="子Agent会话ID")
+    sub_agent_name: str = Field("", description="子Agent名称")
+
+
 class WaitingHumanEvent(FlowEvent):
     """等待人工输入事件"""
 
