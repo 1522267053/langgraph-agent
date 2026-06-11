@@ -534,7 +534,10 @@ function handleRejectTools() {
       <el-card class="tool-approval-card">
         <div class="approval-header">
           <el-icon style="color: #e6a23c; margin-right: 8px"><Warning /></el-icon>
-          <span>请求执行以下工具：</span>
+          <span v-if="store.subAgentApproval?.isSubAgent">
+            子Agent「{{ store.subAgentApproval.agentName }}」请求执行以下工具：
+          </span>
+          <span v-else>请求执行以下工具：</span>
           <span class="approval-countdown">{{ formatCountdown(store.approvalCountdown) }}</span>
         </div>
         <div class="approval-tools">

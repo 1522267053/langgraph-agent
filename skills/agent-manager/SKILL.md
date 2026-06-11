@@ -122,7 +122,7 @@ POST /api/execution/human-input-stream/{execution_id}
 |--|-----------------|----------------|
 | 结构 | start→llm→end + 工具节点 | 任意 DAG |
 | LLM | 仅限 1 个 | 不限 |
-| 支持节点 | start/end/condition/intent_router/llm + 工具节点(mcp/knowledge/skill/python/shell/memory/todo/api/media_gen) | 所有 17 种节点类型 |
+| 支持节点 | start/end/condition/intent_router/llm + 工具节点(mcp/knowledge/skill/python/shell/memory/todo/api/media_gen/sub_agent) | 所有 17 种节点类型 |
 
 ## 创建流程（完整步骤）
 
@@ -212,7 +212,7 @@ POST /api/ai/flow/{id}/edges/batch
 | llm | ✅双向 | ✅接收 | **唯一可接收 tools 的节点** |
 | python/api/knowledge | ✅双向 | ✅ | 数据+工具两种模式 |
 | condition/loop/card/human/intent_router | ✅双向 | ❌ | 分支/子流程控制 |
-| **shell/mcp/skill/memory/todo** | ❌ | ✅**仅输出** | **纯工具节点，禁止 default 边** |
+| **shell/mcp/skill/memory/todo/sub_agent** | ❌ | ✅**仅输出** | **纯工具节点，禁止 default 边** |
 
 ## 变量引用路径
 
@@ -320,6 +320,24 @@ POST /api/ai/flow/{id}/edges/batch
 ### Human
 - 执行后通过 `interrupt()` 暂停，返回 `waiting_human` 事件（含 `execution_id`/`node_key`/`question`）
 - 通过 resume 接口提交人工输入恢复执行
+
+### Sub Agent（子Agent）`sub_agent`
+- **仅 Agent 模式可用**，将已发布的 Agent 作为工具提供给父 Agent 的 LLM 调用
+- **纯工具节点**：只有 `tools` 输出 handle，通过 `source_handle="tools"` 边连接到 LLM
+- **配置**：`agent_id`（引用的已发布 Agent ID）
+- **约束**：
+  - 引用的 Agent 必须已发布（`status=1`）且 `description` 非空（用作工具描述）
+  - 禁止递归：引用的 Agent 内不能包含 `sub_agent` 节点（含通过 card 间接引用）
+  - 同一 LLM 可连接多个 sub_agent 节点
+- **执行模式**：阻塞等待子 Agent 完成并返回结果
+  - 执行期间每 20s 通过 `sub_agent_progress` 心跳事件保持 SSE 连接
+  - 结果超过 500 行或 10KB 时自动截断，写入临时文件，LLM 可通过 `read_agent_file` 工具读取
+- **工具审批转发**：子 Agent 的工具审批取决于其自身 LLM 节点的 `require_tool_approval` 配置
+  - 审批事件通过父 SSE 流转发到前端，前端显示 "子Agent「xxx」请求执行以下工具"
+  - 前端审批/拒绝直接调用子 Agent 自己的端点：`POST /api/agent/{sub_agent_id}/sessions/{sub_session_id}/tool_approval`
+- **工具名称**：`ask_{sanitized_agent_name}`，LLM 通过此工具将任务委派给子 Agent
+- **会话保留**：子 Agent 的会话保留在其聊天页面，标题为 `[子Agent调用] {task[:40]}`
+- **取消传播**：父 Agent 被取消时自动中断子 Agent
 
 ## 已修复 Bug 记录
 

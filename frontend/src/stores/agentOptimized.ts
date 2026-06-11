@@ -79,6 +79,14 @@ export const useAgentStore = defineStore('agent', () => {
   const approvalCountdown = ref(0)
   let approvalTimer: ReturnType<typeof setInterval> | null = null
 
+  // ========== 子Agent工具审批状态 ==========
+  const subAgentApproval = ref<{
+    isSubAgent: boolean
+    agentId: number
+    sessionId: number
+    agentName: string
+  } | null>(null)
+
   // ========== 压缩上下文状态 ==========
   const isCompressing = ref(false)
   let compressPollTimer: ReturnType<typeof setInterval> | null = null
@@ -459,6 +467,17 @@ export const useAgentStore = defineStore('agent', () => {
         isWaitingToolApproval.value = true
         pendingToolCalls.value = event.data.tool_calls || []
         pendingApprovalNeeded.value = event.data.approval_needed || []
+        // 检测子Agent审批
+        if (event.data.is_sub_agent) {
+          subAgentApproval.value = {
+            isSubAgent: true,
+            agentId: event.data.sub_agent_id,
+            sessionId: event.data.sub_session_id,
+            agentName: event.data.sub_agent_name || '子Agent',
+          }
+        } else {
+          subAgentApproval.value = null
+        }
         startApprovalCountdown(298)
       },
       onContextCompressing: (event: SSEEvent) => {
@@ -615,7 +634,16 @@ export const useAgentStore = defineStore('agent', () => {
     pendingApprovalNeeded.value = []
     stopApprovalCountdown()
     try {
-      await agentApi.toolApproval(currentAgent.value.id, currentSession.value.id, 'approved')
+      if (subAgentApproval.value?.isSubAgent) {
+        await agentApi.toolApproval(
+          subAgentApproval.value.agentId,
+          subAgentApproval.value.sessionId,
+          'approved'
+        )
+        subAgentApproval.value = null
+      } else {
+        await agentApi.toolApproval(currentAgent.value.id, currentSession.value.id, 'approved')
+      }
     } catch {
       // error handled by interceptor
     }
@@ -628,7 +656,16 @@ export const useAgentStore = defineStore('agent', () => {
     pendingApprovalNeeded.value = []
     stopApprovalCountdown()
     try {
-      await agentApi.toolApproval(currentAgent.value.id, currentSession.value.id, 'rejected')
+      if (subAgentApproval.value?.isSubAgent) {
+        await agentApi.toolApproval(
+          subAgentApproval.value.agentId,
+          subAgentApproval.value.sessionId,
+          'rejected'
+        )
+        subAgentApproval.value = null
+      } else {
+        await agentApi.toolApproval(currentAgent.value.id, currentSession.value.id, 'rejected')
+      }
     } catch {
       // error handled by interceptor
     }
@@ -681,7 +718,7 @@ export const useAgentStore = defineStore('agent', () => {
             refreshMessages(agentId, sessionId)
             onDone()
           } else {
-            savePollTimer = setTimeout(poll, 200)
+            savePollTimer = setTimeout(poll, 500)
           }
         } else {
           stopSavePolling()
@@ -859,6 +896,7 @@ export const useAgentStore = defineStore('agent', () => {
     pendingToolCalls,
     pendingApprovalNeeded,
     approvalCountdown,
+    subAgentApproval,
     isCompressing,
     isStopping,
     // 消息分页
