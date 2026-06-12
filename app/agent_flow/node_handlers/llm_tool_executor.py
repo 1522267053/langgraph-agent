@@ -390,14 +390,23 @@ async def handle_tool_calls(
             except (json.JSONDecodeError, TypeError):
                 tool_status = "success"
 
-        # 统一截断工具执行结果
-        content = smart_truncate_output(raw_result, prefix=tool_name)
+        # 统一截断工具执行结果（load_skill 豁免，LLM 需要完整指令内容）
+        is_exempt = tool_name == "load_skill"
+        if is_exempt:
+            content = (
+                raw_result
+                if isinstance(raw_result, str)
+                else json.dumps(raw_result, ensure_ascii=False, default=str)
+            )
+        else:
+            content = smart_truncate_output(raw_result, prefix=tool_name)
         msg_buf.append(
             ToolMessage(content=content, tool_call_id=tool_id, name=tool_name)
         )
 
         if emit_tool_end_fn:
-            emit_tool_end_fn(writer, node.node_key, tool_name, raw_result, tool_status)
+            sse_result = raw_result if is_exempt else content
+            emit_tool_end_fn(writer, node.node_key, tool_name, sse_result, tool_status)
 
     return True, tool_call_count
 
