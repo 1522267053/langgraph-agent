@@ -251,7 +251,7 @@ function handleStop() {
               <span class="token-unit">token</span>
             </div>
             <button
-              v-if="isStreaming"
+              v-if="isStreaming || isStopping"
               class="stop-btn"
               :class="{ disabled: isStopping }"
               :disabled="isStopping"
