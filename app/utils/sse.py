@@ -7,7 +7,7 @@ SSE (Server-Sent Events) 工具模块
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from sse_starlette.sse import EventSourceResponse
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,8 @@ async def create_sse_response(
     stream_generator: AsyncGenerator[dict, None],
     end_event_types: tuple = DEFAULT_END_EVENT_TYPES,
     detach_on_disconnect: bool = False,
+    task_store: Optional[dict] = None,
+    task_key: Optional[str] = None,
 ) -> EventSourceResponse:
     """
     创建 SSE 响应
@@ -55,6 +57,8 @@ async def create_sse_response(
         stream_generator: 异步事件生成器，yield 格式为 {"type": "xxx", "data": {...}}
         end_event_types: 结束事件类型列表，遇到这些事件后停止
         detach_on_disconnect: SSE 断开时不中断 generator，让其在后台继续执行
+        task_store: 外部字典，用于存储后台 task 引用（配合 detach_on_disconnect 使用）
+        task_key: task_store 中的 key
 
     Returns:
         EventSourceResponse: SSE 响应对象
@@ -73,9 +77,11 @@ async def create_sse_response(
     async def event_generator():
         if detach_on_disconnect:
             queue: asyncio.Queue = asyncio.Queue()
-            asyncio.create_task(
+            task = asyncio.create_task(
                 _pump_to_queue(stream_generator, queue, end_event_types)
             )
+            if task_store is not None and task_key is not None:
+                task_store[task_key] = task
             try:
                 while True:
                     event = await queue.get()
@@ -89,6 +95,9 @@ async def create_sse_response(
                     }
             except asyncio.CancelledError:
                 pass
+            finally:
+                if task_store is not None and task_key is not None:
+                    task_store.pop(task_key, None)
 
         else:
             try:

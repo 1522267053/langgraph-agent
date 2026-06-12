@@ -680,7 +680,9 @@ export const useAgentStore = defineStore('agent', () => {
       streamAbort()
       streamAbort = null
     }
-    stopStreaming()
+    if (!waitForSave) {
+      stopStreaming()
+    }
     isWaitingHuman.value = false
     currentWaitData.value = null
     isWaitingToolApproval.value = false
@@ -699,14 +701,16 @@ export const useAgentStore = defineStore('agent', () => {
   function startSavePolling(agentId: number, sessionId: number) {
     stopSavePolling()
     const startTime = Date.now()
-    const timeout = 5000
+    const timeout = 8000
     const onDone = () => {
+      stopStreaming()
       isStopping.value = false
       ElMessage.success('停止成功')
     }
     const poll = async () => {
       if (!currentAgent.value || currentSession.value?.id !== sessionId) {
         stopSavePolling()
+        stopStreaming()
         isStopping.value = false
         return
       }
@@ -718,7 +722,7 @@ export const useAgentStore = defineStore('agent', () => {
             refreshMessages(agentId, sessionId)
             onDone()
           } else {
-            savePollTimer = setTimeout(poll, 500)
+            savePollTimer = setTimeout(poll, 1000)
           }
         } else {
           stopSavePolling()

@@ -226,7 +226,12 @@ class AgentApi:
                 ):
                     yield event
 
-            return await create_sse_response(stream(), detach_on_disconnect=True)
+            return await create_sse_response(
+                stream(),
+                detach_on_disconnect=True,
+                task_store=agent_executor_service._streaming_tasks,
+                task_key=str(session_id),
+            )
 
         @self.router.post("/{id}/sessions/{session_id}/resume", summary="恢复执行(SSE)")
         async def resume(
@@ -242,7 +247,12 @@ class AgentApi:
                 ):
                     yield event
 
-            return await create_sse_response(stream(), detach_on_disconnect=True)
+            return await create_sse_response(
+                stream(),
+                detach_on_disconnect=True,
+                task_store=agent_executor_service._streaming_tasks,
+                task_key=str(session_id),
+            )
 
         @self.router.post("/{id}/sessions/{session_id}/cancel", summary="中断会话执行")
         async def cancel_session(
@@ -256,6 +266,10 @@ class AgentApi:
             interrupt_service.set_agent_interrupted(session_id)
             tool_approval_service.cancel(session_id)
             agent_executor_service._pending_save_sessions.add(session_id)
+            # 直接取消后台 streaming task，立即中断 LLM 请求
+            task = agent_executor_service._streaming_tasks.get(str(session_id))
+            if task and not task.done():
+                task.cancel()
             # 同步清理 checkpoint，防止与 DB 消息不同步
             try:
                 await agent_executor_service._cleanup_thread_checkpoint(session_id)

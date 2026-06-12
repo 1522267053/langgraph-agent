@@ -8,6 +8,7 @@ Agent执行服务模块
 4. 简化的流程验证（不需要input_schema/output_schema）
 """
 
+import asyncio
 import logging
 from typing import Optional, AsyncGenerator, Dict, Any, List
 
@@ -45,6 +46,7 @@ class AgentExecutorService(BaseExecutorService):
         self._compressing_sessions: set[int] = set()
         self._running_sessions: set[int] = set()
         self._pending_save_sessions: set[int] = set()
+        self._streaming_tasks: Dict[str, asyncio.Task] = {}
 
     def _validate_agent_flow(self, flow: Flow) -> None:
         """
