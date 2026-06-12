@@ -21,6 +21,10 @@ from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+# 截断触发后展示的预览限制（与触发阈值无关，固定值）
+_PREVIEW_LINES = 50
+_PREVIEW_BYTES = 5120  # 5KB
+
 
 def smart_truncate_output(result: Any, *, prefix: str = "tool_output") -> str:
     """统一截断入口，返回截断/原文后的字符串
@@ -233,24 +237,24 @@ def _truncate_text(
     # 超限：保存完整内容到临时文件
     saved_to = _save_to_temp_file(text, prefix=prefix)
 
-    # 逐行累加字节，不超过 max_bytes
+    # 逐行累加字节，50行 + 5KB双重限制，先到先停
     out: list[str] = []
     byte_count = 0
 
     if direction == "head":
-        for i in range(min(total_lines, max_lines)):
+        for i in range(min(total_lines, _PREVIEW_LINES)):
             line = lines[i]
             line_size = len(line.encode("utf-8")) + (1 if out else 0)
-            if byte_count + line_size > max_bytes:
+            if byte_count + line_size > _PREVIEW_BYTES:
                 break
             out.append(line)
             byte_count += line_size
     else:
         # tail 模式：从末尾向前累加
-        for i in range(total_lines - 1, max(total_lines - max_lines - 1, -1), -1):
+        for i in range(total_lines - 1, max(total_lines - _PREVIEW_LINES - 1, -1), -1):
             line = lines[i]
             line_size = len(line.encode("utf-8")) + (1 if out else 0)
-            if byte_count + line_size > max_bytes:
+            if byte_count + line_size > _PREVIEW_BYTES:
                 break
             out.insert(0, line)
             byte_count += line_size
