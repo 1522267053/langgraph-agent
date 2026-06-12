@@ -22,8 +22,8 @@ from app.config.settings import settings
 logger = logging.getLogger(__name__)
 
 # 截断触发后展示的预览限制（与触发阈值无关，固定值）
-_PREVIEW_LINES = 50
-_PREVIEW_BYTES = 5120  # 5KB
+_PREVIEW_LINES = 20
+_PREVIEW_BYTES = 2 * 1024  # 5KB
 
 
 def smart_truncate_output(result: Any, *, prefix: str = "tool_output") -> str:
