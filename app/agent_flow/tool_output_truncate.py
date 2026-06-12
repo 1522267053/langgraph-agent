@@ -21,9 +21,10 @@ from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-# 截断触发后展示的预览限制（与触发阈值无关，固定值）
-_PREVIEW_LINES = 20
-_PREVIEW_BYTES = 2 * 1024  # 5KB
+
+def _get_preview_limits() -> tuple[int, int]:
+    """从配置获取预览行数和字节数限制"""
+    return settings.tool_output_preview_lines, settings.tool_output_preview_bytes
 
 
 def smart_truncate_output(result: Any, *, prefix: str = "tool_output") -> str:
@@ -219,14 +220,15 @@ def _truncate_text(
     # 超限：保存完整内容到临时文件
     saved_to = _save_to_temp_file(text, prefix=prefix)
 
-    # 逐行累加字节，50行 + 5KB双重限制，先到先停
+    # 逐行累加字节，双重限制，先到先停
+    preview_lines, preview_bytes = _get_preview_limits()
     out: list[str] = []
     byte_count = 0
 
-    for i in range(min(total_lines, _PREVIEW_LINES)):
+    for i in range(min(total_lines, preview_lines)):
         line = lines[i]
         line_size = len(line.encode("utf-8")) + (1 if out else 0)
-        if byte_count + line_size > _PREVIEW_BYTES:
+        if byte_count + line_size > preview_bytes:
             break
         out.append(line)
         byte_count += line_size
