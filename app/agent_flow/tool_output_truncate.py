@@ -14,7 +14,7 @@ JSON 感知截断：保留 JSON 结构完整，只截断大字段值。
 import json
 import logging
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from app.config.build_utils import get_temp_dir
 from app.config.settings import settings
@@ -63,7 +63,7 @@ def smart_truncate_output(result: Any, *, prefix: str = "tool_output") -> str:
             if isinstance(parsed, list):
                 serialized = json.dumps(parsed, ensure_ascii=False, default=str)
                 if _exceeds_limit(serialized, max_lines, max_bytes):
-                    kept_items, saved_to = _truncate_list(
+                    kept_items = _truncate_list(
                         parsed,
                         max_lines=max_lines,
                         max_bytes=max_bytes,
@@ -74,16 +74,14 @@ def smart_truncate_output(result: Any, *, prefix: str = "tool_output") -> str:
         except (json.JSONDecodeError, TypeError):
             pass
         # JSON 解析失败 → 纯文本截断
-        text, _, _ = _truncate_text(
+        text = _truncate_text(
             result, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix
         )
         return text
 
     # 其他类型：str() 转换后处理
     text = str(result)
-    text, _, _ = _truncate_text(
-        text, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix
-    )
+    text = _truncate_text(text, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix)
     return text
 
 
@@ -156,18 +154,14 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
     return result
 
 
-def _truncate_list(
-    lst: list, *, max_lines: int, max_bytes: int, prefix: str
-) -> tuple[list, Optional[str]]:
+def _truncate_list(lst: list, *, max_lines: int, max_bytes: int, prefix: str) -> list:
     """截断列表：保留前 N 项（按字节累加控制），完整列表保存到文件
 
     Returns:
-        (截断后的列表, 保存路径)
+        截断后的列表
     """
     # 完整列表保存到文件
-    saved_to = _save_to_temp_file(
-        json.dumps(lst, ensure_ascii=False, default=str), prefix=prefix
-    )
+    _save_to_temp_file(json.dumps(lst, ensure_ascii=False, default=str), prefix=prefix)
 
     # 逐项累加字节，控制在 max_bytes // 2 以内
     kept: list = []
@@ -183,7 +177,6 @@ def _truncate_list(
         item_bytes = len(item_str.encode("utf-8"))
         if current_bytes + item_bytes > byte_budget:
             break
-        # 嵌套 dict 递归截断
         if isinstance(item, dict):
             kept.append(
                 _truncate_dict(
@@ -194,7 +187,7 @@ def _truncate_list(
             kept.append(item)
         current_bytes += item_bytes
 
-    return kept, saved_to
+    return kept
 
 
 def _truncate_text(
@@ -203,7 +196,7 @@ def _truncate_text(
     max_lines: int,
     max_bytes: int,
     prefix: str,
-) -> tuple[str, bool, Optional[str]]:
+) -> str:
     """纯文本截断：超限时保存完整内容到临时文件，返回前50行预览
 
     Args:
@@ -213,7 +206,7 @@ def _truncate_text(
         prefix: 临时文件名前缀
 
     Returns:
-        (预览文本, 是否截断, 保存路径)
+        预览文本（未超限时为原文）
     """
     lines = text.splitlines()
     total_lines = len(lines)
@@ -221,7 +214,7 @@ def _truncate_text(
 
     # 未超限，原样返回
     if total_lines <= max_lines and text_bytes <= max_bytes:
-        return text, False, None
+        return text
 
     # 超限：保存完整内容到临时文件
     saved_to = _save_to_temp_file(text, prefix=prefix)
@@ -242,7 +235,7 @@ def _truncate_text(
     hint = f"\n\n[输出已截断，共 {total_lines} 行。完整内容已保存到: {saved_to}]"
     preview += hint
 
-    return preview, True, saved_to
+    return preview
 
 
 def _exceeds_limit(text: str, max_lines: int, max_bytes: int) -> bool:
