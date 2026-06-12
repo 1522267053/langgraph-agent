@@ -212,16 +212,14 @@ def _truncate_text(
     max_lines: int,
     max_bytes: int,
     prefix: str,
-    direction: str = "head",
 ) -> tuple[str, bool, Optional[str]]:
-    """纯文本截断：超限时保存完整内容到临时文件，返回预览
+    """纯文本截断：超限时保存完整内容到临时文件，返回前50行预览
 
     Args:
         text: 待截断文本
-        max_lines: 最大行数
-        max_bytes: 最大字节数
+        max_lines: 最大行数（触发阈值）
+        max_bytes: 最大字节数（触发阈值）
         prefix: 临时文件名前缀
-        direction: "head" 取头部预览，"tail" 取尾部预览
 
     Returns:
         (预览文本, 是否截断, 保存路径)
@@ -241,23 +239,13 @@ def _truncate_text(
     out: list[str] = []
     byte_count = 0
 
-    if direction == "head":
-        for i in range(min(total_lines, _PREVIEW_LINES)):
-            line = lines[i]
-            line_size = len(line.encode("utf-8")) + (1 if out else 0)
-            if byte_count + line_size > _PREVIEW_BYTES:
-                break
-            out.append(line)
-            byte_count += line_size
-    else:
-        # tail 模式：从末尾向前累加
-        for i in range(total_lines - 1, max(total_lines - _PREVIEW_LINES - 1, -1), -1):
-            line = lines[i]
-            line_size = len(line.encode("utf-8")) + (1 if out else 0)
-            if byte_count + line_size > _PREVIEW_BYTES:
-                break
-            out.insert(0, line)
-            byte_count += line_size
+    for i in range(min(total_lines, _PREVIEW_LINES)):
+        line = lines[i]
+        line_size = len(line.encode("utf-8")) + (1 if out else 0)
+        if byte_count + line_size > _PREVIEW_BYTES:
+            break
+        out.append(line)
+        byte_count += line_size
 
     preview = "\n".join(out)
     hint = f"\n\n[输出已截断，共 {total_lines} 行。完整内容已保存到: {saved_to}]"
