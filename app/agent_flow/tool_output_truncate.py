@@ -101,17 +101,17 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
             result[key] = value
         elif isinstance(value, str):
             if _exceeds_limit(value, max_lines, max_bytes):
-                # 大字符串字段：保存完整内容，字段值替换为预览
-                saved = _save_to_temp_file(value, prefix=f"{prefix}_{key}")
-                preview, _, _ = _truncate_text(
+                # 大字符串字段：_truncate_text 内部保存完整内容并追加提示
+                preview, _, saved_to = _truncate_text(
                     value,
                     max_lines=max_lines,
                     max_bytes=max_bytes,
                     prefix=f"{prefix}_{key}",
                 )
-                result[key] = preview + f"\n[已截断，完整内容已保存到: {saved}]"
+                result[key] = preview
                 result[f"_{key}_truncated"] = True
-                result[f"_{key}_saved_to"] = saved
+                if saved_to:
+                    result[f"_{key}_saved_to"] = saved_to
             else:
                 result[key] = value
         elif isinstance(value, list):
