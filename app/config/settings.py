@@ -88,8 +88,8 @@ class Settings(BaseSettings):
         default=50, alias="TOOL_OUTPUT_PREVIEW_LINES"
     )  # 截断后预览保留的行数
     tool_output_preview_bytes: int = Field(
-        default=5120, alias="TOOL_OUTPUT_PREVIEW_BYTES"
-    )  # 截断后预览保留的字节数（默认 5KB）
+        default=3072, alias="TOOL_OUTPUT_PREVIEW_BYTES"
+    )  # 截断后预览保留的字节数（默认 3KB）
 
     # 资源市场服务器地址
     marketplace_server_url: str = Field(default="", alias="MARKETPLACE_SERVER_URL")
