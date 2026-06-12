@@ -92,8 +92,8 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
 
     策略：
     - bool/int/float/None: 完整保留
-    - str: 超限则保存文件，字段值替换为预览，追加 _{key}_truncated/_{key}_saved_to
-    - list: 超限则保留前 N 项，追加 _{key}_truncated/_{key}_saved_to/_{key}_total
+    - str: 超限则保存文件，字段值替换为预览，追加 _{key}_truncated
+    - list: 超限则保留前 N 项，追加 _{key}_truncated / _{key}_total
     - dict: 递归应用同样规则
     - 最终序列化后仍超限: 只保留基本类型字段 + 完整 JSON 保存到文件
     """
@@ -101,12 +101,10 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
 
     for key, value in d.items():
         if isinstance(value, (bool, int, float)) or value is None:
-            # 基本类型完整保留
             result[key] = value
         elif isinstance(value, str):
             if _exceeds_limit(value, max_lines, max_bytes):
-                # 大字符串字段：_truncate_text 内部保存完整内容并追加提示
-                preview, _, saved_to = _truncate_text(
+                preview = _truncate_text(
                     value,
                     max_lines=max_lines,
                     max_bytes=max_bytes,
@@ -114,15 +112,12 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
                 )
                 result[key] = preview
                 result[f"_{key}_truncated"] = True
-                if saved_to:
-                    result[f"_{key}_saved_to"] = saved_to
             else:
                 result[key] = value
         elif isinstance(value, list):
             serialized = json.dumps(value, ensure_ascii=False, default=str)
             if _exceeds_limit(serialized, max_lines, max_bytes):
-                # 大列表字段：保留前 N 项，完整列表保存到文件
-                kept_items, saved_to = _truncate_list(
+                kept_items = _truncate_list(
                     value,
                     max_lines=max_lines,
                     max_bytes=max_bytes,
@@ -130,12 +125,10 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
                 )
                 result[key] = kept_items
                 result[f"_{key}_truncated"] = True
-                result[f"_{key}_saved_to"] = saved_to
                 result[f"_{key}_total"] = len(value)
             else:
                 result[key] = value
         elif isinstance(value, dict):
-            # 嵌套 dict 递归截断
             result[key] = _truncate_dict(
                 value,
                 max_lines=max_lines,
@@ -143,7 +136,6 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
                 prefix=f"{prefix}_{key}",
             )
         else:
-            # 其他类型转为字符串
             result[key] = str(value)
 
     # ---- 最终检查：序列化后仍超限 ----
@@ -152,14 +144,13 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
         full_saved = _save_to_temp_file(
             json.dumps(d, ensure_ascii=False, default=str), prefix=prefix
         )
-        # 只保留基本类型字段 + 截断标记
         minimal: dict[str, Any] = {
             k: v
             for k, v in result.items()
             if isinstance(v, (bool, int, float, str)) or v is None
         }
         minimal["_output_truncated"] = True
-        minimal["_output_saved_to"] = full_saved
+        minimal["_hint"] = f"完整 JSON 已保存到: {full_saved}"
         return minimal
 
     return result
