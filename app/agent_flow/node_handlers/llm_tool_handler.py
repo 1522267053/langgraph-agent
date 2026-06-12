@@ -1,48 +1,36 @@
 """
-增强版LLM节点处理器
+LLM 节点处理器主入口
 
 支持：
-- MCP工具调用（通过连接MCP节点）
-- 人工协助工具（通过连接Human节点）
-- API工具（通过连接API节点）
-- 知识库工具（通过连接Knowledge节点）
-- 多轮工具调用（ReAct循环）
+- MCP 工具调用（通过连接 MCP 节点）
+- 人工协助工具（通过连接 Human 节点）
+- 多轮工具调用（ReAct 循环）
 - 多轮人工交互（使用 LangGraph interrupt 机制）
 - 对话历史管理（通过 state.conversation_messages 自动恢复）
 - 流式输出（通过 StreamWriter）
 - 中断检测（通过 interrupt_service）
+- 工具输出统一截断（通过 tool_output_truncate 模块）
 
-工具获取方式：
-通过连接的工具节点（source_handle="tools"）获取，各节点处理器实现 get_tool() 方法
-
-对话历史管理：
-- 对话历史存储在 state.conversation_messages 中
-- 通过 LangGraph checkpoint 自动恢复，无需从数据库加载
-- 仅在首次执行时从数据库加载历史（作为初始化）
+子模块职责：
+- llm_factory: LLM 实例创建和工具绑定
+- llm_message_builder: 消息构建（历史加载、恢复、multimodal）
+- llm_stream: 流式 LLM 调用（重试、thinking 解析）
+- llm_tool_executor: 工具调用处理（执行、人工交互、审批、截断）
 """
 
 import asyncio
-import json
 import logging
-import openai
-from typing import TYPE_CHECKING, Any, Optional, Union
-
+from typing import TYPE_CHECKING, Optional, Union
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
-    AIMessage,
-    AIMessageChunk,
-    BaseMessage,
-    HumanMessage,
     SystemMessage,
-    ToolMessage,
 )
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool
-from langgraph.types import StreamWriter, interrupt
+from langgraph.types import StreamWriter
+
 from pydantic import Field
 
-from app.models.agent_message import AgentMessage
 from app.models.flow_node import FlowNode
 from app.services.agent_conversation_service import AgentConversationService
 from app.services.conversation_service import ConversationService
@@ -51,15 +39,10 @@ from app.agent_flow.exceptions import NodeExecutionError
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.flow_event import (
     ErrorEvent,
-    LlmRetryEvent,
-    NodeContentEvent,
     NodeStartEvent,
-    NodeThinkingEvent,
     TokenUsageEvent,
     ToolCallEndEvent,
-    ToolCallLimitEvent,
     ToolCallStartEvent,
-    ToolApprovalEvent,
 )
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.agent_flow.node_handlers.base_handler import (
@@ -67,49 +50,32 @@ from app.agent_flow.node_handlers.base_handler import (
     BaseNodeConfig,
     NodeVariable,
 )
-from app.agent_flow.tool_resolver import (
-    filter_tools_by_intent,
-    get_connected_tool_edges,
-)
-from app.agent_flow.ai_provider import create_provider
 from app.agent_flow.message_buffer import MessageBuffer
-
-from app.utils.media_resolver import build_multimodal_content, collect_media_blocks
 from app.utils.message_utils import extract_token_usage
+
+from app.agent_flow.node_handlers.llm_factory import prepare_llm
+from app.agent_flow.node_handlers.llm_message_builder import (
+    build_initial_messages,
+    should_auto_compress,
+)
+from app.agent_flow.node_handlers.llm_stream import stream_llm_response
+from app.agent_flow.node_handlers.llm_tool_executor import (
+    handle_tool_calls,
+    setup_tool_handlers,
+)
 
 if TYPE_CHECKING:
     pass
 
-
 logger = logging.getLogger(__name__)
 
+# 自动压缩阈值比例：已用 token 超过 context_length 的此比例时触发压缩
 COMPRESS_THRESHOLD_RATIO = 0.83
-
-_RETRYABLE_ERRORS = (
-    openai.RateLimitError,
-    openai.APIConnectionError,
-    openai.APITimeoutError,
-)
-_RETRY_DELAYS = [1, 2, 4]
-# 人工协助工具名（LLM 通过此工具名触发 interrupt）
-_REQUEST_HUMAN_HELP = "request_human_help"
-
-# 需要用户确认才能执行的工具名（仅 Agent 模式生效）
-_APPROVAL_REQUIRED_TOOLS: frozenset[str] = frozenset(
-    {"shell_executor", "python_executor", "file_write", "text_editor"}
-)
-
-# system_prompt hint 优先级：值越小越靠前，静态内容放前面有利于 LLM 缓存命中
-_HINT_PRIORITY: dict[str, int] = {
-    "todo": 0,
-    "human": 0,
-    "knowledge": 1,
-    "shell": 1,
-    "memory": 2,
-}
 
 
 class LlmNodeConfig(BaseNodeConfig):
+    """LLM 节点配置模型"""
+
     input_variables: list[NodeVariable] = Field(
         default=[],
         description="输入变量映射列表",
@@ -158,13 +124,13 @@ class LlmNodeConfig(BaseNodeConfig):
     )
     user_prompt: str = Field(
         ...,
-        description="用户提示词模板（必填，否则llm收不到消息。支持变量插值，如:{{message}}）",
+        description="用户提示词模板（必填，否则 LLM 收不到消息。支持变量插值，如: {{message}}）",
     )
     require_tool_approval: bool = Field(
-        False, description="危险工具执行前需要用户确认（仅Agent模式生效）"
+        False, description="危险工具执行前需要用户确认（仅 Agent 模式生效）"
     )
     extra_body: dict = Field(
-        {}, description="附加请求参数（JSON对象，会合并到请求体中）"
+        {}, description="附加请求参数（JSON 对象，会合并到请求体中）"
     )
     reasoning_effort: Optional[str] = Field(
         None,
@@ -172,17 +138,17 @@ class LlmNodeConfig(BaseNodeConfig):
         json_schema_extra={"options": ["low", "medium", "high"]},
     )
     context_length: int = Field(
-        0, description="模型上下文窗口大小（token数，0表示不限制）"
+        0, description="模型上下文窗口大小（token 数，0 表示不限制）"
     )
 
 
 class LlmToolNodeHandler(BaseNodeHandler):
     """
-    增强版LLM节点处理器
+    增强版 LLM 节点处理器
 
-    支持MCP工具调用和多轮人工协助
-    工具通过连接到LLM节点的MCP和Human节点提供
-    使用 LangGraph interrupt 机制实现人工交互
+    支持 MCP 工具调用和多轮人工协助。
+    工具通过连接到 LLM 节点的 MCP 和 Human 节点提供。
+    使用 LangGraph interrupt 机制实现人工交互。
     """
 
     ConfigClass = LlmNodeConfig
@@ -212,8 +178,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
         return self.session_id if self.session_id else self.execution_id
 
     def _check_interrupted(self, state: FlowState) -> bool:
-        """
-        检查是否被中断
+        """检查是否被中断
 
         优先级：
         1. state.is_interrupted（内部状态）
@@ -234,8 +199,6 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 return True
         return False
 
-    # ---- 事件发送辅助方法 ----
-
     def check_config(
         self,
         config: dict,
@@ -243,7 +206,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
         state: FlowState,
         writer: Optional[StreamWriter] = None,
     ) -> dict | None:
-        """校验 LLM 必填配置"""
+        """校验 LLM 必填配置（model、api_key）"""
         model = self._require_config(config, "model", node_key, "模型", state, writer)
         if not model:
             return None
@@ -254,13 +217,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
             return None
         return {"model": model, "api_key": api_key}
 
-    def _emit_tool_start(
-        self,
-        writer: Optional[StreamWriter],
-        node_key: str,
-        tool_name: str,
-        tool_args: dict,
-    ) -> None:
+    def _emit_tool_start(self, writer, node_key, tool_name, tool_args):
         """发送工具调用开始事件"""
         self._emit(
             writer,
@@ -269,14 +226,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
             ),
         )
 
-    def _emit_tool_end(
-        self,
-        writer: Optional[StreamWriter],
-        node_key: str,
-        tool_name: str,
-        result: Any,
-        status: str = "success",
-    ) -> None:
+    def _emit_tool_end(self, writer, node_key, tool_name, result, status="success"):
         """发送工具调用结束事件"""
         self._emit(
             writer,
@@ -296,7 +246,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
         writer: Optional[StreamWriter] = None,
     ) -> FlowState | dict:
         """
-        执行增强版LLM节点，支持多轮人工交互和流式输出
+        执行增强版 LLM 节点，支持多轮人工交互和流式输出
 
         整体流程：
         1. 解析配置、初始化工具处理器、收集工具和 prompt 提示
@@ -309,8 +259,16 @@ class LlmToolNodeHandler(BaseNodeHandler):
         max_tool_iterations = cfg.max_tool_iterations
 
         # 单次遍历：收集工具 + 注入处理器依赖 + 收集 prompt 提示
-        tools, prompt_hints = await self._setup_tool_handlers(
-            node, state, writer, config, cfg
+        tools, prompt_hints = await setup_tool_handlers(
+            node,
+            state,
+            writer,
+            config,
+            cfg,
+            flow=self.flow,
+            db_session_factory=self.db_session_factory,
+            handler_registry=self.handler_registry,
+            emit_fn=self._emit,
         )
 
         # 解析输入变量，提取 system_prompt 和 user_prompt
@@ -334,7 +292,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
         for hint in prompt_hints:
             system_prompt = (system_prompt or "") + hint
 
-        # 发送 node_start 事件（在流式输出之前）
+        # 发送 node_start 事件
         self._emit(
             writer,
             NodeStartEvent(
@@ -352,14 +310,25 @@ class LlmToolNodeHandler(BaseNodeHandler):
             return state
 
         # 准备 LLM 实例和消息列表
-        _, llm_with_tools, _ = self._prepare_llm(
+        _, llm_with_tools, _ = prepare_llm(
             node.base_config or {}, tools, node.node_key, state
         )
-        messages = await self._build_initial_messages(
-            node, node.base_config or {}, user_prompt, state, config, writer
+        messages = await build_initial_messages(
+            node,
+            node.base_config or {},
+            user_prompt,
+            state,
+            session_id=self.session_id,
+            execution_id=self.execution_id,
+            conversation_service=self.conversation_service,
+            db_session_factory=self.db_session_factory,
+            config=config,
+            writer=writer,
+            emit_fn=self._emit,
+            emit_tool_end_fn=self._emit_tool_end,
         )
 
-        # 自动上下文压缩：超过 80% 时调用 LLM 压缩旧消息
+        # 自动上下文压缩：超过阈值时调用 LLM 压缩旧消息
         cfg_context_length = cfg.context_length or 0
         msg_buf = MessageBuffer(
             messages,
@@ -370,7 +339,9 @@ class LlmToolNodeHandler(BaseNodeHandler):
             node_key=node.node_key,
             emit_fn=self._emit,
         )
-        prompt_tokens = await self._should_auto_compress(cfg_context_length)
+        prompt_tokens = await should_auto_compress(
+            self.session_id, self.db_session_factory, cfg_context_length
+        )
         if cfg_context_length > 0 and prompt_tokens > int(
             cfg_context_length * COMPRESS_THRESHOLD_RATIO
         ):
@@ -411,7 +382,9 @@ class LlmToolNodeHandler(BaseNodeHandler):
             except Exception as e:
                 logger.warning(f"取消时保存消息失败: {e}")
             if self.session_id:
-                from app.services.agent_executor_service import agent_executor_service
+                from app.services.agent_executor_service import (
+                    agent_executor_service,
+                )
 
                 agent_executor_service._pending_save_sessions.discard(self.session_id)
             state.set_interrupted()
@@ -432,7 +405,9 @@ class LlmToolNodeHandler(BaseNodeHandler):
             except Exception:
                 pass
             if self.session_id:
-                from app.services.agent_executor_service import agent_executor_service
+                from app.services.agent_executor_service import (
+                    agent_executor_service,
+                )
 
                 agent_executor_service._pending_save_sessions.discard(self.session_id)
             state.add_error(node.node_key, f"LLM调用失败: {str(e)}")
@@ -441,96 +416,6 @@ class LlmToolNodeHandler(BaseNodeHandler):
 
         return state
 
-    # ---- 工具处理器初始化 ----
-
-    async def _setup_tool_handlers(
-        self,
-        node: FlowNode,
-        state: FlowState,
-        writer: Optional[StreamWriter],
-        config: Optional[RunnableConfig],
-        cfg: LlmNodeConfig,
-    ) -> tuple[list[BaseTool], list[str]]:
-        """
-        单次遍历工具节点，完成三件事：
-        1. 注入处理器依赖（_agent_id, _writer, _resolve_context, _llm_config）
-        2. 收集工具定义
-        3. 收集 system_prompt 提示片段（按优先级排序，静态内容靠前以利于 LLM 缓存命中）
-
-        Returns:
-            (工具列表, prompt提示片段列表)
-        """
-        tools: list[BaseTool] = []
-        prompt_hints: list[tuple[int, int, str]] = []
-
-        if not self.flow or not self.db_session_factory:
-            return tools, [h for _, _, h in prompt_hints]
-
-        # 获取工具节点 + 边对，按意图条件过滤
-        tool_edge_pairs = get_connected_tool_edges(self.flow, node.node_key)
-        tool_edge_pairs = filter_tools_by_intent(tool_edge_pairs, state)
-
-        llm_config = {
-            "model": cfg.model,
-            "api_key": cfg.api_key,
-            "base_url": cfg.base_url,
-            "provider": cfg.provider,
-            "context_length": cfg.context_length,
-        }
-
-        for idx, (tool_node, _edge) in enumerate(tool_edge_pairs):
-            handler = self.handler_registry.get(tool_node.node_type)
-            if not handler:
-                continue
-
-            # 注入 _agent_id（记忆节点等需要知道当前 Agent 的 ID）
-            if hasattr(handler, "_agent_id") and hasattr(self.flow, "id"):
-                handler._agent_id = self.flow.id
-
-            # 注入 writer、resolve_context、llm_config
-            if hasattr(handler, "_writer"):
-                handler._writer = writer
-            if hasattr(handler, "_resolve_context"):
-                handler._resolve_context(config)
-            if hasattr(handler, "_llm_config"):
-                handler._llm_config = llm_config
-
-            # 收集工具定义（get_tool 返回 None 时仍需收集 prompt hints）
-            try:
-                result = handler.get_tool(tool_node)
-                if result is not None:
-                    if asyncio.iscoroutine(result):
-                        result = await result
-                    if isinstance(result, list):
-                        tools.extend(result)
-                    elif result:
-                        tools.append(result)
-            except Exception as e:
-                state.add_error(
-                    node.node_key,
-                    f"获取工具失败 [{tool_node.node_name}]: {str(e)}",
-                )
-
-            # 收集 system_prompt 提示（所有 handler 均为 async）
-            if hasattr(handler, "get_system_prompt_hint"):
-                hint = await handler.get_system_prompt_hint(tool_node)
-                if hint:
-                    priority = _HINT_PRIORITY.get(tool_node.node_type, 1)
-                    prompt_hints.append((priority, idx, hint))
-
-        # 按优先级排序：静态内容靠前，动态内容（如记忆）靠后，利于 LLM 缓存命中
-        prompt_hints.sort(key=lambda x: (x[0], x[1]))
-
-        # 去重：同名工具只保留第一个（子Agent等节点可能产生重复的通用工具）
-        seen_names = set()
-        unique_tools = []
-        for tool in tools:
-            if tool.name not in seen_names:
-                seen_names.add(tool.name)
-                unique_tools.append(tool)
-
-        return unique_tools, [h for _, _, h in prompt_hints]
-
     # ---- ReAct 循环 ----
 
     async def _run_react_loop(
@@ -538,15 +423,18 @@ class LlmToolNodeHandler(BaseNodeHandler):
         llm: BaseChatModel,
         system_prompt: Optional[str],
         msg_buf: MessageBuffer,
-        tools: list[BaseTool],
+        tools: list,
         node: FlowNode,
         state: FlowState,
         writer: Optional[StreamWriter],
         max_tool_iterations: int,
+        *,
         context_length: int = 0,
     ) -> tuple[str, list[str]]:
-        """
-        ReAct 循环：流式调用 LLM → 处理工具调用 → 继续调用
+        """ReAct 循环：流式调用 LLM → 处理工具调用 → 继续调用
+
+        核心编排逻辑，调用 llm_stream 模块进行流式调用，
+        调用 llm_tool_executor 模块处理工具调用。
 
         Returns:
             (最后一条文本内容, 所有 thinking 片段)
@@ -563,12 +451,19 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 if system_prompt
                 else messages
             )
+
+            # 流式调用 LLM
             (
                 response,
                 current_thinking,
                 current_content,
-            ) = await self._stream_llm_response(
-                llm, call_messages, node.node_key, state, writer
+            ) = await stream_llm_response(
+                llm,
+                call_messages,
+                node.node_key,
+                state,
+                writer,
+                check_interrupted_fn=self._check_interrupted,
             )
 
             # 推送 token 用量事件
@@ -589,13 +484,11 @@ class LlmToolNodeHandler(BaseNodeHandler):
                     if context_length > 0 and usage.get("prompt_tokens", 0) > int(
                         context_length * COMPRESS_THRESHOLD_RATIO
                     ):
-                        # 先将当前response追加到msg_buf，
-                        # 确保压缩时能看到LLM最新输出
-                        if response:
-                            msg_buf.append(response)
-                            if current_content:
-                                last_content = current_content
-                            thinking_content.extend(current_thinking)
+                        # 先将当前 response 追加到 msg_buf，确保压缩时能看到 LLM 最新输出
+                        msg_buf.append(response)
+                        if current_content:
+                            last_content = current_content
+                        thinking_content.extend(current_thinking)
                         node_config = node.base_config or {}
                         await msg_buf.maybe_compress(
                             context_length, node_config, writer
@@ -638,8 +531,8 @@ class LlmToolNodeHandler(BaseNodeHandler):
             if not response or not response.tool_calls:
                 break
 
-            # 处理工具调用，返回 (是否继续循环, 工具调用总次数)
-            should_continue, tool_call_count = await self._handle_tool_calls(
+            # 处理工具调用
+            should_continue, tool_call_count = await handle_tool_calls(
                 response.tool_calls,
                 tools,
                 msg_buf,
@@ -648,744 +541,16 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 writer,
                 tool_call_count,
                 max_tool_iterations,
+                session_id=self.session_id,
+                check_interrupted_fn=self._check_interrupted,
+                emit_fn=self._emit,
+                emit_tool_start_fn=self._emit_tool_start,
+                emit_tool_end_fn=self._emit_tool_end,
             )
             if not should_continue:
                 break
 
         return last_content, thinking_content
-
-    # ---- LLM 准备 ----
-
-    def _prepare_llm(
-        self, node_config: dict, tools: list[BaseTool], node_key: str, state: FlowState
-    ) -> tuple[BaseChatModel, BaseChatModel, bool]:
-        """
-        创建 LLM 实例并绑定工具
-
-        Returns:
-            (llm, llm_with_tools, has_tools) — 原始实例、绑定工具后的实例、是否有工具可用
-        """
-        api_key = node_config.get("api_key")
-        model = node_config.get("model", "")
-        base_url = node_config.get("base_url")
-        max_tokens = node_config.get("max_tokens", 8192)
-        temperature = node_config.get("temperature", 0.7)
-        provider_name = node_config.get("provider", "deepseek")
-        extra_body = node_config.get("extra_body")
-        reasoning_effort = node_config.get("reasoning_effort")
-        llm = self._create_llm(
-            api_key,
-            model,
-            base_url,
-            max_tokens,
-            provider_name,
-            temperature,
-            extra_body=extra_body,
-            reasoning_effort=reasoning_effort,
-        )
-
-        has_tools = len(tools) > 0
-        if has_tools:
-            try:
-                llm_with_tools = llm.bind_tools(tools)
-            except Exception as bind_error:
-                # 模型不支持 function calling 时降级为无工具模式
-                state.add_error(
-                    node_key,
-                    f"模型不支持工具调用，请更换支持function calling的模型: {str(bind_error)}",
-                )
-                has_tools = False
-                llm_with_tools = llm
-        else:
-            llm_with_tools = llm
-
-        return llm, llm_with_tools, has_tools
-
-    # ---- 消息构建 ----
-
-    async def _build_initial_messages(
-        self,
-        node: FlowNode,
-        node_config: dict,
-        user_prompt: Optional[str],
-        state: FlowState,
-        config: Optional[RunnableConfig] = None,
-        writer: Optional[StreamWriter] = None,
-    ) -> list[BaseMessage]:
-        """构建初始消息列表（统一入口）"""
-        messages = await self._load_base_messages(node, node_config, state)
-        messages = self._validate_tool_pairs(messages)
-        resume_injected = self._inject_resume_if_needed(
-            messages, config, node.node_key, writer
-        )
-        self._append_user_message(
-            messages, state, node_config, user_prompt, config, resume_injected
-        )
-        return messages
-
-    async def _should_auto_compress(self, context_length: int) -> int:
-        """查 DB 最后一条 AI 消息的 prompt_tokens，返回已用 token 数"""
-        if not self.session_id or not self.db_session_factory or context_length <= 0:
-            return 0
-        try:
-            async with self.db_session_factory() as db:
-                from sqlalchemy import select
-
-                query = (
-                    select(AgentMessage.prompt_tokens)
-                    .where(
-                        AgentMessage.session_id == self.session_id,
-                        AgentMessage.role == "assistant",
-                        AgentMessage.is_delete == 0,
-                    )
-                    .order_by(AgentMessage.id.desc())
-                    .limit(1)
-                )
-                result = await db.execute(query)
-                return result.scalar() or 0
-        except Exception:
-            return 0
-
-    @staticmethod
-    def _validate_tool_pairs(messages: list[BaseMessage]) -> list[BaseMessage]:
-        """
-        校验并修复消息中 tool_call 与 tool result 的配对关系。
-
-        确保发送给 LLM 的消息列表满足：
-        1. ToolMessage 必须紧跟在对应的 AIMessage（含 tool_calls）之后
-        2. 孤立的 ToolMessage（无前置 tool_call）会被移除
-        3. 含 tool_calls 但缺少 ToolMessage 的 AIMessage，其未匹配的 tool_calls 会被清除
-        """
-        result: list[BaseMessage] = []
-        pending_ai_index: int = -1
-        pending_ids: set[str] = set()
-
-        def flush_pending():
-            nonlocal pending_ai_index, pending_ids
-            if pending_ids and 0 <= pending_ai_index < len(result):
-                ai = result[pending_ai_index]
-                if ai.tool_calls:
-                    ai.tool_calls = [
-                        tc
-                        for tc in ai.tool_calls
-                        if (
-                            tc.get("id", "")
-                            if isinstance(tc, dict)
-                            else getattr(tc, "id", "")
-                        )
-                        not in pending_ids
-                    ]
-                    if not ai.tool_calls:
-                        ai.tool_calls = None
-            pending_ai_index = -1
-            pending_ids.clear()
-
-        for msg in messages:
-            if isinstance(msg, AIMessage) and msg.tool_calls:
-                flush_pending()
-                pending_ids = {
-                    tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
-                    for tc in msg.tool_calls
-                }
-                result.append(msg)
-                pending_ai_index = len(result) - 1
-            elif isinstance(msg, AIMessage):
-                flush_pending()
-                result.append(msg)
-            elif isinstance(msg, ToolMessage):
-                if pending_ai_index >= 0 and msg.tool_call_id in pending_ids:
-                    pending_ids.discard(msg.tool_call_id)
-                    result.append(msg)
-                    if not pending_ids:
-                        pending_ai_index = -1
-                else:
-                    logger.debug(
-                        f"移除孤立 ToolMessage: tool_call_id={msg.tool_call_id}"
-                    )
-            else:
-                flush_pending()
-                result.append(msg)
-
-        flush_pending()
-        return result
-
-    async def _load_base_messages(
-        self, node: FlowNode, node_config: dict, state: FlowState
-    ) -> list[BaseMessage]:
-        """加载历史消息：优先 checkpoint，其次数据库"""
-        messages: list[BaseMessage] = [
-            m
-            for m in state.get_conversation_messages(node.node_key)
-            if not isinstance(m, SystemMessage)
-        ]
-        if messages:
-            return messages
-
-        return [
-            m
-            for m in await self._load_history_from_db(node_config, node.node_key)
-            if not isinstance(m, SystemMessage)
-        ]
-
-    def _inject_resume_if_needed(
-        self,
-        messages: list[BaseMessage],
-        config: Optional[RunnableConfig],
-        node_key: str = "",
-        writer: Optional[StreamWriter] = None,
-    ) -> bool:
-        """interrupt 恢复场景：将人类回复注入为 ToolMessage
-
-        仅当 messages 中存在未匹配的 tool_call 时才注入（说明 resume 来自
-        当前 LLM 节点的 request_human_help 工具调用），否则返回 False，
-        避免流程中 Human 节点 interrupt 恢复后误影响下游 LLM 节点。
-        注入成功时同步发送 tool_call_end 事件，关闭前端 running 状态的工具调用。
-        """
-        if not messages or not config:
-            return False
-
-        resume_input = config.get("configurable", {}).get("_human_resume_input")
-        if not resume_input:
-            return False
-
-        matched_ids = {
-            m.tool_call_id
-            for m in messages
-            if isinstance(m, ToolMessage) and m.tool_call_id
-        }
-        for msg in messages:
-            if not isinstance(msg, AIMessage) or not msg.tool_calls:
-                continue
-            for tc in msg.tool_calls:
-                tc_id = (
-                    tc.get("id", "")
-                    if isinstance(tc, dict)
-                    else getattr(tc, "id", "") or ""
-                )
-                tc_name = (
-                    tc.get("name", "")
-                    if isinstance(tc, dict)
-                    else getattr(tc, "name", "") or ""
-                )
-                if tc_id and tc_id not in matched_ids:
-                    messages.append(
-                        ToolMessage(
-                            content=str(resume_input),
-                            tool_call_id=tc_id,
-                            name=tc_name,
-                        )
-                    )
-                    if node_key and writer:
-                        self._emit_tool_end(
-                            writer, node_key, tc_name, resume_input, status="success"
-                        )
-                    return True
-
-        return False
-
-    def _append_user_message(
-        self,
-        messages: list[BaseMessage],
-        state: FlowState,
-        node_config: dict,
-        user_prompt: Optional[str],
-        config: Optional[RunnableConfig] = None,
-        resume_injected: bool = False,
-    ) -> None:
-        """构建 multimodal HumanMessage 并追加到消息列表"""
-        if resume_injected:
-            return
-
-        actual_user_prompt = user_prompt or state.input_data.get("message", "")
-        if not actual_user_prompt:
-            return
-
-        capabilities = node_config.get("capabilities", {})
-        media_blocks, file_index = collect_media_blocks(state.input_data, capabilities)
-        prompt_text = (
-            f"{actual_user_prompt}\n\n{file_index}"
-            if file_index
-            else actual_user_prompt
-        )
-        if media_blocks:
-            content = build_multimodal_content(prompt_text, media_blocks)
-        else:
-            content = prompt_text
-        messages.append(
-            HumanMessage(
-                content=content,
-                additional_kwargs={
-                    "_raw_user_content": state.input_data.get("message", "")
-                },
-            )
-        )
-
-    # ---- 流式 LLM 调用 ----
-
-    async def _stream_llm_response(
-        self,
-        llm: BaseChatModel,
-        messages: list[BaseMessage],
-        node_key: str,
-        state: FlowState,
-        writer: Optional[StreamWriter],
-    ) -> tuple[Optional[AIMessageChunk], list[str], str]:
-        """
-        流式调用 LLM 并收集响应
-
-        对限流、网络错误、超时自动重试（间隔1s→2s→4s，最多3次）
-
-        Returns:
-            (完整响应, thinking片段列表, 累积文本内容)
-        """
-        response: Optional[AIMessageChunk] = None
-        current_thinking = ""
-        current_content = ""
-        thinking_chunks: list[str] = []
-        retry_count = 0
-
-        while True:
-            try:
-                async for chunk in llm.astream(messages):
-                    if self._check_interrupted(state):
-                        break
-
-                    if (
-                        chunk.additional_kwargs
-                        and "reasoning_content" in chunk.additional_kwargs
-                    ):
-                        thinking_chunk = chunk.additional_kwargs["reasoning_content"]
-                        current_thinking += thinking_chunk
-                        thinking_chunks.append(thinking_chunk)
-                        self._emit(
-                            writer,
-                            NodeThinkingEvent(
-                                node_key=node_key, content=thinking_chunk
-                            ),
-                        )
-
-                    if chunk.content:
-                        for text, is_thinking in self._parse_content_blocks(
-                            chunk.content
-                        ):
-                            if is_thinking:
-                                current_thinking += text
-                                thinking_chunks.append(text)
-                                self._emit(
-                                    writer,
-                                    NodeThinkingEvent(node_key=node_key, content=text),
-                                )
-                            else:
-                                current_content += text
-                                self._emit(
-                                    writer,
-                                    NodeContentEvent(node_key=node_key, content=text),
-                                )
-
-                    response = response + chunk if response else chunk
-
-                break
-            except _RETRYABLE_ERRORS as e:
-                retry_count += 1
-                if retry_count > len(_RETRY_DELAYS):
-                    raise
-                delay = _RETRY_DELAYS[retry_count - 1]
-                self._emit(
-                    writer,
-                    LlmRetryEvent(
-                        node_key=node_key,
-                        message=f"LLM请求失败({e})，{delay}秒后重试({retry_count}/3)",
-                        retry_count=retry_count,
-                        max_retries=len(_RETRY_DELAYS),
-                        wait_seconds=delay,
-                    ),
-                )
-                await asyncio.sleep(delay)
-
-        return response, thinking_chunks, current_content
-
-    @staticmethod
-    def _parse_content_blocks(content) -> list[tuple[str, bool]]:
-        """
-        解析 chunk.content，兼容 str 和 Anthropic content block 列表格式
-
-        Anthropic streaming 返回的 content 可能是:
-        - str: 普通文本
-        - list[dict]: [{"type": "thinking", "thinking": "..."}, {"type": "text", "text": "..."}, {"type": "signature", ...}]
-
-        Returns:
-            [(文本, 是否thinking), ...] 列表，忽略 signature 等无关块
-        """
-        if isinstance(content, str):
-            if content:
-                return [(content, False)]
-            return []
-        if isinstance(content, list):
-            result: list[tuple[str, bool]] = []
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                block_type = block.get("type", "")
-                if block_type == "thinking":
-                    text = block.get("thinking", "")
-                    if text:
-                        result.append((text, True))
-                elif block_type == "text":
-                    text = block.get("text", "")
-                    if text:
-                        result.append((text, False))
-            return result
-        return []
-
-    # ---- 工具调用处理 ----
-
-    async def _handle_tool_calls(
-        self,
-        tool_calls: list[dict],
-        tools: list[BaseTool],
-        msg_buf: MessageBuffer,
-        node: FlowNode,
-        state: FlowState,
-        writer: Optional[StreamWriter],
-        tool_call_count: int,
-        max_tool_iterations: int,
-    ) -> tuple[bool, int]:
-        """
-        统一处理所有工具调用（人工协助 + 普通工具）
-
-        不同 MCP 服务器的工具调用并行执行（per-server 锁保证安全），
-        非 MCP 工具也并行执行。人工介入工具单独处理。
-
-        Returns:
-            (是否应继续循环, 工具调用总次数)
-        """
-        # 扫描是否存在人工介入工具，存在则跳过所有其他工具（避免有副作用的工具先执行）
-        human_help_idx = next(
-            (
-                i
-                for i, tc in enumerate(tool_calls)
-                if tc.get("name") == _REQUEST_HUMAN_HELP
-            ),
-            -1,
-        )
-        if human_help_idx >= 0:
-            skip_msg = "人工介入，跳过其他工具调用"
-            before = tool_calls[:human_help_idx]
-            if before:
-                self._reject_remaining_tools(
-                    before, msg_buf, node.node_key, writer, skip_msg
-                )
-            after = tool_calls[human_help_idx + 1 :]
-            if after:
-                self._reject_remaining_tools(
-                    after, msg_buf, node.node_key, writer, skip_msg
-                )
-
-            tool_call = tool_calls[human_help_idx]
-            tool_name = tool_call.get("name", "")
-            tool_args = tool_call.get("args", {})
-            tool_id = tool_call.get("id", "")
-            tool_call_count += 1
-            self._emit_tool_start(writer, node.node_key, tool_name, tool_args)
-            result = await self._handle_human_interaction(
-                tool_args, tool_id, msg_buf.messages, node, state
-            )
-            msg_buf.append(
-                ToolMessage(content=str(result), tool_call_id=tool_id, name=tool_name)
-            )
-            self._emit_tool_end(
-                writer, node.node_key, tool_name, result, status="success"
-            )
-            return True, tool_call_count
-
-        # ---- 工具确认（仅 Agent 模式） ----
-        # session_id > 0 表示 Agent 模式（由 agent_executor_service 传入真实会话 ID），
-        # Flow 模式 session_id 为 0，不触发确认逻辑
-        if self.session_id > 0:
-            config = node.base_config or {}
-            if config.get("require_tool_approval"):
-                approval_names = {
-                    tc["name"] for tc in tool_calls
-                } & _APPROVAL_REQUIRED_TOOLS
-                if approval_names:
-                    from app.services.tool_approval_service import (
-                        tool_approval_service,
-                    )
-
-                    # 注册等待句柄并通过 SSE 通知前端
-                    future = tool_approval_service.register(
-                        self.session_id, tool_calls, list(approval_names)
-                    )
-                    self._emit(
-                        writer,
-                        ToolApprovalEvent(
-                            node_key=node.node_key,
-                            tool_calls=tool_calls,
-                            approval_needed=list(approval_names),
-                        ),
-                    )
-                    # 等待前端确认（5分钟超时，SSE 流保持连接）
-                    try:
-                        await asyncio.wait_for(future.event.wait(), timeout=300)
-                    except asyncio.TimeoutError:
-                        tool_approval_service.remove(self.session_id)
-                        state.set_interrupted()
-                        for tc in tool_calls:
-                            tc_name = tc.get("name", "")
-                            tc_id = tc.get("id", "")
-                            msg = "工具确认超时（5分钟未响应），自动取消执行"
-                            msg_buf.append(
-                                ToolMessage(
-                                    content=msg, tool_call_id=tc_id, name=tc_name
-                                )
-                            )
-                            self._emit_tool_end(
-                                writer, node.node_key, tc_name, msg, status="error"
-                            )
-                        return False, tool_call_count
-                    tool_approval_service.remove(self.session_id)
-
-                    if future.result == "rejected":
-                        state.set_interrupted()
-                        for tc in tool_calls:
-                            tc_name = tc.get("name", "")
-                            tc_id = tc.get("id", "")
-                            msg = "用户拒绝执行"
-                            msg_buf.append(
-                                ToolMessage(
-                                    content=msg, tool_call_id=tc_id, name=tc_name
-                                )
-                            )
-                            self._emit_tool_end(
-                                writer, node.node_key, tc_name, msg, status="error"
-                            )
-                        return False, tool_call_count
-
-        # ---- 检查工具调用次数是否超限（整批检查） ----
-        if tool_call_count + len(tool_calls) > max_tool_iterations:
-            over_idx = max_tool_iterations - tool_call_count
-            if over_idx < 0:
-                over_idx = 0
-            if over_idx < len(tool_calls):
-                limit_msg = f"超过最大工具调用次数: {max_tool_iterations}"
-                self._reject_remaining_tools(
-                    tool_calls[over_idx:], msg_buf, node.node_key, writer, limit_msg
-                )
-                self._emit(
-                    writer,
-                    ToolCallLimitEvent(
-                        node_key=node.node_key,
-                        max_iterations=max_tool_iterations,
-                    ),
-                )
-                state.add_error(
-                    node.node_key, f"超过最大工具调用次数: {max_tool_iterations}"
-                )
-                tool_calls = tool_calls[:over_idx]
-                if not tool_calls:
-                    return False, tool_call_count
-
-        # ---- 并行执行工具调用 ----
-        tool_call_count += len(tool_calls)
-
-        async def _run_single_tool(tool_call: dict) -> tuple[dict, Any]:
-            """执行单个工具调用并返回 (tool_call, result)"""
-            tool_name = tool_call.get("name", "")
-            tool_args = tool_call.get("args", "")
-            if self._check_interrupted(state):
-                return tool_call, {"success": False, "error": "执行被中断"}
-            self._emit_tool_start(writer, node.node_key, tool_name, tool_args)
-            result = await self._execute_tool(tool_name, tool_args, tools, state)
-            return tool_call, result
-
-        results = await asyncio.gather(
-            *[_run_single_tool(tc) for tc in tool_calls], return_exceptions=True
-        )
-
-        for tool_call, raw_result in results:
-            if isinstance(raw_result, Exception):
-                raw_result = {
-                    "success": False,
-                    "error": f"工具执行异常: {str(raw_result)}",
-                }
-
-            tool_name = tool_call.get("name", "")
-            tool_id = tool_call.get("id", "")
-
-            tool_status = "error"
-            if not isinstance(raw_result, Exception):
-                try:
-                    parsed = (
-                        json.loads(raw_result)
-                        if isinstance(raw_result, str)
-                        else raw_result
-                    )
-                    if not (
-                        isinstance(parsed, dict) and parsed.get("success") is False
-                    ):
-                        tool_status = "success"
-                except (json.JSONDecodeError, TypeError):
-                    tool_status = "success"
-
-            msg_buf.append(
-                ToolMessage(
-                    content=str(raw_result), tool_call_id=tool_id, name=tool_name
-                )
-            )
-            self._emit_tool_end(
-                writer, node.node_key, tool_name, raw_result, tool_status
-            )
-
-        return True, tool_call_count
-
-    def _reject_remaining_tools(
-        self,
-        remaining_calls: list[dict],
-        msg_buf: MessageBuffer,
-        node_key: str,
-        writer: Optional[StreamWriter],
-        reason: str,
-    ) -> None:
-        """拒绝剩余的工具调用（发送失败事件 + ToolMessage）"""
-        for call in remaining_calls:
-            call_id = call.get("id", "")
-            call_name = call.get("name", "")
-            self._emit_tool_end(
-                writer,
-                node_key,
-                call_name,
-                {"success": False, "error": reason},
-                status="error",
-            )
-            msg_buf.append(
-                ToolMessage(content=reason, tool_call_id=call_id, name=call_name)
-            )
-
-    async def _handle_human_interaction(
-        self,
-        tool_args: dict,
-        tool_id: str,
-        messages: list[BaseMessage],
-        node: FlowNode,
-        state: FlowState,
-    ) -> str:
-        """
-        处理人工协助工具调用
-
-        流程：保存当前进度 → LangGraph interrupt → 等待用户输入 → 返回用户回复
-        """
-        question = tool_args.get("question", "需要您的帮助")
-        context_str = tool_args.get("context")
-
-        # 在 interrupt 前保存进度（state + DB），确保前端能展示当前对话
-        state.set_conversation_messages(node.node_key, list(messages))
-        await self._save_history_to_db(messages, node.node_key)
-
-        # 触发 LangGraph interrupt，暂停执行等待用户输入
-        human_input = interrupt(
-            {
-                "type": "human_input_required",
-                "node_key": node.node_key,
-                "question": question,
-                "context": context_str,
-                "tool_call_id": tool_id,
-            }
-        )
-
-        return human_input
-
-    # ---- LLM 创建 ----
-
-    def _create_llm(
-        self,
-        api_key: str,
-        model: str,
-        base_url: str = "",
-        max_tokens: int = 8192,
-        provider_name: str = "deepseek",
-        temperature: float = 0.7,
-        extra_body: Optional[dict] = None,
-        reasoning_effort: Optional[str] = None,
-    ) -> BaseChatModel:
-        """通过 AI 提供商创建 LLM 实例"""
-        provider = create_provider(provider_name, api_key, base_url)
-        kwargs: dict = {
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "streaming": True,
-            "verbose": True,
-        }
-        if extra_body:
-            kwargs["extra_body"] = extra_body
-        if reasoning_effort:
-            kwargs["reasoning_effort"] = reasoning_effort
-        return provider.create_chat_model(**kwargs)
-
-    # ---- 对话历史管理 ----
-
-    async def _load_history_from_db(
-        self, node_config: dict, node_key: str
-    ) -> list[BaseMessage]:
-        """
-        从数据库加载对话历史（仅首次执行时调用）
-
-        Agent 模式（session_id > 0）: 始终加载全部历史
-        Flow 模式: 支持 history_mode:
-        - "none": 不加载历史
-        - "flow": 加载整个流程的历史
-        - "node": 仅加载当前节点的历史（默认）
-        """
-        if not self.conversation_service or not self.db_session_factory:
-            return []
-
-        max_history_turns = node_config.get("max_history_turns", 10)
-
-        # Agent 模式：始终加载全部对话历史
-        if self.session_id:
-            try:
-                async with self.db_session_factory() as db:
-                    messages = await self.conversation_service.get_full_history(
-                        db, self._id_param
-                    )
-                    return list(messages)
-            except Exception:
-                return []
-
-        # Flow 模式：按 history_mode 区分
-        history_mode = node_config.get("history_mode", "node")
-        if history_mode == "none":
-            return []
-
-        try:
-            async with self.db_session_factory() as db:
-                if history_mode == "flow":
-                    messages = await self.conversation_service.get_full_history(
-                        db, self._id_param, limit=max_history_turns * 4
-                    )
-                else:
-                    messages = await self.conversation_service.get_history(
-                        db, self._id_param, node_key, limit=max_history_turns * 4
-                    )
-                return list(messages)
-        except Exception:
-            return []
-
-    # ---- 工具执行 ----
-
-    async def _execute_tool(
-        self, tool_name: str, tool_args: dict, tools: list[BaseTool], state: FlowState
-    ) -> Any:
-        """按名称查找并执行工具"""
-        if self._check_interrupted(state):
-            return {"success": False, "error": "执行被中断"}
-        for tool in tools:
-            if tool.name == tool_name:
-                try:
-                    return await tool.ainvoke(tool_args)
-                except Exception as e:
-                    return {"success": False, "error": f"工具执行错误: {str(e)}"}
-        return {"success": False, "error": f"未找到工具: {tool_name}"}
 
     # ---- 输入/输出内容（用于执行结果显示） ----
 
@@ -1393,7 +558,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
     def get_input_content(
         cls, node: FlowNode, state: FlowState, resolver, config: Optional[dict] = None
     ) -> Optional[dict]:
-        """获取LLM节点的输入内容"""
+        """获取 LLM 节点的输入内容"""
         if config is None:
             config = node.base_config or {}
         input_data = {}
@@ -1424,7 +589,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
     def get_output_content(
         cls, node: FlowNode, state: FlowState, resolver, config: Optional[dict] = None
     ) -> Optional[dict]:
-        """获取LLM节点的输出内容"""
+        """获取 LLM 节点的输出内容"""
         if config is None:
             config = node.base_config or {}
         output = {}
@@ -1457,16 +622,15 @@ def create_llm_handler(
     handler_registry: Optional[dict] = None,
     session_id: int = 0,
 ):
-    """
-    创建 LLM 节点处理器实例
+    """创建 LLM 节点处理器实例
 
     Args:
         flow: 流程对象
         db_session_factory: 数据库会话工厂
-        execution_id: 执行记录ID（Flow 模式）
+        execution_id: 执行记录 ID（Flow 模式）
         conversation_service: 对话服务
         handler_registry: 工具处理器注册表
-        session_id: 会话ID（Agent 模式）
+        session_id: 会话 ID（Agent 模式）
     """
     return LlmToolNodeHandler(
         flow=flow,
