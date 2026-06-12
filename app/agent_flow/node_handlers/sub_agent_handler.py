@@ -9,7 +9,6 @@ import asyncio
 import json
 import logging
 import re
-import uuid
 from typing import Optional, TYPE_CHECKING
 
 from langchain_core.tools import StructuredTool
@@ -17,7 +16,6 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
 from pydantic import Field, create_model
 
-from app.config.build_utils import get_temp_dir
 from app.config.database import AsyncSessionLocal
 from app.models.flow_node import FlowNode
 from app.agent_flow.flow_context import FlowState
@@ -31,8 +29,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_OUTPUT_LINES = 500
-MAX_TOOL_OUTPUT_BYTES = 10240
 HEARTBEAT_INTERVAL = 20
 
 _TYPE_MAP = {
@@ -47,51 +43,6 @@ class SubAgentNodeConfig(BaseNodeConfig):
     """子Agent节点配置"""
 
     agent_id: int = Field(..., description="引用的Agent ID")
-
-
-def _truncate_output(text: str) -> dict:
-    """截断过长的输出，超限时写入临时文件"""
-    if not text:
-        return {"text": "", "truncated": False, "saved_to": None, "total_lines": 0}
-
-    lines = text.splitlines()
-    total_lines = len(lines)
-    text_bytes = len(text.encode("utf-8"))
-
-    if total_lines <= MAX_TOOL_OUTPUT_LINES and text_bytes <= MAX_TOOL_OUTPUT_BYTES:
-        return {
-            "text": text,
-            "truncated": False,
-            "saved_to": None,
-            "total_lines": total_lines,
-        }
-
-    temp_dir = get_temp_dir()
-    temp_filename = f"sub_agent_output_{uuid.uuid4().hex[:8]}.log"
-    temp_path = temp_dir / temp_filename
-    temp_path.write_text(text, encoding="utf-8")
-
-    head_count = MAX_TOOL_OUTPUT_LINES // 2
-    head_lines = lines[:head_count]
-    preview = "\n".join(head_lines)
-    if (
-        text_bytes > MAX_TOOL_OUTPUT_BYTES
-        and len(preview.encode("utf-8")) > MAX_TOOL_OUTPUT_BYTES
-    ):
-        byte_head = preview.encode("utf-8")[: MAX_TOOL_OUTPUT_BYTES // 2]
-        preview = byte_head.decode("utf-8", errors="ignore")
-
-    preview += (
-        f"\n\n[输出已截断，共 {total_lines} 行。"
-        f"完整内容已保存到: {temp_path}，可用 read_agent_file 读取]"
-    )
-
-    return {
-        "text": preview,
-        "truncated": True,
-        "saved_to": str(temp_path),
-        "total_lines": total_lines,
-    }
 
 
 def _sanitize_tool_name(name: str) -> str:
@@ -390,5 +341,4 @@ async def _run_sub_agent(
                 except asyncio.TimeoutError:
                     tool_approval_service.remove(session_id)
 
-    truncated = _truncate_output(content)
-    return truncated
+    return content

@@ -27,6 +27,7 @@ from app.agent_flow.node_handlers.base_handler import (
     BaseNodeConfig,
     NodeVariable,
 )
+from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.config.build_utils import BASE_DIR, get_temp_dir
 from app.models.flow_node import FlowNode
 
@@ -228,8 +229,6 @@ FORBIDDEN_PATH_PATTERNS = [
 MAX_FILE_SIZE = 50 * 1024 * 1024
 MAX_CONTENT_SIZE = 50 * 1024 * 1024
 MAX_FILE_READ_LINES = 100
-MAX_TOOL_OUTPUT_LINES = 500
-MAX_TOOL_OUTPUT_BYTES = 10240
 
 
 def _validate_file_path(file_path: str) -> tuple[bool, str]:
@@ -379,69 +378,18 @@ def _decode_output(data: bytes) -> str:
             return "\n".join(decoded)
 
 
-def _truncate_tool_output(
-    text: str,
-    max_lines: int = MAX_TOOL_OUTPUT_LINES,
-    max_bytes: int = MAX_TOOL_OUTPUT_BYTES,
-) -> dict:
-    """截断过长的工具输出，超限时将完整内容写入临时文件并返回预览
+def _apply_shell_output_truncation(result: dict, task) -> None:
+    """对 shell 工具返回的 stdout/stderr 应用统一截断，就地修改 result dict
 
-    Returns:
-        {"text": 截断/原文, "truncated": bool, "saved_to": Optional[路径], "total_lines": int}
+    使用公共截断模块的 JSON 感知截断：stdout 和 stderr 作为 dict 的独立字段，
+    会被 smart_truncate_output 内部的 _truncate_dict 分别截断。
     """
-    lines = text.splitlines()
-    total_lines = len(lines)
-    text_bytes = len(text.encode("utf-8"))
-
-    if total_lines <= max_lines and text_bytes <= max_bytes:
-        return {
-            "text": text,
-            "truncated": False,
-            "saved_to": None,
-            "total_lines": total_lines,
-        }
-
-    temp_dir = get_temp_dir()
-    temp_filename = f"tool_output_{uuid.uuid4().hex[:8]}.log"
-    temp_path = temp_dir / temp_filename
-    temp_path.write_text(text, encoding="utf-8")
-
-    head_count = max_lines // 2
-    head_lines = lines[:head_count]
-    preview = "\n".join(head_lines)
-    if text_bytes > max_bytes and len(preview.encode("utf-8")) > max_bytes:
-        byte_head = preview.encode("utf-8")[: max_bytes // 2]
-        preview = byte_head.decode("utf-8", errors="ignore")
-
-    preview += (
-        f"\n\n[输出已截断，共 {total_lines} 行。"
-        f"完整内容已保存到: {temp_path}，可用 file_read 读取]"
-    )
-
-    return {
-        "text": preview,
-        "truncated": True,
-        "saved_to": str(temp_path),
-        "total_lines": total_lines,
-    }
-
-
-def _apply_output_truncation(result: dict, stdout: str, stderr: str) -> None:
-    """对 shell 工具返回的 stdout/stderr 应用截断，就地修改 result dict"""
-    if stdout:
-        stdout_info = _truncate_tool_output(stdout)
-        result["stdout"] = stdout_info["text"]
-        if stdout_info["truncated"]:
-            result["_stdout_truncated"] = True
-            result["_stdout_saved_to"] = stdout_info["saved_to"]
-            result["_stdout_total_lines"] = stdout_info["total_lines"]
-    if stderr:
-        stderr_info = _truncate_tool_output(stderr)
-        result["stderr"] = stderr_info["text"]
-        if stderr_info["truncated"]:
-            result["_stderr_truncated"] = True
-            result["_stderr_saved_to"] = stderr_info["saved_to"]
-            result["_stderr_total_lines"] = stderr_info["total_lines"]
+    if task.stdout:
+        result["stdout"] = task.stdout
+    if task.stderr:
+        result["stderr"] = task.stderr
+    truncated = json.loads(smart_truncate_output(result, prefix="shell_output"))
+    result.update(truncated)
 
 
 def _diff_preview(
@@ -837,7 +785,7 @@ class ShellNodeHandler(BaseNodeHandler):
             if monitor in done:
                 _background_tasks.pop(task.task_id, None)
                 result = {"success": True, **task.to_dict()}
-                _apply_output_truncation(result, task.stdout, task.stderr)
+                _apply_shell_output_truncation(result, task)
                 return json.dumps(result, ensure_ascii=False)
 
             result = {
@@ -846,7 +794,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 "message": f"命令仍在执行中，请使用 shell_task_status 工具查询进度（task_id: {task.task_id}）",
                 **task.to_dict(),
             }
-            _apply_output_truncation(result, task.stdout, task.stderr)
+            _apply_shell_output_truncation(result, task)
             return json.dumps(result, ensure_ascii=False)
 
         shell_tool = StructuredTool(
@@ -880,7 +828,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 await asyncio.wait({task._monitor_task}, timeout=async_wait)
             result = {"success": True, **task.to_dict()}
             if task.stdout or task.stderr:
-                _apply_output_truncation(result, task.stdout, task.stderr)
+                _apply_shell_output_truncation(result, task)
             return json.dumps(result, ensure_ascii=False)
 
         shell_task_status_tool = StructuredTool(

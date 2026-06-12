@@ -200,11 +200,13 @@ langgraph-agent/
 │   ├── middleware/              # 全局异常处理器 + 认证中间件 + 安全头中间件
 │   ├── agent_flow/             # LangGraph 流程执行引擎
 │   │   ├── node_handlers/      #   节点处理器（17 种，自动注册）
+│   │   │   ├── llm_*.py        #     LLM 节点模块化拆分（主入口 + factory + stream + message + executor）
 │   │   ├── ai_provider/        #   AI 模型提供商（6 种，自动注册）
 │   │   ├── flow_context.py     #   FlowState 状态定义 + reducer
 │   │   ├── graph_builder.py    #   StateGraph 构建器
 │   │   ├── edge_router.py      #   通用边路由（condition/expression/普通边/循环守卫）
 │   │   ├── tool_resolver.py    #   工具发现（扫描 source_handle="tools" 边）
+│   │   ├── tool_output_truncate.py # 工具输出统一截断（JSON 感知，阈值可配置）
 │   │   ├── subgraph_builder.py #   子图构建器基类
 │   │   ├── subgraph_runner.py  #   子图流式执行器
 │   │   ├── card_subgraph.py    #   卡片子图构建器
@@ -326,6 +328,10 @@ EMBEDDING_MODEL=
 
 # 登录密码（可选，为空不启用。DB 中 global_config 优先级更高）
 LOGIN_PASSWORD=your_password
+
+# 工具输出截断（超过阈值时保存到临时文件，返回预览）
+TOOL_OUTPUT_MAX_LINES=500
+TOOL_OUTPUT_MAX_BYTES=10240
 ```
 
 完整配置见 [.env.example](.env.example)。

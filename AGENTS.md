@@ -48,6 +48,11 @@ app/                          # 后端
 │   └── auth_middleware.py     #   Session cookie 认证（密码哈希内存缓存，仅 /api/* 路径需认证）
 ├── agent_flow/               # LangGraph 流程编排
 │   ├── node_handlers/        #   节点处理器（自动扫描注册）
+│   │   ├── llm_tool_handler.py #   LLM 节点主入口（execute + ReAct 循环 + LlmNodeConfig）
+│   │   ├── llm_factory.py    #     LLM 实例创建和工具绑定
+│   │   ├── llm_message_builder.py # 消息构建（历史加载、恢复、multimodal）
+│   │   ├── llm_stream.py     #     流式 LLM 调用（重试、thinking 解析）
+│   │   └── llm_tool_executor.py #  工具执行（并行执行、人工交互、审批、截断）
 │   ├── ai_provider/          #   AI 模型提供商（自动扫描注册）
 │   ├── flow_context.py       #   FlowState 定义
 │   ├── flow_event.py         #   流程执行 SSE 事件类
@@ -55,6 +60,7 @@ app/                          # 后端
 │   ├── variable_resolver.py  #   统一变量解析器（context > input > variables 优先级）
 │   ├── handler_registry.py   #   NodeHandlerRegistry
 │   ├── tool_resolver.py      #   LLM 工具解析
+│   ├── tool_output_truncate.py #  工具输出统一截断（JSON 感知，阈值可配置）
 │   ├── graph_builder.py      #   图构建器
 │   ├── edge_router.py        #   通用边路由（wire_edges, iteration_guard）
 │   ├── subgraph_builder.py   #   子图构建器基类（BaseSubgraphBuilder）
@@ -318,6 +324,19 @@ class MyNodeHandler(BaseNodeHandler):
 30. **删除历史必须同步清理 checkpoint**: 对话历史采用双写机制（LangGraph checkpoint + DB），删除/修改 DB 消息后必须同步清理 checkpoint，否则下次对话时 checkpoint 中的旧消息会通过增量写入重新回填 DB。统一使用 `_cleanup_thread_checkpoint(session_id)` 方法清理
 31. **变量解析优先级**: `variable_resolver.py` 统一解析变量，无前缀时按 context（input_variables 映射）> input（state.input_data）> variables（state.variables）顺序查找
 32. **消息缓冲区**: `message_buffer.py` 管理对话消息的完整生命周期（加载历史→追加→压缩→持久化到 DB），SSE 流式方法中自动管理
+33. **工具输出统一截断**: `tool_output_truncate.py` 提供所有工具结果的 JSON 感知截断，阈值通过 `.env` 配置（`TOOL_OUTPUT_MAX_LINES`/`TOOL_OUTPUT_MAX_BYTES`）
+    - **统一输出为 JSON 字符串**: 所有工具输出在截断层统一为 JSON 字符串，LLM 始终收到结构完整、可解析的 JSON
+    - **str 输入处理**: 先尝试 `json.loads()` 解析为 dict，成功则走 JSON 感知截断；解析失败则退化为纯文本截断
+    - **dict 类型截断**: 保留 JSON 结构完整，只截断大字段值（str 字段独立截断、list 字段保留前 N 项），超限时保存完整内容到临时文件
+    - **截断入口**: `smart_truncate_output(result, prefix="tool_output")` → 返回截断后的字符串
+    - **截断时机**: `llm_tool_executor.py` 在 `handle_tool_calls()` 中构造 `ToolMessage` 前统一调用，所有工具（Shell、Sub-Agent、MCP、Knowledge、Memory 等）一致处理
+    - **Shell 工具**: 内部通过 `_apply_shell_output_truncation()` 预截断（stdout/stderr 作为 dict 独立字段被分别截断），LLM 层兜底截断通常不会再次触发
+34. **LLM 节点模块化拆分**: `LlmToolNodeHandler` 主入口约 410 行，职责拆分到 4 个子模块（高内聚低耦合，回调传参模式）：
+    - `llm_factory.py`: `create_llm()` + `prepare_llm()` — LLM 实例创建和工具绑定
+    - `llm_message_builder.py`: `build_initial_messages()` + `validate_tool_pairs()` + `inject_resume_if_needed()` + `append_user_message()` + `load_history_from_db()` + `should_auto_compress()` — 消息构建全流程
+    - `llm_stream.py`: `stream_llm_response()` + `parse_content_blocks()` — 流式调用 + 重试 + thinking 解析
+    - `llm_tool_executor.py`: `setup_tool_handlers()` + `handle_tool_calls()` + `execute_tool()` + `handle_human_interaction()` + `reject_remaining_tools()` — 工具执行全流程
+    - 依赖方向单向（无循环依赖）: `llm_tool_handler.py` → 四个子模块，子模块不 import 主入口
 
 ### 前端
 
