@@ -49,6 +49,14 @@ class SchedulerService:
             max_instances=1,
             misfire_grace_time=settings.doc_process_interval,
         )
+        self._scheduler.add_job(
+            self._cleanup_temp_files,
+            CronTrigger(minute=0, hour="*"),
+            id="cleanup_temp_files",
+            name="清理7天前的临时文件",
+            replace_existing=True,
+            max_instances=1,
+        )
         self._scheduler.start()
         logger.info(f"调度器已启动，文档处理任务间隔: {settings.doc_process_interval}s")
 
@@ -174,6 +182,33 @@ class SchedulerService:
                 logger.info(f"定时任务[{task.name}]执行完成")
         except Exception as e:
             logger.error(f"定时任务[{task_id}]执行异常: {e}", exc_info=True)
+
+    async def _cleanup_temp_files(self) -> None:
+        """清理 temp 目录中超过 7 天的文件"""
+        import time
+
+        from app.config.build_utils import get_temp_dir
+
+        temp_dir = get_temp_dir()
+        if not temp_dir.exists():
+            return
+
+        now = time.time()
+        max_age = 7 * 24 * 3600  # 7天
+        deleted = 0
+
+        for entry in temp_dir.iterdir():
+            if not entry.is_file():
+                continue
+            try:
+                if now - entry.stat().st_mtime > max_age:
+                    entry.unlink()
+                    deleted += 1
+            except Exception as e:
+                logger.warning(f"清理临时文件失败: {entry.name}: {e}")
+
+        if deleted > 0:
+            logger.info(f"已清理 {deleted} 个过期临时文件")
 
     async def _process_pending_documents(self) -> None:
         """
