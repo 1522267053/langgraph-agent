@@ -655,7 +655,7 @@ class AgentExecutorService(BaseExecutorService):
                         )
 
                 # 首次对话时自动生成标题
-                if is_first_message and llm_content:
+                if is_first_message and llm_content and session.title == "新对话":
                     title = user_message[:50]
                     if len(user_message) > 50:
                         title += "..."
