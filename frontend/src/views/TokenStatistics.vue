@@ -271,6 +271,7 @@ onUnmounted(() => {
       </el-form-item>
     </el-form>
 
+    <div v-loading="loading" class="content-area">
     <!-- 概览卡片 -->
     <div class="overview-cards">
       <div class="overview-card">
@@ -371,6 +372,7 @@ onUnmounted(() => {
           </template>
         </el-table-column>
       </el-table>
+    </div>
     </div>
   </div>
 </template>
