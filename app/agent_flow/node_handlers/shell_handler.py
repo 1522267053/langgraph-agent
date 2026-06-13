@@ -1426,20 +1426,13 @@ class ShellNodeHandler(BaseNodeHandler):
 
             is_valid, error_msg = _validate_file_path(str(search_root))
             if not is_valid:
-                return json.dumps(
-                    {"error": error_msg, "success": False}, ensure_ascii=False
-                )
+                return f"路径校验失败: {error_msg}"
 
             if not search_root.exists():
-                return json.dumps(
-                    {"error": f"路径不存在: {search_root}", "success": False},
-                    ensure_ascii=False,
-                )
+                return f"路径不存在: {search_root}"
+
             if not search_root.is_dir():
-                return json.dumps(
-                    {"error": f"路径不是目录: {search_root}", "success": False},
-                    ensure_ascii=False,
-                )
+                return f"路径不是目录: {search_root}"
 
             # literal_text 模式：自动转义正则特殊字符
             search_pattern = re.escape(pattern) if literal_text else pattern
@@ -1448,10 +1441,7 @@ class ShellNodeHandler(BaseNodeHandler):
             try:
                 re.compile(search_pattern)
             except re.error as e:
-                return json.dumps(
-                    {"error": f"正则表达式无效: {e}", "success": False},
-                    ensure_ascii=False,
-                )
+                return f"正则表达式无效: {e}"
 
             # 优先使用 ripgrep，失败时 fallback 到纯 Python
             results = []
@@ -1473,21 +1463,26 @@ class ShellNodeHandler(BaseNodeHandler):
                     search_root, search_pattern, include, MAX_SEARCH_RESULTS
                 )
 
-            result: dict = {
-                "success": True,
-                "search_root": str(search_root),
-                "pattern": pattern,
-                "total_matches": total_matches,
-                "result_count": len(results),
-                "results": results,
-            }
+            if not results:
+                return "No matches found"
+
+            lines: list[str] = [f"Found {total_matches} matches\n"]
+            current_file = ""
+            for match in results:
+                fp = match["file_path"]
+                if fp != current_file:
+                    if current_file:
+                        lines.append("")
+                    current_file = fp
+                    lines.append(f"{fp}:")
+                lines.append(f"  {match['line_number']}: {match['line_content']}")
+
             if truncated:
-                result["truncated"] = True
-                result["message"] = (
-                    f"匹配结果超过 {MAX_SEARCH_RESULTS} 条，仅返回前 {MAX_SEARCH_RESULTS} 条。"
-                    "请缩小搜索范围或使用更精确的正则表达式。"
+                lines.append(
+                    f"\n(Results truncated after {MAX_SEARCH_RESULTS} matches. "
+                    "Use a more specific path or pattern.)"
                 )
-            return json.dumps(result, ensure_ascii=False)
+            return "\n".join(lines)
 
         file_search_tool = StructuredTool(
             name="file_search",
