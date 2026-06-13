@@ -104,14 +104,12 @@ class TodoNodeHandler(BaseNodeHandler):
             """写入/更新任务计划列表"""
             ref_type, ref_id = handler._resolve_context()
             if not ref_type or not ref_id:
-                return json.dumps({"error": "无法获取上下文信息"}, ensure_ascii=False)
+                return "无法获取上下文信息"
 
             try:
                 items = json.loads(todos)
             except json.JSONDecodeError:
-                return json.dumps(
-                    {"error": "todos 参数必须是合法的 JSON 数组"}, ensure_ascii=False
-                )
+                return "todos 参数必须是合法的 JSON 数组"
 
             if not isinstance(items, list):
                 items = [items]
@@ -139,7 +137,7 @@ class TodoNodeHandler(BaseNodeHandler):
                 )
 
             if not validated:
-                return json.dumps({"error": "任务列表不能为空"}, ensure_ascii=False)
+                return "任务列表不能为空"
 
             async with AsyncSessionLocal() as db:
                 result = await todo_service.update_ref_todos(
@@ -150,9 +148,7 @@ class TodoNodeHandler(BaseNodeHandler):
             handler._last_todos = [
                 {**item, "id": r["id"]} for item, r in zip(validated, result)
             ]
-            return json.dumps(
-                {"success": True, "updated_count": len(result)}, ensure_ascii=False
-            )
+            return f"已更新任务列表（{len(result)}条）"
 
         async def read_todos() -> str:
             """读取当前任务计划列表"""
