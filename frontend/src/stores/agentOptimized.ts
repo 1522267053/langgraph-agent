@@ -327,31 +327,42 @@ export const useAgentStore = defineStore('agent', () => {
             currentAssistant.segments.push({ type: 'tool', tool })
 
             const toolName = tc.name as string
-            if (
-              toolName === 'todowrite' &&
+            if (toolName === 'todowrite' && toolResult?.status === 'success') {
+              try {
+                const todosArgs = JSON.parse((tc.args as { todos?: string })?.todos || '[]')
+                if (Array.isArray(todosArgs)) {
+                  currentAssistant.segments.push({
+                    type: 'todo',
+                    todo: todosArgs.map(
+                      (item: { content?: string; status?: string; priority?: string }) => ({
+                        content: item.content || '',
+                        status: item.status || 'pending',
+                        priority: item.priority || 'medium'
+                      })
+                    )
+                  })
+                }
+              } catch {
+                // ignore parse errors
+              }
+            } else if (
+              toolName === 'todoread' &&
               toolResult?.status === 'success' &&
               typeof resultData === 'object' &&
               resultData !== null
             ) {
-              const parsed = resultData as { success?: boolean; updated_count?: number }
-              if (parsed.success && parsed.updated_count) {
-                try {
-                  const todosArgs = JSON.parse((tc.args as { todos?: string })?.todos || '[]')
-                  if (Array.isArray(todosArgs)) {
-                    currentAssistant.segments.push({
-                      type: 'todo',
-                      todo: todosArgs.map(
-                        (item: { content?: string; status?: string; priority?: string }) => ({
-                          content: item.content || '',
-                          status: item.status || 'pending',
-                          priority: item.priority || 'medium'
-                        })
-                      )
+              const parsed = resultData as { todos?: unknown }
+              if (Array.isArray(parsed.todos)) {
+                currentAssistant.segments.push({
+                  type: 'todo',
+                  todo: parsed.todos.map(
+                    (item: { content?: string; status?: string; priority?: string }) => ({
+                      content: item.content || '',
+                      status: item.status || 'pending',
+                      priority: item.priority || 'medium'
                     })
-                  }
-                } catch {
-                  // ignore parse errors
-                }
+                  )
+                })
               }
             }
           }
