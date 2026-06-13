@@ -83,8 +83,7 @@ function updateConfig(): void {
       </el-form>
       <div class="config-hint">
         <el-text size="small" type="info">
-          子Agent节点需通过工具连接到LLM节点使用。
-          被引用的Agent必须填写了描述。
+          子Agent节点需通过工具连接到LLM节点使用。 被引用的Agent必须填写了描述。
         </el-text>
       </div>
     </div>

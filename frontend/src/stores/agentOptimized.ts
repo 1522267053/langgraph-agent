@@ -473,7 +473,7 @@ export const useAgentStore = defineStore('agent', () => {
             isSubAgent: true,
             agentId: event.data.sub_agent_id,
             sessionId: event.data.sub_session_id,
-            agentName: event.data.sub_agent_name || '子Agent',
+            agentName: event.data.sub_agent_name || '子Agent'
           }
         } else {
           subAgentApproval.value = null
@@ -819,10 +819,7 @@ export const useAgentStore = defineStore('agent', () => {
   /**
    * 压缩会话上下文
    */
-  async function compressSession(
-    agentId: number,
-    sessionId: number
-  ): Promise<boolean> {
+  async function compressSession(agentId: number, sessionId: number): Promise<boolean> {
     isCompressing.value = true
     try {
       const res = await agentApi.compress(agentId, sessionId)

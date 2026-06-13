@@ -93,10 +93,7 @@ const handlesWithOffsets = computed<HandleOffset[]>(() => {
     const total = group.length
     const gap = total > 1 ? Math.min(HANDLE_GAP_MAX, SAFE_RANGE / (total - 1)) : HANDLE_GAP_MAX
     for (let i = 0; i < total; i++) {
-      offsetMap.set(
-        group[i].globalIndex,
-        `${50 - ((total - 1) * gap) / 2 + i * gap}%`
-      )
+      offsetMap.set(group[i].globalIndex, `${50 - ((total - 1) * gap) / 2 + i * gap}%`)
     }
   }
   return props.handles.map((h, gi) => ({
@@ -115,7 +112,7 @@ const nodeMinHeight = computed(() => {
   const maxHandles = Math.max(sides.left, sides.right)
   if (maxHandles <= 1) return undefined
   const gap = Math.min(HANDLE_GAP_MAX, SAFE_RANGE / (maxHandles - 1))
-  const minHeight = Math.ceil(MIN_PX_GAP * 100 / gap)
+  const minHeight = Math.ceil((MIN_PX_GAP * 100) / gap)
   return minHeight > 70 ? `${minHeight}px` : undefined
 })
 
