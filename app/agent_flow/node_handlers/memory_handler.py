@@ -480,11 +480,11 @@ class MemoryNodeHandler(BaseNodeHandler):
         async def delete_memory(memory_ids: str) -> str:
             agent_id = handler._get_agent_id()
             if not agent_id:
-                return json.dumps({"error": "无法获取Agent ID"}, ensure_ascii=False)
+                return "无法获取Agent ID"
 
             ids = [int(i.strip()) for i in memory_ids.split(",") if i.strip()]
             if not ids:
-                return json.dumps({"error": "未提供有效的记忆ID"}, ensure_ascii=False)
+                return "未提供有效的记忆ID"
 
             async with AsyncSessionLocal() as db:
                 valid_memories = await memory_service.get_by_ids(db, agent_id, ids)
@@ -494,14 +494,8 @@ class MemoryNodeHandler(BaseNodeHandler):
                     if mid in valid_ids:
                         await memory_service.delete(db, mid)
                         deleted_ids.append(mid)
-                return json.dumps(
-                    {
-                        "success": True,
-                        "deleted_count": len(deleted_ids),
-                        "deleted_ids": deleted_ids,
-                    },
-                    ensure_ascii=False,
-                )
+                await db.commit()
+                return f"已删除 {len(deleted_ids)} 条记忆 (ID: {', '.join(str(i) for i in deleted_ids)})"
 
         async def get_memory(memory_ids: str) -> str:
             """通过 ID 批量获取记忆的完整内容"""

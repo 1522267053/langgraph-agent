@@ -1195,19 +1195,11 @@ class ShellNodeHandler(BaseNodeHandler):
         async def file_write(file_path: str, content: str) -> str:
             is_valid, error_msg = _validate_writable_path(file_path)
             if not is_valid:
-                return json.dumps(
-                    {"error": error_msg, "success": False}, ensure_ascii=False
-                )
+                return f"路径校验失败: {error_msg}"
 
             content_size = len(content.encode("utf-8"))
             if content_size > MAX_CONTENT_SIZE:
-                return json.dumps(
-                    {
-                        "error": f"写入内容过大（{content_size} 字节），最大支持 {MAX_CONTENT_SIZE} 字节",
-                        "success": False,
-                    },
-                    ensure_ascii=False,
-                )
+                return f"写入内容过大（{content_size} 字节），最大支持 {MAX_CONTENT_SIZE} 字节"
 
             path = Path(file_path).resolve()
             existed = path.exists()
@@ -1215,21 +1207,10 @@ class ShellNodeHandler(BaseNodeHandler):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 _atomic_write(path, content, encoding="utf-8")
             except Exception as e:
-                return json.dumps(
-                    {"error": f"文件写入失败: {e}", "success": False},
-                    ensure_ascii=False,
-                )
+                return f"文件写入失败: {e}"
 
             action = "覆盖" if existed else "新建"
-            return json.dumps(
-                {
-                    "success": True,
-                    "file_path": str(path),
-                    "existed": existed,
-                    "message": f"文件{action}成功",
-                },
-                ensure_ascii=False,
-            )
+            return f"文件{action}成功: {path}"
 
         file_write_tool = StructuredTool(
             name="file_write",
