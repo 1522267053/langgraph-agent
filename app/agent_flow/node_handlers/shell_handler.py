@@ -1326,7 +1326,6 @@ class ShellNodeHandler(BaseNodeHandler):
                         "file_path": file_path_str,
                         "line_number": line_num,
                         "line_content": line_text[:500],
-                        "matched_text": "",
                         "_mod_time": file_mod_time,
                     }
                 )
@@ -1396,14 +1395,11 @@ class ShellNodeHandler(BaseNodeHandler):
                     for line_idx, line in enumerate(lines):
                         if compiled_re.search(line):
                             total_matches += 1
-                            match = compiled_re.search(line)
-                            matched_text = match.group(0) if match else ""
                             results.append(
                                 {
                                     "file_path": str(file_path),
                                     "line_number": line_idx + 1,
-                                    "line_content": line[:200],
-                                    "matched_text": matched_text[:200],
+                                    "line_content": line[:500],
                                     "_mod_time": mod_time,
                                 }
                             )
