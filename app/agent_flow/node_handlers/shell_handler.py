@@ -11,6 +11,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import tempfile
 import uuid
 from pathlib import Path
@@ -252,6 +253,11 @@ SKIP_DIR_NAMES = {
 }
 
 
+def _is_hidden_path(path: Path) -> bool:
+    """检查路径是否包含隐藏文件或隐藏目录（以 . 开头的部分）"""
+    return any(part.startswith(".") for part in path.parts)
+
+
 def _validate_file_path(file_path: str) -> tuple[bool, str]:
     """校验文件路径是否安全
 
@@ -391,6 +397,10 @@ class FileSearchInput(BaseModel):
     include: Optional[str] = Field(
         None,
         description="文件类型过滤（如 *.py, *.{ts,tsx}），仅搜索匹配的文件",
+    )
+    literal_text: bool = Field(
+        False,
+        description="是否将 pattern 作为纯文本搜索（自动转义正则特殊字符），默认 False",
     )
 
 
@@ -1244,10 +1254,177 @@ class ShellNodeHandler(BaseNodeHandler):
             except OSError:
                 return True
 
+        def _build_include_args(include: str) -> list[str]:
+            """将 include 字符串拆分为 ripgrep --glob 参数列表"""
+            patterns = [p.strip() for p in include.split(",")]
+            args: list[str] = []
+            for pat in patterns:
+                args.extend(["--glob", pat])
+            return args
+
+        async def _search_with_ripgrep(
+            search_root: Path, pattern: str, include: Optional[str], limit: int
+        ) -> tuple[list[dict], int, bool]:
+            """使用 ripgrep 搜索文件内容，返回 (结果列表, 总匹配数, 是否截断)"""
+            args = ["-H", "-n", "--no-heading", pattern]
+            if include:
+                args.extend(_build_include_args(include))
+            args.append(str(search_root))
+
+            actual_cmd = f"rg {' '.join(args)}"
+            if platform.system() == "Windows":
+                actual_cmd = f"chcp 65001 >nul 2>&1 && {actual_cmd}"
+
+            try:
+                process = await asyncio.create_subprocess_shell(
+                    actual_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    shell=True,
+                )
+                stdout, _stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=60
+                )
+            except FileNotFoundError:
+                raise
+            except Exception:
+                raise
+
+            if process.returncode == 1:
+                return [], 0, False
+            if process.returncode != 0:
+                raise RuntimeError(f"rg exited with code {process.returncode}")
+
+            output = stdout.decode("utf-8", errors="replace")
+            all_matches: list[dict] = []
+            current_file = ""
+            file_mod_time: float = 0
+
+            for line in output.splitlines():
+                if not line:
+                    continue
+
+                parts = line.split(":", 2)
+                if len(parts) < 3:
+                    continue
+
+                file_path_str, line_num_str, line_text = parts
+                try:
+                    line_num = int(line_num_str)
+                except ValueError:
+                    continue
+
+                if file_path_str != current_file:
+                    current_file = file_path_str
+                    try:
+                        file_mod_time = os.path.getmtime(file_path_str)
+                    except OSError:
+                        file_mod_time = 0
+
+                all_matches.append(
+                    {
+                        "file_path": file_path_str,
+                        "line_number": line_num,
+                        "line_content": line_text[:500],
+                        "matched_text": "",
+                        "_mod_time": file_mod_time,
+                    }
+                )
+
+            total = len(all_matches)
+            truncated = total > limit
+            if truncated:
+                all_matches = all_matches[:limit]
+
+            all_matches.sort(key=lambda x: x["_mod_time"], reverse=True)
+            for item in all_matches:
+                item.pop("_mod_time", None)
+
+            return all_matches, total, truncated
+
+        async def _search_with_regex(
+            search_root: Path, pattern: str, include: Optional[str], limit: int
+        ) -> tuple[list[dict], int, bool]:
+            """纯 Python 正则搜索（ripgrep 不可用时的 fallback）"""
+            try:
+                compiled_re = re.compile(pattern)
+            except re.error:
+                return [], 0, False
+
+            include_patterns: list[str] = []
+            if include:
+                include_patterns = [p.strip() for p in include.split(",")]
+
+            results: list[dict] = []
+            total_matches = 0
+
+            try:
+                for file_path in search_root.rglob("*"):
+                    if not file_path.is_file():
+                        continue
+
+                    if any(part in SKIP_DIR_NAMES for part in file_path.parts):
+                        continue
+
+                    if _is_hidden_path(file_path):
+                        continue
+
+                    if include_patterns:
+                        if not any(
+                            fnmatch.fnmatch(file_path.name, pat)
+                            for pat in include_patterns
+                        ):
+                            continue
+
+                    try:
+                        stat_info = file_path.stat()
+                    except OSError:
+                        continue
+                    if stat_info.st_size > MAX_SEARCH_FILE_SIZE:
+                        continue
+
+                    if _is_binary_file(file_path):
+                        continue
+
+                    try:
+                        raw, _encoding = _detect_and_read(file_path)
+                    except Exception:
+                        continue
+
+                    mod_time = stat_info.st_mtime
+                    lines = raw.splitlines()
+                    for line_idx, line in enumerate(lines):
+                        if compiled_re.search(line):
+                            total_matches += 1
+                            match = compiled_re.search(line)
+                            matched_text = match.group(0) if match else ""
+                            results.append(
+                                {
+                                    "file_path": str(file_path),
+                                    "line_number": line_idx + 1,
+                                    "line_content": line[:200],
+                                    "matched_text": matched_text[:200],
+                                    "_mod_time": mod_time,
+                                }
+                            )
+                            if len(results) >= limit:
+                                results.sort(key=lambda x: x["_mod_time"], reverse=True)
+                                for item in results:
+                                    item.pop("_mod_time", None)
+                                return results, total_matches, True
+            except Exception:
+                return results, total_matches, False
+
+            results.sort(key=lambda x: x["_mod_time"], reverse=True)
+            for item in results:
+                item.pop("_mod_time", None)
+            return results, total_matches, False
+
         async def file_search(
             pattern: str,
             path: Optional[str] = None,
             include: Optional[str] = None,
+            literal_text: bool = False,
         ) -> str:
             search_root = Path(path).resolve() if path else BASE_DIR
 
@@ -1268,76 +1445,36 @@ class ShellNodeHandler(BaseNodeHandler):
                     ensure_ascii=False,
                 )
 
-            # 编译正则表达式
+            # literal_text 模式：自动转义正则特殊字符
+            search_pattern = re.escape(pattern) if literal_text else pattern
+
+            # 正则表达式预编译校验
             try:
-                compiled_re = re.compile(pattern)
+                re.compile(search_pattern)
             except re.error as e:
                 return json.dumps(
                     {"error": f"正则表达式无效: {e}", "success": False},
                     ensure_ascii=False,
                 )
 
+            # 优先使用 ripgrep，失败时 fallback 到纯 Python
             results = []
             total_matches = 0
             truncated = False
 
-            try:
-                for file_path in search_root.rglob("*"):
-                    if truncated:
-                        break
-
-                    if not file_path.is_file():
-                        continue
-
-                    if any(part in SKIP_DIR_NAMES for part in file_path.parts):
-                        continue
-
-                    # include 文件类型过滤
-                    if include:
-                        patterns = [p.strip() for p in include.split(",")]
-                        if not any(
-                            fnmatch.fnmatch(file_path.name, pat) for pat in patterns
-                        ):
-                            continue
-
-                    # 跳过大文件
-                    try:
-                        file_size = file_path.stat().st_size
-                    except OSError:
-                        continue
-                    if file_size > MAX_SEARCH_FILE_SIZE:
-                        continue
-
-                    # 跳过二进制文件
-                    if _is_binary_file(file_path):
-                        continue
-
-                    try:
-                        raw, _encoding = _detect_and_read(file_path)
-                    except Exception:
-                        continue
-
-                    lines = raw.splitlines()
-                    for line_idx, line in enumerate(lines):
-                        if compiled_re.search(line):
-                            total_matches += 1
-                            match = compiled_re.search(line)
-                            matched_text = match.group(0) if match else ""
-                            results.append(
-                                {
-                                    "file_path": str(file_path),
-                                    "line_number": line_idx + 1,
-                                    "line_content": line[:500],
-                                    "matched_text": matched_text[:200],
-                                }
-                            )
-                            if len(results) >= MAX_SEARCH_RESULTS:
-                                truncated = True
-                                break
-            except Exception as e:
-                return json.dumps(
-                    {"error": f"搜索过程中出错: {e}", "success": False},
-                    ensure_ascii=False,
+            rg_available = shutil.which("rg") is not None
+            if rg_available:
+                try:
+                    results, total_matches, truncated = await _search_with_ripgrep(
+                        search_root, search_pattern, include, MAX_SEARCH_RESULTS
+                    )
+                except Exception:
+                    results, total_matches, truncated = await _search_with_regex(
+                        search_root, search_pattern, include, MAX_SEARCH_RESULTS
+                    )
+            else:
+                results, total_matches, truncated = await _search_with_regex(
+                    search_root, search_pattern, include, MAX_SEARCH_RESULTS
                 )
 
             result: dict = {
@@ -1360,9 +1497,10 @@ class ShellNodeHandler(BaseNodeHandler):
             name="file_search",
             description=(
                 "在指定目录中递归搜索文件内容，使用正则表达式匹配。"
-                "返回匹配的文件路径、行号和行内容。"
+                "返回匹配的文件路径、行号和行内容，按文件修改时间降序排列。"
                 "适用于在项目中查找特定模式（如函数定义、变量引用、错误信息等）。"
                 "单文件内精确定位请用 file_read 读取后再查看。"
+                "搜索含特殊字符的纯文本时建议设置 literal_text=true。"
             ),
             func=None,
             coroutine=file_search,
