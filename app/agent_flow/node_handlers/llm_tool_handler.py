@@ -466,19 +466,54 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 check_interrupted_fn=self._check_interrupted,
             )
 
-            # 推送 token 用量事件
+            # 推送 token 用量事件 + 持久化到 token_usage 表
             if response:
                 usage = extract_token_usage(response)
                 if usage.get("total_tokens"):
+                    node_config = node.base_config or {}
+                    model_name = node_config.get("model", "")
+                    provider_name = node_config.get("provider", "")
                     self._emit(
                         writer,
                         TokenUsageEvent(
                             node_key=node.node_key,
-                            prompt_tokens=usage["prompt_tokens"],
-                            completion_tokens=usage["completion_tokens"],
-                            total_tokens=usage["total_tokens"],
+                            prompt_tokens=usage.get("prompt_tokens", 0),
+                            completion_tokens=usage.get("completion_tokens", 0),
+                            total_tokens=usage.get("total_tokens", 0),
+                            model=model_name,
+                            provider=provider_name,
+                            cache_read_tokens=usage.get("cache_read_tokens", 0),
+                            cache_write_tokens=usage.get("cache_write_tokens", 0),
+                            reasoning_tokens=usage.get("reasoning_tokens", 0),
                         ),
                     )
+                    # 异步写入 token_usage 表（不阻塞主流程）
+                    if self.db_session_factory:
+                        try:
+                            from app.services.token_usage_service import (
+                                token_usage_service,
+                            )
+
+                            async with self.db_session_factory() as tdb:
+                                await token_usage_service.record_usage(
+                                    tdb,
+                                    source_type="agent" if self.session_id else "flow",
+                                    source_id=self.session_id or self.execution_id,
+                                    node_key=node.node_key,
+                                    model=model_name,
+                                    provider=provider_name,
+                                    prompt_tokens=usage.get("prompt_tokens", 0),
+                                    completion_tokens=usage.get("completion_tokens", 0),
+                                    total_tokens=usage.get("total_tokens", 0),
+                                    cache_read_tokens=usage.get("cache_read_tokens", 0),
+                                    cache_write_tokens=usage.get(
+                                        "cache_write_tokens", 0
+                                    ),
+                                    reasoning_tokens=usage.get("reasoning_tokens", 0),
+                                    usage_metadata=usage.get("usage_metadata"),
+                                )
+                        except Exception as e:
+                            logger.warning(f"记录 token_usage 失败: {e}")
 
                     # 循环中检查上下文是否需要压缩
                     if context_length > 0 and usage.get("prompt_tokens", 0) > int(

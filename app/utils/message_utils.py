@@ -22,22 +22,42 @@ def extract_token_usage(message: BaseMessage) -> dict:
     """从 AI 消息中提取 token 用量，非 AI 消息返回空字典。
 
     兼容 usage_metadata 和 response_metadata 两种格式。
+    扩展提取 cache/reasoning token 和原始 usage_metadata。
     """
     if not isinstance(message, (AIMessage, AIMessageChunk)):
         return {}
     usage = getattr(message, "usage_metadata", None)
+    result: dict = {}
     if usage:
-        return {
+        result = {
             "prompt_tokens": usage.get("input_tokens"),
             "completion_tokens": usage.get("output_tokens"),
             "total_tokens": usage.get("total_tokens"),
         }
+        # ---- cache token（标准 UsageMetadata） ----
+        input_details = usage.get("input_token_details") or {}
+        cache_read = input_details.get("cache_read")
+        if cache_read:
+            result["cache_read_tokens"] = cache_read
+        cache_write = input_details.get("cache_creation")
+        if cache_write:
+            result["cache_write_tokens"] = cache_write
+        # ---- reasoning token（标准 UsageMetadata） ----
+        output_details = usage.get("output_token_details") or {}
+        reasoning = output_details.get("reasoning")
+        if reasoning:
+            result["reasoning_tokens"] = reasoning
+        result["usage_metadata"] = usage
+        return result
     resp_meta = getattr(message, "response_metadata", {})
     token_usage = resp_meta.get("token_usage") or resp_meta.get("usage") or {}
     return {
         "prompt_tokens": token_usage.get("prompt_tokens"),
         "completion_tokens": token_usage.get("completion_tokens"),
         "total_tokens": token_usage.get("total_tokens"),
+        "cache_read_tokens": token_usage.get("prompt_cache_hit_tokens"),
+        "cache_write_tokens": token_usage.get("prompt_cache_miss_tokens"),
+        "usage_metadata": resp_meta,
     }
 
 

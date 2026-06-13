@@ -18,7 +18,8 @@ import {
   Star,
   StarFilled,
   SwitchButton,
-  User
+  User,
+  TrendCharts
 } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { useAgentStore } from '@/stores'
@@ -180,6 +181,7 @@ const menuItems = [
   { path: '/mcp-server', title: 'MCP 服务器', icon: Connection },
   { path: '/skill-list', title: 'Skill 管理', icon: List },
   { path: '/execution', title: '执行记录', icon: Timer },
+  { path: '/statistics', title: 'Token 统计', icon: TrendCharts },
   { path: '/scheduled-task', title: '定时任务', icon: Timer },
   { path: '/files', title: '文件管理', icon: Folder },
   { path: '/marketplace', title: '资源市场', icon: Shop },

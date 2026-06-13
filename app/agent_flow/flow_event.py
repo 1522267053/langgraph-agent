@@ -185,6 +185,11 @@ class TokenUsageEvent(FlowEvent):
     prompt_tokens: int = Field(0, description="输入token数")
     completion_tokens: int = Field(0, description="输出token数")
     total_tokens: int = Field(0, description="总token数")
+    model: str = Field("", description="模型名称")
+    provider: str = Field("", description="供应商标识")
+    cache_read_tokens: int = Field(0, description="缓存读取token数")
+    cache_write_tokens: int = Field(0, description="缓存写入token数")
+    reasoning_tokens: int = Field(0, description="推理token数")
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.TOKEN_USAGE

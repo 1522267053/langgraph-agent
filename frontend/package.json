@@ -20,6 +20,7 @@
     "@vue-flow/minimap": "^1.5.4",
     "@vueuse/core": "^14.2.1",
     "axios": "^1.13.5",
+    "echarts": "^6.1.0",
     "element-plus": "^2.13.2",
     "highlight.js": "^11.11.1",
     "js-sha256": "^0.11.1",
