@@ -117,6 +117,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '系统设置' }
   },
   {
+    path: '/statistics',
+    name: 'TokenStatistics',
+    component: () => import('@/views/TokenStatistics.vue'),
+    meta: { title: 'Token 统计' }
+  },
+  {
     path: '/marketplace',
     name: 'Marketplace',
     component: () => import('@/views/Marketplace.vue'),

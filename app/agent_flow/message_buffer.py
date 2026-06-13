@@ -118,7 +118,7 @@ class MessageBuffer:
             ContextCompressingEvent(status="done", removed_count=removed),
         )
 
-        # 发送压缩 LLM 调用的 token 用量事件
+        # 发送压缩 LLM 调用的 token 用量事件 + 持久化
         token_usage = result.get("token_usage") or {}
         if token_usage.get("total_tokens"):
             self._emit(
@@ -130,6 +130,24 @@ class MessageBuffer:
                     total_tokens=token_usage.get("total_tokens", 0),
                 ),
             )
+            if self.db_session_factory:
+                try:
+                    from app.services.token_usage_service import (
+                        token_usage_service,
+                    )
+
+                    async with self.db_session_factory() as db:
+                        await token_usage_service.record_usage(
+                            db,
+                            source_type="agent",
+                            source_id=self.session_id,
+                            node_key="_compress",
+                            prompt_tokens=token_usage.get("prompt_tokens", 0),
+                            completion_tokens=token_usage.get("completion_tokens", 0),
+                            total_tokens=token_usage.get("total_tokens", 0),
+                        )
+                except Exception as e:
+                    logger.warning(f"记录压缩 token_usage 失败: {e}")
 
         user_content = f"{agent_executor_service.COMPRESS_MARKER} 共 {removed} 条历史对话已压缩为以下摘要："
         self._messages = [

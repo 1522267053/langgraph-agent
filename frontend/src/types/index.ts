@@ -23,3 +23,6 @@ export * from './mcpServer'
 
 // 执行相关类型
 export * from './execution'
+
+// 统计相关类型
+export * from './statistics'
