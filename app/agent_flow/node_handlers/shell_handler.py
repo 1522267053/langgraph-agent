@@ -6,6 +6,7 @@ Shell命令执行节点处理器
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
+import fnmatch
 import json
 import os
 import platform
@@ -229,6 +230,26 @@ FORBIDDEN_PATH_PATTERNS = [
 MAX_FILE_SIZE = 50 * 1024 * 1024
 MAX_CONTENT_SIZE = 50 * 1024 * 1024
 MAX_FILE_READ_LINES = 100
+MAX_SEARCH_RESULTS = 50
+MAX_SEARCH_FILE_SIZE = 5 * 1024 * 1024
+
+SKIP_DIR_NAMES = {
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    "coverage",
+    ".coverage",
+}
 
 
 def _validate_file_path(file_path: str) -> tuple[bool, str]:
@@ -358,6 +379,19 @@ class ShellTaskCancelInput(BaseModel):
     """终止后台Shell任务"""
 
     task_id: str = Field(..., description="要终止的后台任务ID")
+
+
+class FileSearchInput(BaseModel):
+    """文件内容搜索工具输入参数"""
+
+    pattern: str = Field(..., description="正则表达式搜索模式")
+    path: Optional[str] = Field(
+        None, description="搜索目录路径，不传则搜索当前工作目录"
+    )
+    include: Optional[str] = Field(
+        None,
+        description="文件类型过滤（如 *.py, *.{ts,tsx}），仅搜索匹配的文件",
+    )
 
 
 def _decode_output(data: bytes) -> str:
@@ -1199,6 +1233,142 @@ class ShellNodeHandler(BaseNodeHandler):
             args_schema=FileWriteInput,
         )
 
+        # ---- file_search ----
+
+        def _is_binary_file(file_path: Path) -> bool:
+            """通过读取前 8KB 检测文件是否为二进制文件"""
+            try:
+                with file_path.open("rb") as f:
+                    chunk = f.read(8192)
+                return b"\x00" in chunk
+            except OSError:
+                return True
+
+        async def file_search(
+            pattern: str,
+            path: Optional[str] = None,
+            include: Optional[str] = None,
+        ) -> str:
+            search_root = Path(path).resolve() if path else BASE_DIR
+
+            is_valid, error_msg = _validate_file_path(str(search_root))
+            if not is_valid:
+                return json.dumps(
+                    {"error": error_msg, "success": False}, ensure_ascii=False
+                )
+
+            if not search_root.exists():
+                return json.dumps(
+                    {"error": f"路径不存在: {search_root}", "success": False},
+                    ensure_ascii=False,
+                )
+            if not search_root.is_dir():
+                return json.dumps(
+                    {"error": f"路径不是目录: {search_root}", "success": False},
+                    ensure_ascii=False,
+                )
+
+            # 编译正则表达式
+            try:
+                compiled_re = re.compile(pattern)
+            except re.error as e:
+                return json.dumps(
+                    {"error": f"正则表达式无效: {e}", "success": False},
+                    ensure_ascii=False,
+                )
+
+            results = []
+            total_matches = 0
+            truncated = False
+
+            try:
+                for file_path in search_root.rglob("*"):
+                    if truncated:
+                        break
+
+                    if not file_path.is_file():
+                        continue
+
+                    if any(part in SKIP_DIR_NAMES for part in file_path.parts):
+                        continue
+
+                    # include 文件类型过滤
+                    if include:
+                        patterns = [p.strip() for p in include.split(",")]
+                        if not any(
+                            fnmatch.fnmatch(file_path.name, pat) for pat in patterns
+                        ):
+                            continue
+
+                    # 跳过大文件
+                    try:
+                        file_size = file_path.stat().st_size
+                    except OSError:
+                        continue
+                    if file_size > MAX_SEARCH_FILE_SIZE:
+                        continue
+
+                    # 跳过二进制文件
+                    if _is_binary_file(file_path):
+                        continue
+
+                    try:
+                        raw, _encoding = _detect_and_read(file_path)
+                    except Exception:
+                        continue
+
+                    lines = raw.splitlines()
+                    for line_idx, line in enumerate(lines):
+                        if compiled_re.search(line):
+                            total_matches += 1
+                            match = compiled_re.search(line)
+                            matched_text = match.group(0) if match else ""
+                            results.append(
+                                {
+                                    "file_path": str(file_path),
+                                    "line_number": line_idx + 1,
+                                    "line_content": line[:500],
+                                    "matched_text": matched_text[:200],
+                                }
+                            )
+                            if len(results) >= MAX_SEARCH_RESULTS:
+                                truncated = True
+                                break
+            except Exception as e:
+                return json.dumps(
+                    {"error": f"搜索过程中出错: {e}", "success": False},
+                    ensure_ascii=False,
+                )
+
+            result: dict = {
+                "success": True,
+                "search_root": str(search_root),
+                "pattern": pattern,
+                "total_matches": total_matches,
+                "result_count": len(results),
+                "results": results,
+            }
+            if truncated:
+                result["truncated"] = True
+                result["message"] = (
+                    f"匹配结果超过 {MAX_SEARCH_RESULTS} 条，仅返回前 {MAX_SEARCH_RESULTS} 条。"
+                    "请缩小搜索范围或使用更精确的正则表达式。"
+                )
+            return json.dumps(result, ensure_ascii=False)
+
+        file_search_tool = StructuredTool(
+            name="file_search",
+            description=(
+                "在指定目录中递归搜索文件内容，使用正则表达式匹配。"
+                "返回匹配的文件路径、行号和行内容。"
+                "适用于在项目中查找特定模式（如函数定义、变量引用、错误信息等）。"
+                "单文件内精确定位请用 file_read 读取后再查看。"
+            ),
+            func=None,
+            coroutine=file_search,
+            args_schema=FileSearchInput,
+        )
+
         return [
             shell_tool,
             shell_task_status_tool,
@@ -1207,6 +1377,7 @@ class ShellNodeHandler(BaseNodeHandler):
             file_read_tool,
             text_editor_tool,
             file_write_tool,
+            file_search_tool,
         ]
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
@@ -1215,11 +1386,12 @@ class ShellNodeHandler(BaseNodeHandler):
         current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return (
             "\n\n## Shell 与文件操作\n"
-            "你已连接 Shell 执行节点。修改文件时先用 file_read 读取，再用 text_editor 精确替换；创建新文件用 file_write\n"
+            "你已连接 Shell 执行节点。先用 file_search 在项目中搜索目标，再用 file_read 读取文件内容，用 text_editor 精确替换；创建新文件用 file_write\n"
             "### 输出控制（重要）\n"
             "- 执行命令前先评估可能的输出量，大量输出务必用 | head、| tail、| grep 等管道过滤\n"
             "- 如果命令输出被截断（返回 _truncated 标记），完整内容已自动保存到临时文件，需要时用 file_read 读取\n"
             "- file_read 单次最多读取 100 行，大文件用 offset 参数分段读取\n"
+            "- file_search 递归搜索文件内容（正则匹配），跨文件快速定位目标位置\n"
             "- 禁止用 cat 读取大文件，始终使用 file_read\n"
             f"\n临时文件输出目录: `{temp_dir}`，当前时间: {current_time_str}"
         )
