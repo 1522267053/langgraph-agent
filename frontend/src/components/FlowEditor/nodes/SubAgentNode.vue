@@ -9,10 +9,7 @@ const props = defineProps<{
   selected?: boolean
 }>()
 
-const agents = inject<Ref<{ id: number; name: string; description?: string }[]>>(
-  'agents',
-  ref([])
-)
+const agents = inject<Ref<{ id: number; name: string; description?: string }[]>>('agents', ref([]))
 
 const agentName = computed(() => {
   const agentId = props.data?.config?.agent_id as number

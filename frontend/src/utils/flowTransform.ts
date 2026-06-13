@@ -108,7 +108,10 @@ export function vueFlowGraphToBackend(
 } {
   const existingNodeMap = new Map(existingNodes.map(n => [n.node_key, n]))
   const existingEdgeMap = new Map(
-    existingEdges.map(e => [`${e.source_node_key}_${e.target_node_key}_${e.source_handle || ''}`, e])
+    existingEdges.map(e => [
+      `${e.source_node_key}_${e.target_node_key}_${e.source_handle || ''}`,
+      e
+    ])
   )
 
   const nodesToCreate: FlowNodeCreate[] = []

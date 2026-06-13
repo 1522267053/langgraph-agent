@@ -574,11 +574,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         conditions = [Flow.flow_type == flow_type, Flow.is_delete == 0]
         if exclude_id is not None:
             conditions.append(Flow.id != exclude_id)
-        count_query = (
-            select(func.count())
-            .select_from(Flow)
-            .where(*conditions)
-        )
+        count_query = select(func.count()).select_from(Flow).where(*conditions)
         count_result = await db.execute(count_query)
         total = count_result.scalar() or 0
 
