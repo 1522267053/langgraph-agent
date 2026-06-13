@@ -16,62 +16,71 @@ from app.schemas.statistics_schema import (
 )
 from app.services.token_usage_service import token_usage_service
 
-router = APIRouter(prefix="/api/statistics", tags=["Token统计"])
-
 _TIME_GRAIN_OPTIONS = {"day", "week", "month"}
 
 
-@router.post("/token-overview", summary="Token消耗概览")
-async def get_token_overview(
-    query: Optional[TokenStatisticsQuery] = None,
-    db: AsyncSession = Depends(get_db),
-):
-    """获取Token消耗总量概览"""
-    q = query or TokenStatisticsQuery()
-    data = await token_usage_service.aggregate_overview(
-        db, start_date=q.start_date, end_date=q.end_date
-    )
-    return ApiResponse.success(data=TokenOverview(**data), msg="查询成功")
+class StatisticsApi:
+    """Token 消耗统计 API"""
+
+    def __init__(self):
+        self.router = APIRouter(prefix="/api/statistics", tags=["Token统计"])
+        self._register_routes()
+
+    def _register_routes(self):
+        """注册所有路由"""
+
+        @self.router.post("/token-overview", summary="Token消耗概览")
+        async def get_token_overview(
+            query: Optional[TokenStatisticsQuery] = None,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """获取Token消耗总量概览"""
+            q = query or TokenStatisticsQuery()
+            data = await token_usage_service.aggregate_overview(
+                db, start_date=q.start_date, end_date=q.end_date
+            )
+            return ApiResponse.success(data=TokenOverview(**data), msg="查询成功")
+
+        @self.router.post("/token-trend", summary="Token消耗时间趋势")
+        async def get_token_trend(
+            query: Optional[TokenStatisticsQuery] = None,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """获取Token消耗按时间维度的趋势数据"""
+            q = query or TokenStatisticsQuery()
+            grain = q.time_grain if q.time_grain in _TIME_GRAIN_OPTIONS else "day"
+            items = await token_usage_service.aggregate_trend(
+                db, grain=grain, start_date=q.start_date, end_date=q.end_date
+            )
+            data = [TokenTrendItem(**item) for item in items]
+            return ApiResponse.success(data=data, msg="查询成功")
+
+        @self.router.post("/token-by-flow", summary="按流程/Agent统计Token")
+        async def get_token_by_flow(
+            query: Optional[TokenStatisticsQuery] = None,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """获取按流程/Agent维度的Token消耗排行"""
+            q = query or TokenStatisticsQuery()
+            items = await token_usage_service.aggregate_by_flow(
+                db, start_date=q.start_date, end_date=q.end_date
+            )
+            data = [TokenByFlowItem(**item) for item in items]
+            return ApiResponse.success(data=data, msg="查询成功")
+
+        @self.router.post("/token-by-model", summary="按模型统计Token")
+        async def get_token_by_model(
+            query: Optional[TokenStatisticsQuery] = None,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """获取按模型维度的Token消耗统计"""
+            q = query or TokenStatisticsQuery()
+            items = await token_usage_service.aggregate_by_model(
+                db, start_date=q.start_date, end_date=q.end_date
+            )
+            data = [TokenByModelItem(**item) for item in items]
+            return ApiResponse.success(data=data, msg="查询成功")
 
 
-@router.post("/token-trend", summary="Token消耗时间趋势")
-async def get_token_trend(
-    query: Optional[TokenStatisticsQuery] = None,
-    db: AsyncSession = Depends(get_db),
-):
-    """获取Token消耗按时间维度的趋势数据"""
-    q = query or TokenStatisticsQuery()
-    grain = q.time_grain if q.time_grain in _TIME_GRAIN_OPTIONS else "day"
-    items = await token_usage_service.aggregate_trend(
-        db, grain=grain, start_date=q.start_date, end_date=q.end_date
-    )
-    data = [TokenTrendItem(**item) for item in items]
-    return ApiResponse.success(data=data, msg="查询成功")
-
-
-@router.post("/token-by-flow", summary="按流程/Agent统计Token")
-async def get_token_by_flow(
-    query: Optional[TokenStatisticsQuery] = None,
-    db: AsyncSession = Depends(get_db),
-):
-    """获取按流程/Agent维度的Token消耗排行"""
-    q = query or TokenStatisticsQuery()
-    items = await token_usage_service.aggregate_by_flow(
-        db, start_date=q.start_date, end_date=q.end_date
-    )
-    data = [TokenByFlowItem(**item) for item in items]
-    return ApiResponse.success(data=data, msg="查询成功")
-
-
-@router.post("/token-by-model", summary="按模型统计Token")
-async def get_token_by_model(
-    query: Optional[TokenStatisticsQuery] = None,
-    db: AsyncSession = Depends(get_db),
-):
-    """获取按模型维度的Token消耗统计"""
-    q = query or TokenStatisticsQuery()
-    items = await token_usage_service.aggregate_by_model(
-        db, start_date=q.start_date, end_date=q.end_date
-    )
-    data = [TokenByModelItem(**item) for item in items]
-    return ApiResponse.success(data=data, msg="查询成功")
+statistics_api = StatisticsApi()
+router = statistics_api.router
