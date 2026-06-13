@@ -391,7 +391,7 @@ async def handle_tool_calls(
                 tool_status = "success"
 
         # 统一截断工具执行结果（load_skill 豁免，LLM 需要完整指令内容）
-        is_exempt = tool_name == "load_skill"
+        is_exempt = tool_name in ("load_skill", "file_search")
         if is_exempt:
             content = (
                 raw_result
