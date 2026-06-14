@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import socket
 import sys
 
 from app.config.build_utils import BASE_DIR
@@ -14,6 +15,38 @@ from app.config.logging_config import cleanup_logs
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _get_local_ips() -> list[str]:
+    """获取本机所有 IPv4 地址（排除 127.0.0.1）"""
+    ips: list[str] = []
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = info[4][0]
+            if ip not in ips and ip != "127.0.0.1":
+                ips.append(ip)
+    except socket.gaierror:
+        pass
+    # 兜底：UDP socket 探测默认路由出口 IP
+    if not ips:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ips.append(s.getsockname()[0])
+            s.close()
+        except OSError:
+            ips.append("127.0.0.1")
+    return ips
+
+
+def _log_startup_banner() -> None:
+    """打印自定义启动横幅，列出所有可访问地址"""
+    port = settings.app_port
+    addresses = ["127.0.0.1", *_get_local_ips()]
+    logger.info("Uvicorn running on:")
+    for addr in addresses:
+        logger.info("  → http://%s:%d (Press CTRL+C to quit)", addr, port)
 
 
 async def _load_notification_config() -> None:
@@ -74,6 +107,9 @@ async def startup() -> None:
 
     # ---- 启动定时任务调度器 ----
     await scheduler_service.start()
+
+    # ---- 打印自定义启动横幅 ----
+    _log_startup_banner()
 
     # ---- 打开浏览器 ----
     asyncio.create_task(_open_browser())

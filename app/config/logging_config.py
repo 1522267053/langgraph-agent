@@ -26,6 +26,13 @@ class VideoRangeFilter(logging.Filter):
             return True
 
 
+class UvicornStartupFilter(logging.Filter):
+    """抑制 uvicorn 默认启动地址横幅（Uvicorn running on http://0.0.0.0 ...），由 lifespan 自定义输出"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "Uvicorn running on http://0.0.0.0" not in record.getMessage()
+
+
 def cleanup_logs(
     log_dir: str,
     base_name: str,
@@ -242,15 +249,26 @@ def get_uvicorn_log_config() -> dict:
         "stream": "ext://sys.stdout",
     }
 
-    # 过滤视频 206 Range 请求日志
+    # 过滤视频 206 Range 请求日志 + 抑制 uvicorn 默认启动横幅
     log_config["filters"] = {
         "video_range": {
             "()": "app.config.logging_config.VideoRangeFilter",
+        },
+        "uvicorn_startup": {
+            "()": "app.config.logging_config.UvicornStartupFilter",
         },
     }
     for handler_key in ("access", "console_access", "file_access"):
         if handler_key in log_config["handlers"]:
             log_config["handlers"][handler_key]["filters"] = ["video_range"]
+
+    # 在 default 和 console_default 上抑制 uvicorn 启动横幅（文件日志保留完整记录）
+    for handler_key in ("default", "console_default"):
+        handler = log_config["handlers"][handler_key]
+        if "filters" in handler:
+            handler["filters"].append("uvicorn_startup")
+        else:
+            handler["filters"] = ["uvicorn_startup"]
 
     # 抑制 asyncio socket.send() 警告
     log_config["loggers"]["asyncio"] = {
