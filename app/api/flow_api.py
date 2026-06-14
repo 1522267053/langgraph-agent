@@ -148,9 +148,13 @@ class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
             flow_data: FlowCreate, db: AsyncSession = Depends(get_db)
         ):
             """创建Agent流程（flow_type=agent）"""
-            agent_data = flow_data.model_copy(
-                update={"flow_type": FlowType.AGENT.value}
-            )
+            from app.services.flow_service import DEFAULT_AGENT_INPUT_SCHEMA
+
+            update_dict: dict = {"flow_type": FlowType.AGENT.value}
+            # 新建 Agent 时如果没有 input_schema，补充默认 message 字段
+            if not flow_data.input_schema:
+                update_dict["input_schema"] = DEFAULT_AGENT_INPUT_SCHEMA
+            agent_data = flow_data.model_copy(update=update_dict)
             try:
                 new_flow = await flow_service.create(db, agent_data)
                 return ApiResponse.success(

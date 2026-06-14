@@ -132,7 +132,9 @@ class ScheduledTaskService(BaseService[ScheduledTask, ScheduledTask, ScheduledTa
                 input_data = task.input_data or {}
 
                 if target_type == ScheduledTaskTargetType.AGENT.value:
-                    await self._execute_agent_task(db, log, target_id, input_data)
+                    await self._execute_agent_task(
+                        db, log, target_id, input_data, task.name
+                    )
                 else:
                     await self._execute_flow_task(db, log, target_id, input_data)
 
@@ -244,11 +246,14 @@ class ScheduledTaskService(BaseService[ScheduledTask, ScheduledTask, ScheduledTa
         log: ScheduledTaskLog,
         agent_flow_id: int,
         input_data: dict,
+        task_name: str = "",
     ) -> None:
         """执行 Agent 目标任务（创建新会话并发送消息）"""
         from app.services.agent_executor_service import agent_executor_service
 
         session = await agent_executor_service.create_session(db, agent_flow_id)
+        session.title = f"[定时任务] {task_name}" if task_name else "[定时任务]"
+        await db.commit()
         log.session_id = session.id
         log.agent_id = agent_flow_id
 
@@ -272,7 +277,7 @@ class ScheduledTaskService(BaseService[ScheduledTask, ScheduledTask, ScheduledTa
 
         try:
             async for event in agent_executor_service.chat_stream(
-                db, session.id, message, params
+                session.id, message, params
             ):
                 pass
         except Exception:

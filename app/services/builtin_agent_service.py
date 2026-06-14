@@ -19,7 +19,7 @@ from app.config.build_utils import get_internal_dir
 from app.models.flow import Flow, FlowType
 from app.models.flow_node import FlowNode, NodeType
 from app.models.skill import Skill
-from app.services.flow_service import flow_service
+from app.services.flow_service import flow_service, DEFAULT_AGENT_INPUT_SCHEMA
 from app.services.global_config_service import global_config_service
 from app.schemas.flow_schema import FlowCreate
 from app.schemas.flow_node_schema import FlowNodeCreate
@@ -161,6 +161,11 @@ class BuiltinAgentService:
 
         if builtin_flow:
             logger.info("内置 Agent 已存在: id=%d", builtin_flow.id)
+            # 补偿：旧版本创建的内置 Agent 可能没有 input_schema
+            if not builtin_flow.input_schema:
+                builtin_flow.input_schema = DEFAULT_AGENT_INPUT_SCHEMA
+                await db.commit()
+                logger.info("已为内置 Agent 补充 input_schema: id=%d", builtin_flow.id)
             return builtin_flow.id
 
         skills = await self._ensure_skill(db)
@@ -297,6 +302,7 @@ class BuiltinAgentService:
             name="AI 助手",
             description="系统内置 AI 助手，可以帮助你创建智能体和工作流",
             flow_type=FlowType.AGENT.value,
+            input_schema=DEFAULT_AGENT_INPUT_SCHEMA,
         )
         flow = await flow_service.create(db, flow_data)
 
