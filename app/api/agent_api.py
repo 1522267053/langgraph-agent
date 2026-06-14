@@ -40,6 +40,10 @@ class ToolApprovalRequest(BaseModel):
     action: str = Field(..., description="approved 或 rejected")
 
 
+class AgentSearchRequest(BaseModel):
+    keyword: str = Field(..., description="搜索关键词")
+
+
 class AgentApi:
     """Agent API"""
 
@@ -332,6 +336,26 @@ class AgentApi:
                 db, session_id
             )
             return ApiResponse.success(data={"compressing": is_compressing})
+
+        @self.router.post(
+            "/{id}/search",
+            response_model=ApiResponse,
+            summary="搜索会话和消息内容",
+        )
+        async def search_history(
+            id: int,
+            req: AgentSearchRequest,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """搜索 Agent 的会话标题和消息内容"""
+            if not req.keyword or not req.keyword.strip():
+                return ApiResponse.success(
+                    data={"sessions": [], "messages": []}, msg="查询成功"
+                )
+            result = await agent_executor_service.search_history(
+                db, id, req.keyword.strip()
+            )
+            return ApiResponse.success(data=result, msg="查询成功")
 
 
 agent_api = AgentApi()

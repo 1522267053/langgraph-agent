@@ -1,0 +1,158 @@
+import { ref, onUnmounted } from 'vue'
+import { ElNotification } from 'element-plus'
+
+interface ExecutionDoneData {
+  execution_id: number | null
+  flow_id: number | null
+  flow_name: string
+  status: 'success' | 'failed' | 'cancelled'
+  source: 'flow' | 'agent'
+  error_message?: string | null
+  duration_ms?: number | null
+}
+
+interface WSMessage {
+  type: 'execution_done'
+  data: ExecutionDoneData
+}
+
+const ws = ref<WebSocket | null>(null)
+const connected = ref(false)
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+
+/** 当前正在通过 SSE 观看的 execution_id（用于跳过重复通知） */
+let watchingExecutionId: number | null = null
+
+export function setWatchingExecution(id: number | null) {
+  watchingExecutionId = id
+}
+
+function buildWsUrl(): string {
+  const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${protocol}://${location.host}/ws/notifications`
+}
+
+function handleNotification(msg: WSMessage) {
+  if (msg.type === 'execution_done') {
+    const { flow_name, status, source, error_message, duration_ms, execution_id } =
+      msg.data
+
+    // 跳过用户正在通过 SSE 观看的执行
+    if (
+      execution_id !== null &&
+      watchingExecutionId !== null &&
+      execution_id === watchingExecutionId
+    ) {
+      return
+    }
+
+    const typeLabel = source === 'agent' ? '对话' : '流程'
+    const durationStr = duration_ms ? `${(duration_ms / 1000).toFixed(1)} 秒` : ''
+
+    if (status === 'success') {
+      ElNotification({
+        type: 'success',
+        title: `${typeLabel}完成`,
+        message: `「${flow_name}」执行完成${durationStr ? `，耗时 ${durationStr}` : ''}`,
+        duration: 5000,
+        position: 'top-right'
+      })
+    } else if (status === 'failed') {
+      ElNotification({
+        type: 'error',
+        title: `${typeLabel}失败`,
+        message: `「${flow_name}」: ${error_message || '执行失败'}`,
+        duration: 0,
+        position: 'top-right'
+      })
+    }
+  }
+}
+
+function startHeartbeat() {
+  stopHeartbeat()
+  heartbeatTimer = setInterval(() => {
+    if (ws.value?.readyState === WebSocket.OPEN) {
+      try {
+        ws.value.send('ping')
+      } catch {
+        // ignore
+      }
+    }
+  }, 30000)
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = null
+  }
+}
+
+function connect() {
+  if (ws.value?.readyState === WebSocket.OPEN || ws.value?.readyState === WebSocket.CONNECTING) {
+    return
+  }
+
+  try {
+    const socket = new WebSocket(buildWsUrl())
+
+    socket.onopen = () => {
+      connected.value = true
+      startHeartbeat()
+    }
+
+    socket.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data) as WSMessage
+        handleNotification(msg)
+      } catch {
+        // ignore non-JSON messages (heartbeat responses)
+      }
+    }
+
+    socket.onclose = () => {
+      connected.value = false
+      stopHeartbeat()
+      scheduleReconnect()
+    }
+
+    socket.onerror = () => {
+      connected.value = false
+    }
+
+    ws.value = socket
+  } catch {
+    scheduleReconnect()
+  }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  reconnectTimer = setTimeout(() => connect(), 3000)
+}
+
+function disconnect() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  stopHeartbeat()
+  if (ws.value) {
+    ws.value.onclose = null
+    ws.value.close()
+    ws.value = null
+  }
+  connected.value = false
+}
+
+export function useWebSocket() {
+  onUnmounted(() => {
+    // 不在组件卸载时断开，WebSocket 是全局生命周期
+  })
+
+  return { connected, connect, disconnect }
+}
+
+export { connect as connectWebSocket, disconnect as disconnectWebSocket }

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch, inject, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Link, Warning, CircleCheck, QuestionFilled } from '@element-plus/icons-vue'
+import { Link, Warning, CircleCheck, QuestionFilled, Bell } from '@element-plus/icons-vue'
 import {
   configApi,
   type ProviderInfo,
@@ -39,6 +39,7 @@ const loginPasswordConfirm = ref('')
 const loginUsername = ref('')
 const currentPassword = ref('')
 const hasUsername = computed(() => config.value.has_username ?? false)
+const executionNotificationEnabled = ref(true)
 
 const currentVersion = ref('0.1.0')
 const updateInfo = ref<UpdateCheckResult | null>(null)
@@ -84,6 +85,7 @@ onMounted(async () => {
     contextLength.value = config.value.context_length || undefined
     embeddingModel.value = config.value.embedding_model || ''
     embeddingBaseUrl.value = config.value.embedding_base_url || ''
+    executionNotificationEnabled.value = config.value.execution_notification_enabled ?? true
   } catch {
     // error handled by interceptor
   } finally {
@@ -118,7 +120,8 @@ async function handleSave() {
       base_url: baseUrl.value.trim() || undefined,
       context_length: parseContextLength(contextLength.value),
       embedding_model: embeddingModel.value.trim() || undefined,
-      embedding_base_url: embeddingBaseUrl.value.trim() || undefined
+      embedding_base_url: embeddingBaseUrl.value.trim() || undefined,
+      execution_notification_enabled: executionNotificationEnabled.value
     }
     if (apiKey.value.trim()) {
       data.api_key = apiKey.value.trim()
@@ -432,6 +435,31 @@ function openDownloadUrl(): void {
             </el-button>
           </el-form>
         </div>
+      </el-card>
+
+      <el-card shadow="never" class="settings-card" style="margin-top: 16px">
+        <template #header>
+          <div class="card-title" style="display: flex; align-items: center; gap: 8px">
+            <el-icon><Bell /></el-icon>
+            <span>通知设置</span>
+          </div>
+        </template>
+        <el-form label-position="top">
+          <el-form-item>
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%">
+              <div>
+                <div style="font-size: 14px; font-weight: 500">执行完成通知</div>
+                <div style="font-size: 12px; color: #64748b; margin-top: 4px">
+                  流程或智能体执行完成时，通过 WebSocket 推送桌面通知（右上角弹窗）
+                </div>
+              </div>
+              <el-switch v-model="executionNotificationEnabled" />
+            </div>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+          </el-form-item>
+        </el-form>
       </el-card>
 
       <el-card shadow="never" class="settings-card" style="margin-top: 16px">

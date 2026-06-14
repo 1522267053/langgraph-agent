@@ -19,12 +19,15 @@ import {
   StarFilled,
   SwitchButton,
   User,
-  TrendCharts
+  TrendCharts,
+  ChatLineSquare
 } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { useAgentStore } from '@/stores'
 import { authApi } from '@/api/auth'
 import { configApi, type UpdateCheckResult } from '@/api/config'
+import { connectWebSocket } from '@/composables/useWebSocket'
+import { agentApi } from '@/api/agent'
 
 const route = useRoute()
 const router = useRouter()
@@ -67,6 +70,9 @@ async function checkAppUpdate(): Promise<void> {
 }
 
 let updateChecked = false
+
+// 初始化 WebSocket 连接（全局通知）
+connectWebSocket()
 
 async function handleLogout(): Promise<void> {
   try {
@@ -141,6 +147,65 @@ const chatAgentId = computed(() => {
 const sidebarVisible = ref(false)
 const searchKeyword = ref('')
 
+// ---- 对话历史搜索 ----
+interface SearchResultSession {
+  id: number
+  title: string
+  create_time: string
+}
+interface SearchResultMessage {
+  id: number
+  session_id: number
+  session_title: string
+  role: string
+  content_preview: string
+  create_time: string
+}
+const searchResults = ref<{
+  sessions: SearchResultSession[]
+  messages: SearchResultMessage[]
+}>({ sessions: [], messages: [] })
+const searching = ref(false)
+
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(searchKeyword, val => {
+  if (searchTimer) clearTimeout(searchTimer)
+  if (!val.trim() || !chatAgentId.value) {
+    searchResults.value = { sessions: [], messages: [] }
+    return
+  }
+  searchTimer = setTimeout(async () => {
+    searching.value = true
+    try {
+      const res = await agentApi.search(chatAgentId.value!, val.trim())
+      searchResults.value = res.data.data || { sessions: [], messages: [] }
+    } catch {
+      searchResults.value = { sessions: [], messages: [] }
+    } finally {
+      searching.value = false
+    }
+  }, 300)
+})
+
+const isSearchMode = computed(() => searchKeyword.value.trim().length > 0)
+
+async function handleSearchResultClick(sessionId: number) {
+  if (!chatAgentId.value) return
+  const session = store.sessions.find(s => s.id === sessionId)
+  if (session) {
+    await handleSelectSession(session)
+  } else {
+    // 会话不在当前页，手动切换
+    const fakeSession = { id: sessionId, title: '', flow_id: chatAgentId.value } as (
+      typeof store.sessions
+    )[0]
+    await store.selectSession(chatAgentId.value, fakeSession)
+    sidebarVisible.value = false
+  }
+  searchKeyword.value = ''
+}
+
 const agentList = computed(() => store.agents.filter(a => a.flow_type === 'agent'))
 
 const selectedAgentId = computed({
@@ -183,6 +248,7 @@ const menuItems = [
   { path: '/execution', title: '执行记录', icon: Timer },
   { path: '/statistics', title: 'Token 统计', icon: TrendCharts },
   { path: '/scheduled-task', title: '定时任务', icon: Timer },
+  { path: '/webhook', title: 'Webhook', icon: Connection },
   { path: '/files', title: '文件管理', icon: Folder },
   { path: '/marketplace', title: '资源市场', icon: Shop },
   { path: '/settings', title: '系统设置', icon: Setting }
@@ -306,27 +372,68 @@ function openDownloadUrl(): void {
             </div>
 
             <div class="session-list">
-              <div
-                v-for="session in store.sessions"
-                :key="session.id"
-                :class="['session-item', { active: store.currentSession?.id === session.id }]"
-                @click="handleSelectSession(session)"
-              >
-                <el-icon class="session-icon">
-                  <ChatDotRound />
-                </el-icon>
-                <div class="session-info">
-                  <div class="session-title">{{ session.title || '新会话' }}</div>
-                  <div class="session-time">{{ session.create_time || '' }}</div>
+              <!-- 搜索结果 -->
+              <template v-if="isSearchMode">
+                <div v-if="searching" class="search-loading">
+                  <span>搜索中...</span>
                 </div>
-                <el-button
-                  :icon="Delete"
-                  link
-                  size="small"
-                  class="delete-btn"
-                  @click.stop="handleDeleteSession(session)"
-                />
-              </div>
+                <template v-else>
+                  <div
+                    v-if="searchResults.sessions.length === 0 && searchResults.messages.length === 0"
+                    class="search-empty"
+                  >
+                    未找到匹配结果
+                  </div>
+                  <div
+                    v-for="s in searchResults.sessions"
+                    :key="'s' + s.id"
+                    class="session-item search-result-item"
+                    @click="handleSearchResultClick(s.id)"
+                  >
+                    <el-icon class="session-icon"><ChatDotRound /></el-icon>
+                    <div class="session-info">
+                      <div class="session-title">{{ s.title || '新会话' }}</div>
+                      <div class="session-time">{{ s.create_time }}</div>
+                    </div>
+                  </div>
+                  <div
+                    v-for="m in searchResults.messages"
+                    :key="'m' + m.id"
+                    class="message-result-item"
+                    @click="handleSearchResultClick(m.session_id)"
+                  >
+                    <el-icon class="message-result-icon"><ChatLineSquare /></el-icon>
+                    <div class="message-result-info">
+                      <div class="message-result-session">{{ m.session_title }}</div>
+                      <div class="message-result-content">{{ m.content_preview }}</div>
+                    </div>
+                  </div>
+                </template>
+              </template>
+              <!-- 正常会话列表 -->
+              <template v-else>
+                <div
+                  v-for="session in store.sessions"
+                  :key="session.id"
+                  :class="['session-item', { active: store.currentSession?.id === session.id }]"
+                  @click="handleSelectSession(session)"
+                >
+                  <el-icon class="session-icon">
+                    <ChatDotRound />
+                  </el-icon>
+                  <div class="session-info">
+                    <div class="session-title">{{ session.title || '新会话' }}</div>
+                    <div class="session-time">{{ session.create_time || '' }}</div>
+                  </div>
+                  <el-button
+                    :icon="Delete"
+                    link
+                    size="small"
+                    class="delete-btn"
+                    @click.stop="handleDeleteSession(session)"
+                  />
+                </div>
+              </template>
             </div>
 
             <div v-if="store.sessionTotal > store.sessionPageSize" class="session-pagination">
@@ -799,6 +906,65 @@ function openDownloadUrl(): void {
 
 .session-item:hover .delete-btn {
   opacity: 1;
+}
+
+/* ---- Search Results ---- */
+.search-loading,
+.search-empty {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.search-result-item {
+  border-left: 3px solid #22c55e;
+}
+
+.message-result-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  border-radius: 0 6px 6px 0;
+  transition: all 0.2s;
+}
+
+.message-result-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.message-result-icon {
+  font-size: 14px;
+  color: #64748b;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.message-result-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.message-result-session {
+  font-size: 11px;
+  font-weight: 600;
+  color: #60a5fa;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-result-content {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .session-pagination {

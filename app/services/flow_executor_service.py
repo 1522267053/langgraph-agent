@@ -309,6 +309,7 @@ class FlowExecutorService(BaseExecutorService):
                 context=context,
                 tool_node_keys=self._get_tool_node_keys(expanded_flow),
                 resume_input=None,
+                flow_name=flow.name or "",
             ):
                 yield event
                 if event.get("type") == "waiting_human":
@@ -399,6 +400,7 @@ class FlowExecutorService(BaseExecutorService):
                 context=context,
                 tool_node_keys=self._get_tool_node_keys(expanded_flow),
                 resume_input=human_input,
+                flow_name=flow.name or "",
             ):
                 yield event
 
@@ -413,6 +415,7 @@ class FlowExecutorService(BaseExecutorService):
         context: FlowContext,
         tool_node_keys: set[str],
         resume_input: Optional[str] = None,
+        flow_name: str = "",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         公共图执行方法
@@ -507,9 +510,31 @@ class FlowExecutorService(BaseExecutorService):
                     execution.output_data = context.state.output_data
                     await db.commit()
 
+                    # ---- WebSocket 广播执行完成通知 ----
+                    duration_ms = None
+                    if execution.start_time:
+                        duration_ms = int(
+                            (datetime.now() - execution.start_time).total_seconds()
+                            * 1000
+                        )
+
             interrupt_service.clear_flow_interrupted(execution_id)
 
             status = "cancelled" if is_interrupted else "success"
+            try:
+                from app.services.ws_manager import ws_manager
+
+                await ws_manager.notify_execution_done(
+                    execution_id=execution_id,
+                    flow_id=expanded_flow.id,
+                    flow_name=flow_name,
+                    status=status,
+                    source="flow",
+                    duration_ms=duration_ms,
+                )
+            except Exception as ws_err:
+                logger.warning(f"WebSocket 广播失败: {ws_err}")
+
             yield FlowEventFactory.flow_done(
                 execution_id=execution_id,
                 output_data=context.state.output_data,
@@ -549,6 +574,21 @@ class FlowExecutorService(BaseExecutorService):
                         )
                 except Exception as cleanup_error:
                     logger.warning(f"清理 checkpoint 失败: {cleanup_error}")
+
+            # ---- WebSocket 广播执行失败通知 ----
+            try:
+                from app.services.ws_manager import ws_manager
+
+                await ws_manager.notify_execution_done(
+                    execution_id=execution_id,
+                    flow_id=None,
+                    flow_name=flow_name,
+                    status="failed",
+                    source="flow",
+                    error_message=error_msg,
+                )
+            except Exception as ws_err:
+                logger.warning(f"WebSocket 广播失败: {ws_err}")
 
             yield FlowEventFactory.error(error_msg, execution_id=execution_id)
 

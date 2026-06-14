@@ -349,3 +349,15 @@ export interface FlowImportResult {
   created: Array<{ id: number; name: string; flow_type: string }>
   warnings: string[]
 }
+
+/** 流程版本快照 */
+export interface FlowSnapshot {
+  id?: number
+  flow_id: number
+  snapshot_name: string
+  snapshot_description?: string
+  snapshot_data?: Record<string, unknown>
+  snapshot_type: 'auto' | 'manual'
+  is_pinned: number
+  create_time?: string
+}

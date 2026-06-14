@@ -11,7 +11,8 @@ import type {
   FlowEdgeCreate,
   FlowEdgeUpdate,
   FlowExportData,
-  FlowImportResult
+  FlowImportResult,
+  FlowSnapshot
 } from '@/types/flow'
 
 export const flowApi = {
@@ -65,6 +66,35 @@ export const flowApi = {
 
   importFlows(data: FlowExportData) {
     return request.post<ApiResponse<FlowImportResult>>('/flow/import', data)
+  },
+
+  duplicate(id: number) {
+    return request.post<ApiResponse<Flow>>(`/flow/duplicate/${id}`)
+  },
+
+  // ---- 版本快照 ----
+  autoSnapshot(flowId: number) {
+    return request.post<ApiResponse<void>>(`/flow-snapshot/auto/${flowId}`)
+  },
+
+  createSnapshot(flowId: number, data: { name: string; description?: string }) {
+    return request.post<ApiResponse<void>>(`/flow-snapshot/create/${flowId}`, data)
+  },
+
+  listSnapshots(flowId: number) {
+    return request.get<ApiResponse<FlowSnapshot[]>>(`/flow-snapshot/list/${flowId}`)
+  },
+
+  restoreSnapshot(snapshotId: number) {
+    return request.post<ApiResponse<void>>(`/flow-snapshot/restore/${snapshotId}`)
+  },
+
+  deleteSnapshot(id: number) {
+    return get<void>(`/flow-snapshot/delete/${id}`)
+  },
+
+  pinSnapshot(id: number) {
+    return request.post<ApiResponse<void>>(`/flow-snapshot/pin/${id}`)
   }
 }
 

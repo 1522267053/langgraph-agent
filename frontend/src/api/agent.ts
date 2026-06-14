@@ -68,6 +68,25 @@ export const agentApi = {
   },
 
   /**
+   * 搜索会话和消息内容
+   * @param agentId Agent ID
+   * @param keyword 搜索关键词
+   */
+  search(agentId: number, keyword: string) {
+    return post<{
+      sessions: Array<{ id: number; title: string; create_time: string }>
+      messages: Array<{
+        id: number
+        session_id: number
+        session_title: string
+        role: string
+        content_preview: string
+        create_time: string
+      }>
+    }>(`/agent/${agentId}/search`, { keyword })
+  },
+
+  /**
    * 删除指定消息及之后的所有消息
    * @param agentId Agent ID
    * @param sessionId 会话ID

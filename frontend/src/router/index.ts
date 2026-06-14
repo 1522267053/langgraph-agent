@@ -111,6 +111,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '定时任务管理' }
   },
   {
+    path: '/webhook',
+    name: 'WebhookList',
+    component: () => import('@/views/WebhookList.vue'),
+    meta: { title: 'Webhook 管理' }
+  },
+  {
     path: '/settings',
     name: 'Settings',
     component: () => import('@/views/Settings.vue'),
