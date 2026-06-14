@@ -109,31 +109,50 @@ export function useStreamingMessage() {
 
   /**
    * 追加思考内容
+   *
+   * 新思考块的首个 chunk（currentSegmentType 从其他类型切换而来）直接追加新分段，
+   * 避免 updateThinking 的前缀匹配命中上一轮的旧 thinking 分段（位于 tool 之前），
+   * 导致新思考内容错误地替换旧位置、打乱 tool 与 thinking 的先后顺序。
+   * 续传 chunk（同一 thinking 块的后续增量）走 updateThinking 原地更新。
    */
   function appendThinking(chunk: string): void {
-    if (currentSegmentType.value !== 'thinking') {
+    const isNewBlock = currentSegmentType.value !== 'thinking'
+    if (isNewBlock) {
       currentSegmentType.value = 'thinking'
       thinkingContent.value = chunk
     } else {
       thinkingContent.value += chunk
     }
     const msg = getOrCreateStreamingMessage()
-    msg.segments = updateThinking(msg.segments, thinkingContent.value)
+    if (isNewBlock) {
+      msg.segments = [...msg.segments, { type: 'thinking', thinking: thinkingContent.value }]
+    } else {
+      msg.segments = updateThinking(msg.segments, thinkingContent.value)
+    }
     msg.thinking = thinkingContent.value
   }
 
   /**
    * 追加文本内容
+   *
+   * 新内容块的首个 chunk（currentSegmentType 从其他类型切换而来）直接追加新分段，
+   * 避免 updateContent 的前缀匹配命中上一轮的旧 content 分段（位于 tool 之前）。
+   * 续传 chunk（同一 content 块的后续增量）走 updateContent 原地更新。
    */
   function appendContent(chunk: string): void {
-    if (currentSegmentType.value !== 'content') {
+    const isNewBlock = currentSegmentType.value !== 'content'
+    if (isNewBlock) {
       currentSegmentType.value = 'content'
       textContent.value = chunk
     } else {
       textContent.value += chunk
     }
     const msg = getOrCreateStreamingMessage()
-    msg.segments = updateContent(msg.segments, textContent.value)
+    if (isNewBlock) {
+      msg.segments = [...msg.segments, { type: 'content', content: textContent.value }]
+    } else {
+      msg.segments = updateContent(msg.segments, textContent.value)
+    }
     msg.content = textContent.value
   }
 
