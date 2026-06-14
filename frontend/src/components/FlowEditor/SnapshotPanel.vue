@@ -94,15 +94,11 @@ async function handleRestore(snapshot: FlowSnapshot) {
 
 async function handleDelete(snapshot: FlowSnapshot) {
   try {
-    await ElMessageBox.confirm(
-      `确定删除快照「${snapshot.snapshot_name}」吗？`,
-      '确认删除',
-      {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }
-    )
+    await ElMessageBox.confirm(`确定删除快照「${snapshot.snapshot_name}」吗？`, '确认删除', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
     await flowApi.deleteSnapshot(snapshot.id!)
     ElMessage.success('删除成功')
     await loadSnapshots()
@@ -134,19 +130,11 @@ async function handleTogglePin(snapshot: FlowSnapshot) {
       </div>
 
       <div v-loading="loading" class="snapshot-list">
-        <div
-          v-for="snapshot in snapshots"
-          :key="snapshot.id"
-          class="snapshot-item"
-        >
+        <div v-for="snapshot in snapshots" :key="snapshot.id" class="snapshot-item">
           <div class="snapshot-info">
             <div class="snapshot-name-row">
               <span class="snapshot-name">{{ snapshot.snapshot_name }}</span>
-              <el-tag
-                v-if="snapshot.snapshot_type === 'auto'"
-                size="small"
-                type="info"
-              >
+              <el-tag v-if="snapshot.snapshot_type === 'auto'" size="small" type="info">
                 自动
               </el-tag>
               <el-tag v-else size="small" type="success">手动</el-tag>
@@ -157,11 +145,7 @@ async function handleTogglePin(snapshot: FlowSnapshot) {
               >
                 <StarFilled />
               </el-icon>
-              <el-icon
-                v-else
-                class="pin-icon"
-                @click="handleTogglePin(snapshot)"
-              >
+              <el-icon v-else class="pin-icon" @click="handleTogglePin(snapshot)">
                 <Star />
               </el-icon>
             </div>
@@ -210,12 +194,7 @@ async function handleTogglePin(snapshot: FlowSnapshot) {
           <el-input v-model="newName" placeholder="请输入快照名称" />
         </el-form-item>
         <el-form-item label="描述（可选）">
-          <el-input
-            v-model="newDescription"
-            type="textarea"
-            :rows="3"
-            placeholder="快照描述"
-          />
+          <el-input v-model="newDescription" type="textarea" :rows="3" placeholder="快照描述" />
         </el-form-item>
       </el-form>
       <template #footer>
