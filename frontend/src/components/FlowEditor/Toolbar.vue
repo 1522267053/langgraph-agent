@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ArrowLeft, CaretRight, FolderChecked, VideoPlay } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowLeft, CaretRight, FolderChecked, VideoPlay } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flowStore'
 import { useRouter, useRoute } from 'vue-router'
 
@@ -63,6 +63,26 @@ function handleOpenFiles() {
     router.push(`${base}/files/${store.flowInfo.id}`)
   }
 }
+
+function handleMobileCommand(command: string) {
+  switch (command) {
+    case 'save':
+      handleSave()
+      break
+    case 'execute':
+      handleExecute()
+      break
+    case 'history':
+      handleShowHistory()
+      break
+    case 'snapshot':
+      handleShowSnapshot()
+      break
+    case 'files':
+      handleOpenFiles()
+      break
+  }
+}
 </script>
 
 <template>
@@ -93,23 +113,50 @@ function handleOpenFiles() {
       </div>
     </div>
     <div class="toolbar-right">
-      <div v-if="store.flowInfo?.id" class="toolbar-tab-group">
-        <button class="tab-btn" @click="handleShowHistory">执行历史</button>
-        <button class="tab-btn" @click="handleShowSnapshot">版本快照</button>
-        <button class="tab-btn" @click="handleOpenFiles">
-          {{ props.isAgent ? '智能体文件资源' : '流程文件资源' }}
-        </button>
+      <div class="desktop-actions">
+        <div v-if="store.flowInfo?.id" class="toolbar-tab-group">
+          <button class="tab-btn" @click="handleShowHistory">执行历史</button>
+          <button class="tab-btn" @click="handleShowSnapshot">版本快照</button>
+          <button class="tab-btn" @click="handleOpenFiles">
+            {{ props.isAgent ? '智能体文件资源' : '流程文件资源' }}
+          </button>
+        </div>
+        <div class="toolbar-actions">
+          <el-button class="action-save" :loading="store.saving" @click="handleSave">
+            <el-icon class="el-icon--left"><FolderChecked /></el-icon>
+            保存
+          </el-button>
+          <button class="action-execute" @click="handleExecute">
+            <el-icon size="18"><CaretRight /></el-icon>
+            {{ props.isAgent ? '执行智能体' : '执行流程' }}
+          </button>
+        </div>
       </div>
-      <div class="toolbar-actions">
-        <el-button class="action-save" :loading="store.saving" @click="handleSave">
-          <el-icon class="el-icon--left"><FolderChecked /></el-icon>
-          保存
-        </el-button>
-        <button class="action-execute" @click="handleExecute">
-          <el-icon size="18"><CaretRight /></el-icon>
-          {{ props.isAgent ? '执行智能体' : '执行流程' }}
+      <el-dropdown
+        v-if="store.flowInfo?.id"
+        class="mobile-actions"
+        trigger="click"
+        placement="bottom-end"
+        @command="handleMobileCommand"
+      >
+        <button class="mobile-more-btn">
+          <span>操作</span>
+          <el-icon size="14"><ArrowDown /></el-icon>
         </button>
-      </div>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="save" :icon="FolderChecked">保存</el-dropdown-item>
+            <el-dropdown-item command="execute" :icon="CaretRight">
+              {{ props.isAgent ? '执行智能体' : '执行流程' }}
+            </el-dropdown-item>
+            <el-dropdown-item command="history" divided>执行历史</el-dropdown-item>
+            <el-dropdown-item command="snapshot">版本快照</el-dropdown-item>
+            <el-dropdown-item command="files">
+              {{ props.isAgent ? '智能体文件资源' : '流程文件资源' }}
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
     </div>
   </header>
 </template>
@@ -261,6 +308,36 @@ function handleOpenFiles() {
   gap: 8px;
 }
 
+.desktop-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.mobile-actions {
+  display: none;
+}
+
+.mobile-more-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: #2563eb;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  outline: none;
+  box-shadow: 0 4px 14px -3px rgba(37, 99, 235, 0.4);
+}
+
+.mobile-more-btn:active {
+  transform: scale(0.96);
+}
+
 .action-save {
   display: inline-flex;
   align-items: center;
@@ -345,22 +422,12 @@ function handleOpenFiles() {
     gap: 8px;
   }
 
-  .toolbar-tab-group {
+  .desktop-actions {
     display: none;
   }
 
-  .action-save {
-    padding: 6px 12px !important;
-    height: 36px !important;
-    font-size: 12px !important;
-    border-radius: 8px !important;
-  }
-
-  .action-execute {
-    padding: 6px 12px;
-    height: 36px;
-    font-size: 12px;
-    border-radius: 8px;
+  .mobile-actions {
+    display: block;
   }
 }
 </style>

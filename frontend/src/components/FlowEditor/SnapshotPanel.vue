@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshLeft, Delete, Plus, Star, StarFilled, InfoFilled } from '@element-plus/icons-vue'
 import { flowApi } from '@/api/flow'
+import { useIsMobile } from '@/composables/useIsMobile'
 import type { FlowSnapshot } from '@/types/flow'
 
 const props = defineProps<{
@@ -20,6 +21,9 @@ const loading = ref(false)
 const showCreateDialog = ref(false)
 const newName = ref('')
 const newDescription = ref('')
+
+const { isMobile } = useIsMobile()
+const drawerSize = computed(() => (isMobile.value ? '100%' : '480px'))
 
 async function loadSnapshots() {
   if (!props.flowId) return
@@ -118,7 +122,7 @@ async function handleTogglePin(snapshot: FlowSnapshot) {
     :model-value="visible"
     title="版本快照"
     direction="rtl"
-    size="480px"
+    :size="drawerSize"
     @update:model-value="handleClose"
   >
     <div class="snapshot-panel">
