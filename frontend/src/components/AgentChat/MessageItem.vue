@@ -36,8 +36,13 @@ const hasTextContent = computed(() => {
   if (!props.isStreaming) return false
   const last = props.messages.at(-1)
   if (!last || last.role !== 'assistant') return true
-  return !last.content && !last.thinking
+  return !last.segments || last.segments.length === 0
 })
+
+/** 判断指定消息是否为最后一条（用于流式指示器定位） */
+function isLastMessage(idx: number): boolean {
+  return idx === props.messages.length - 1
+}
 </script>
 
 <template>
@@ -87,6 +92,15 @@ const hasTextContent = computed(() => {
               :is-streaming="isStreaming"
               @revert="dbMsgId => emit('revert', dbMsgId)"
             />
+            <!-- 流式输出指示器：最后一个 assistant 消息在 streaming 期间持续显示 -->
+            <div
+              v-if="isStreaming && isLastMessage(idx)"
+              class="streaming-indicator"
+            >
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <span class="dot"></span>
+            </div>
             <div v-if="msg.total_tokens" class="token-info">
               <span>
                 输入:
@@ -294,6 +308,30 @@ export default {
 }
 
 .typing .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* 流式输出指示器：复用 @keyframes typing，点更小更轻量 */
+.streaming-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 4px;
+}
+
+.streaming-indicator .dot {
+  width: 6px;
+  height: 6px;
+  background: #94a3b8;
+  border-radius: 50%;
+  animation: typing 1.4s infinite both;
+}
+
+.streaming-indicator .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.streaming-indicator .dot:nth-child(3) {
   animation-delay: 0.4s;
 }
 
