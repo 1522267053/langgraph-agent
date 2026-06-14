@@ -87,12 +87,12 @@ async function loadFlows() {
 const allFlows = computed(() => [...flowList.value, ...agentList.value])
 
 function flowName(flowId: number): string {
-  const flow = allFlows.value.find((f) => f.id === flowId)
+  const flow = allFlows.value.find(f => f.id === flowId)
   return flow?.name || `#${flowId}`
 }
 
 function flowType(flowId: number): string {
-  const flow = allFlows.value.find((f) => f.id === flowId)
+  const flow = allFlows.value.find(f => f.id === flowId)
   return flow?.flow_type === 'agent' ? '智能体' : '流程'
 }
 
@@ -141,15 +141,15 @@ function generateInputTemplate(fields: FlowIOField[]): string {
 /** 选择流程时自动填充输入参数模板 */
 watch(
   () => formData.flow_id,
-  (newId) => {
+  newId => {
     if (!newId) {
       inputConfigText.value = ''
       return
     }
     // 从已加载的流程列表中查找 input_schema
-    const flow = allFlows.value.find((f) => f.id === newId)
-    const fields = (flow as Flow & { input_schema?: { fields?: FlowIOField[] } })
-      ?.input_schema?.fields
+    const flow = allFlows.value.find(f => f.id === newId)
+    const fields = (flow as Flow & { input_schema?: { fields?: FlowIOField[] } })?.input_schema
+      ?.fields
     inputConfigText.value = fields?.length ? generateInputTemplate(fields) : ''
   }
 )
@@ -320,12 +320,13 @@ onMounted(() => {
           />
         </el-form-item>
         <el-form-item label="状态">
-          <el-select
-            v-model="queryParams.condition.is_enabled"
-            placeholder="全部"
-            clearable
-          >
-            <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          <el-select v-model="queryParams.condition.is_enabled" placeholder="全部" clearable>
+            <el-option
+              v-for="opt in statusOptions"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -345,10 +346,7 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="流程类型" width="100" align="center">
           <template #default="{ row }">
-            <el-tag
-              size="small"
-              :type="flowType(row.flow_id) === '智能体' ? 'success' : 'primary'"
-            >
+            <el-tag size="small" :type="flowType(row.flow_id) === '智能体' ? 'success' : 'primary'">
               {{ flowType(row.flow_id) }}
             </el-tag>
           </template>
@@ -418,20 +416,10 @@ onMounted(() => {
         <el-form-item label="关联流程" required>
           <el-select v-model="formData.flow_id" placeholder="选择流程" style="width: 100%">
             <el-option-group v-if="flowList.length" label="流程">
-              <el-option
-                v-for="f in flowList"
-                :key="f.id"
-                :label="f.name"
-                :value="f.id!"
-              />
+              <el-option v-for="f in flowList" :key="f.id" :label="f.name" :value="f.id!" />
             </el-option-group>
             <el-option-group v-if="agentList.length" label="智能体">
-              <el-option
-                v-for="a in agentList"
-                :key="a.id"
-                :label="a.name"
-                :value="a.id!"
-              />
+              <el-option v-for="a in agentList" :key="a.id" :label="a.name" :value="a.id!" />
             </el-option-group>
           </el-select>
         </el-form-item>
@@ -448,7 +436,10 @@ onMounted(() => {
           <div class="form-tip">请求体参数会覆盖模板中的同名键</div>
         </el-form-item>
         <el-form-item label="回调 URL">
-          <el-input v-model="formData.callback_url" placeholder="执行完成后 POST 通知此 URL（可选）" />
+          <el-input
+            v-model="formData.callback_url"
+            placeholder="执行完成后 POST 通知此 URL（可选）"
+          />
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="formData.is_enabled" :active-value="1" :inactive-value="0" />

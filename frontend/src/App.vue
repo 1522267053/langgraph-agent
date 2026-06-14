@@ -197,9 +197,11 @@ async function handleSearchResultClick(sessionId: number) {
     await handleSelectSession(session)
   } else {
     // 会话不在当前页，手动切换
-    const fakeSession = { id: sessionId, title: '', flow_id: chatAgentId.value } as (
-      typeof store.sessions
-    )[0]
+    const fakeSession = {
+      id: sessionId,
+      title: '',
+      flow_id: chatAgentId.value
+    } as (typeof store.sessions)[0]
     await store.selectSession(chatAgentId.value, fakeSession)
     sidebarVisible.value = false
   }
@@ -379,7 +381,9 @@ function openDownloadUrl(): void {
                 </div>
                 <template v-else>
                   <div
-                    v-if="searchResults.sessions.length === 0 && searchResults.messages.length === 0"
+                    v-if="
+                      searchResults.sessions.length === 0 && searchResults.messages.length === 0
+                    "
                     class="search-empty"
                   >
                     未找到匹配结果

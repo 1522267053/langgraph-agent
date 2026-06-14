@@ -32,7 +32,13 @@ _RATE_THRESHOLD = 10  # 10 个 404 触发封禁
 _RATE_BLOCK_DURATION = 300  # 封禁 5 分钟
 
 # 不计入 404 速率限制的路径前缀
-_IGNORED_404_PREFIXES = ("/favicon.ico", "/robots.txt", "/sitemap.xml", "/assets/")
+_IGNORED_404_PREFIXES = (
+    "/favicon.ico",
+    "/robots.txt",
+    "/sitemap.xml",
+    "/assets/",
+    "/ws/",
+)
 
 
 def _is_404_blocked(ip: str) -> bool:

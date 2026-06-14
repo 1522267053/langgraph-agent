@@ -446,7 +446,14 @@ function openDownloadUrl(): void {
         </template>
         <el-form label-position="top">
           <el-form-item>
-            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%">
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                width: 100%;
+              "
+            >
               <div>
                 <div style="font-size: 14px; font-weight: 500">执行完成通知</div>
                 <div style="font-size: 12px; color: #64748b; margin-top: 4px">

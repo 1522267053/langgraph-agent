@@ -76,10 +76,7 @@ function handleReset() {
 
 // ---- ECharts ----
 
-function initChart(
-  id: string,
-  chart: echarts.ECharts | null
-): echarts.ECharts | null {
+function initChart(id: string, chart: echarts.ECharts | null): echarts.ECharts | null {
   const el = document.getElementById(id)
   if (!el || el.clientWidth === 0 || el.clientHeight === 0) return chart
   const c = chart ?? echarts.init(el)
@@ -272,107 +269,107 @@ onUnmounted(() => {
     </el-form>
 
     <div v-loading="loading" class="content-area">
-    <!-- 概览卡片 -->
-    <div class="overview-cards">
-      <div class="overview-card">
-        <div class="card-value">{{ formatNumber(overview.total_tokens) }}</div>
-        <div class="card-label">总 Token</div>
+      <!-- 概览卡片 -->
+      <div class="overview-cards">
+        <div class="overview-card">
+          <div class="card-value">{{ formatNumber(overview.total_tokens) }}</div>
+          <div class="card-label">总 Token</div>
+        </div>
+        <div class="overview-card">
+          <div class="card-value">{{ formatNumber(overview.total_prompt_tokens) }}</div>
+          <div class="card-label">输入 Token</div>
+        </div>
+        <div class="overview-card">
+          <div class="card-value">{{ formatNumber(overview.total_completion_tokens) }}</div>
+          <div class="card-label">输出 Token</div>
+        </div>
+        <div class="overview-card">
+          <div class="card-value">{{ overview.llm_call_count }}</div>
+          <div class="card-label">LLM 调用</div>
+        </div>
       </div>
-      <div class="overview-card">
-        <div class="card-value">{{ formatNumber(overview.total_prompt_tokens) }}</div>
-        <div class="card-label">输入 Token</div>
+
+      <!-- 趋势 -->
+      <div class="card-panel chart-section">
+        <h3 class="section-title">Token 消耗趋势</h3>
+        <div id="trend-chart" class="chart-container"></div>
       </div>
-      <div class="overview-card">
-        <div class="card-value">{{ formatNumber(overview.total_completion_tokens) }}</div>
-        <div class="card-label">输出 Token</div>
+
+      <!-- 按流程统计 -->
+      <div class="card-panel chart-section">
+        <h3 class="section-title">按流程/Agent 统计</h3>
+        <div id="flow-chart" class="chart-container"></div>
       </div>
-      <div class="overview-card">
-        <div class="card-value">{{ overview.llm_call_count }}</div>
-        <div class="card-label">LLM 调用</div>
+
+      <div class="card-panel table-container">
+        <el-table v-loading="loading" :data="flowData" stripe style="width: 100%">
+          <el-table-column prop="flow_name" label="名称" min-width="160" show-overflow-tooltip />
+          <el-table-column prop="flow_type" label="类型" width="80">
+            <template #default="{ row }">
+              <span
+                class="type-badge"
+                :class="row.flow_type === 'agent' ? 'type-agent' : 'type-flow'"
+              >
+                {{ row.flow_type === 'agent' ? 'Agent' : 'Flow' }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="prompt_tokens" label="输入 Token" width="120" align="right">
+            <template #default="{ row }">{{ formatNumber(row.prompt_tokens) }}</template>
+          </el-table-column>
+          <el-table-column prop="completion_tokens" label="输出 Token" width="120" align="right">
+            <template #default="{ row }">{{ formatNumber(row.completion_tokens) }}</template>
+          </el-table-column>
+          <el-table-column prop="total_tokens" label="总 Token" width="120" align="right">
+            <template #default="{ row }">{{ formatNumber(row.total_tokens) }}</template>
+          </el-table-column>
+          <el-table-column prop="call_count" label="LLM 调用" width="110" align="right" />
+        </el-table>
       </div>
-    </div>
 
-    <!-- 趋势 -->
-    <div class="card-panel chart-section">
-      <h3 class="section-title">Token 消耗趋势</h3>
-      <div id="trend-chart" class="chart-container"></div>
-    </div>
+      <!-- 按模型统计 -->
+      <div class="card-panel chart-section">
+        <h3 class="section-title">按模型统计</h3>
+        <div id="model-chart" class="chart-container chart-container-lg"></div>
+      </div>
 
-    <!-- 按流程统计 -->
-    <div class="card-panel chart-section">
-      <h3 class="section-title">按流程/Agent 统计</h3>
-      <div id="flow-chart" class="chart-container"></div>
-    </div>
-
-    <div class="card-panel table-container">
-      <el-table v-loading="loading" :data="flowData" stripe style="width: 100%">
-        <el-table-column prop="flow_name" label="名称" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="flow_type" label="类型" width="80">
-          <template #default="{ row }">
-            <span
-              class="type-badge"
-              :class="row.flow_type === 'agent' ? 'type-agent' : 'type-flow'"
-            >
-              {{ row.flow_type === 'agent' ? 'Agent' : 'Flow' }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="prompt_tokens" label="输入 Token" width="120" align="right">
-          <template #default="{ row }">{{ formatNumber(row.prompt_tokens) }}</template>
-        </el-table-column>
-        <el-table-column prop="completion_tokens" label="输出 Token" width="120" align="right">
-          <template #default="{ row }">{{ formatNumber(row.completion_tokens) }}</template>
-        </el-table-column>
-        <el-table-column prop="total_tokens" label="总 Token" width="120" align="right">
-          <template #default="{ row }">{{ formatNumber(row.total_tokens) }}</template>
-        </el-table-column>
-        <el-table-column prop="call_count" label="LLM 调用" width="110" align="right" />
-      </el-table>
-    </div>
-
-    <!-- 按模型统计 -->
-    <div class="card-panel chart-section">
-      <h3 class="section-title">按模型统计</h3>
-      <div id="model-chart" class="chart-container chart-container-lg"></div>
-    </div>
-
-    <div class="card-panel table-container">
-      <el-table v-loading="loading" :data="modelData" stripe style="width: 100%">
-        <el-table-column prop="model" label="模型" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="provider" label="Provider" width="120" show-overflow-tooltip />
-        <el-table-column prop="prompt_tokens" label="输入" width="110" align="right">
-          <template #default="{ row }">{{ formatNumber(row.prompt_tokens) }}</template>
-        </el-table-column>
-        <el-table-column prop="completion_tokens" label="输出" width="110" align="right">
-          <template #default="{ row }">{{ formatNumber(row.completion_tokens) }}</template>
-        </el-table-column>
-        <el-table-column prop="total_tokens" label="总 Token" width="110" align="right">
-          <template #default="{ row }">{{ formatNumber(row.total_tokens) }}</template>
-        </el-table-column>
-        <el-table-column prop="call_count" label="调用" width="80" align="right" />
-        <el-table-column prop="cache_read_tokens" label="缓存读" width="100" align="right">
-          <template #default="{ row }">
-            <span :class="{ 'cache-tag': row.cache_read_tokens > 0 }">
-              {{ formatNumber(row.cache_read_tokens) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="cache_write_tokens" label="缓存写" width="100" align="right">
-          <template #default="{ row }">
-            <span :class="{ 'cache-tag': row.cache_write_tokens > 0 }">
-              {{ formatNumber(row.cache_write_tokens) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="reasoning_tokens" label="推理" width="100" align="right">
-          <template #default="{ row }">
-            <span :class="{ 'reasoning-tag': row.reasoning_tokens > 0 }">
-              {{ formatNumber(row.reasoning_tokens) }}
-            </span>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
+      <div class="card-panel table-container">
+        <el-table v-loading="loading" :data="modelData" stripe style="width: 100%">
+          <el-table-column prop="model" label="模型" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="provider" label="Provider" width="120" show-overflow-tooltip />
+          <el-table-column prop="prompt_tokens" label="输入" width="110" align="right">
+            <template #default="{ row }">{{ formatNumber(row.prompt_tokens) }}</template>
+          </el-table-column>
+          <el-table-column prop="completion_tokens" label="输出" width="110" align="right">
+            <template #default="{ row }">{{ formatNumber(row.completion_tokens) }}</template>
+          </el-table-column>
+          <el-table-column prop="total_tokens" label="总 Token" width="110" align="right">
+            <template #default="{ row }">{{ formatNumber(row.total_tokens) }}</template>
+          </el-table-column>
+          <el-table-column prop="call_count" label="调用" width="80" align="right" />
+          <el-table-column prop="cache_read_tokens" label="缓存读" width="100" align="right">
+            <template #default="{ row }">
+              <span :class="{ 'cache-tag': row.cache_read_tokens > 0 }">
+                {{ formatNumber(row.cache_read_tokens) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="cache_write_tokens" label="缓存写" width="100" align="right">
+            <template #default="{ row }">
+              <span :class="{ 'cache-tag': row.cache_write_tokens > 0 }">
+                {{ formatNumber(row.cache_write_tokens) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="reasoning_tokens" label="推理" width="100" align="right">
+            <template #default="{ row }">
+              <span :class="{ 'reasoning-tag': row.reasoning_tokens > 0 }">
+                {{ formatNumber(row.reasoning_tokens) }}
+              </span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </div>
   </div>
 </template>
@@ -388,7 +385,7 @@ onUnmounted(() => {
   margin-bottom: 20px;
 }
 
-.table-container{
+.table-container {
   margin-bottom: 20px;
 }
 

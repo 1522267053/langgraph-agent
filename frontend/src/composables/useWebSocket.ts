@@ -20,6 +20,9 @@ const ws = ref<WebSocket | null>(null)
 const connected = ref(false)
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+let reconnectAttempts = 0
+const MAX_RECONNECT_ATTEMPTS = 10
+const MAX_RECONNECT_DELAY = 30000
 
 /** 当前正在通过 SSE 观看的 execution_id（用于跳过重复通知） */
 let watchingExecutionId: number | null = null
@@ -35,8 +38,7 @@ function buildWsUrl(): string {
 
 function handleNotification(msg: WSMessage) {
   if (msg.type === 'execution_done') {
-    const { flow_name, status, source, error_message, duration_ms, execution_id } =
-      msg.data
+    const { flow_name, status, source, error_message, duration_ms, execution_id } = msg.data
 
     // 跳过用户正在通过 SSE 观看的执行
     if (
@@ -100,10 +102,11 @@ function connect() {
 
     socket.onopen = () => {
       connected.value = true
+      reconnectAttempts = 0
       startHeartbeat()
     }
 
-    socket.onmessage = (event) => {
+    socket.onmessage = event => {
       try {
         const msg = JSON.parse(event.data) as WSMessage
         handleNotification(msg)
@@ -129,8 +132,11 @@ function connect() {
 }
 
 function scheduleReconnect() {
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return
   if (reconnectTimer) clearTimeout(reconnectTimer)
-  reconnectTimer = setTimeout(() => connect(), 3000)
+  const delay = Math.min(1000 * 2 ** reconnectAttempts, MAX_RECONNECT_DELAY)
+  reconnectAttempts++
+  reconnectTimer = setTimeout(() => connect(), delay)
 }
 
 function disconnect() {
@@ -138,6 +144,7 @@ function disconnect() {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
+  reconnectAttempts = 0
   stopHeartbeat()
   if (ws.value) {
     ws.value.onclose = null
