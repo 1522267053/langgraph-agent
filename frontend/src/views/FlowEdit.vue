@@ -16,6 +16,7 @@ import ExecutionPanel from '@/components/FlowEditor/ExecutionPanel.vue'
 import CreateFlowDialog from '@/components/FlowEditor/CreateFlowDialog.vue'
 import ExecuteFlowDialog from '@/components/FlowEditor/ExecuteFlowDialog.vue'
 import HumanInputDialog from '@/components/FlowEditor/HumanInputDialog.vue'
+import SnapshotPanel from '@/components/FlowEditor/SnapshotPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -315,6 +316,18 @@ function handleShowHistory() {
   showExecutionPanel.value = true
   loadHistory(historyPage.value, historyPageSize.value)
 }
+
+const showSnapshotPanel = ref(false)
+
+function handleShowSnapshot() {
+  showSnapshotPanel.value = true
+}
+
+async function handleSnapshotRestored() {
+  if (flowId.value) {
+    await store.loadFlow(flowId.value)
+  }
+}
 </script>
 
 <template>
@@ -324,6 +337,7 @@ function handleShowHistory() {
       @save="handleSave"
       @execute="handleExecute"
       @show-history="handleShowHistory"
+      @show-snapshot="handleShowSnapshot"
     />
 
     <div class="editor-container">
@@ -414,6 +428,12 @@ function handleShowHistory() {
       :loading="humanInputLoading"
       @submit="submitHumanInput"
       @cancel="stopExecutionWithPolling"
+    />
+
+    <SnapshotPanel
+      v-model:visible="showSnapshotPanel"
+      :flow-id="flowId"
+      @restored="handleSnapshotRestored"
     />
 
     <footer class="status-bar">

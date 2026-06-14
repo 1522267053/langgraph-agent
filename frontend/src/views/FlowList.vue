@@ -8,7 +8,8 @@ import {
   Edit,
   Delete,
   Download,
-  Upload
+  Upload,
+  CopyDocument
 } from '@element-plus/icons-vue'
 import { flowApi } from '@/api/flow'
 import type { Flow, FlowStatus, FlowType, FlowExportData } from '@/types/flow'
@@ -57,6 +58,7 @@ function getRowActions(row: Flow) {
     row.flow_type === 'agent'
       ? { key: 'chat', label: '对话', icon: ChatDotRound, btnClass: 'action-chat' }
       : { key: 'run', label: '执行', icon: VideoPlay, btnClass: 'action-run' },
+    { key: 'duplicate', label: '复制', icon: CopyDocument, btnClass: 'action-duplicate' },
     { key: 'export', label: '导出', icon: Download, btnClass: 'action-export' },
     { key: 'edit', label: '编辑', icon: Edit, btnClass: 'action-edit' },
     { key: 'delete', label: '删除', icon: Delete, btnClass: 'action-delete', danger: true }
@@ -71,6 +73,9 @@ function onRowAction(row: Flow, key: string) {
     case 'run':
       handleRun(row)
       break
+    case 'duplicate':
+      handleDuplicate(row)
+      break
     case 'export':
       handleExport([row.id!])
       break
@@ -80,6 +85,18 @@ function onRowAction(row: Flow, key: string) {
     case 'delete':
       handleDelete(row)
       break
+  }
+}
+
+async function handleDuplicate(row: Flow) {
+  try {
+    const res = await flowApi.duplicate(row.id!)
+    if (res.data.code === 1) {
+      ElMessage.success('复制成功')
+      await loadData()
+    }
+  } catch {
+    // 错误由拦截器处理
   }
 }
 

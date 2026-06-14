@@ -192,6 +192,21 @@ class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
             except Exception as e:
                 return ApiResponse.error(msg=f"导入失败: {e}")
 
+        @self.router.post(
+            "/duplicate/{id}",
+            response_model=ApiResponse[FlowBase],
+            summary="复制流程/智能体",
+        )
+        async def duplicate_flow(id: int, db: AsyncSession = Depends(get_db)):
+            """复制流程或智能体（含全部节点和边）"""
+            try:
+                new_flow = await flow_service.duplicate_flow(db, id)
+                return ApiResponse.success(
+                    data=FlowBase.model_to_view(new_flow), msg="复制成功"
+                )
+            except ValueError as e:
+                return ApiResponse.error(msg=str(e))
+
 
 flow_api = FlowApi()
 router = flow_api.router

@@ -127,6 +127,12 @@ class GlobalConfigApi:
                 from app.services.embedding_service import reset_embedding_service
 
                 reset_embedding_service()
+            if request.execution_notification_enabled is not None:
+                from app.services.ws_manager import ws_manager
+
+                ws_manager.set_notification_enabled(
+                    request.execution_notification_enabled
+                )
             return ApiResponse.success(msg="更新成功")
 
         @self.router.get(

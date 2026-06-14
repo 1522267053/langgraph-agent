@@ -106,6 +106,89 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             raise ValueError(f"名称「{obj_in.name}」已存在")
         return await super().create(db, obj_in)
 
+    async def duplicate_flow(self, db: AsyncSession, flow_id: int) -> Flow:
+        """复制流程或智能体（含全部节点和边）
+
+        复制规则：
+        - 副本名称自动生成（原名称 (副本)），确保唯一
+        - node_key 保持不变（边通过 key 连接，无需重映射）
+        - 保留 base_config（含 LLM api_key/base_url）
+        - 副本状态为 DRAFT，saved_as_card=0
+        - 不复制记忆（记忆绑定 agent_id）
+
+        Args:
+            db: 数据库异步会话
+            flow_id: 源流程 ID
+
+        Returns:
+            新创建的流程对象（含节点和边）
+
+        Raises:
+            ValueError: 流程不存在或为内置流程
+        """
+        source = await self.get_with_nodes_and_edges(db, flow_id)
+        if not source:
+            raise ValueError("流程不存在")
+
+        if getattr(source, "is_builtin", 0) == 1:
+            raise ValueError("内置流程不可复制")
+
+        # 生成唯一名称
+        unique_name = await self._ensure_unique_flow_name(db, source.name)
+
+        # 构造节点列表（node_key 保持不变）
+        ai_nodes = [
+            {
+                "node_type": n.node_type,
+                "node_key": n.node_key,
+                "node_name": n.node_name,
+                "position_x": n.position_x,
+                "position_y": n.position_y,
+                "base_config": dict(n.base_config) if n.base_config else None,
+                "ref_flow_id": n.ref_flow_id,
+            }
+            for n in (source.nodes or [])
+        ]
+
+        # 构造边列表
+        ai_edges = [
+            {
+                "source_node_key": e.source_node_key,
+                "target_node_key": e.target_node_key,
+                "source_handle": e.source_handle,
+                "target_handle": e.target_handle,
+                "condition": e.condition,
+                "label": e.label,
+            }
+            for e in (source.edges or [])
+        ]
+
+        return await self.generate_flow(
+            db=db,
+            name=unique_name,
+            flow_type=source.flow_type,
+            description=source.description,
+            input_schema=source.input_schema,
+            output_schema=source.output_schema,
+            ai_nodes=ai_nodes,
+            ai_edges=ai_edges,
+        )
+
+    async def _ensure_unique_flow_name(self, db: AsyncSession, name: str) -> str:
+        """确保流程名称唯一，冲突时添加 (副本) 后缀"""
+        candidate = name
+        num = 1
+        while True:
+            stmt = select(Flow.id).where(Flow.name == candidate, Flow.is_delete == 0)
+            result = await db.execute(stmt)
+            if not result.scalar_one_or_none():
+                return candidate
+            num += 1
+            candidate = f"{name} (副本{num if num > 2 else ''})"
+            if num > 100:
+                candidate = f"{name} ({datetime.now().strftime('%Y%m%d%H%M%S')})"
+                return candidate
+
     async def check_circular_card_refs(
         self, db: AsyncSession, flow_id: int, ref_flow_id: int
     ) -> None:

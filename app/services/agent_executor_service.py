@@ -167,6 +167,85 @@ class AgentExecutorService(BaseExecutorService):
         """创建新会话（公开方法）"""
         return await self._create_session(db, flow_id)
 
+    async def search_history(
+        self, db: AsyncSession, flow_id: int, keyword: str
+    ) -> dict:
+        """搜索会话标题和消息内容
+
+        Args:
+            db: 数据库会话
+            flow_id: Agent Flow ID
+            keyword: 搜索关键词
+
+        Returns:
+            {"sessions": [...], "messages": [...]}
+        """
+        search_pattern = f"%{keyword}%"
+
+        # 搜索会话标题
+        session_query = (
+            select(
+                AgentSession.id,
+                AgentSession.title,
+                AgentSession.create_time,
+            )
+            .where(
+                AgentSession.flow_id == flow_id,
+                AgentSession.is_delete == 0,
+                AgentSession.title.like(search_pattern),
+            )
+            .order_by(AgentSession.id.desc())
+            .limit(20)
+        )
+        session_result = await db.execute(session_query)
+        sessions = [
+            {
+                "id": row.id,
+                "title": row.title,
+                "create_time": str(row.create_time) if row.create_time else "",
+            }
+            for row in session_result.all()
+        ]
+
+        # 搜索消息内容（JOIN agent_session 过滤 flow_id）
+        msg_query = (
+            select(
+                AgentMessage.id,
+                AgentMessage.session_id,
+                AgentMessage.role,
+                AgentMessage.content,
+                AgentSession.title.label("session_title"),
+                AgentMessage.create_time,
+            )
+            .join(AgentSession, AgentMessage.session_id == AgentSession.id)
+            .where(
+                AgentSession.flow_id == flow_id,
+                AgentSession.is_delete == 0,
+                AgentMessage.is_delete == 0,
+                AgentMessage.role.in_(["human", "ai"]),
+                (
+                    AgentMessage.content.like(search_pattern)
+                    | AgentMessage.original_content.like(search_pattern)
+                ),
+            )
+            .order_by(AgentMessage.id.desc())
+            .limit(50)
+        )
+        msg_result = await db.execute(msg_query)
+        messages = [
+            {
+                "id": row.id,
+                "session_id": row.session_id,
+                "session_title": row.session_title,
+                "role": row.role,
+                "content_preview": (row.content or "")[:200],
+                "create_time": str(row.create_time) if row.create_time else "",
+            }
+            for row in msg_result.all()
+        ]
+
+        return {"sessions": sessions, "messages": messages}
+
     async def _cleanup_thread_checkpoint(self, session_id: int) -> None:
         """清理会话对应的 LangGraph checkpoint，确保下次执行从 DB 重建历史"""
         try:
@@ -665,6 +744,19 @@ class AgentExecutorService(BaseExecutorService):
 
                 # 发送完成事件
                 is_interrupted = interrupt_service.is_agent_interrupted(session_id)
+                # ---- WebSocket 广播（chat 完成通知）----
+                try:
+                    from app.services.ws_manager import ws_manager
+
+                    await ws_manager.notify_execution_done(
+                        execution_id=session_id,
+                        flow_id=session.flow_id if session else None,
+                        flow_name=session.title or "Agent对话",
+                        status="cancelled" if is_interrupted else "success",
+                        source="agent",
+                    )
+                except Exception:
+                    pass
                 yield FlowEventFactory.flow_done(
                     execution_id=session_id,
                     output_data={"content": llm_content},
@@ -675,6 +767,20 @@ class AgentExecutorService(BaseExecutorService):
             except Exception as e:
                 error_msg = str(e)
                 logger.exception(f"Agent执行失败: {e}")
+                # ---- WebSocket 广播（chat 失败通知）----
+                try:
+                    from app.services.ws_manager import ws_manager
+
+                    await ws_manager.notify_execution_done(
+                        execution_id=session_id,
+                        flow_id=session.flow_id if session else None,
+                        flow_name=session.title or "Agent对话",
+                        status="failed",
+                        source="agent",
+                        error_message=error_msg,
+                    )
+                except Exception:
+                    pass
                 yield FlowEventFactory.error(f"执行失败: {error_msg}")
                 interrupt_service.clear_agent_interrupted(session_id)
 
@@ -862,6 +968,19 @@ class AgentExecutorService(BaseExecutorService):
 
                 # 发送完成事件
                 is_interrupted = interrupt_service.is_agent_interrupted(session_id)
+                # ---- WebSocket 广播（resume 完成通知）----
+                try:
+                    from app.services.ws_manager import ws_manager
+
+                    await ws_manager.notify_execution_done(
+                        execution_id=session_id,
+                        flow_id=session.flow_id if session else None,
+                        flow_name=session.title or "Agent对话",
+                        status="cancelled" if is_interrupted else "success",
+                        source="agent",
+                    )
+                except Exception:
+                    pass
                 yield FlowEventFactory.flow_done(
                     execution_id=session_id,
                     output_data={"content": llm_content},
@@ -872,6 +991,20 @@ class AgentExecutorService(BaseExecutorService):
             except Exception as e:
                 error_msg = str(e)
                 logger.exception(f"Agent恢复执行失败: {e}")
+                # ---- WebSocket 广播（resume 失败通知）----
+                try:
+                    from app.services.ws_manager import ws_manager
+
+                    await ws_manager.notify_execution_done(
+                        execution_id=session_id,
+                        flow_id=session.flow_id if session else None,
+                        flow_name=session.title or "Agent对话",
+                        status="failed",
+                        source="agent",
+                        error_message=error_msg,
+                    )
+                except Exception:
+                    pass
                 yield FlowEventFactory.error(f"执行失败: {error_msg}")
                 interrupt_service.clear_agent_interrupted(session_id)
 

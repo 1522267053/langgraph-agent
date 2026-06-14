@@ -23,6 +23,7 @@ export interface GlobalConfigData {
   has_password?: boolean
   has_username?: boolean
   username?: string | null
+  execution_notification_enabled?: boolean
 }
 
 export interface InitConfigRequest {
@@ -50,6 +51,7 @@ export interface UpdateConfigRequest {
   login_password?: string
   login_username?: string
   current_password?: string
+  execution_notification_enabled?: boolean
 }
 
 export const configApi = {

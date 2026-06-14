@@ -52,6 +52,7 @@ CONFIG_KEYS = {
     "embedding_model": "向量模型名称",
     "login_password_hash": "登录密码哈希",
     "login_username": "登录用户名",
+    "execution_notification_enabled": "执行完成通知开关",
     MARKETPLACE_SERVER_URL_KEY: "资源市场服务器地址",
     MARKETPLACE_TOKEN_KEY: "市场 JWT Token",
     MARKETPLACE_TOKEN_EXPIRES_KEY: "市场 Token 过期时间",
@@ -243,6 +244,11 @@ class GlobalConfigService:
         if request.embedding_model is not None:
             updates["embedding_model"] = request.embedding_model
 
+        if request.execution_notification_enabled is not None:
+            updates["execution_notification_enabled"] = str(
+                request.execution_notification_enabled
+            )
+
         if request.login_password is not None or request.login_username is not None:
             # 修改密码时必须验证当前密码
             if request.login_password:
@@ -326,6 +332,9 @@ class GlobalConfigService:
         ctx_str = self._ai_config.get("context_length") or ""
         ctx_length = int(ctx_str) if ctx_str.isdigit() else None
 
+        notif_str = await self.get_value(db, "execution_notification_enabled")
+        notif_enabled = notif_str.lower() != "false" if notif_str else True
+
         return GlobalConfigResponse(
             provider=provider,
             model=model,
@@ -339,6 +348,7 @@ class GlobalConfigService:
             has_password=has_password,
             has_username=has_username,
             username=username,
+            execution_notification_enabled=notif_enabled,
         )
 
     async def get_password_hash(self, db: AsyncSession) -> Optional[str]:

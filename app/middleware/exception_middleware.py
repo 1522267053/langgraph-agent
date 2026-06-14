@@ -73,6 +73,12 @@ async def http_exception_handler(
     request: Request, exc: StarletteHTTPException
 ) -> JSONResponse:
     """处理 HTTPException"""
+    # 客户端断开连接时静默处理（不记录日志）
+    if exc.status_code == 400 and "error parsing the body" in str(exc.detail):
+        return JSONResponse(
+            status_code=200, content=ApiResponse.error(msg="客户端已断开").model_dump()
+        )
+
     if exc.status_code == 404:
         path = request.url.path
         if not path.startswith("/api/"):

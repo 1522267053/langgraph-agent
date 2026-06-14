@@ -43,6 +43,9 @@ class UpdateConfigRequest(BaseModel):
     current_password: Optional[str] = Field(
         None, description="当前密码哈希（修改密码时必填，用于验证身份）"
     )
+    execution_notification_enabled: Optional[bool] = Field(
+        None, description="是否启用执行完成通知"
+    )
 
 
 class GlobalConfigResponse(BaseModel):
@@ -60,6 +63,7 @@ class GlobalConfigResponse(BaseModel):
     has_password: bool = False
     has_username: bool = False
     username: Optional[str] = None
+    execution_notification_enabled: bool = True
 
 
 class CheckInitResponse(BaseModel):

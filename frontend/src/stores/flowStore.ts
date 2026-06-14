@@ -306,6 +306,15 @@ export const useFlowStore = defineStore('flow', () => {
 
     saving.value = true
     try {
+      // 保存前自动创建快照（失败不阻塞保存）
+      if (flowInfo.value.id) {
+        try {
+          await flowApi.autoSnapshot(flowInfo.value.id)
+        } catch {
+          // 快照失败不影响保存
+        }
+      }
+
       await flowApi.update({
         id: flowInfo.value.id!,
         name: flowInfo.value.name!,

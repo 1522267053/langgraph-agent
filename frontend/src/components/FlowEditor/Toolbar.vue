@@ -16,6 +16,7 @@ const emit = defineEmits<{
   (e: 'save'): void
   (e: 'execute'): void
   (e: 'showHistory'): void
+  (e: 'showSnapshot'): void
 }>()
 
 const statusLabel = computed(() => {
@@ -46,6 +47,10 @@ function handleExecute() {
 
 function handleShowHistory() {
   emit('showHistory')
+}
+
+function handleShowSnapshot() {
+  emit('showSnapshot')
 }
 
 function handleBack() {
@@ -90,6 +95,7 @@ function handleOpenFiles() {
     <div class="toolbar-right">
       <div v-if="store.flowInfo?.id" class="toolbar-tab-group">
         <button class="tab-btn" @click="handleShowHistory">执行历史</button>
+        <button class="tab-btn" @click="handleShowSnapshot">版本快照</button>
         <button class="tab-btn" @click="handleOpenFiles">
           {{ props.isAgent ? '智能体文件资源' : '流程文件资源' }}
         </button>
