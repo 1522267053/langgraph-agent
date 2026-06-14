@@ -1,4 +1,4 @@
-import { ref, onUnmounted } from 'vue'
+import { ref } from 'vue'
 import { ElNotification } from 'element-plus'
 
 interface ExecutionDoneData {
@@ -148,10 +148,6 @@ function disconnect() {
 }
 
 export function useWebSocket() {
-  onUnmounted(() => {
-    // 不在组件卸载时断开，WebSocket 是全局生命周期
-  })
-
   return { connected, connect, disconnect }
 }
 

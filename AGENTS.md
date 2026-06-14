@@ -169,9 +169,10 @@ class FlowCreate(FlowBase):
 class FlowUpdate(FlowBase):
     pass  # 全部可选（继承 BaseView）
 
-class FlowCondition(BaseModel):           # 查询条件 schema（不继承 BaseView）
+class FlowCondition(BaseView):           # 查询条件 schema（也继承 BaseView）
     name: Optional[str] = None
 ```
+- **所有 `*_schema.py` 中的类必须继承 `BaseView`**（含 Base/Create/Update/Condition）
 - `BaseView.model_config = ConfigDict(from_attributes=True, validate_assignment=True)`
 - `BaseView.to_model(ModelClass)`: Schema→Model，只保留 Model 中存在的字段
 - `BaseView.model_to_view(instance)`: Model→Schema，只保留 Schema 中定义的字段
@@ -222,11 +223,28 @@ flow_api = FlowApi()
 router = flow_api.router  # 必须导出 router，用于自动注册
 ```
 - `BaseApi[M, V, Q, C, U]` 泛型参数: Model, View, Query, Create, Update
+  - Q（Query）参数可复用 V（View）类型（如 `BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]`），无需单独定义 Condition 类
 - `RouteConfig`: `enable_page`(T), `enable_get`(T), `enable_create`(T), `enable_update`(T),
   `enable_delete`(T), `enable_batch_delete`(T), `enable_batch_create`(F), `enable_batch_update`(F)
 - 自动路由: POST `/page`, GET `/get/{id}`, POST `/create`, POST `/update`,
   GET `/delete/{id}`, POST `/deleteBatch`
 - 自定义路由在 `__init__` 中通过 `self.router.get/post` 注册
+- 非 CRUD API（如 `global_config_api.py`、`flow_snapshot_api.py`）使用类方式 + 裸 `APIRouter`:
+  ```python
+  class GlobalConfigApi:
+      def __init__(self):
+          self.router = APIRouter(prefix="/api/config", tags=["全局配置"])
+          self._register_routes()
+
+      def _register_routes(self):
+          @self.router.get("/check", ...)
+          async def check_init(db: AsyncSession = Depends(get_db)):
+              ...
+
+  global_config_api = GlobalConfigApi()
+  router = global_config_api.router  # 必须导出 router
+  ```
+  - 适用于无标准 CRUD 操作、纯自定义路由的 API（与 `BaseApi` 模式互斥选择）
 
 ### 响应与错误处理
 

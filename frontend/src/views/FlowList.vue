@@ -404,7 +404,7 @@ onMounted(() => {
             <span class="time-text">{{ row.create_time }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" :width="isMobile ? 60 : 230" fixed="right">
+        <el-table-column label="操作" :width="isMobile ? 60 : 250" fixed="right">
           <template #default="{ row }">
             <ActionColumn :actions="getRowActions(row)" @action="onRowAction(row, $event)" />
           </template>
