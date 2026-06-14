@@ -56,6 +56,12 @@ function handlePageChange(page: number) {
   loadData()
 }
 
+function handleSizeChange(size: number) {
+  queryParams.page_size = size
+  queryParams.page = 1
+  loadData()
+}
+
 const statusOptions = [
   { label: '启用', value: 1 },
   { label: '禁用', value: 0 }
@@ -81,12 +87,12 @@ async function loadFlows() {
 const allFlows = computed(() => [...flowList.value, ...agentList.value])
 
 function flowName(flowId: number): string {
-  const flow = allFlows.value.find(f => f.id === flowId)
+  const flow = allFlows.value.find((f) => f.id === flowId)
   return flow?.name || `#${flowId}`
 }
 
 function flowType(flowId: number): string {
-  const flow = allFlows.value.find(f => f.id === flowId)
+  const flow = allFlows.value.find((f) => f.id === flowId)
   return flow?.flow_type === 'agent' ? '智能体' : '流程'
 }
 
@@ -141,8 +147,9 @@ watch(
       return
     }
     // 从已加载的流程列表中查找 input_schema
-    const flow = allFlows.value.find(f => f.id === newId)
-    const fields = (flow as Flow & { input_schema?: { fields?: FlowIOField[] } })?.input_schema?.fields
+    const flow = allFlows.value.find((f) => f.id === newId)
+    const fields = (flow as Flow & { input_schema?: { fields?: FlowIOField[] } })
+      ?.input_schema?.fields
     inputConfigText.value = fields?.length ? generateInputTemplate(fields) : ''
   }
 )
@@ -233,9 +240,7 @@ async function handleSubmit() {
 // ---- 删除 ----
 async function handleDelete(row: WebhookConfig) {
   try {
-    await ElMessageBox.confirm(`确定删除 Webhook「${row.name}」吗？`, '确认删除', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm(`确定删除 Webhook「${row.name}」吗？`, '提示', {
       type: 'warning'
     })
     await webhookApi.delete(row.id!)
@@ -295,56 +300,68 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-container">
+  <div class="webhook-list-page page">
     <div class="page-header">
-      <h2>Webhook 管理</h2>
+      <h1 class="page-title">Webhook 管理</h1>
       <div class="header-actions">
-        <el-button :icon="Plus" type="primary" @click="openCreate">新建 Webhook</el-button>
+        <el-button type="primary" :icon="Plus" @click="openCreate">新建 Webhook</el-button>
         <el-button :icon="Refresh" @click="loadData">刷新</el-button>
       </div>
     </div>
 
-    <div class="filter-bar glass-panel">
-      <el-input
-        v-model="queryParams.condition.name"
-        placeholder="搜索名称"
-        clearable
-        style="width: 200px"
-        @keyup.enter="handleSearch"
-      />
-      <el-select
-        v-model="queryParams.condition.is_enabled"
-        placeholder="状态"
-        clearable
-        style="width: 120px"
-      >
-        <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-      </el-select>
-      <el-button type="primary" @click="handleSearch">查询</el-button>
-      <el-button @click="handleReset">重置</el-button>
+    <div class="search-bar">
+      <el-form inline>
+        <el-form-item label="名称">
+          <el-input
+            v-model="queryParams.condition.name"
+            placeholder="搜索名称..."
+            clearable
+            @keyup.enter="handleSearch"
+          />
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-select
+            v-model="queryParams.condition.is_enabled"
+            placeholder="全部"
+            clearable
+          >
+            <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item>
+          <el-button class="btn-search" @click="handleSearch">查询</el-button>
+          <el-button class="btn-reset" @click="handleReset">重置</el-button>
+        </el-form-item>
+      </el-form>
     </div>
 
-    <div class="table-container glass-panel">
-      <el-table v-loading="loading" :data="tableData" style="width: 100%">
-        <el-table-column prop="name" label="名称" min-width="160">
+    <div v-loading="loading" class="card-panel table-container">
+      <el-table :data="tableData" style="width: 100%">
+        <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">
-            <div>
-              <span class="wh-name">{{ row.name }}</span>
-              <el-tag v-if="row.is_enabled === 0" size="small" type="danger">禁用</el-tag>
-            </div>
+            <span class="wh-name">{{ row.name }}</span>
             <span v-if="row.description" class="wh-desc">{{ row.description }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="关联流程" min-width="180">
+        <el-table-column label="流程类型" width="100" align="center">
           <template #default="{ row }">
-            <div class="wh-flow-cell">
-              <el-tag size="small" :type="flowType(row.flow_id) === '智能体' ? 'success' : 'primary'" class="wh-flow-tag">
-                {{ flowType(row.flow_id) }}
-              </el-tag>
-              <el-tooltip :content="flowName(row.flow_id)" placement="top" :show-after="300">
-                <span class="wh-flow-name">{{ flowName(row.flow_id) }}</span>
-              </el-tooltip>
-            </div>
+            <el-tag
+              size="small"
+              :type="flowType(row.flow_id) === '智能体' ? 'success' : 'primary'"
+            >
+              {{ flowType(row.flow_id) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="关联流程" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="wh-flow-name">{{ flowName(row.flow_id) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.is_enabled === 1" size="small" type="success">启用</el-tag>
+            <el-tag v-else size="small" type="danger">禁用</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="回调 URL" min-width="200" show-overflow-tooltip>
@@ -375,13 +392,15 @@ onMounted(() => {
         </el-table-column>
       </el-table>
 
-      <div class="pagination-bar">
+      <div class="pagination">
         <el-pagination
           v-model:current-page="queryParams.page"
-          :page-size="queryParams.page_size"
+          v-model:page-size="queryParams.page_size"
           :total="total"
-          layout="total, prev, pager, next"
+          :page-sizes="[10, 20, 50]"
+          layout="total, sizes, prev, pager, next, jumper"
           @current-change="handlePageChange"
+          @size-change="handleSizeChange"
         />
       </div>
     </div>
@@ -444,61 +463,14 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page-container {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 16px;
-  overflow: hidden;
-}
-
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
-}
-
-.page-header h2 {
-  font-size: 20px;
-  font-weight: 700;
-  color: #1e293b;
-  margin: 0;
-}
-
 .header-actions {
   display: flex;
-  gap: 8px;
-}
-
-.filter-bar {
-  display: flex;
   gap: 12px;
-  align-items: center;
-  padding: 16px;
-  border-radius: 12px;
-  flex-shrink: 0;
-}
-
-.table-container {
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  padding: 16px;
-  border-radius: 12px;
-}
-
-.table-container :deep(.el-table) {
-  flex: 1;
-  overflow: auto;
 }
 
 .wh-name {
   font-weight: 600;
   color: #1e293b;
-  margin-right: 8px;
 }
 
 .wh-desc {
@@ -506,16 +478,6 @@ onMounted(() => {
   font-size: 12px;
   color: #64748b;
   margin-top: 2px;
-}
-
-.wh-flow-cell {
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-}
-
-.wh-flow-tag {
-  flex-shrink: 0;
 }
 
 .wh-flow-name {
@@ -541,12 +503,6 @@ onMounted(() => {
 .wh-count {
   font-weight: 600;
   color: #1e293b;
-}
-
-.pagination-bar {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 12px;
 }
 
 .form-tip {
