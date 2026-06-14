@@ -275,5 +275,25 @@ class FlowSnapshotService(
         logger.info(f"自动清理流程 {flow_id} 的 {len(ids_to_delete)} 个旧快照")
         return len(ids_to_delete)
 
+    # ---- 置顶/取消置顶 ----
+
+    async def toggle_pin(self, db: AsyncSession, snapshot_id: int) -> Optional[int]:
+        """切换快照的置顶状态
+
+        Args:
+            db: 数据库异步会话
+            snapshot_id: 快照ID
+
+        Returns:
+            新的 is_pinned 值（0 或 1），快照不存在时返回 None
+        """
+        snapshot = await self.get_by_id(db, snapshot_id)
+        if not snapshot:
+            return None
+
+        snapshot.is_pinned = 0 if snapshot.is_pinned == 1 else 1
+        await db.commit()
+        return snapshot.is_pinned
+
 
 flow_snapshot_service = FlowSnapshotService()

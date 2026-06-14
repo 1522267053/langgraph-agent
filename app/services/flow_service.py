@@ -184,7 +184,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             if not result.scalar_one_or_none():
                 return candidate
             num += 1
-            candidate = f"{name} (副本{num if num > 2 else ''})"
+            candidate = f"{name} (副本{num if num > 1 else ''})"
             if num > 100:
                 candidate = f"{name} ({datetime.now().strftime('%Y%m%d%H%M%S')})"
                 return candidate
@@ -1283,6 +1283,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
 
         if name is not None or description is not None:
             update_data = FlowUpdate(
+                id=flow_id,
                 name=name,
                 description=description,
                 input_schema=input_schema,

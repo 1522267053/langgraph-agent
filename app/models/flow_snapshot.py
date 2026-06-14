@@ -6,7 +6,7 @@
 """
 
 from typing import Optional
-from sqlalchemy import String, Text, JSON, SmallInteger
+from sqlalchemy import String, Text, JSON, SmallInteger, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base_model import DbBaseModel
@@ -17,7 +17,7 @@ class FlowSnapshot(DbBaseModel):
 
     __tablename__ = "flow_snapshot"
 
-    flow_id: Mapped[int] = mapped_column(nullable=False, comment="关联流程ID")
+    flow_id: Mapped[int] = mapped_column(Integer, nullable=False, comment="关联流程ID")
 
     snapshot_name: Mapped[str] = mapped_column(
         String(255), nullable=False, comment="快照名称"
