@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.webhook import WebhookConfig
+from app.models.flow import FlowType
 from app.schemas.webhook_schema import (
     WebhookConfigCreate,
     WebhookConfigUpdate,
@@ -125,15 +126,16 @@ class WebhookService(
         callback_url: Optional[str],
         webhook_name: str,
     ) -> None:
-        """后台执行 Webhook 触发的流程
+        """后台执行 Webhook 触发的流程/智能体
 
-        消费 execute_stream 生成器直到完成，完成后发送 callback 回调。
-        WebSocket 通知由 flow_executor_service 的完成点自动处理。
+        消费执行生成器直到完成，完成后发送 callback 回调。
+        WebSocket 通知由各 executor service 的完成点自动处理。
+        根据 flow_type 分流：flow → flow_executor_service，agent → agent_executor_service。
         """
-        from app.services.flow_executor_service import flow_executor_service
         from app.config.database import AsyncSessionLocal
 
-        # 先获取流程名称（用于通知）
+        # 查询流程名称和类型（用于通知和分流）
+        flow_type = None
         if not flow_name:
             try:
                 async with AsyncSessionLocal() as db:
@@ -144,6 +146,7 @@ class WebhookService(
                     )
                     if flow:
                         flow_name = flow.name or ""
+                        flow_type = flow.flow_type
             except Exception:
                 pass
 
@@ -152,9 +155,20 @@ class WebhookService(
         status = "unknown"
 
         try:
-            async for event in flow_executor_service.execute_stream(
-                flow_id, input_data=input_data
-            ):
+            if flow_type == FlowType.AGENT.value:
+                event_stream = self._execute_agent_via_webhook(
+                    flow_id, input_data, webhook_name
+                )
+            else:
+                from app.services.flow_executor_service import (
+                    flow_executor_service,
+                )
+
+                event_stream = flow_executor_service.execute_stream(
+                    flow_id, input_data=input_data
+                )
+
+            async for event in event_stream:
                 event_type = event.get("type")
                 if event_type == "flow_done":
                     status = event.get("data", {}).get("status", "success")
@@ -184,6 +198,33 @@ class WebhookService(
                     )
             except Exception as e:
                 logger.warning(f"Webhook callback 失败: {callback_url}, {e}")
+
+    async def _execute_agent_via_webhook(
+        self, flow_id: int, input_data: dict, webhook_name: str
+    ):
+        """通过 Webhook 触发 Agent 执行（创建临时会话）
+
+        参照 scheduled_task_service._execute_agent_task 的模式。
+        """
+        from app.services.agent_executor_service import agent_executor_service
+        from app.config.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            # 创建临时会话，标题标注来源
+            session = await agent_executor_service.create_session(db, flow_id)
+            session.title = f"[Webhook] {webhook_name}"
+            await db.commit()
+
+        # 提取 message 和额外参数
+        message = (input_data or {}).get("message", "")
+        params = {k: v for k, v in (input_data or {}).items() if k != "message"}
+        if not params:
+            params = None
+
+        async for event in agent_executor_service.chat_stream(
+            session.id, message, params
+        ):
+            yield event
 
 
 webhook_service = WebhookService()
