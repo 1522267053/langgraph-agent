@@ -60,6 +60,7 @@ Dify 仅有短期对话记忆，DeerFlow 尚未实现分层记忆。本项目的
 - **流式推理** — 支持 DeepSeek thinking、Anthropic thinking 推理过程流式输出
 - **媒体生成** — 图片/音频/视频生成工具（OpenAI/Anthropic/MiniMax）
 - **定时任务** — 基于 APScheduler 的 Cron 定时触发，支持 Flow/Agent 执行目标
+- **日程管理** — 完整 CRUD + FullCalendar 日历视图 + APScheduler 提醒推送 + Agent 工具节点
 - **执行追踪** — 完整的节点级执行记录和状态追踪
 - **扩展性强** — 注册表模式 + 自动发现，放文件即生效
 - **轻量部署** — 默认 SQLite 零配置启动，单服务架构，支持 Docker 和 PyInstaller/Nuitka 打包
@@ -199,7 +200,7 @@ langgraph-agent/
 │   ├── services/               # 业务逻辑层（BaseService 泛型 CRUD）
 │   ├── middleware/              # 全局异常处理器 + 认证中间件 + 安全头中间件
 │   ├── agent_flow/             # LangGraph 流程执行引擎
-│   │   ├── node_handlers/      #   节点处理器（17 种，自动注册）
+│   │   ├── node_handlers/      #   节点处理器（18 种，自动注册）
 │   │   │   ├── llm_*.py        #     LLM 节点模块化拆分（主入口 + factory + stream + message + executor）
 │   │   ├── ai_provider/        #   AI 模型提供商（6 种，自动注册）
 │   │   ├── flow_context.py     #   FlowState 状态定义 + reducer
@@ -228,7 +229,7 @@ langgraph-agent/
 │   ├── constants/              # 配置常量
 │   ├── stores/                 # Pinia 状态管理
 │   ├── types/                  # TypeScript 类型定义
-│   ├── views/                  # 页面组件（14 个）
+│   ├── views/                  # 页面组件（15 个）
 │   └── utils/                  # 工具函数
 ├── main.py                     # 后端入口
 ├── pyproject.toml              # Poetry 依赖配置
@@ -241,7 +242,7 @@ langgraph-agent/
 
 | 模式 | 说明 | 允许的节点 |
 |------|------|-----------|
-| **Flow** | 可视化工作流编排，Start → End 完整流程 | 全部 17 种节点 |
+| **Flow** | 可视化工作流编排，Start → End 完整流程 | 全部 18 种节点 |
 | **Agent** | 对话式 AI 助手，单 LLM + 工具节点 | 排除 condition/card/loop |
 
 ### 节点类型
@@ -264,6 +265,7 @@ langgraph-agent/
 | **python** | Python 代码沙箱执行，AST 级安全隔离 | Flow / Agent |
 | **shell** | Shell 命令执行 | Flow / Agent |
 | **todo** | 任务计划，LLM 自主进行任务拆分与进度跟踪 | Flow / Agent |
+| **agenda** | 日程管理，LLM 自主创建/查询/更新/删除日程 | Flow / Agent |
 | **media_gen** | 媒体生成（图片/音频/视频） | Flow / Agent |
 
 ### 变量引用

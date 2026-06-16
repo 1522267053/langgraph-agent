@@ -38,12 +38,12 @@ npm run format                # Prettier 格式化
 ```
 app/                          # 后端
 ├── config/                   # 配置、数据库（settings.py, database.py, logging_config.py, build_utils.py, version.py）
-├── constants/                # 静态常量（node_types.py，21 种节点类型标签）
+├── constants/                # 静态常量（node_types.py，22 种节点类型标签）
 ├── api/                      # API 路由（自动扫描注册，必须导出 router）
 ├── models/                   # SQLAlchemy 模型（禁止外键，自动扫描加载）
 ├── schemas/                  # Pydantic Schema（BaseView → XxxCreate/XxxUpdate）
 ├── services/                 # 业务逻辑层（BaseService 泛型 CRUD）
-│   └── scheduler_service.py  #   APScheduler 定时任务（文档异步处理）
+│   └── scheduler_service.py  #   APScheduler 定时任务（文档异步处理 + 日程提醒）
 ├── middleware/                # 全局异常处理器 + 认证中间件 + 安全头中间件（SecurityHeaderMiddleware）
 │   └── auth_middleware.py     #   Session cookie 认证（密码哈希内存缓存，仅 /api/* 路径需认证）
 ├── agent_flow/               # LangGraph 流程编排
@@ -53,6 +53,7 @@ app/                          # 后端
 │   │   ├── llm_message_builder.py # 消息构建（历史加载、恢复、multimodal）
 │   │   ├── llm_stream.py     #     流式 LLM 调用（重试、thinking 解析）
 │   │   └── llm_tool_executor.py #  工具执行（并行执行、人工交互、审批、截断）
+│   │   └── agenda_handler.py  #     日程节点（4 个工具：create/list/update/delete）
 │   ├── ai_provider/          #   AI 模型提供商（自动扫描注册）
 │   ├── flow_context.py       #   FlowState 定义
 │   ├── flow_event.py         #   流程执行 SSE 事件类
@@ -84,7 +85,7 @@ frontend/src/                 # 前端
 ├── stores/                   # Pinia 状态仓库（flowStore, agentStore）
 ├── types/                    # TypeScript 类型定义
 ├── utils/                    # 工具函数（sse, flowTransform, format）
-└── views/                    # 页面组件（14 个）
+└── views/                    # 页面组件（15 个）
 ```
 
 ## 自动注册机制（loader.py）
