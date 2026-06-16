@@ -25,7 +25,7 @@ CSP_POLICY = (
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.bootcdn.net; "
     "style-src 'self' 'unsafe-inline' https://cdn.bootcdn.net; "
     "img-src 'self' data: blob:; "
-    "font-src 'self'; "
+    "font-src 'self' data:; "
     "connect-src 'self'; "
     "frame-ancestors 'self'; "
     "form-action 'self'; "
