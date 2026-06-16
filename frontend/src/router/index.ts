@@ -111,6 +111,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '定时任务管理' }
   },
   {
+    path: '/agenda',
+    name: 'AgendaList',
+    component: () => import('@/views/AgendaList.vue'),
+    meta: { title: '日程管理' }
+  },
+  {
     path: '/webhook',
     name: 'WebhookList',
     component: () => import('@/views/WebhookList.vue'),

@@ -22,6 +22,7 @@ export type CardNodeType =
   | 'todo'
   | 'media_gen'
   | 'sub_agent'
+  | 'agenda'
 
 /** 所有节点类型 */
 export type AllNodeType = NodeType | CardNodeType

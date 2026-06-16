@@ -211,6 +211,13 @@ export const TOOL_NODE_TYPES: NodeTypeOption[] = [
     description: '调用已发布的Agent作为子任务执行器',
     category: 'tool',
     defaultConfig: { agent_id: null }
+  },
+  {
+    value: 'agenda',
+    label: '日程',
+    icon: 'Calendar',
+    description: '为Agent提供日程管理能力（创建、查询、更新、删除日程）',
+    category: 'tool'
   }
 ]
 

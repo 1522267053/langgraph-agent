@@ -4,8 +4,8 @@
 """
 
 from datetime import datetime
-from typing import Optional, Generic, TypeVar, Sequence
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
+from typing import Optional, Generic, TypeVar, Sequence, Union
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, BeforeValidator
 from typing_extensions import Self, Annotated
 
 from app.models.base_model import DbBaseModel
@@ -17,11 +17,38 @@ T = TypeVar("T", covariant=True)
 M = TypeVar("M", bound=DbBaseModel)
 
 
+def _parse_datetime(value: Union[str, datetime, None]) -> Union[datetime, None]:
+    """解析日期时间字符串为 datetime 对象
+
+    支持 ISO 8601 (2026-06-16T15:30:00) 和中国常用格式 (2026-06-16 15:30:00)。
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    # YYYY-MM-DD HH:MM:SS → 替换空格为 T，兼容 ISO 8601 解析
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"无法解析日期时间: {value}")
+
+
 def _format_datetime(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else ""
 
 
-ChinaDateTime = Annotated[datetime, PlainSerializer(_format_datetime, return_type=str)]
+ChinaDateTime = Annotated[
+    datetime,
+    BeforeValidator(_parse_datetime),
+    PlainSerializer(_format_datetime, return_type=str, when_used='json'),
+]
 
 
 class BaseView(BaseModel):
@@ -58,8 +85,8 @@ class BaseView(BaseModel):
             >>> policy_schema = PolicyCreate(title="测试", content="内容")
             >>> policy_model = policy_schema.to_model(Policy)
         """
-        # 使用 model_dump 获取字典数据
-        data = self.model_dump()
+        # 使用 model_dump 获取字典数据（mode='python' 保留 datetime 等原生类型）
+        data = self.model_dump(mode='python')
 
         # 获取模型类的所有字段名
         model_fields = set(model_class.__mapper__.attrs.keys())

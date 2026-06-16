@@ -1,5 +1,6 @@
-import { ref } from 'vue'
-import { ElNotification } from 'element-plus'
+import { ref, h } from 'vue'
+import { ElNotification, ElButton } from 'element-plus'
+import { agendaApi } from '@/api/agenda'
 
 interface ExecutionDoneData {
   execution_id: number | null
@@ -11,9 +12,17 @@ interface ExecutionDoneData {
   duration_ms?: number | null
 }
 
+interface AgendaReminderData {
+  agenda_id: number
+  title: string
+  description?: string | null
+  start_time?: string | null
+  location?: string | null
+}
+
 interface WSMessage {
-  type: 'execution_done'
-  data: ExecutionDoneData
+  type: 'execution_done' | 'agenda_reminder'
+  data: ExecutionDoneData | AgendaReminderData
 }
 
 const ws = ref<WebSocket | null>(null)
@@ -38,7 +47,8 @@ function buildWsUrl(): string {
 
 function handleNotification(msg: WSMessage) {
   if (msg.type === 'execution_done') {
-    const { flow_name, status, source, error_message, duration_ms, execution_id } = msg.data
+    const data = msg.data as ExecutionDoneData
+    const { flow_name, status, source, error_message, duration_ms, execution_id } = data
 
     // 跳过用户正在通过 SSE 观看的执行
     if (
@@ -69,6 +79,50 @@ function handleNotification(msg: WSMessage) {
         position: 'top-right'
       })
     }
+  } else if (msg.type === 'agenda_reminder') {
+    const data = msg.data as AgendaReminderData
+    const parts: string[] = []
+    if (data.start_time) parts.push(`时间: ${data.start_time}`)
+    if (data.location) parts.push(`地点: ${data.location}`)
+    if (data.description) parts.push(data.description)
+
+    ElNotification({
+      type: 'warning',
+      title: `日程提醒: ${data.title}`,
+      message: h('div', [
+        h('p', { style: 'margin: 4px 0 12px' }, parts.join(' | ') || '该日程开始了'),
+        h('div', { style: 'display: flex; gap: 8px' }, [
+          h(ElButton, {
+            type: 'primary',
+            size: 'small',
+            onClick: async () => {
+              try {
+                await agendaApi.complete(data.agenda_id)
+                ElNotification.closeAll()
+              } catch {
+                // ignore
+              }
+            }
+          }, () => '完成'),
+          h(ElButton, {
+            size: 'small',
+            onClick: async () => {
+              try {
+                await agendaApi.postpone(data.agenda_id)
+                ElNotification.closeAll()
+              } catch {
+                // ignore
+              }
+            }
+          }, () => '延后15分钟')
+        ])
+      ]),
+      duration: 0,
+      position: 'top-right',
+      onClick: () => {
+        window.location.hash = '#/agenda'
+      }
+    })
   }
 }
 

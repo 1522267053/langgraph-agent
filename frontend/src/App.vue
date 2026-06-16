@@ -20,9 +20,11 @@ import {
   SwitchButton,
   User,
   TrendCharts,
-  ChatLineSquare
+  ChatLineSquare,
+  Calendar
 } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { useAgentStore } from '@/stores'
 import { authApi } from '@/api/auth'
 import { configApi, type UpdateCheckResult } from '@/api/config'
@@ -250,6 +252,7 @@ const menuItems = [
   { path: '/execution', title: '执行记录', icon: Timer },
   { path: '/statistics', title: 'Token 统计', icon: TrendCharts },
   { path: '/scheduled-task', title: '定时任务', icon: Timer },
+  { path: '/agenda', title: '日程管理', icon: Calendar },
   { path: '/webhook', title: 'Webhook', icon: Connection },
   { path: '/files', title: '文件管理', icon: Folder },
   { path: '/marketplace', title: '资源市场', icon: Shop },
@@ -309,6 +312,7 @@ function openDownloadUrl(): void {
 </script>
 
 <template>
+  <el-config-provider :locale="zhCn">
   <div class="app-container">
     <div v-if="forceUpgradeInfo" class="force-upgrade-banner">
       <span class="banner-text">
@@ -620,6 +624,7 @@ function openDownloadUrl(): void {
       </template>
     </div>
   </div>
+  </el-config-provider>
 </template>
 
 <style scoped>

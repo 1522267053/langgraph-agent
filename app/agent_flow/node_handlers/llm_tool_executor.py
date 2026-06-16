@@ -47,6 +47,7 @@ _HINT_PRIORITY: dict[str, int] = {
     "human": 0,
     "knowledge": 1,
     "shell": 1,
+    "agenda": 1,
     "memory": 2,
 }
 

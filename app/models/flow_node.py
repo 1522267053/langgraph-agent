@@ -32,6 +32,7 @@ class NodeType(str, Enum):
     MEDIA_GEN = "media_gen"
     INTENT_ROUTER = "intent_router"
     SUB_AGENT = "sub_agent"
+    AGENDA = "agenda"
 
 
 BASIC_NODE_TYPES: List[NodeType] = [
@@ -52,6 +53,7 @@ BASIC_NODE_TYPES: List[NodeType] = [
     NodeType.MEDIA_GEN,
     NodeType.INTENT_ROUTER,
     NodeType.SUB_AGENT,
+    NodeType.AGENDA,
 ]
 
 AGENT_ALLOWED_NODE_TYPES: List[str] = [
@@ -70,6 +72,7 @@ AGENT_ALLOWED_NODE_TYPES: List[str] = [
     NodeType.CONDITION.value,
     NodeType.INTENT_ROUTER.value,
     NodeType.SUB_AGENT.value,
+    NodeType.AGENDA.value,
 ]
 
 AGENT_TOOL_NODE_TYPES: set[str] = {
@@ -83,6 +86,7 @@ AGENT_TOOL_NODE_TYPES: set[str] = {
     NodeType.API.value,
     NodeType.MEDIA_GEN.value,
     NodeType.SUB_AGENT.value,
+    NodeType.AGENDA.value,
 }
 
 TOOL_ONLY_NODE_TYPES: set[str] = {
@@ -91,6 +95,7 @@ TOOL_ONLY_NODE_TYPES: set[str] = {
     NodeType.MEMORY.value,
     NodeType.TODO.value,
     NodeType.SUB_AGENT.value,
+    NodeType.AGENDA.value,
 }
 
 NODE_SOURCE_HANDLES: dict[str, set[str]] = {
@@ -113,6 +118,7 @@ NODE_SOURCE_HANDLES: dict[str, set[str]] = {
     # 意图路由：default + 每个意图 key 动态生成 handle（前端动态生成）
     NodeType.INTENT_ROUTER.value: {"default"},
     NodeType.SUB_AGENT.value: {"tools"},
+    NodeType.AGENDA.value: {"tools"},
 }
 
 NODE_TARGET_HANDLES: dict[str, set[str]] = {
@@ -134,6 +140,7 @@ NODE_TARGET_HANDLES: dict[str, set[str]] = {
     NodeType.MEDIA_GEN.value: {"default"},
     NodeType.INTENT_ROUTER.value: {"default"},
     NodeType.SUB_AGENT.value: set(),
+    NodeType.AGENDA.value: set(),
 }
 
 AGENT_UNIQUE_NODE_TYPES: set[str] = {

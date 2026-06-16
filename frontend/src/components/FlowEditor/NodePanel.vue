@@ -27,7 +27,8 @@ import {
   Operation,
   PictureFilled,
   Aim,
-  Avatar
+  Avatar,
+  Calendar
 } from '@element-plus/icons-vue'
 
 const store = useFlowStore()
@@ -116,6 +117,13 @@ const cardNodes: {
     icon: Avatar,
     color: '#3b82f6',
     bgColor: '#eff6ff'
+  },
+  {
+    type: 'agenda',
+    label: '日程',
+    icon: Calendar,
+    color: '#0ea5e9',
+    bgColor: '#f0f9ff'
   }
 ]
 
@@ -129,14 +137,15 @@ const agentToolTypes: Set<CardNodeType> = new Set([
   'memory',
   'todo',
   'media_gen',
-  'sub_agent'
+  'sub_agent',
+  'agenda'
 ])
 
 const filteredCardNodes = computed(() => {
   if (props.isAgent) {
     return cardNodes.filter(item => item.type === 'llm' || agentToolTypes.has(item.type))
   }
-  return cardNodes.filter(item => item.type !== 'memory')
+  return cardNodes.filter(item => item.type !== 'memory' && item.type !== 'agenda')
 })
 
 const showFlowCardDialog = ref(false)
