@@ -11,12 +11,14 @@ import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from starlette.routing import WebSocketRoute
 
+from app.config.database import AsyncSessionLocal
 from app.middleware.auth_middleware import (
     COOKIE_NAME,
     _get_password_hash_cached,
     _is_system_initialized,
     _verify_session,
 )
+from app.services.global_config_service import global_config_service
 from app.services.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,7 @@ async def notification_ws(websocket: WebSocket):
 
     通过 session cookie 认证（与 HTTP 请求共用 auth_session cookie）。
     未配置密码时免认证直接连接。
+    握手成功后绑定用户名，支持定向推送。
     """
     # ---- 认证校验 ----
     initialized = await _is_system_initialized()
@@ -40,19 +43,29 @@ async def notification_ws(websocket: WebSocket):
                 await websocket.close(code=4401)
                 return
 
-    # ---- 接受连接 ----
-    await ws_manager.connect(websocket)
+    # ---- 读取当前用户名（单用户系统，从全局配置获取）----
+    username = "default"
+    try:
+        async with AsyncSessionLocal() as db:
+            name = await global_config_service.get_username(db)
+            if name:
+                username = name
+    except Exception as e:
+        logger.warning(f"WebSocket 握手时读取用户名失败，使用默认值: {e}")
+
+    # ---- 接受连接并绑定用户 ----
+    await ws_manager.connect(websocket, username)
 
     try:
         # 保持连接，忽略客户端消息（仅做心跳）
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        ws_manager.disconnect(websocket)
         logger.info(f"WebSocket 断开，当前连接数: {ws_manager.connection_count()}")
     except Exception as e:
-        ws_manager.disconnect(websocket)
         logger.warning(f"WebSocket 异常断开: {e}")
+    finally:
+        ws_manager.disconnect(websocket)
 
 
 def register_websocket_routes(app: FastAPI) -> None:

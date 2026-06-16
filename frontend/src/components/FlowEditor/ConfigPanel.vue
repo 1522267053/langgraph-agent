@@ -25,7 +25,8 @@ import {
   TodoConfigComponent,
   MediaGenConfigComponent,
   IntentRouterConfigComponent,
-  SubAgentConfigComponent
+  SubAgentConfigComponent,
+  AgendaConfigComponent
 } from './config'
 import ToolEdgeCondition from './components/ToolEdgeCondition.vue'
 
@@ -48,6 +49,7 @@ import type {
   MediaGenNodeConfig,
   IntentRouterConfig,
   SubAgentConfig,
+  AgendaConfig,
   FlowIOField,
   FieldType,
   NodeVariable
@@ -107,6 +109,7 @@ const isPythonNode = computed(() => selectedNode.value?.type === 'python')
 const isShellNode = computed(() => selectedNode.value?.type === 'shell')
 const isMemoryNode = computed(() => selectedNode.value?.type === 'memory')
 const isTodoNode = computed(() => selectedNode.value?.type === 'todo')
+const isAgendaNode = computed(() => selectedNode.value?.type === 'agenda')
 const isMediaGenNode = computed(() => selectedNode.value?.type === 'media_gen')
 const isIntentRouterNode = computed(() => selectedNode.value?.type === 'intent_router')
 const isSubAgentNode = computed(() => selectedNode.value?.type === 'sub_agent')
@@ -212,6 +215,8 @@ const memoryConfig = ref<MemoryConfig>({
 })
 
 const todoConfig = ref<TodoConfig>({})
+
+const agendaConfig = ref<AgendaConfig>({})
 
 const mediaGenConfig = ref<MediaGenNodeConfig>({
   media_type: 'image',
@@ -503,6 +508,10 @@ watch(selectedNode, async node => {
     todoConfig.value = {}
   }
 
+  if (node?.type === 'agenda') {
+    agendaConfig.value = {}
+  }
+
   if (node?.type === 'sub_agent') {
     subAgentConfig.value = rawConfig as unknown as SubAgentConfig
   }
@@ -629,6 +638,13 @@ function updateMemoryConfig(config: MemoryConfig): void {
 function updateTodoConfig(config: TodoConfig): void {
   if (selectedNode.value && isTodoNode.value) {
     todoConfig.value = config
+    store.updateNodeData(selectedNode.value.id, { config: { ...config } })
+  }
+}
+
+function updateAgendaConfig(config: AgendaConfig): void {
+  if (selectedNode.value && isAgendaNode.value) {
+    agendaConfig.value = config
     store.updateNodeData(selectedNode.value.id, { config: { ...config } })
   }
 }
@@ -911,6 +927,12 @@ async function handleToggleCard(val: boolean | string): Promise<void> {
           v-if="isTodoNode"
           :config="todoConfig"
           @update:config="updateTodoConfig"
+        />
+
+        <AgendaConfigComponent
+          v-if="isAgendaNode"
+          :config="agendaConfig"
+          @update:config="updateAgendaConfig"
         />
 
         <MediaGenConfigComponent

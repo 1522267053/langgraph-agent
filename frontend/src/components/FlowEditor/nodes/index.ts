@@ -17,6 +17,7 @@ import TodoNode from './TodoNode.vue'
 import MediaGenNode from './MediaGenNode.vue'
 import IntentRouterNode from './IntentRouterNode.vue'
 import SubAgentNode from './SubAgentNode.vue'
+import AgendaNode from './AgendaNode.vue'
 
 export const nodeTypes = {
   start: markRaw(StartNode),
@@ -36,7 +37,8 @@ export const nodeTypes = {
   todo: markRaw(TodoNode),
   media_gen: markRaw(MediaGenNode),
   intent_router: markRaw(IntentRouterNode),
-  sub_agent: markRaw(SubAgentNode)
+  sub_agent: markRaw(SubAgentNode),
+  agenda: markRaw(AgendaNode)
 }
 
 export {
@@ -57,5 +59,6 @@ export {
   TodoNode,
   MediaGenNode,
   IntentRouterNode,
-  SubAgentNode
+  SubAgentNode,
+  AgendaNode
 }

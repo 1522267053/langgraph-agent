@@ -398,6 +398,7 @@ class BuiltinAgentService:
                 ("python_tool", NodeType.PYTHON.value, "Python 工具", 700, 450, {}),
                 ("shell_tool", NodeType.SHELL.value, "Shell 工具", 900, 450, {}),
                 ("memory_tool", NodeType.MEMORY.value, "记忆管理", 300, 600, {}),
+                ("agenda_tool", NodeType.AGENDA.value, "日程管理", 500, 600, {}),
             ]
         )
         for key, ntype, name, x, y, cfg in tool_nodes:

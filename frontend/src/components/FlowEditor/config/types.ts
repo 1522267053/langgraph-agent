@@ -226,6 +226,10 @@ export interface MediaGenNodeConfig {
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface TodoConfig {}
 
+/** 日程节点配置 */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface AgendaConfig {}
+
 /** 子Agent节点配置 */
 export interface SubAgentConfig {
   agent_id: number | null
