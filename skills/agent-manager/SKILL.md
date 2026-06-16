@@ -122,7 +122,7 @@ POST /api/execution/human-input-stream/{execution_id}
 |--|-----------------|----------------|
 | 结构 | start→llm→end + 工具节点 | 任意 DAG |
 | LLM | 仅限 1 个 | 不限 |
-| 支持节点 | start/end/condition/intent_router/llm + 工具节点(mcp/knowledge/skill/python/shell/memory/todo/api/media_gen/sub_agent) | 所有 17 种节点类型 |
+| 支持节点 | start/end/condition/intent_router/llm + 工具节点(mcp/knowledge/skill/python/shell/memory/todo/agenda/api/media_gen/sub_agent) | 所有 18 种节点类型 |
 
 ## 创建流程（完整步骤）
 
@@ -212,7 +212,7 @@ POST /api/ai/flow/{id}/edges/batch
 | llm | ✅双向 | ✅接收 | **唯一可接收 tools 的节点** |
 | python/api/knowledge | ✅双向 | ✅ | 数据+工具两种模式 |
 | condition/loop/card/human/intent_router | ✅双向 | ❌ | 分支/子流程控制 |
-| **shell/mcp/skill/memory/todo/sub_agent** | ❌ | ✅**仅输出** | **纯工具节点，禁止 default 边** |
+| **shell/mcp/skill/memory/todo/agenda/sub_agent** | ❌ | ✅**仅输出** | **纯工具节点，禁止 default 边** |
 
 ## 变量引用路径
 
@@ -263,8 +263,8 @@ POST /api/ai/flow/{id}/edges/batch
   - `description`: 工具描述，LLM 据此判断何时调用
   - 关闭时：通用 `api_call_tool`，LLM 需自行提供完整 URL/Method/Headers/Body
 
-### MCP / Skill / Memory / Todo
-- MCP：`mcp_server_ids` | Skill：`skill_ids` | Memory/Todo：无需配置，连到 LLM 即可
+### MCP / Skill / Memory / Todo / Agenda
+- MCP：`mcp_server_ids` | Skill：`skill_ids` | Memory/Todo/Agenda：无需配置，连到 LLM 即可
 
 ### Condition (`condition`)
 - `logic`: `and`/`or`，`rules`: `[{variable, operator, value}]`
