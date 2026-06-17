@@ -342,11 +342,19 @@ class FileReadInput(BaseModel):
 
     file_path: str = Field(..., description="文件绝对路径")
     offset: Optional[int] = Field(
-        None, description="起始行号（从1开始），不传则从头读取"
+        None, description="起始行号（从1开始），与start_char互斥"
     )
     limit: Optional[int] = Field(
         None,
-        description="读取行数，单次最多 100 行，不传则读取 100 行",
+        description="读取行数，单次最多 100 行，不传则读取 100 行，与end_char互斥",
+    )
+    start_char: Optional[int] = Field(
+        None,
+        description="起始字符位置（0-indexed，包含），与offset互斥，适合读取单行大文件的特定片段",
+    )
+    end_char: Optional[int] = Field(
+        None,
+        description="结束字符位置（0-indexed，不包含），与limit互斥，不传则读取到文件末尾",
     )
 
 
@@ -1010,6 +1018,8 @@ class ShellNodeHandler(BaseNodeHandler):
             file_path: str,
             offset: Optional[int] = None,
             limit: Optional[int] = None,
+            start_char: Optional[int] = None,
+            end_char: Optional[int] = None,
         ) -> str:
             is_valid, error_msg = _validate_file_path(file_path)
             if not is_valid:
@@ -1047,6 +1057,34 @@ class ShellNodeHandler(BaseNodeHandler):
                     ensure_ascii=False,
                 )
 
+            total_chars = len(raw)
+
+            # ---- 字符模式 ----
+            if start_char is not None:
+                if offset is not None:
+                    return json.dumps(
+                        {
+                            "error": "start_char 和 offset 不能同时使用，请选择一种模式",
+                            "success": False,
+                        },
+                        ensure_ascii=False,
+                    )
+                s = max(0, start_char)
+                e = min(end_char, total_chars) if end_char is not None else total_chars
+                content = raw[s:e]
+                result: dict = {
+                    "success": True,
+                    "file_path": str(path),
+                    "total_chars": total_chars,
+                    "start_char": s,
+                    "end_char": e,
+                    "content": content,
+                }
+                if e < total_chars:
+                    result["has_more"] = True
+                return json.dumps(result, ensure_ascii=False)
+
+            # ---- 行模式 ----
             lines = raw.splitlines()
             total_lines = len(lines)
             actual_limit = (
@@ -1063,6 +1101,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 "success": True,
                 "file_path": str(path),
                 "total_lines": total_lines,
+                "total_chars": total_chars,
                 "offset": start + 1,
                 "limit": len(selected),
                 "content": content,
@@ -1074,8 +1113,12 @@ class ShellNodeHandler(BaseNodeHandler):
         file_read_tool = StructuredTool(
             name="file_read",
             description=(
-                "读取文件内容，返回带行号的文本(格式如 ```12: 文件内容的一行```)。"
-                "单次最多读取 100 行，大文件请多次调用并指定 offset 分段读取。"
+                "读取文件内容。支持两种模式：\n"
+                "1. 行模式（默认）：返回带行号的文本(格式如 ```12: 文件内容的一行```)，"
+                "单次最多读取 100 行，大文件请多次调用并指定 offset 分段读取。\n"
+                "2. 字符模式：传 start_char/end_char 按字符位置读取（0-indexed），"
+                "适合读取单行大文件的特定片段，不传 end_char 则读取到文件末尾。\n"
+                "两种模式互斥（offset 与 start_char 不能同时传）。"
                 "读取前无需校验文件是否存在，工具会自动处理。"
             ),
             func=None,
