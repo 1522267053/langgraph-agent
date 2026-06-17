@@ -220,6 +220,27 @@ def _truncate_text(
     # 超限：保存完整内容到临时文件
     saved_to = _save_to_temp_file(text, prefix=prefix)
 
+    # ---- 单行 JSON 自动格式化 ----
+    if total_lines == 1:
+        try:
+            parsed = json.loads(text)
+            formatted = json.dumps(parsed, ensure_ascii=False, indent=2)
+            formatted_lines = formatted.splitlines()
+            formatted_bytes = len(formatted.encode("utf-8"))
+            if len(formatted_lines) <= max_lines and formatted_bytes <= max_bytes:
+                return formatted
+            # 格式化后仍超限，保存格式化后的版本
+            saved_to = _save_to_temp_file(formatted, prefix=prefix)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # ---- 单行超限：直接截取前 preview_bytes 字节 ----
+    if total_lines == 1:
+        preview_bytes = _get_preview_limits()[1]
+        truncated_line = text[:preview_bytes]
+        hint = f"\n\n[输出已截断，共 1 行。完整内容已保存到: {saved_to}]"
+        return truncated_line + hint
+
     # 逐行累加字节，双重限制，先到先停
     preview_lines, preview_bytes = _get_preview_limits()
     out: list[str] = []
