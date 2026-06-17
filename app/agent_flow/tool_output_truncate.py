@@ -3,7 +3,8 @@
 
 JSON 感知截断：保留 JSON 结构完整，只截断大字段值。
 - dict: 保留结构，截断大字符串字段和大列表字段
-- str: 先尝试 json.loads() 解析为 dict，成功则走 JSON 感知截断；失败则按行/字节截断（纯文本模式）
+- list: 逐项格式化（dict 项递归截断），整体超限时保留前 N 项
+- str: 先尝试 json.loads() 解析为 dict/list，成功则走 JSON 感知截断；失败则按行/字节截断（纯文本模式）
 - 其他类型: str() 后按纯文本截断
 
 所有工具输出统一为 JSON 字符串，LLM 始终收到结构完整、可解析的 JSON。
@@ -32,11 +33,12 @@ def smart_truncate_output(result: Any, *, prefix: str = "tool_output") -> str:
 
     策略：
     - dict: JSON 感知截断（保留结构，截断大字段值），返回 JSON 字符串
-    - str: 先尝试 json.loads() 解析为 dict，成功则走 JSON 感知截断；失败则纯文本截断
-    - 其他类型: str() 转换后尝试 JSON 解析或纯文本截断
+    - list: 逐项格式化（dict 项递归截断），整体超限时保留前 N 项，返回 JSON 字符串
+    - str: 先尝试 json.loads() 解析为 dict/list，成功则走 JSON 感知截断；失败则纯文本截断
+    - 其他类型: str() 转换后纯文本截断
 
     Args:
-        result: 工具执行结果（dict/str/其他类型）
+        result: 工具执行结果（dict/list/str/其他类型）
         prefix: 临时文件名前缀，用于区分来源（如 shell_output、memory_output）
 
     Returns:
@@ -45,62 +47,104 @@ def smart_truncate_output(result: Any, *, prefix: str = "tool_output") -> str:
     max_lines = settings.tool_output_max_lines
     max_bytes = settings.tool_output_max_bytes
 
+    # ---- dict: JSON 感知截断 ----
     if isinstance(result, dict):
-        truncated = _truncate_dict(
+        return _truncate_and_serialize_dict(
             result, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix
         )
-        return json.dumps(truncated, ensure_ascii=False, default=str)
+
+    # ---- list: JSON 感知截断（逐项格式化 + 整体超限保留前 N 项）----
+    if isinstance(result, list):
+        return _truncate_json_list(
+            result, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix
+        )
 
     if isinstance(result, str):
-        # 尝试解析为 JSON，成功则走 dict 截断路径
+        # 尝试解析为 JSON，成功则走结构化截断路径
         try:
             parsed = json.loads(result)
             if isinstance(parsed, dict):
-                truncated = _truncate_dict(
+                return _truncate_and_serialize_dict(
                     parsed, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix
                 )
-                return json.dumps(truncated, ensure_ascii=False, default=str)
-            # 解析成功但不是 dict（如 list/number），检查是否超限
             if isinstance(parsed, list):
-                # 始终格式化：dict 项走 _truncate_dict 递归处理长字符串字段
-                formatted_items = []
-                for item in parsed:
-                    if isinstance(item, dict):
-                        formatted_items.append(
-                            _truncate_dict(
-                                item,
-                                max_lines=max_lines,
-                                max_bytes=max_bytes,
-                                prefix=prefix,
-                            )
-                        )
-                    else:
-                        formatted_items.append(item)
-                serialized = json.dumps(
-                    formatted_items, ensure_ascii=False, default=str
+                return _truncate_json_list(
+                    parsed, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix
                 )
-                if _exceeds_limit(serialized, max_lines, max_bytes):
-                    kept_items = _truncate_list(
-                        parsed,
-                        max_lines=max_lines,
-                        max_bytes=max_bytes,
-                        prefix=prefix,
-                    )
-                    return json.dumps(kept_items, ensure_ascii=False, default=str)
-                return serialized
+            # 解析成功但为标量（number/bool/null），原样返回
             return result
         except (json.JSONDecodeError, TypeError):
             pass
         # JSON 解析失败 → 纯文本截断
-        text = _truncate_text(
+        return _truncate_text(
             result, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix
         )
-        return text
 
-    # 其他类型：str() 转换后处理
+    # 其他类型：str() 转换后纯文本截断
     text = str(result)
-    text = _truncate_text(text, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix)
-    return text
+    return _truncate_text(text, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix)
+
+
+def _truncate_and_serialize_dict(
+    d: dict, *, max_lines: int, max_bytes: int, prefix: str
+) -> str:
+    """截断 dict 并序列化为 JSON 字符串
+
+    dict 路径与 str→dict 路径的公共逻辑：先 _truncate_dict 结构化截断，再 json.dumps。
+    """
+    truncated = _truncate_dict(
+        d, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix
+    )
+    return json.dumps(truncated, ensure_ascii=False, default=str)
+
+
+def _truncate_json_list(
+    lst: list, *, max_lines: int, max_bytes: int, prefix: str
+) -> str:
+    """截断 JSON list 并返回序列化字符串
+
+    策略：
+    1. 逐项格式化：dict 项走 _truncate_dict（递归截断大字段值），非 dict 项原样保留
+    2. 序列化后未超限 → 直接返回
+    3. 超限 → 保存原始完整列表到临时文件，按字节预算保留前 N 项
+
+    注：_truncate_dict 对每个 dict 项仅调用一次（避免重复处理）。
+    """
+    # ---- 逐项格式化（_truncate_dict 仅调用一次）----
+    formatted_items: list = []
+    for item in lst:
+        if isinstance(item, dict):
+            formatted_items.append(
+                _truncate_dict(
+                    item, max_lines=max_lines, max_bytes=max_bytes, prefix=prefix
+                )
+            )
+        else:
+            formatted_items.append(item)
+
+    serialized = json.dumps(formatted_items, ensure_ascii=False, default=str)
+    if not _exceeds_limit(serialized, max_lines, max_bytes):
+        return serialized
+
+    # ---- 超限：保存原始完整列表到文件，按字节预算保留前 N 项 ----
+    _save_to_temp_file(json.dumps(lst, ensure_ascii=False, default=str), prefix=prefix)
+
+    kept: list = []
+    byte_budget = max_bytes // 2
+    current_bytes = 0
+    for item in formatted_items:
+        item_str = (
+            json.dumps(item, ensure_ascii=False, default=str)
+            if isinstance(item, (dict, list))
+            else str(item)
+        )
+        item_bytes = len(item_str.encode("utf-8"))
+        if current_bytes + item_bytes > byte_budget:
+            break
+        kept.append(item)
+        current_bytes += item_bytes
+
+    return json.dumps(kept, ensure_ascii=False, default=str)
 
 
 def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> dict:
