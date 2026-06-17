@@ -619,6 +619,16 @@ onMounted(() => {
         <el-form-item label="地点">
           <el-input v-model="form.location" placeholder="输入地点（可选）" />
         </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="form.status" style="width: 100%">
+            <el-option
+              v-for="opt in statusOptions"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="重复">
           <el-select v-model="form.recurrence" style="width: 100%">
             <el-option
