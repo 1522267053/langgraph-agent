@@ -62,7 +62,23 @@ def smart_truncate_output(result: Any, *, prefix: str = "tool_output") -> str:
                 return json.dumps(truncated, ensure_ascii=False, default=str)
             # 解析成功但不是 dict（如 list/number），检查是否超限
             if isinstance(parsed, list):
-                serialized = json.dumps(parsed, ensure_ascii=False, default=str)
+                # 始终格式化：dict 项走 _truncate_dict 递归处理长字符串字段
+                formatted_items = []
+                for item in parsed:
+                    if isinstance(item, dict):
+                        formatted_items.append(
+                            _truncate_dict(
+                                item,
+                                max_lines=max_lines,
+                                max_bytes=max_bytes,
+                                prefix=prefix,
+                            )
+                        )
+                    else:
+                        formatted_items.append(item)
+                serialized = json.dumps(
+                    formatted_items, ensure_ascii=False, default=str
+                )
                 if _exceeds_limit(serialized, max_lines, max_bytes):
                     kept_items = _truncate_list(
                         parsed,
@@ -71,6 +87,7 @@ def smart_truncate_output(result: Any, *, prefix: str = "tool_output") -> str:
                         prefix=prefix,
                     )
                     return json.dumps(kept_items, ensure_ascii=False, default=str)
+                return serialized
             return result
         except (json.JSONDecodeError, TypeError):
             pass
