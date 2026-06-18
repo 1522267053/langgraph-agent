@@ -68,7 +68,7 @@ function handleNotification(msg: WSMessage) {
 
     if (status === 'success') {
       const msgPreview = last_user_message
-        ? `「${flow_name} ${truncate(last_user_message)}」执行完成`
+        ? `「${flow_name}：${truncate(last_user_message)}」执行完成`
         : `「${flow_name}」执行完成`
       ElNotification({
         type: 'success',
@@ -79,7 +79,7 @@ function handleNotification(msg: WSMessage) {
       })
     } else if (status === 'failed') {
       const msgPreview = last_user_message
-        ? `「${flow_name} ${truncate(last_user_message)}」执行失败`
+        ? `「${flow_name}：${truncate(last_user_message)}」执行失败`
         : `「${flow_name}」执行失败`
       ElNotification({
         type: 'error',

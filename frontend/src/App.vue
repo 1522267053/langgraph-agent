@@ -457,7 +457,7 @@ function openDownloadUrl(): void {
           </template>
 
           <nav class="sidebar-nav">
-            <div v-if="isChatPage" class="nav-divider"></div>
+            
             <a
               v-for="item in menuItems"
               :key="item.path"
@@ -595,7 +595,6 @@ function openDownloadUrl(): void {
           </template>
 
           <nav :class="['drawer-nav', { 'drawer-nav-full': !isChatPage }]">
-            <div v-if="isChatPage" class="nav-divider"></div>
             <a
               v-for="item in menuItems"
               :key="item.path"
@@ -1007,6 +1006,7 @@ function openDownloadUrl(): void {
   min-height: 0;
   overflow-y: auto;
   padding: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .nav-divider {
