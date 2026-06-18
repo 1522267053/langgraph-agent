@@ -70,7 +70,7 @@ watch(model, val => {
   }
 })
 
-onMounted(async () => {
+async function loadConfig() {
   try {
     const [configRes, providerRes] = await Promise.all([
       configApi.getConfig(),
@@ -88,9 +88,13 @@ onMounted(async () => {
     executionNotificationEnabled.value = config.value.execution_notification_enabled ?? true
   } catch {
     // error handled by interceptor
-  } finally {
-    loading.value = false
   }
+}
+
+onMounted(async () => {
+  loading.value = true
+  await loadConfig()
+  loading.value = false
   marketplaceStore.loadStatus()
   checkForUpdates()
 })
@@ -150,6 +154,7 @@ async function handleSave() {
     }
     await configApi.updateConfig(data)
     ElMessage.success('配置已保存')
+    await loadConfig()
     apiKey.value = ''
     embeddingApiKey.value = ''
     loginPassword.value = ''
