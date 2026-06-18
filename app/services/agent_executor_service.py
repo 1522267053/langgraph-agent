@@ -306,7 +306,7 @@ class AgentExecutorService(BaseExecutorService):
         user_message_content = ""
         for msg in messages_to_delete:
             if msg.role == "human" or msg.role == "user":
-                user_message_content = msg.content
+                user_message_content = msg.original_content or msg.content
                 break
 
         message_ids = [msg.id for msg in messages_to_delete]
@@ -754,6 +754,7 @@ class AgentExecutorService(BaseExecutorService):
                         flow_name=session.title or "Agent对话",
                         status="cancelled" if is_interrupted else "success",
                         source="agent",
+                        last_user_message=user_message,
                     )
                 except Exception:
                     pass
@@ -778,6 +779,7 @@ class AgentExecutorService(BaseExecutorService):
                         status="failed",
                         source="agent",
                         error_message=error_msg,
+                        last_user_message=user_message,
                     )
                 except Exception:
                     pass
@@ -978,6 +980,7 @@ class AgentExecutorService(BaseExecutorService):
                         flow_name=session.title or "Agent对话",
                         status="cancelled" if is_interrupted else "success",
                         source="agent",
+                        last_user_message=human_input,
                     )
                 except Exception:
                     pass
@@ -1002,6 +1005,7 @@ class AgentExecutorService(BaseExecutorService):
                         status="failed",
                         source="agent",
                         error_message=error_msg,
+                        last_user_message=human_input,
                     )
                 except Exception:
                     pass

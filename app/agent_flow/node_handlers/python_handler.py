@@ -501,13 +501,7 @@ class PythonNodeHandler(BaseNodeHandler):
             f"{node.node_key}_python_input", __base__=BaseModel, **fields
         )
 
-        tool_name = (
-            (node.node_name or node.node_key)
-            .strip()
-            .lower()
-            .replace(" ", "_")
-            .replace("-", "_")
-        ) + f"_{node.node_key}"
+        tool_name = f"python_{node.node_key}"
         description = (
             cfg.description or f"执行 {node.node_name or node.node_key} Python代码"
         )
