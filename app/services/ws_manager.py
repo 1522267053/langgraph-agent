@@ -95,6 +95,7 @@ class WebSocketManager:
         source: str = "flow",
         error_message: Optional[str] = None,
         duration_ms: Optional[int] = None,
+        last_user_message: Optional[str] = None,
     ) -> None:
         """广播执行完成通知（统一入口），受通知开关控制"""
         if not self._notification_enabled:
@@ -111,6 +112,7 @@ class WebSocketManager:
                     "source": source,
                     "error_message": error_message,
                     "duration_ms": duration_ms,
+                    "last_user_message": last_user_message,
                 },
             }
         )

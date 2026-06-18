@@ -10,6 +10,7 @@ interface ExecutionDoneData {
   source: 'flow' | 'agent'
   error_message?: string | null
   duration_ms?: number | null
+  last_user_message?: string | null
 }
 
 interface AgendaReminderData {
@@ -48,7 +49,7 @@ function buildWsUrl(): string {
 function handleNotification(msg: WSMessage) {
   if (msg.type === 'execution_done') {
     const data = msg.data as ExecutionDoneData
-    const { flow_name, status, source, error_message, duration_ms, execution_id } = data
+    const { flow_name, status, source, execution_id, last_user_message } = data
 
     // 跳过用户正在通过 SSE 观看的执行
     if (
@@ -60,21 +61,30 @@ function handleNotification(msg: WSMessage) {
     }
 
     const typeLabel = source === 'agent' ? '对话' : '流程'
-    const durationStr = duration_ms ? `${(duration_ms / 1000).toFixed(1)} 秒` : ''
+
+    function truncate(str: string, max = 50): string {
+      return str.length > max ? str.slice(0, max) + '...' : str
+    }
 
     if (status === 'success') {
+      const msgPreview = last_user_message
+        ? `「${flow_name} ${truncate(last_user_message)}」执行完成`
+        : `「${flow_name}」执行完成`
       ElNotification({
         type: 'success',
         title: `${typeLabel}完成`,
-        message: `「${flow_name}」执行完成${durationStr ? `，耗时 ${durationStr}` : ''}`,
+        message: msgPreview,
         duration: 5000,
         position: 'top-right'
       })
     } else if (status === 'failed') {
+      const msgPreview = last_user_message
+        ? `「${flow_name} ${truncate(last_user_message)}」执行失败`
+        : `「${flow_name}」执行失败`
       ElNotification({
         type: 'error',
         title: `${typeLabel}失败`,
-        message: `「${flow_name}」: ${error_message || '执行失败'}`,
+        message: msgPreview,
         duration: 0,
         position: 'top-right'
       })

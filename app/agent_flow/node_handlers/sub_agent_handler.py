@@ -8,7 +8,6 @@
 import asyncio
 import json
 import logging
-import re
 from typing import Optional, TYPE_CHECKING
 
 from langchain_core.tools import StructuredTool
@@ -45,21 +44,13 @@ class SubAgentNodeConfig(BaseNodeConfig):
     agent_id: int = Field(..., description="引用的Agent ID")
 
 
-def _sanitize_tool_name(name: str) -> str:
-    """将Agent名称转换为合法的工具名前缀"""
-    sanitized = re.sub(r"[^a-zA-Z0-9_\u4e00-\u9fff]", "_", name)
-    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
-    return sanitized[:30] if sanitized else "agent"
-
-
-def _build_ask_tool_schema(agent_name: str, input_schema: dict | None):
+def _build_ask_tool_schema(agent_name: str, input_schema: dict | None, node_key: str):
     """根据子Agent的input_schema动态构建ask工具的参数模型
 
     Returns:
         (Pydantic模型类, file_list字段名集合)
     """
-    tool_prefix = _sanitize_tool_name(agent_name)
-    model_name = f"Ask{tool_prefix}Input"
+    model_name = f"Ask{node_key}Input"
 
     fields_def: dict[str, tuple] = {
         "task": (str, Field(..., description="要委派给子Agent执行的任务描述")),
@@ -157,7 +148,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
             return []
 
         agent_name = agent.name or f"agent_{agent_id}"
-        tool_prefix = _sanitize_tool_name(agent_name)
+        tool_prefix = node.node_key
         description = agent.description or ""
 
         input_schema = None
@@ -169,7 +160,9 @@ class SubAgentNodeHandler(BaseNodeHandler):
                 except (json.JSONDecodeError, TypeError):
                     input_schema = None
 
-        ask_schema, file_list_fields = _build_ask_tool_schema(agent_name, input_schema)
+        ask_schema, file_list_fields = _build_ask_tool_schema(
+            agent_name, input_schema, node.node_key
+        )
 
         tools: list[StructuredTool] = []
 
