@@ -379,26 +379,39 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         ]
 
     async def consolidate_hot_memories(
-        self, db: AsyncSession, agent_id: int, new_memories: List[dict]
+        self,
+        db: AsyncSession,
+        agent_id: int,
+        new_memories: List[dict],
+        protected_ids: Optional[List[int]] = None,
+        demote_target: Optional[int] = None,
     ) -> dict:
-        """全量替换热记忆：软删除旧热记忆 → 批量保存新热记忆
+        """全量替换热记忆：先降级 → 软删除旧热记忆 → 批量保存新热记忆
 
         新记忆的 importance/keywords 优先从 LLM 输出中取，
         缺失时从旧记忆按 title 匹配兜底继承。
         向量化在同一个事务完成后批量执行。
+
+        Args:
+            protected_ids: 受保护的热记忆 ID（新保存的），不参与软删除
+            demote_target: 降级目标数量，超过此数量的低价值热记忆先降级为 warm
         """
+        # ---- 降级低价值热记忆（同一事务） ----
+        if demote_target is not None:
+            await self._demote_to_target(db, agent_id, demote_target)
+
         old_memories = await self.get_hot_memories(db, agent_id)
         old_count = len(old_memories)
 
-        title_to_old = {m.title: m for m in old_memories}
+        protected_set = set(protected_ids or [])
+        to_delete = [m for m in old_memories if m.id not in protected_set]
+        protected = [m for m in old_memories if m.id in protected_set]
 
-        for old_m in old_memories:
-            if old_m.vector_id:
-                try:
-                    vector_store = _get_vector_store()
-                    await vector_store.delete([old_m.vector_id])
-                except Exception:
-                    logger.warning(f"删除旧记忆向量失败: memory_id={old_m.id}")
+        title_to_old = {m.title: m for m in old_memories}
+        old_vector_ids = [m.vector_id for m in to_delete if m.vector_id]
+
+        # 软删除旧记忆（保留 protected 记忆）
+        for old_m in to_delete:
             old_m.is_delete = 1
             self._set_modifier_fields(old_m)
 
@@ -411,16 +424,23 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
             title = (item.get("title") or "").strip()
             content = (item.get("content") or "").strip()
             if not title or not content:
-                continue
-            if (
-                len(title) > self.TITLE_MAX_LENGTH
-                or len(content) > self.CONTENT_MAX_LENGTH
-            ):
                 logger.warning(
-                    f"整理时跳过超长记忆: title={title[:50]}, "
-                    f"title_len={len(title)}, content_len={len(content)}"
+                    f"整理时跳过缺少标题或内容的条目: "
+                    f"title={title[:50]!r}, content_len={len(content)}"
                 )
                 continue
+            if len(title) > self.TITLE_MAX_LENGTH:
+                logger.warning(
+                    f"整理时标题超长已截断: title={title[:50]}, "
+                    f"len={len(title)}, max={self.TITLE_MAX_LENGTH}"
+                )
+                title = title[: self.TITLE_MAX_LENGTH]
+            if len(content) > self.CONTENT_MAX_LENGTH:
+                logger.warning(
+                    f"整理时内容超长已截断: title={title[:50]}, "
+                    f"content_len={len(content)}, max={self.CONTENT_MAX_LENGTH}"
+                )
+                content = content[: self.CONTENT_MAX_LENGTH]
 
             importance = item.get("importance", 5)
             if not isinstance(importance, int) or importance < 1 or importance > 5:
@@ -452,10 +472,20 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
 
         await db.commit()
 
+        # 向量化新记忆
         await self._vectorize_memories_batch(new_memory_objects, db=db)
+
+        # 向量化成功后删除旧向量（best-effort）
+        if old_vector_ids:
+            try:
+                vector_store = _get_vector_store()
+                await vector_store.delete(old_vector_ids)
+            except Exception:
+                logger.warning(f"删除旧记忆向量失败: agent_id={agent_id}")
 
         logger.info(
             f"热记忆整理完成: agent_id={agent_id}, {old_count}条 → {len(results)}条"
+            f"（protected={len(protected)}条）"
         )
 
         return {"old_count": old_count, "new_count": len(results), "results": results}
@@ -587,17 +617,10 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
 
         return memory
 
-    async def demote_low_value_hot_memories(
+    async def _demote_to_target(
         self, db: AsyncSession, agent_id: int, target_count: int
     ) -> int:
-        """选择性降级低价值热记忆
-
-        按 importance ASC、access_count ASC、create_time ASC 排序，
-        将末尾低价值记忆降为 warm，直到热记忆总数 <= target_count。
-
-        Returns:
-            降级的记忆数量
-        """
+        """内部降级方法（不独立 commit，由调用方管理事务）"""
         stmt = (
             select(Memory)
             .where(
@@ -612,7 +635,6 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
                 Memory.create_time.asc(),
             )
         )
-
         result = await db.execute(stmt, execution_options={"include_deleted": False})
         all_hot = list(result.scalars().all())
 
@@ -624,12 +646,27 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
             memory.memory_type = MemoryType.WARM.value
             self._set_modifier_fields(memory)
 
-        await db.commit()
         logger.info(
-            f"选择性降级热记忆: agent_id={agent_id}, "
+            f"内部降级热记忆: agent_id={agent_id}, "
             f"demoted={demote_count}, remaining={target_count}"
         )
         return demote_count
+
+    async def demote_low_value_hot_memories(
+        self, db: AsyncSession, agent_id: int, target_count: int
+    ) -> int:
+        """选择性降级低价值热记忆（独立事务，外部调用用）
+
+        按 importance ASC、access_count ASC、create_time ASC 排序，
+        将末尾低价值记忆降为 warm，直到热记忆总数 <= target_count。
+
+        Returns:
+            降级的记忆数量
+        """
+        count = await self._demote_to_target(db, agent_id, target_count)
+        if count > 0:
+            await db.commit()
+        return count
 
     async def get_warm_for_promote(
         self,
