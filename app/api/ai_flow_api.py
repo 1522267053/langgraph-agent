@@ -28,7 +28,7 @@ from app.schemas.ai_flow_schema import (
 )
 from app.services.flow_service import flow_service
 from app.services.global_config_service import global_config_service
-from app.services.node_config_helper import fill_node_defaults
+from app.services.node_config_helper import fill_node_defaults, inject_llm_defaults
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 
 
@@ -161,39 +161,19 @@ class AiFlowApi:
         """批量创建节点。node_key 省略时自动生成，冲突时自动追加序号。返回 node_key 列表供创建边使用。"""
         try:
             nodes_data = [n.model_dump() for n in data.nodes]
-            global_cfg = await global_config_service.get_default_llm_config(db)
             for nd in nodes_data:
-                node_type = nd.get("node_type", "")
-                bc = fill_node_defaults(node_type, nd.get("base_config"))
-                if node_type == "start" and not bc.get("input_variables"):
-                    bc["input_variables"] = [
-                        {
-                            "name": "message",
-                            "type": "string",
-                            "description": "用户消息",
-                            "required": True,
-                        }
-                    ]
-                elif node_type == "llm":
-                    needs_inject = not bc.get("model") or not bc.get("api_key")
-                    if (
-                        needs_inject
-                        and global_cfg.get("model")
-                        and global_cfg.get("api_key")
-                    ):
-                        if not bc.get("provider"):
-                            bc["provider"] = global_cfg.get("provider", "deepseek")
-                        if not bc.get("model"):
-                            bc["model"] = global_cfg.get("model", "")
-                        if not bc.get("api_key"):
-                            bc["api_key"] = global_cfg.get("api_key", "")
-                        if not bc.get("base_url") and global_cfg.get("base_url"):
-                            bc["base_url"] = global_cfg["base_url"]
-                        if not bc.get("context_length") and global_cfg.get(
-                            "context_length"
-                        ):
-                            bc["context_length"] = global_cfg["context_length"]
-                nd["base_config"] = bc
+                if nd.get("node_type") == "start":
+                    bc = nd.get("base_config") or {}
+                    if not bc.get("input_variables"):
+                        bc["input_variables"] = [
+                            {
+                                "name": "message",
+                                "type": "string",
+                                "description": "用户消息",
+                                "required": True,
+                            }
+                        ]
+                        nd["base_config"] = bc
             created = await flow_service.batch_add_nodes(db, flow_id, nodes_data)
             await db.commit()
             return ApiResponse.success(
@@ -234,25 +214,8 @@ class AiFlowApi:
             for nd in nodes_data:
                 node_type = key_to_type.get(nd.get("node_key", ""))
                 bc = fill_node_defaults(node_type, nd.get("base_config"))
-                if node_type == "llm":
-                    needs_inject = not bc.get("model") or not bc.get("api_key")
-                    if (
-                        needs_inject
-                        and global_cfg.get("model")
-                        and global_cfg.get("api_key")
-                    ):
-                        if not bc.get("provider"):
-                            bc["provider"] = global_cfg.get("provider", "deepseek")
-                        if not bc.get("model"):
-                            bc["model"] = global_cfg.get("model", "")
-                        if not bc.get("api_key"):
-                            bc["api_key"] = global_cfg.get("api_key", "")
-                        if not bc.get("base_url") and global_cfg.get("base_url"):
-                            bc["base_url"] = global_cfg["base_url"]
-                        if not bc.get("context_length") and global_cfg.get(
-                            "context_length"
-                        ):
-                            bc["context_length"] = global_cfg["context_length"]
+                if node_type in ("llm", "intent_router"):
+                    bc = inject_llm_defaults(bc, global_cfg)
                 nd["base_config"] = bc
             count = await flow_service.batch_update_nodes_by_keys(
                 db, flow_id, nodes_data

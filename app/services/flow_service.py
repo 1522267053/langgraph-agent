@@ -1724,12 +1724,17 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         """
         import time
 
+        from app.services.node_config_helper import fill_node_defaults, inject_llm_defaults
+        from app.services.global_config_service import global_config_service
+
         existing_nodes = await self._get_flow_nodes(db, flow_id)
         existing_keys = {n.node_key for n in existing_nodes}
 
         flow = await self.get_by_id(db, flow_id)
         if flow and flow.flow_type == FlowType.AGENT.value:
             self._check_agent_unique_for_batch(db, flow_id, nodes_data, existing_nodes)
+
+        global_cfg = await global_config_service.get_default_llm_config(db)
 
         nodes_to_create: list[FlowNodeCreate] = []
         results: list[dict] = []
@@ -1749,6 +1754,10 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
                 idx += 1
             existing_keys.add(node_key)
 
+            bc = fill_node_defaults(node_type, nd.get("base_config"))
+            if node_type in ("llm", "intent_router"):
+                bc = inject_llm_defaults(bc, global_cfg)
+
             nodes_to_create.append(
                 FlowNodeCreate(
                     flow_id=flow_id,
@@ -1757,7 +1766,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
                     node_name=nd.get("node_name"),
                     position_x=nd.get("position_x", 0),
                     position_y=nd.get("position_y", 0),
-                    base_config=nd.get("base_config"),
+                    base_config=bc,
                     ref_flow_id=nd.get("ref_flow_id"),
                 )
             )

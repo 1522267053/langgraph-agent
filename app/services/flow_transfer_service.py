@@ -690,27 +690,17 @@ class FlowTransferService:
         self, db: AsyncSession, nodes: list[dict]
     ) -> None:
         """为缺少 api_key 的 LLM 节点填充本地默认配置"""
+        from app.services.node_config_helper import inject_llm_defaults
         from app.services.global_config_service import global_config_service
 
-        default_config = await global_config_service.get_default_llm_config(db)
-        if not default_config.get("api_key"):
+        global_cfg = await global_config_service.get_default_llm_config(db)
+        if not global_cfg.get("api_key"):
             return
         for node in nodes:
-            if node.get("node_type") == "llm":
-                config = node.get("base_config") or {}
-                if not config.get("api_key"):
-                    config["api_key"] = default_config["api_key"]
-                if not config.get("base_url") and default_config.get("base_url"):
-                    config["base_url"] = default_config["base_url"]
-                if not config.get("provider") and default_config.get("provider"):
-                    config["provider"] = default_config["provider"]
-                if not config.get("model") and default_config.get("model"):
-                    config["model"] = default_config["model"]
-                if not config.get("context_length") and default_config.get(
-                    "context_length"
-                ):
-                    config["context_length"] = default_config["context_length"]
-                node["base_config"] = config
+            if node.get("node_type") in ("llm", "intent_router"):
+                node["base_config"] = inject_llm_defaults(
+                    node.get("base_config") or {}, global_cfg
+                )
 
     def _resolve_node_refs(
         self,

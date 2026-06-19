@@ -32,7 +32,6 @@ from app.agent_flow.node_handlers.base_handler import (
 )
 from app.config.database import AsyncSessionLocal
 from app.models.flow_node import FlowNode
-from app.services.global_config_service import global_config_service
 
 if TYPE_CHECKING:
     from app.agent_flow.flow_context import FlowState  # noqa: F811
@@ -309,9 +308,8 @@ class IntentRouterHandler(BaseNodeHandler):
         if cfg.system_prompt.strip():
             system_prompt = system_prompt + "\n\n" + cfg.system_prompt.strip()
 
-        # ---- 解析 LLM 配置（节点配置 > 全局默认）----
-        llm_cfg = await self._resolve_llm_config(cfg)
-        if not llm_cfg["model"] or not llm_cfg["api_key"]:
+        # ---- 解析 LLM 配置（已由保存节点时注入全局默认值）----
+        if not cfg.model or not cfg.api_key:
             detail["called"] = False
             detail["fallback_reason"] = "llm_not_configured"
             return detail
@@ -319,11 +317,11 @@ class IntentRouterHandler(BaseNodeHandler):
         # ---- 调用 LLM ----
         try:
             llm = self._create_llm(
-                api_key=llm_cfg["api_key"],
-                model=llm_cfg["model"],
-                base_url=llm_cfg["base_url"],
+                api_key=cfg.api_key,
+                model=cfg.model,
+                base_url=cfg.base_url or "",
                 max_tokens=cfg.max_tokens,
-                provider_name=llm_cfg["provider"],
+                provider_name=cfg.provider or "deepseek",
                 temperature=cfg.temperature,
             )
             messages = [
@@ -382,28 +380,6 @@ class IntentRouterHandler(BaseNodeHandler):
                 line += f"\n  示例：{examples_str}"
             lines.append(line)
         return "\n".join(lines)
-
-    async def _resolve_llm_config(self, cfg: IntentRouterConfig) -> dict:
-        """合并节点配置与全局默认配置（节点优先）"""
-        try:
-            async with self._db_session_factory() as db:
-                defaults = await global_config_service.get_default_llm_config(db)
-        except Exception:
-            logger.exception("加载全局默认 LLM 配置失败，回退到 .env")
-            from app.config.settings import settings
-
-            defaults = {
-                "provider": "deepseek",
-                "model": getattr(settings, "default_model", "") or "",
-                "api_key": getattr(settings, "default_api_key", "") or "",
-                "base_url": getattr(settings, "default_base_url", "") or "",
-            }
-        return {
-            "provider": cfg.provider or defaults.get("provider") or "deepseek",
-            "model": cfg.model or defaults.get("model") or "",
-            "api_key": cfg.api_key or defaults.get("api_key") or "",
-            "base_url": cfg.base_url or defaults.get("base_url") or "",
-        }
 
     @staticmethod
     def _create_llm(

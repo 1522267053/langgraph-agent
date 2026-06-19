@@ -274,7 +274,7 @@ POST /api/ai/flow/{id}/edges/batch
 - 两级级联：**规则层**（keywords + regex，按 intents 顺序短路）→ **LLM 层**（语义分类）
 - 每个意图 `{key, description, examples, rule: {keywords, regex_patterns}}`
 - 分支边的 `source_handle` = 意图 key，未命中走 `default`
-- 启用 LLM 层需有效 `provider/model/api_key`；仅规则层可省略
+- 启用 LLM 层需有效 `provider/model/api_key`（留空自动使用全局默认配置）；仅规则层可省略
 - 多分支可汇聚同一 end 节点
 - 输出：`intent`/`raw_response`/`metadata`
 - 路由结果写入两个变量：`variables._intent_route`（通用）+ `variables._intent_route_{node_key}`（节点级）

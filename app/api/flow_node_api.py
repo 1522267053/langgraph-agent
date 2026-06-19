@@ -283,26 +283,12 @@ class FlowNodeApi(
         db: AsyncSession, node_type: str, base_config: dict | None
     ) -> dict | None:
         """为 LLM 节点注入全局默认配置（仅回填空字段）"""
-        if node_type != "llm" or base_config is None:
+        if node_type not in ("llm", "intent_router") or base_config is None:
             return base_config
-        needs_inject = not base_config.get("model") or not base_config.get("api_key")
-        if not needs_inject:
-            return base_config
+        from app.services.node_config_helper import inject_llm_defaults
+
         global_cfg = await global_config_service.get_default_llm_config(db)
-        if not global_cfg.get("model") or not global_cfg.get("api_key"):
-            return base_config
-        merged = {**base_config}
-        if not merged.get("provider"):
-            merged["provider"] = global_cfg.get("provider", "deepseek")
-        if not merged.get("model"):
-            merged["model"] = global_cfg.get("model", "")
-        if not merged.get("api_key"):
-            merged["api_key"] = global_cfg.get("api_key", "")
-        if not merged.get("base_url") and global_cfg.get("base_url"):
-            merged["base_url"] = global_cfg["base_url"]
-        if not merged.get("context_length") and global_cfg.get("context_length"):
-            merged["context_length"] = global_cfg["context_length"]
-        return merged
+        return inject_llm_defaults(base_config, global_cfg)
 
     async def create(self, db: AsyncSession, data: FlowNodeCreate) -> FlowNode:
         """创建节点（含 Agent 校验 + 循环嵌套校验 + LLM 全局默认配置注入）"""
