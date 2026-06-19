@@ -89,8 +89,8 @@ _register(
         flow_type="flow",
         nodes=[
             TemplateNode(node_type="start", node_key="start", node_name="开始节点", position_x=50, position_y=200),
-            TemplateNode(node_type="knowledge", node_key="knowledge", node_name="知识库检索", position_x=250, position_y=50),
-            TemplateNode(node_type="llm", node_key="llm", node_name="LLM 总结", position_x=250, position_y=200),
+            TemplateNode(node_type="knowledge", node_key="knowledge", node_name="知识库检索", position_x=250, position_y=50, base_config={"top_k": 5}),
+            TemplateNode(node_type="llm", node_key="llm", node_name="LLM 总结", position_x=250, position_y=200, base_config={"user_prompt": "根据知识库内容回答用户问题：\n\n{{input.message}}"}),
             TemplateNode(node_type="end", node_key="end", node_name="结束节点", position_x=450, position_y=200),
         ],
         edges=[
@@ -115,8 +115,13 @@ _register(
         flow_type="flow",
         nodes=[
             TemplateNode(node_type="start", node_key="start", node_name="开始节点", position_x=50, position_y=200),
-            TemplateNode(node_type="intent_router", node_key="intent_router", node_name="意图路由", position_x=250, position_y=200),
-            TemplateNode(node_type="llm", node_key="llm", node_name="LLM 自动回复", position_x=150, position_y=400),
+            TemplateNode(node_type="intent_router", node_key="intent_router", node_name="意图路由", position_x=250, position_y=200, base_config={
+                "intents": [
+                    {"key": "auto_reply", "description": "可自动回复的常见问题", "examples": [], "rule": {"keywords": [], "regex_patterns": []}},
+                    {"key": "transfer", "description": "需转人工处理的复杂问题", "examples": [], "rule": {"keywords": [], "regex_patterns": []}},
+                ],
+            }),
+            TemplateNode(node_type="llm", node_key="llm", node_name="LLM 自动回复", position_x=150, position_y=400, base_config={"user_prompt": "你是一个智能客服助手，请友好地回答用户问题。\n\n用户问题：{{input.message}}"}),
             TemplateNode(node_type="human", node_key="human", node_name="转人工", position_x=400, position_y=400),
             TemplateNode(node_type="end", node_key="end", node_name="结束节点", position_x=275, position_y=550),
         ],
@@ -144,7 +149,7 @@ _register(
         flow_type="flow",
         nodes=[
             TemplateNode(node_type="start", node_key="start", node_name="开始节点", position_x=50, position_y=200),
-            TemplateNode(node_type="python", node_key="python", node_name="Python 处理", position_x=250, position_y=200),
+            TemplateNode(node_type="python", node_key="python", node_name="Python 处理", position_x=250, position_y=200, base_config={"code": "def main(input_data):\n    print(\"hello\")\n    return \"\""}),
             TemplateNode(node_type="end", node_key="end", node_name="结束节点", position_x=450, position_y=200),
         ],
         edges=[
@@ -168,7 +173,7 @@ _register(
         flow_type="agent",
         nodes=[
             TemplateNode(node_type="start", node_key="start", node_name="开始节点", position_x=50, position_y=200),
-            TemplateNode(node_type="llm", node_key="llm", node_name="AI 助手", position_x=250, position_y=200),
+            TemplateNode(node_type="llm", node_key="llm", node_name="AI 助手", position_x=250, position_y=200, base_config={"user_prompt": "{{input.message}}"}),
             TemplateNode(node_type="end", node_key="end", node_name="结束节点", position_x=450, position_y=200),
         ],
         edges=[
@@ -192,8 +197,8 @@ _register(
         flow_type="agent",
         nodes=[
             TemplateNode(node_type="start", node_key="start", node_name="开始节点", position_x=50, position_y=200),
-            TemplateNode(node_type="llm", node_key="llm", node_name="AI 助手", position_x=250, position_y=200),
-            TemplateNode(node_type="knowledge", node_key="knowledge", node_name="知识库检索", position_x=250, position_y=50),
+            TemplateNode(node_type="llm", node_key="llm", node_name="AI 助手", position_x=250, position_y=200, base_config={"user_prompt": "根据知识库内容回答用户问题：\n\n{{input.message}}"}),
+            TemplateNode(node_type="knowledge", node_key="knowledge", node_name="知识库检索", position_x=250, position_y=50, base_config={"top_k": 5}),
             TemplateNode(node_type="end", node_key="end", node_name="结束节点", position_x=450, position_y=200),
         ],
         edges=[
@@ -218,10 +223,10 @@ _register(
         flow_type="agent",
         nodes=[
             TemplateNode(node_type="start", node_key="start", node_name="开始节点", position_x=50, position_y=200),
-            TemplateNode(node_type="llm", node_key="llm", node_name="AI 助手", position_x=250, position_y=200),
-            TemplateNode(node_type="knowledge", node_key="knowledge", node_name="知识库检索", position_x=100, position_y=50),
-            TemplateNode(node_type="python", node_key="python", node_name="Python 执行", position_x=250, position_y=50),
-            TemplateNode(node_type="shell", node_key="shell", node_name="Shell 命令", position_x=400, position_y=50),
+            TemplateNode(node_type="llm", node_key="llm", node_name="AI 助手", position_x=250, position_y=200, base_config={"user_prompt": "{{input.message}}"}),
+            TemplateNode(node_type="knowledge", node_key="knowledge", node_name="知识库检索", position_x=100, position_y=50, base_config={"top_k": 5}),
+            TemplateNode(node_type="python", node_key="python", node_name="Python 执行", position_x=250, position_y=50, base_config={"code": "def main(input_data):\n    print(\"hello\")\n    return \"\""}),
+            TemplateNode(node_type="shell", node_key="shell", node_name="Shell 命令", position_x=400, position_y=50, base_config={"command": "dir /b\necho Done"}),
             TemplateNode(node_type="end", node_key="end", node_name="结束节点", position_x=450, position_y=200),
         ],
         edges=[
@@ -270,6 +275,8 @@ async def create_from_template(
     description: Optional[str] = None,
 ) -> int:
     """从模板创建流程"""
+    from app.services.node_config_helper import fill_node_defaults
+
     template = get_template(template_id)
     if not template:
         raise ValueError(f"模板不存在: {template_id}")
@@ -283,7 +290,11 @@ async def create_from_template(
     )
     flow = await flow_service.create(db, flow_data)
 
-    nodes_data = [n.model_dump() for n in template.nodes]
+    nodes_data = []
+    for n in template.nodes:
+        nd = n.model_dump()
+        nd["base_config"] = fill_node_defaults(n.node_type, nd.get("base_config"))
+        nodes_data.append(nd)
     await flow_service.batch_add_nodes(db, flow.id, nodes_data)
 
     edges_create = [

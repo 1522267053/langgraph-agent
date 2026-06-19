@@ -28,29 +28,8 @@ from app.schemas.ai_flow_schema import (
 )
 from app.services.flow_service import flow_service
 from app.services.global_config_service import global_config_service
+from app.services.node_config_helper import fill_node_defaults
 from app.agent_flow.handler_registry import NodeHandlerRegistry
-
-
-def _get_default_config(node_type: str) -> dict:
-    """从节点 handler 的 ConfigClass 获取默认配置。"""
-    handler_cls = NodeHandlerRegistry.get_handler_class(node_type)
-    if not handler_cls:
-        handler_cls = NodeHandlerRegistry._get_factory_handler_class(node_type)
-    if handler_cls:
-        return handler_cls.get_default_config()
-    return {}
-
-
-def _fill_node_defaults(node_type: str, base_config: dict | None) -> dict:
-    """用默认值补全缺失字段，不覆盖已有值。"""
-    defaults = _get_default_config(node_type)
-    if not defaults:
-        return base_config or {}
-    bc = dict(base_config or {})
-    for key, default_val in defaults.items():
-        if key not in bc:
-            bc[key] = default_val
-    return bc
 
 
 class AiFlowApi:
@@ -185,7 +164,7 @@ class AiFlowApi:
             global_cfg = await global_config_service.get_default_llm_config(db)
             for nd in nodes_data:
                 node_type = nd.get("node_type", "")
-                bc = _fill_node_defaults(node_type, nd.get("base_config"))
+                bc = fill_node_defaults(node_type, nd.get("base_config"))
                 if node_type == "start" and not bc.get("input_variables"):
                     bc["input_variables"] = [
                         {
@@ -254,7 +233,7 @@ class AiFlowApi:
             global_cfg = await global_config_service.get_default_llm_config(db)
             for nd in nodes_data:
                 node_type = key_to_type.get(nd.get("node_key", ""))
-                bc = _fill_node_defaults(node_type, nd.get("base_config"))
+                bc = fill_node_defaults(node_type, nd.get("base_config"))
                 if node_type == "llm":
                     needs_inject = not bc.get("model") or not bc.get("api_key")
                     if (

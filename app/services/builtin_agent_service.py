@@ -21,6 +21,7 @@ from app.models.flow_node import FlowNode, NodeType
 from app.models.skill import Skill
 from app.services.flow_service import flow_service, DEFAULT_AGENT_INPUT_SCHEMA
 from app.services.global_config_service import global_config_service
+from app.services.node_config_helper import fill_node_defaults
 from app.schemas.flow_schema import FlowCreate
 from app.schemas.flow_node_schema import FlowNodeCreate
 from app.schemas.flow_edge_schema import FlowEdgeCreate
@@ -335,7 +336,7 @@ class BuiltinAgentService:
                 "node_name": "AI 助手",
                 "position_x": 350,
                 "position_y": 200,
-                "base_config": {
+                "base_config": fill_node_defaults("llm", {
                     "provider": provider_name,
                     "model": model,
                     "api_key": api_key,
@@ -343,17 +344,7 @@ class BuiltinAgentService:
                     "context_length": global_llm.get("context_length"),
                     "system_prompt": BUILTIN_AGENT_SYSTEM_PROMPT,
                     "user_prompt": "{{message}}",
-                    "temperature": 0.7,
                     "max_tool_iterations": 100,
-                    "max_tokens": 8192,
-                    "history_mode": "node",
-                    "max_history_turns": 10,
-                    "capabilities": {
-                        "image": False,
-                        "video": False,
-                        "audio": False,
-                        "pdf": False,
-                    },
                     "input_variables": [
                         {
                             "name": "message",
@@ -361,7 +352,7 @@ class BuiltinAgentService:
                             "type": "string",
                         }
                     ],
-                },
+                }),
             },
             {
                 "node_type": NodeType.END.value,
@@ -387,18 +378,18 @@ class BuiltinAgentService:
                     "技能",
                     100,
                     450,
-                    {"skill_ids": [s["id"] for s in skills]},
+                    fill_node_defaults("skill", {"skill_ids": [s["id"] for s in skills]}),
                 )
             )
 
         tool_nodes.extend(
             [
-                ("api_tool", NodeType.API.value, "API 工具", 300, 450, {}),
-                ("todo_tool", NodeType.TODO.value, "任务计划", 500, 450, {}),
-                ("python_tool", NodeType.PYTHON.value, "Python 工具", 700, 450, {}),
-                ("shell_tool", NodeType.SHELL.value, "Shell 工具", 900, 450, {}),
-                ("memory_tool", NodeType.MEMORY.value, "记忆管理", 300, 600, {}),
-                ("agenda_tool", NodeType.AGENDA.value, "日程管理", 500, 600, {}),
+                ("api_tool", NodeType.API.value, "API 工具", 300, 450, fill_node_defaults("api")),
+                ("todo_tool", NodeType.TODO.value, "任务计划", 500, 450, fill_node_defaults("todo")),
+                ("python_tool", NodeType.PYTHON.value, "Python 工具", 700, 450, fill_node_defaults("python")),
+                ("shell_tool", NodeType.SHELL.value, "Shell 工具", 900, 450, fill_node_defaults("shell")),
+                ("memory_tool", NodeType.MEMORY.value, "记忆管理", 300, 600, fill_node_defaults("memory")),
+                ("agenda_tool", NodeType.AGENDA.value, "日程管理", 500, 600, fill_node_defaults("agenda")),
             ]
         )
         for key, ntype, name, x, y, cfg in tool_nodes:
