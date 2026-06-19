@@ -498,7 +498,6 @@ export const useAgentStore = defineStore('agent', () => {
         } else {
           isCompressing.value = false
           if (status === 'done' && currentAgent.value && currentSession.value) {
-            // 压缩完成后刷新消息列表
             try {
               agentApi.getMessages(currentAgent.value.id, currentSession.value.id).then(res => {
                 if (res.data.code === 1) {

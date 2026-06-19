@@ -5,6 +5,7 @@ AI 流程生成专用 API 路由
 工作流：创建流程 → 批量添加节点（获取 node_key）→ 批量添加边。
 """
 
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -528,6 +529,10 @@ class AiFlowApi:
         try:
             builder.build()
             mermaid = builder.get_graph_mermaid()
+            # Mermaid 语法中 "end" 是保留关键字，替换为 end_node
+            mermaid = re.sub(r'\bend\b', 'end_node', mermaid)
+            # 改为从左到右布局
+            mermaid = mermaid.replace('graph TD', 'graph LR', 1)
         except ValueError as e:
             return f'graph TD\n    error["流程结构验证失败: {e}"]'
 
