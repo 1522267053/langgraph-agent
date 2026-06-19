@@ -192,7 +192,6 @@ async function loadExecutionDetailWithPanel(executionId: number) {
 async function handleFlowCreated(id: number) {
   flowId.value = id
   router.replace(isAgentMode.value ? `/agent/edit/${id}` : `/flow/edit/${id}`)
-  await store.loadFlow(id)
 }
 
 async function handleSave() {
