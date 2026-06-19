@@ -26,3 +26,30 @@ def fill_node_defaults(node_type: str, overrides: dict | None = None) -> dict:
     if overrides:
         defaults.update(overrides)
     return defaults
+
+
+def inject_llm_defaults(base_config: dict, global_cfg: dict) -> dict:
+    """
+    为 LLM 节点配置注入全局默认值（仅回填空字段）。
+
+    Args:
+        base_config: 节点当前配置
+        global_cfg: 全局 LLM 默认配置
+
+    Returns:
+        注入后的配置字典
+    """
+    bc = dict(base_config)
+    needs_inject = not bc.get("model") or not bc.get("api_key")
+    if needs_inject and global_cfg.get("model") and global_cfg.get("api_key"):
+        if not bc.get("provider"):
+            bc["provider"] = global_cfg.get("provider", "deepseek")
+        if not bc.get("model"):
+            bc["model"] = global_cfg.get("model", "")
+        if not bc.get("api_key"):
+            bc["api_key"] = global_cfg.get("api_key", "")
+        if not bc.get("base_url") and global_cfg.get("base_url"):
+            bc["base_url"] = global_cfg["base_url"]
+        if not bc.get("context_length") and global_cfg.get("context_length"):
+            bc["context_length"] = global_cfg["context_length"]
+    return bc

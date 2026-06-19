@@ -80,6 +80,17 @@ def _resolve_schema_ref(ref: str, defs: dict, depth: int = 0) -> dict:
         if items_ref:
             desc["type"] = "array"
             desc["items"] = _resolve_schema_ref(items_ref, defs, depth + 1)
+        elif "$ref" in pprop:
+            desc["type"] = "object"
+            ref_def = _resolve_schema_ref(pprop["$ref"], defs, depth + 1)
+            desc["properties"] = ref_def.get("properties", {})
+        else:
+            for any_entry in p_any:
+                if "$ref" in any_entry:
+                    desc["type"] = "object"
+                    ref_def = _resolve_schema_ref(any_entry["$ref"], defs, depth + 1)
+                    desc["properties"] = ref_def.get("properties", {})
+                    break
         result["properties"][pname] = desc
     return result
 
@@ -107,6 +118,25 @@ def _schema_from_pydantic(model_cls: type[BaseModel]) -> list[dict]:
                         or prop.get("title")
                         or name,
                         "properties": _resolve_schema_ref(ref, defs).get(
+                            "properties", {}
+                        ),
+                    }
+                )
+            continue
+
+        # 跳过直接 $ref（非 Optional 嵌套模型）
+        if "$ref" in prop:
+            ref_name = prop["$ref"].rsplit("/", 1)[-1]
+            if ref_name in defs:
+                fields.append(
+                    {
+                        "name": name,
+                        "type": "object",
+                        "required": name in required_set,
+                        "description": prop.get("description")
+                        or prop.get("title")
+                        or name,
+                        "properties": _resolve_schema_ref(prop["$ref"], defs).get(
                             "properties", {}
                         ),
                     }
@@ -142,6 +172,15 @@ def _schema_from_pydantic(model_cls: type[BaseModel]) -> list[dict]:
         items_ref = prop.get("items", {}).get("$ref")
         if items_ref and mapped_type == "array":
             field_desc["items"] = _resolve_schema_ref(items_ref, defs)
+
+        # 展开 anyOf 中的 $ref（如 Optional[SomeModel]）
+        if "type" not in prop and any("$ref" in e for e in any_of):
+            for any_entry in any_of:
+                if "$ref" in any_entry:
+                    field_desc["type"] = "object"
+                    ref_def = _resolve_schema_ref(any_entry["$ref"], defs)
+                    field_desc["properties"] = ref_def.get("properties", {})
+                    break
 
         fields.append(field_desc)
 
