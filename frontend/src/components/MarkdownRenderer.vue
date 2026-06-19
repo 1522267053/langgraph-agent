@@ -207,7 +207,9 @@ async function onMarkdownRendered(immediate = false): Promise<void> {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await nextTick()
+  await nextTick()
   onMarkdownRendered(true)
 })
 
