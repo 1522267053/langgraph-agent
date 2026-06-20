@@ -29,6 +29,7 @@ class FlowEventType(str, Enum):
     ERROR = "error"
     LLM_RETRY = "llm_retry"
     CONTEXT_COMPRESSING = "context_compressing"
+    FLOW_PREVIEW = "flow_preview"
 
 
 class FlowEvent(BaseModel):
@@ -248,6 +249,26 @@ class ContextCompressingEvent(FlowEvent):
         return FlowEventType.CONTEXT_COMPRESSING
 
 
+class FlowPreviewEvent(FlowEvent):
+    """流程预览事件（工具执行后检测到流程变更时发送，前端渲染迷你画布）"""
+
+    flow_id: int = Field(..., description="流程ID")
+    flow_name: str = Field("", description="流程名称")
+    action: str = Field(
+        "",
+        description="变更类型: create/nodes_changed/edges_changed/config_changed/delete",
+    )
+    nodes: list[dict] = Field(
+        default_factory=list, description="节点列表（FlowNodeBase schema）"
+    )
+    edges: list[dict] = Field(
+        default_factory=list, description="边列表（FlowEdgeBase schema）"
+    )
+
+    def _get_event_type(self) -> FlowEventType:
+        return FlowEventType.FLOW_PREVIEW
+
+
 AnyFlowEvent = Union[
     FlowStartEvent,
     ResumeStartEvent,
@@ -266,6 +287,7 @@ AnyFlowEvent = Union[
     ErrorEvent,
     LlmRetryEvent,
     ContextCompressingEvent,
+    FlowPreviewEvent,
 ]
 
 

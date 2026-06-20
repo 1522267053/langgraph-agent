@@ -69,6 +69,14 @@ export interface SSEEventData {
   mime_type?: string
   /** 媒体下载URL */
   download_url?: string
+  /** 流程名称（flow_preview 事件） */
+  flow_name?: string
+  /** 变更类型（flow_preview 事件） */
+  action?: string
+  /** 节点列表（flow_preview 事件） */
+  nodes?: Record<string, unknown>[]
+  /** 边列表（flow_preview 事件） */
+  edges?: Record<string, unknown>[]
 }
 
 /** 人工等待数据 */
@@ -106,6 +114,7 @@ export type FlowSSEEventType =
   | 'error'
   | 'llm_retry'
   | 'context_compressing'
+  | 'flow_preview'
 
 /** SSE事件类型（Agent会话） */
 export type AgentSSEEventType = FlowSSEEventType
@@ -155,6 +164,8 @@ export interface FlowSSEHandlers {
   onLlmRetry?: SSEEventHandler
   /** 上下文压缩状态 */
   onContextCompressing?: SSEEventHandler
+  /** 流程预览（AI 创建/修改流程时推送） */
+  onFlowPreview?: SSEEventHandler
 }
 
 /** Agent会话SSE处理器接口 */

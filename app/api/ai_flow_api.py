@@ -30,6 +30,7 @@ from app.services.flow_service import flow_service
 from app.services.global_config_service import global_config_service
 from app.services.node_config_helper import fill_node_defaults, inject_llm_defaults
 from app.agent_flow.handler_registry import NodeHandlerRegistry
+from app.agent_flow.flow_change_tracker import record_flow_change
 
 
 class AiFlowApi:
@@ -129,6 +130,7 @@ class AiFlowApi:
         flow = await flow_service.create(db, flow_data)
         await db.commit()
         await db.refresh(flow)
+        record_flow_change(flow.id, "create")
         return ApiResponse.success(
             data={
                 "id": flow.id,
@@ -148,6 +150,7 @@ class AiFlowApi:
         try:
             await flow_service.delete_with_cascade(db, flow_id)
             await db.commit()
+            record_flow_change(flow_id, "delete")
             return ApiResponse.success(msg="流程删除成功")
         except ValueError as e:
             return ApiResponse.error(msg=str(e))
@@ -176,6 +179,7 @@ class AiFlowApi:
                         nd["base_config"] = bc
             created = await flow_service.batch_add_nodes(db, flow_id, nodes_data)
             await db.commit()
+            record_flow_change(flow_id, "nodes_changed")
             return ApiResponse.success(
                 data={"created_nodes": created},
                 msg=f"成功创建 {len(created)} 个节点",
@@ -195,6 +199,7 @@ class AiFlowApi:
                 db, flow_id, data.node_keys
             )
             await db.commit()
+            record_flow_change(flow_id, "nodes_changed")
             return ApiResponse.success(msg=f"成功删除 {count} 个节点")
         except ValueError as e:
             return ApiResponse.error(msg=str(e))
@@ -221,6 +226,7 @@ class AiFlowApi:
                 db, flow_id, nodes_data
             )
             await db.commit()
+            record_flow_change(flow_id, "config_changed")
             return ApiResponse.success(msg=f"成功配置 {count} 个节点")
         except ValueError as e:
             return ApiResponse.error(msg=str(e))
@@ -302,6 +308,7 @@ class AiFlowApi:
                 await db.rollback()
                 return ApiResponse.error(msg=cond_error)
 
+            record_flow_change(flow_id, "edges_changed")
             result = [
                 {
                     "source_node_key": e.source_node_key,
@@ -329,6 +336,7 @@ class AiFlowApi:
                 db, flow_id, edges_data
             )
             await db.commit()
+            record_flow_change(flow_id, "edges_changed")
             return ApiResponse.success(msg=f"成功删除 {count} 条边")
         except ValueError as e:
             return ApiResponse.error(msg=str(e))
@@ -472,9 +480,9 @@ class AiFlowApi:
             builder.build()
             mermaid = builder.get_graph_mermaid()
             # Mermaid 语法中 "end" 是保留关键字，替换为 end_node
-            mermaid = re.sub(r'\bend\b', 'end_node', mermaid)
+            mermaid = re.sub(r"\bend\b", "end_node", mermaid)
             # 改为从左到右布局
-            mermaid = mermaid.replace('graph TD', 'graph LR', 1)
+            mermaid = mermaid.replace("graph TD", "graph LR", 1)
         except ValueError as e:
             return f'graph TD\n    error["流程结构验证失败: {e}"]'
 

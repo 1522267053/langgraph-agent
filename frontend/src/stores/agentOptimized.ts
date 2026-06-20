@@ -95,6 +95,16 @@ export const useAgentStore = defineStore('agent', () => {
   const isStopping = ref(false)
   let savePollTimer: ReturnType<typeof setTimeout> | null = null
 
+  // ========== 流程预览（AI 创建/修改流程时推送，独立于消息分段） ==========
+  const flowPreview = ref<{
+    flow_id: number
+    flow_name?: string
+    action?: string
+    nodes?: Record<string, unknown>[]
+    edges?: Record<string, unknown>[]
+    deleted?: boolean
+  } | null>(null)
+
   // ========== 中断函数引用 ==========
   let streamAbort: (() => void) | null = null
   let wasFirstMessage = false
@@ -190,6 +200,7 @@ export const useAgentStore = defineStore('agent', () => {
     messagesLoading.value = true
     clearMessages()
     cancelStream()
+    flowPreview.value = null
 
     currentSession.value = session
     try {
@@ -427,6 +438,7 @@ export const useAgentStore = defineStore('agent', () => {
   function createStreamHandlers() {
     return {
       onFlowStart: () => {
+        flowPreview.value = null
         startStreaming()
       },
       onNodeStart: (_event: SSEEvent) => {
@@ -510,6 +522,16 @@ export const useAgentStore = defineStore('agent', () => {
               console.error('[onContextCompressing] 刷新消息失败', e)
             }
           }
+        }
+      },
+      onFlowPreview: (event: SSEEvent) => {
+        flowPreview.value = {
+          flow_id: event.data.flow_id || 0,
+          flow_name: event.data.flow_name,
+          action: event.data.action,
+          nodes: event.data.nodes as Record<string, unknown>[] | undefined,
+          edges: event.data.edges as Record<string, unknown>[] | undefined,
+          deleted: event.data.action === 'delete'
         }
       },
       onFlowDone: async () => {
@@ -818,6 +840,7 @@ export const useAgentStore = defineStore('agent', () => {
     currentSession.value = null
     messages.value = []
     clearMessages()
+    flowPreview.value = null
     isWaitingHuman.value = false
     currentWaitData.value = null
     sessionPage.value = 1
@@ -910,6 +933,7 @@ export const useAgentStore = defineStore('agent', () => {
     subAgentApproval,
     isCompressing,
     isStopping,
+    flowPreview,
     // 消息分页
     hasMoreMessages,
     loadingMoreMessages,

@@ -93,10 +93,7 @@ function isLastMessage(idx: number): boolean {
               @revert="dbMsgId => emit('revert', dbMsgId)"
             />
             <!-- 流式输出指示器：最后一个 assistant 消息在 streaming 期间持续显示 -->
-            <div
-              v-if="isStreaming && isLastMessage(idx)"
-              class="streaming-indicator"
-            >
+            <div v-if="isStreaming && isLastMessage(idx)" class="streaming-indicator">
               <span class="dot"></span>
               <span class="dot"></span>
               <span class="dot"></span>
