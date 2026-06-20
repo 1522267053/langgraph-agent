@@ -77,7 +77,7 @@ app/                          # 后端
 
 frontend/src/                 # 前端
 ├── api/                      # API 请求封装（axios, get/post/put/del）
-├── components/FlowEditor/    # 流程编辑器（nodes/, config/, components/, 画布, 面板）
+├── components/FlowEditor/    # 流程编辑器（nodeRegistry.ts 注册表 + nodes/, config/, components/, 画布, 面板）
 ├── components/AgentChat/     # Agent 对话组件（ChatInput, MessageItem, SessionSidebar, MemoryPanel, TodoPanel）
 ├── components/common/        # 共享组件（AIMessageContent, ThinkingBlock 等）
 ├── composables/              # 组合式函数（useSSE, useStreamingMessage 等）
@@ -302,10 +302,16 @@ class MyNodeHandler(BaseNodeHandler):
 1. `app/models/flow_node.py` — 添加 `NodeType` 枚举值 + `BASIC_NODE_TYPES`
 2. `app/constants/node_types.py` — 添加节点类型中文标签
 3. `app/agent_flow/node_handlers/<type>_handler.py` — `@NodeHandlerRegistry.register("type")`
-4. `frontend/src/constants/nodeTypes.ts` — 节点配置
-5. `frontend/src/components/FlowEditor/nodes/<Type>Node.vue` — 节点组件
-6. `frontend/src/components/FlowEditor/config/<Type>Config.vue` — 配置组件
-7. `frontend/src/components/FlowEditor/nodes/index.ts` — `markRaw()` 注册
+
+### 前端新节点类型（4 步，组件自动发现）
+1. `frontend/src/types/flow.ts` — 添加 `CardNodeType` 联合类型成员
+2. `frontend/src/components/FlowEditor/nodeRegistry.ts` — 添加 entry（label/icon/category/defaultConfig + 可选 hook）
+3. `frontend/src/components/FlowEditor/nodes/<Type>Node.vue` — 节点组件（放入目录即自动注册）
+4. `frontend/src/components/FlowEditor/config/<Type>Config.vue` — 配置组件（放入目录即自动注册）
+
+> 组件由 `nodeRegistry.ts` 的 `import.meta.glob` 自动发现，无需手动 import。
+> 标准节点（无特殊逻辑）仅需一个 registry entry，ConfigPanel 和 NodePanel 自动渲染。
+> 有特殊配置逻辑的节点可添加 `initConfig`/`getExtraProps`/`getExtraEvents`/`postInit` hook。
 
 ## 关键注意事项
 

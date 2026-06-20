@@ -200,7 +200,7 @@ langgraph-agent/
 │   ├── services/               # 业务逻辑层（BaseService 泛型 CRUD）
 │   ├── middleware/              # 全局异常处理器 + 认证中间件 + 安全头中间件
 │   ├── agent_flow/             # LangGraph 流程执行引擎
-│   │   ├── node_handlers/      #   节点处理器（18 种，自动注册）
+│   │   ├── node_handlers/      #   节点处理器（19 种，自动注册）
 │   │   │   ├── llm_*.py        #     LLM 节点模块化拆分（主入口 + factory + stream + message + executor）
 │   │   ├── ai_provider/        #   AI 模型提供商（6 种，自动注册）
 │   │   ├── flow_context.py     #   FlowState 状态定义 + reducer
@@ -222,7 +222,7 @@ langgraph-agent/
 ├── frontend/src/               # 前端
 │   ├── api/                    # API 请求封装
 │   ├── components/
-│   │   ├── FlowEditor/         #   流程编辑器（Vue Flow，nodes/ + config/ + components/）
+│   │   ├── FlowEditor/         #   流程编辑器（nodeRegistry.ts 注册表 + Vue Flow，nodes/ + config/ + components/）
 │   │   ├── AgentChat/          #   Agent 对话组件
 │   │   └── common/            #   共享组件
 │   ├── composables/            # Vue 组合式函数
@@ -242,7 +242,7 @@ langgraph-agent/
 
 | 模式 | 说明 | 允许的节点 |
 |------|------|-----------|
-| **Flow** | 可视化工作流编排，Start → End 完整流程 | 全部 18 种节点 |
+| **Flow** | 可视化工作流编排，Start → End 完整流程 | 全部 19 种节点 |
 | **Agent** | 对话式 AI 助手，单 LLM + 工具节点 | 排除 condition/card/loop |
 
 ### 节点类型
@@ -267,6 +267,7 @@ langgraph-agent/
 | **todo** | 任务计划，LLM 自主进行任务拆分与进度跟踪 | Flow / Agent |
 | **agenda** | 日程管理，LLM 自主创建/查询/更新/删除日程 | Flow / Agent |
 | **media_gen** | 媒体生成（图片/音频/视频） | Flow / Agent |
+| **sub_agent** | 子 Agent 调用，引用已发布的 Agent 作为子任务执行器 | Flow / Agent |
 
 ### 变量引用
 

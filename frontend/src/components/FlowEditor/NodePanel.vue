@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { type Component } from 'vue'
 import { useVueFlow } from '@vue-flow/core'
 import { useFlowStore } from '@/stores/flowStore'
 import { flowApi } from '@/api/flow'
@@ -11,25 +10,11 @@ import {
   Postcard,
   Plus,
   Search,
-  VideoPlay,
   CircleClose,
-  Share,
-  RefreshRight,
-  ChatDotRound,
-  Connection,
-  User,
-  Link,
-  MagicStick,
-  Cpu,
-  Monitor,
-  Notebook,
-  List,
   Operation,
-  PictureFilled,
-  Aim,
-  Avatar,
-  Calendar
+  MagicStick
 } from '@element-plus/icons-vue'
+import { getBasicPanelNodes, getCardPanelNodes } from './nodeRegistry'
 
 const store = useFlowStore()
 const { project } = useVueFlow()
@@ -45,29 +30,16 @@ const emit = defineEmits<{
   (e: 'closeMobile'): void
 }>()
 
-const basicNodes: {
-  type: NodeType
-  label: string
-  icon: Component
-  color: string
-  bgColor: string
-}[] = [
-  { type: 'start', label: '开始', icon: VideoPlay, color: '#10b981', bgColor: '#ecfdf5' },
-  { type: 'end', label: '结束', icon: CircleClose, color: '#ef4444', bgColor: '#fef2f2' },
-  { type: 'condition', label: '条件判断', icon: Share, color: '#f59e0b', bgColor: '#fffbeb' },
-  { type: 'loop', label: '循环', icon: RefreshRight, color: '#6366f1', bgColor: '#eef2ff' },
-  { type: 'intent_router', label: '意图路由', icon: Aim, color: '#9c27b0', bgColor: '#faf5ff' }
-]
+// 从注册表获取节点列表
+const basicNodes = getBasicPanelNodes()
+const cardNodes = getCardPanelNodes()
+
+// Agent 模式排除的工具类型（仅 Flow 模式显示）
+const flowExcludeTypes = new Set(['memory', 'agenda'])
 
 const filteredBasicNodes = computed(() => {
   if (props.isAgent) {
-    return basicNodes.filter(
-      item =>
-        item.type === 'start' ||
-        item.type === 'end' ||
-        item.type === 'condition' ||
-        item.type === 'intent_router'
-    )
+    return basicNodes.filter(item => item.type !== 'loop')
   }
   if (store.isInSubView && store.subViewParentType === 'loop') {
     return basicNodes.filter(item => item.type !== 'loop')
@@ -75,77 +47,13 @@ const filteredBasicNodes = computed(() => {
   return basicNodes
 })
 
-const cardNodes: {
-  type: CardNodeType
-  label: string
-  icon: Component
-  color: string
-  bgColor: string
-}[] = [
-  {
-    type: 'llm',
-    label: '大模型调用 (LLM)',
-    icon: ChatDotRound,
-    color: '#10b981',
-    bgColor: '#ecfdf5'
-  },
-  { type: 'mcp', label: 'MCP调用', icon: Connection, color: '#6366f1', bgColor: '#eef2ff' },
-  {
-    type: 'knowledge',
-    label: '知识库检索',
-    icon: Search,
-    color: '#3b82f6',
-    bgColor: '#eff6ff'
-  },
-  { type: 'human', label: '人类回答', icon: User, color: '#ef4444', bgColor: '#fef2f2' },
-  { type: 'api', label: 'API调用', icon: Link, color: '#a855f7', bgColor: '#faf5ff' },
-  { type: 'skill', label: '技能调用', icon: MagicStick, color: '#a855f7', bgColor: '#faf5ff' },
-  { type: 'python', label: 'Python 代码', icon: Cpu, color: '#f59e0b', bgColor: '#fffbeb' },
-  { type: 'shell', label: 'Shell 命令', icon: Monitor, color: '#f59e0b', bgColor: '#fffbeb' },
-  { type: 'memory', label: '记忆', icon: Notebook, color: '#3b82f6', bgColor: '#eff6ff' },
-  { type: 'todo', label: '任务计划', icon: List, color: '#64748b', bgColor: '#f8fafc' },
-  {
-    type: 'media_gen',
-    label: '媒体生成',
-    icon: PictureFilled,
-    color: '#a855f7',
-    bgColor: '#faf5ff'
-  },
-  {
-    type: 'sub_agent',
-    label: '子Agent',
-    icon: Avatar,
-    color: '#3b82f6',
-    bgColor: '#eff6ff'
-  },
-  {
-    type: 'agenda',
-    label: '日程',
-    icon: Calendar,
-    color: '#0ea5e9',
-    bgColor: '#f0f9ff'
-  }
-]
-
-const agentToolTypes: Set<CardNodeType> = new Set([
-  'mcp',
-  'knowledge',
-  'api',
-  'skill',
-  'python',
-  'shell',
-  'memory',
-  'todo',
-  'media_gen',
-  'sub_agent',
-  'agenda'
-])
-
 const filteredCardNodes = computed(() => {
   if (props.isAgent) {
-    return cardNodes.filter(item => item.type === 'llm' || agentToolTypes.has(item.type))
+    // Agent 模式：llm + 所有工具类型（排除 card）
+    return cardNodes.filter(item => item.type === 'llm' || !flowExcludeTypes.has(item.type))
   }
-  return cardNodes.filter(item => item.type !== 'memory' && item.type !== 'agenda')
+  // Flow 模式：排除 memory 和 agenda
+  return cardNodes.filter(item => !flowExcludeTypes.has(item.type))
 })
 
 const showFlowCardDialog = ref(false)
@@ -225,10 +133,10 @@ onMounted(() => {
             :key="item.type"
             class="basic-node-card"
             draggable="true"
-            @dragstart="onDragStart($event, item.type)"
-            @click="onClickToAdd(item.type)"
+            @dragstart="onDragStart($event, item.type as NodeType)"
+            @click="onClickToAdd(item.type as NodeType)"
           >
-            <el-icon size="20" :style="{ color: item.color }">
+            <el-icon size="20" :style="{ color: item.iconColor }">
               <component :is="item.icon" />
             </el-icon>
             <span>{{ item.label }}</span>
@@ -247,10 +155,13 @@ onMounted(() => {
             :key="item.type"
             class="card-node-item"
             draggable="true"
-            @dragstart="onDragStart($event, item.type)"
-            @click="onClickToAdd(item.type)"
+            @dragstart="onDragStart($event, item.type as CardNodeType)"
+            @click="onClickToAdd(item.type as CardNodeType)"
           >
-            <div class="card-node-icon" :style="{ background: item.bgColor, color: item.color }">
+            <div
+              class="card-node-icon"
+              :style="{ background: item.iconBgColor, color: item.iconColor }"
+            >
               <el-icon size="16">
                 <component :is="item.icon" />
               </el-icon>

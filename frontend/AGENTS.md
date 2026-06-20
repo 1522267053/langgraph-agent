@@ -25,12 +25,13 @@ src/
 ├── theme/                # Element Plus 主题覆盖
 ├── components/
 │   ├── FlowEditor/       #   流程编辑器
-│   │   ├── nodes/        #     17 种节点组件（markRaw 包装）
-│   │   ├── config/       #     17 种节点配置组件
+│   │   ├── nodeRegistry.ts #   节点注册表（自动发现 + 元数据 + hook，唯一数据源）
+│   │   ├── nodes/        #     节点组件（import.meta.glob 自动注册）
+│   │   ├── config/       #     节点配置组件（import.meta.glob 自动注册）
 │   │   ├── components/   #     编辑器内部组件（VariableSelector）
 │   │   ├── FlowCanvas.vue      画布
-│   │   ├── ConfigPanel.vue    配置面板
-│   │   ├── NodePanel.vue      节点面板
+│   │   ├── ConfigPanel.vue    配置面板（数据驱动，component :is 动态渲染）
+│   │   ├── NodePanel.vue      节点面板（从注册表派生节点列表）
 │   │   ├── Toolbar.vue        工具栏
 │   │   ├── ExecutionPanel.vue 执行面板
 │   │   ├── HumanInputDialog.vue / FlowQuickExecute.vue / ExecuteFlowDialog.vue / CreateFlowDialog.vue
@@ -123,8 +124,26 @@ export const flowApi = {
 ### Vue Flow 节点
 
 ```typescript
-// nodes/index.ts — 所有节点必须 markRaw() 包装
-export const nodeTypes = { start: markRaw(StartNode), llm: markRaw(LlmNode) }
+// nodeRegistry.ts — 组件由 import.meta.glob 自动发现，无需手动 import
+// 放入 nodes/*Node.vue / config/*Config.vue 即自动注册
+// PascalCase → snake_case 转换：MediaGenNode.vue → media_gen
+
+// 注册表 entry（nodeRegistry.ts 中定义）
+{
+  label: '天气查询',           // 节点面板显示名
+  description: '查询天气信息',
+  category: 'tool',           // basic | llm | tool | io
+  icon: Sunny,                // Element Plus 图标组件
+  iconColor: '#3b82f6',       // 边框色
+  iconBgColor: '#eff6ff',     // 背景色
+  defaultConfig: () => ({ city: '' }),
+  // 以下 hook 仅特殊节点需要（标准节点省略）
+  initConfig?: (rawConfig, ctx) => ({ ...rawConfig }),     // 配置初始化
+  postInit?: (config, ctx) => { ... },                     // 初始化后副作用（如同步 store）
+  getExtraProps?: (ctx) => ({ nodeId: ctx.selectedNodeId }),// 额外 props
+  getExtraEvents?: (ctx) => ({ 'update:label': fn }),       // 额外事件
+  shouldRenderConfig?: (ctx) => !ctx.isInSubView,           // 是否渲染配置面板
+}
 
 // handles 定义（id 字段对命名 handle 关键）
 const handles = [
@@ -168,6 +187,17 @@ const handles = [
 
 ## 添加新模块清单
 
+### 前端新节点类型（4 步，组件自动发现）
+1. `src/types/flow.ts` — 添加 `CardNodeType` 联合类型成员
+2. `src/components/FlowEditor/nodeRegistry.ts` — 添加 entry（label/icon/category/defaultConfig + 可选 hook）
+3. `src/components/FlowEditor/nodes/<Type>Node.vue` — 节点组件（放入目录即自动注册）
+4. `src/components/FlowEditor/config/<Type>Config.vue` — 配置组件（放入目录即自动注册）
+
+> 组件由 `nodeRegistry.ts` 的 `import.meta.glob` 自动发现，无需手动 import。
+> 标准节点（无特殊逻辑）仅需一个 registry entry，ConfigPanel 和 NodePanel 自动渲染。
+> 有特殊配置逻辑的节点可添加 `initConfig`/`getExtraProps`/`getExtraEvents`/`postInit` hook。
+
+### 前端新页面/模块
 1. `src/types/` — TypeScript 类型（interface 用于对象，type 用于联合类型）
 2. `src/api/` — API 请求函数（使用 `get`/`post`/`put`/`del` 导出方法）
 3. `src/stores/` — Pinia store（可选）

@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- **可视化流程编辑** - 基于 Vue Flow 的拖拽式流程设计，支持 15 种节点类型
+- **可视化流程编辑** - 基于 Vue Flow 的拖拽式流程设计，支持 19 种节点类型
 - **双模式编辑** - Flow（工作流编排）和 Agent（对话式助手）共用编辑器，按模式过滤可用节点
 - **Agent 对话** - 完整的会话管理、SSE 流式对话、Human-in-the-loop 交互恢复
 - **流式推理展示** - 实时显示 LLM 思维链（DeepSeek thinking / Anthropic thinking）、内容输出、工具调用
@@ -87,11 +87,12 @@ src/
 │   └── ai_provider.ts      #   AI Provider 列表
 ├── components/
 │   ├── FlowEditor/         # 流程编辑器
-│   │   ├── nodes/          #   节点组件（15 种 + BaseNode）
-│   │   ├── config/         #   节点配置面板（15 种 + types.ts）
+│   │   ├── nodeRegistry.ts  #   节点注册表（自动发现 + 元数据 + hook，唯一数据源）
+│   │   ├── nodes/          #   节点组件（19 种 + BaseNode，import.meta.glob 自动注册）
+│   │   ├── config/         #   节点配置面板（19 种 + types.ts，import.meta.glob 自动注册）
 │   │   ├── FlowCanvas.vue  #   Vue Flow 画布（快捷键、拖拽、连接）
-│   │   ├── ConfigPanel.vue #   右侧配置面板（动态渲染）
-│   │   ├── NodePanel.vue   #   左侧节点面板（分类拖拽）
+│   │   ├── ConfigPanel.vue #   右侧配置面板（component :is 动态渲染）
+│   │   ├── NodePanel.vue   #   左侧节点面板（从注册表派生节点列表）
 │   │   ├── Toolbar.vue     #   顶部工具栏
 │   │   ├── ExecutionPanel.vue  # 执行结果面板
 │   │   ├── HumanInputDialog.vue # 人工交互对话框
@@ -116,7 +117,7 @@ src/
 │   ├── useAvailableVariables.ts  # 上游变量可用性计算
 │   └── useInputVariables.ts #   输入变量管理
 ├── constants/              # 常量配置
-│   ├── nodeTypes.ts        #   15 种节点类型定义（分类、图标、默认配置）
+│   ├── nodeTypes.ts        #   节点类型常量（从 nodeRegistry 派生）
 │   ├── variable.ts         #   变量路径前缀和引用规范
 │   ├── status.ts           #   流程/执行/节点状态枚举和文本映射
 │   └── operators.ts        #   12 种条件运算符（比较/字符串/存在性）
@@ -145,14 +146,14 @@ src/
 
 ## 节点类型
 
-流程编辑器支持 15 种节点，分为 4 个类别：
+流程编辑器支持 19 种节点，分为 4 个类别：
 
 | 类别 | 节点 | Handle 模式 |
 |------|------|------------|
-| **基础** | start, end, condition, card, loop | 标准 I/O |
+| **基础** | start, end, condition, loop, intent_router | 标准 I/O |
 | **LLM** | llm | 标准 I/O + 工具输入（orange） |
-| **工具** | mcp, knowledge, skill, shell, python, human, memory, todo, api | 纯工具输出（green→tools） |
-| **混合** | knowledge, human, python, api | 标准 I/O + 工具输出 |
+| **工具** | mcp, api, skill, knowledge, python, shell, memory, todo, media_gen, sub_agent, agenda | 纯工具输出（green→tools） |
+| **交互** | human, card | 标准 I/O + 工具输出 |
 
 Handle 颜色约定：green=输入、blue=输出、orange=工具、red=假分支
 
@@ -189,11 +190,13 @@ useStreamingMessage 解析事件类型
 
 ### 添加新节点类型
 
-1. `src/constants/nodeTypes.ts` — 添加节点类型定义（value/label/icon/category/defaultConfig）
-2. `src/types/flow.ts` — 添加节点配置类型
-3. `src/components/FlowEditor/nodes/` — 创建节点组件（继承 BaseNode）
-4. `src/components/FlowEditor/config/` — 创建配置面板组件
-5. `src/components/FlowEditor/nodes/index.ts` — `markRaw()` 注册
+1. `src/types/flow.ts` — 添加 `CardNodeType` 联合类型成员
+2. `src/components/FlowEditor/nodeRegistry.ts` — 添加 entry（label/icon/category/defaultConfig + 可选 hook）
+3. `src/components/FlowEditor/nodes/` — 创建节点组件（继承 BaseNode，放入目录即自动注册）
+4. `src/components/FlowEditor/config/` — 创建配置面板组件（放入目录即自动注册）
+
+> 组件由 `nodeRegistry.ts` 的 `import.meta.glob` 自动发现，无需手动 import。
+> 标准节点（无特殊逻辑）仅需一个 registry entry，ConfigPanel 和 NodePanel 自动渲染。
 
 ### 添加新页面
 
