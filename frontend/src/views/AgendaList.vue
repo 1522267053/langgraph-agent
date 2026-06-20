@@ -7,7 +7,12 @@ import dayGridPlugin from '@fullcalendar/daygrid'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import interactionPlugin from '@fullcalendar/interaction'
 import zhCnLocale from '@fullcalendar/core/locales/zh-cn'
-import type { CalendarOptions, DateSelectArg, EventClickArg, EventDropArg } from '@fullcalendar/core'
+import type {
+  CalendarOptions,
+  DateSelectArg,
+  EventClickArg,
+  EventDropArg
+} from '@fullcalendar/core'
 import { agendaApi } from '@/api/agenda'
 import type { Agenda, AgendaCondition } from '@/api/agenda'
 import type { PaginatedResponse } from '@/types/common'
@@ -151,7 +156,7 @@ function getRowActions(row: Agenda) {
     },
     { key: 'edit', label: '编辑', icon: Edit, btnClass: 'action-edit' },
     { key: 'delete', label: '删除', icon: Delete, btnClass: 'action-delete', danger: true }
-  ].filter((a) => a.visible !== false)
+  ].filter(a => a.visible !== false)
 }
 
 async function onRowAction(row: Agenda, key: string) {
@@ -340,12 +345,18 @@ const calendarOptions = reactive<CalendarOptions>({
   eventClassNames: (info: { event: { extendedProps: Agenda } }) => {
     return info.event.extendedProps.status === 2 ? ['agenda-completed'] : []
   },
-  eventResize: async (info: { event: { extendedProps: Agenda; start: Date | null; end: Date | null; id: string }; revert: () => void }) => {
+  eventResize: async (info: {
+    event: { extendedProps: Agenda; start: Date | null; end: Date | null; id: string }
+    revert: () => void
+  }) => {
     await handleEventChange(info)
-  },
+  }
 })
 
-async function handleEventChange(info: { event: { extendedProps: Agenda; start: Date | null; end: Date | null; id: string }; revert: () => void }) {
+async function handleEventChange(info: {
+  event: { extendedProps: Agenda; start: Date | null; end: Date | null; id: string }
+  revert: () => void
+}) {
   const agenda = info.event.extendedProps as Agenda
   if (!agenda.id) return
   const start = info.event.start
@@ -394,9 +405,11 @@ async function loadCalendarEvents(start_date: string, end_date: string) {
     if (res.data.code === 1) {
       const items = res.data.data as Agenda[]
       calendarOptions.events = items
-        .filter((item) => item.start_time)
-        .map((item) => {
-          const isMultiDay = item.start_time && item.end_time &&
+        .filter(item => item.start_time)
+        .map(item => {
+          const isMultiDay =
+            item.start_time &&
+            item.end_time &&
             item.start_time.slice(0, 10) !== item.end_time.slice(0, 10)
           return {
             id: String(item.id),
@@ -418,7 +431,7 @@ async function loadCalendarEvents(start_date: string, end_date: string) {
   }
 }
 
-watch(viewMode, (val) => {
+watch(viewMode, val => {
   if (val === 'calendar') {
     // 初始加载当前月份数据，datesSet 会接管后续视图切换
     const now = new Date()
@@ -505,11 +518,7 @@ onMounted(() => {
           <el-table-column prop="title" label="标题" min-width="160">
             <template #default="{ row }">
               <div class="agenda-title-cell">
-                <span
-                  v-if="row.color"
-                  class="color-dot"
-                  :style="{ backgroundColor: row.color }"
-                />
+                <span v-if="row.color" class="color-dot" :style="{ backgroundColor: row.color }" />
                 <span :class="{ 'text-done': row.status === 2 }">{{ row.title }}</span>
               </div>
             </template>
@@ -569,18 +578,13 @@ onMounted(() => {
 
     <!-- 日历视图 -->
     <template v-else>
-      <div class="card-panel calendar-panel" v-loading="calendarLoading">
+      <div v-loading="calendarLoading" class="card-panel calendar-panel">
         <FullCalendar :options="calendarOptions" />
       </div>
     </template>
 
     <!-- 新建/编辑 Dialog -->
-    <el-dialog
-      v-model="dialogVisible"
-      :title="dialogTitle"
-      width="600px"
-      destroy-on-close
-    >
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="600px" destroy-on-close>
       <el-form label-width="90px" size="default">
         <el-form-item label="标题" required>
           <el-input v-model="form.title" placeholder="输入日程标题" />

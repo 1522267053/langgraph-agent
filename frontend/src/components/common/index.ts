@@ -4,3 +4,4 @@
  */
 
 export { default as ThinkingBlock } from './ThinkingBlock.vue'
+export { default as FlowPreviewCard } from './FlowPreviewCard.vue'

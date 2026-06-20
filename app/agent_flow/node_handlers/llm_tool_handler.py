@@ -39,6 +39,7 @@ from app.agent_flow.exceptions import NodeExecutionError
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.flow_event import (
     ErrorEvent,
+    FlowPreviewEvent,
     NodeStartEvent,
     TokenUsageEvent,
     ToolCallEndEvent,
@@ -234,6 +235,55 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 node_key=node_key, tool_name=tool_name, status=status, result=result
             ),
         )
+
+    async def _emit_flow_preview(self, writer, flow_id: int, action: str):
+        """查询 flow 详情并发送流程预览事件
+
+        在工具执行批次完成后，检测到流程变更时调用。
+        使用独立 DB 会话查询最新流程结构（节点+边）。
+        """
+        if not self.db_session_factory:
+            return
+        try:
+            from app.config.database import AsyncSessionLocal
+            from app.services.flow_service import flow_service
+            from app.schemas.flow_node_schema import FlowNodeBase
+            from app.schemas.flow_edge_schema import FlowEdgeBase
+
+            async with AsyncSessionLocal() as db:
+                flow = await flow_service.get_with_nodes_and_edges(db, flow_id)
+                if not flow:
+                    # 流程已被删除，发送精简事件通知前端
+                    if action == "delete":
+                        self._emit(
+                            writer,
+                            FlowPreviewEvent(
+                                flow_id=flow_id, action="delete", flow_name=""
+                            ),
+                        )
+                    return
+                nodes_views = (
+                    FlowNodeBase.model_to_view_batch(flow.nodes) if flow.nodes else []
+                )
+                edges_views = (
+                    FlowEdgeBase.model_to_view_batch(flow.edges) if flow.edges else []
+                )
+                # Schema 实例转为 dict（mode="json" 确保 datetime 等类型转为可序列化字符串）
+                nodes_dicts = [n.model_dump(mode="json") for n in nodes_views]
+                edges_dicts = [e.model_dump(mode="json") for e in edges_views]
+
+            self._emit(
+                writer,
+                FlowPreviewEvent(
+                    flow_id=flow_id,
+                    flow_name=flow.name,
+                    action=action,
+                    nodes=nodes_dicts,
+                    edges=edges_dicts,
+                ),
+            )
+        except Exception as e:
+            logger.warning(f"发送流程预览事件失败 flow_id={flow_id}: {e}")
 
     # ---- 主执行入口 ----
 
@@ -581,6 +631,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 emit_fn=self._emit,
                 emit_tool_start_fn=self._emit_tool_start,
                 emit_tool_end_fn=self._emit_tool_end,
+                emit_flow_preview_fn=self._emit_flow_preview,
             )
             if not should_continue:
                 break

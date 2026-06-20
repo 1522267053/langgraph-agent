@@ -11,6 +11,7 @@ import MemoryPanel from '@/components/AgentChat/MemoryPanel.vue'
 import MessageItem from '@/components/AgentChat/MessageItem.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import ChatInput from '@/components/AgentChat/ChatInput.vue'
+import FlowPreviewCard from '@/components/common/FlowPreviewCard.vue'
 
 import 'highlight.js/styles/vs2015.css'
 
@@ -568,6 +569,17 @@ function handleRejectTools() {
       </el-card>
     </div>
 
+    <div v-if="store.flowPreview" class="flow-preview-wrapper">
+      <FlowPreviewCard
+        :flow-id="store.flowPreview.flow_id"
+        :flow-name="store.flowPreview.flow_name"
+        :nodes="store.flowPreview.nodes"
+        :edges="store.flowPreview.edges"
+        :deleted="store.flowPreview.deleted"
+        @close="store.flowPreview = null"
+      />
+    </div>
+
     <div class="input-wrapper">
       <ChatInput
         v-model:input-message="inputMessage"
@@ -956,7 +968,14 @@ export default {
     padding: 20px 16px;
   }
 
-  .input-wrapper {
+.flow-preview-wrapper {
+  flex-shrink: 0;
+  padding: 5px 24px;
+  max-height: 250px;
+  overflow: hidden;
+}
+
+.input-wrapper {
     padding: 16px;
   }
 

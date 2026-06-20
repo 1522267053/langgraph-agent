@@ -10,6 +10,7 @@ LLM 工具执行模块
 import asyncio
 import json
 import logging
+import time
 from typing import Any, Callable, Optional
 
 from langchain_core.messages import ToolMessage
@@ -17,6 +18,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.types import StreamWriter, interrupt
 
+from app.agent_flow.flow_change_tracker import consume_changes_since
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.flow_event import (
     ToolApprovalEvent,
@@ -172,6 +174,7 @@ async def handle_tool_calls(
     emit_fn: Optional[Callable] = None,
     emit_tool_start_fn: Optional[Callable] = None,
     emit_tool_end_fn: Optional[Callable] = None,
+    emit_flow_preview_fn: Optional[Callable] = None,
 ) -> tuple[bool, int]:
     """统一处理所有工具调用（人工协助 + 审批确认 + 并行执行 + 截断）
 
@@ -192,6 +195,7 @@ async def handle_tool_calls(
         emit_fn: 事件发送回调
         emit_tool_start_fn: 工具开始事件发送回调
         emit_tool_end_fn: 工具结束事件发送回调
+        emit_flow_preview_fn: 流程预览事件发送回调（async，工具执行后检测到流程变更时调用）
 
     Returns:
         (是否应继续循环, 工具调用总次数)
@@ -343,6 +347,7 @@ async def handle_tool_calls(
 
     # ---- 并行执行工具调用 ----
     tool_call_count += len(tool_calls)
+    batch_start_time = time.time()
 
     async def _run_single_tool(
         tool_call: dict,
@@ -408,6 +413,20 @@ async def handle_tool_calls(
         if emit_tool_end_fn:
             sse_result = raw_result if is_exempt else content
             emit_tool_end_fn(writer, node.node_key, tool_name, sse_result, tool_status)
+
+    # ---- 检测流程变更并发送预览事件 ----
+    if emit_flow_preview_fn and writer:
+        changes = consume_changes_since(batch_start_time)
+        if changes:
+            # 按 flow_id 去重，保留最新 action
+            seen: dict[int, str] = {}
+            for c in changes:
+                seen[c.flow_id] = c.action
+            for fid, action in seen.items():
+                try:
+                    await emit_flow_preview_fn(writer, fid, action)
+                except Exception as e:
+                    logger.warning(f"发送流程预览事件失败 flow_id={fid}: {e}")
 
     return True, tool_call_count
 

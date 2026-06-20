@@ -102,29 +102,37 @@ function handleNotification(msg: WSMessage) {
       message: h('div', [
         h('p', { style: 'margin: 4px 0 12px' }, parts.join(' | ') || '该日程开始了'),
         h('div', { style: 'display: flex; gap: 8px' }, [
-          h(ElButton, {
-            type: 'primary',
-            size: 'small',
-            onClick: async () => {
-              try {
-                await agendaApi.complete(data.agenda_id)
-                ElNotification.closeAll()
-              } catch {
-                // ignore
+          h(
+            ElButton,
+            {
+              type: 'primary',
+              size: 'small',
+              onClick: async () => {
+                try {
+                  await agendaApi.complete(data.agenda_id)
+                  ElNotification.closeAll()
+                } catch {
+                  // ignore
+                }
               }
-            }
-          }, () => '完成'),
-          h(ElButton, {
-            size: 'small',
-            onClick: async () => {
-              try {
-                await agendaApi.postpone(data.agenda_id)
-                ElNotification.closeAll()
-              } catch {
-                // ignore
+            },
+            () => '完成'
+          ),
+          h(
+            ElButton,
+            {
+              size: 'small',
+              onClick: async () => {
+                try {
+                  await agendaApi.postpone(data.agenda_id)
+                  ElNotification.closeAll()
+                } catch {
+                  // ignore
+                }
               }
-            }
-          }, () => '延后15分钟')
+            },
+            () => '延后15分钟'
+          )
         ])
       ]),
       duration: 0,
