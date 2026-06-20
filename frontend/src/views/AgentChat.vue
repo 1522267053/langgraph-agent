@@ -968,14 +968,14 @@ export default {
     padding: 20px 16px;
   }
 
-.flow-preview-wrapper {
-  flex-shrink: 0;
-  padding: 5px 24px;
-  max-height: 250px;
-  overflow: hidden;
-}
+  .flow-preview-wrapper {
+    flex-shrink: 0;
+    padding: 5px 24px;
+    max-height: 250px;
+    overflow: hidden;
+  }
 
-.input-wrapper {
+  .input-wrapper {
     padding: 16px;
   }
 

@@ -1,20 +1,5 @@
+/**
+ * 配置类型 re-export
+ * @description 配置组件由 nodeRegistry 自动发现，无需手动注册
+ */
 export * from './types'
-export { default as LlmConfigComponent } from './LlmConfig.vue'
-export { default as ConditionConfigComponent } from './ConditionConfig.vue'
-export { default as ApiConfigComponent } from './ApiConfig.vue'
-export { default as McpConfigComponent } from './McpConfig.vue'
-export { default as HumanConfigComponent } from './HumanConfig.vue'
-export { default as SkillConfigComponent } from './SkillConfig.vue'
-export { default as KnowledgeConfigComponent } from './KnowledgeConfig.vue'
-export { default as PythonConfigComponent } from './PythonConfig.vue'
-export { default as ShellConfigComponent } from './ShellConfig.vue'
-export { default as EndConfigComponent } from './EndConfig.vue'
-export { default as CardConfigComponent } from './CardConfig.vue'
-export { default as LoopConfigComponent } from './LoopConfig.vue'
-export { default as StartConfigComponent } from './StartConfig.vue'
-export { default as MemoryConfigComponent } from './MemoryConfig.vue'
-export { default as TodoConfigComponent } from './TodoConfig.vue'
-export { default as MediaGenConfigComponent } from './MediaGenConfig.vue'
-export { default as IntentRouterConfigComponent } from './IntentRouterConfig.vue'
-export { default as SubAgentConfigComponent } from './SubAgentConfig.vue'
-export { default as AgendaConfigComponent } from './AgendaConfig.vue'
