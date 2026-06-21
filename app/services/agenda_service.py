@@ -6,7 +6,7 @@
 
 import calendar
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 from sqlalchemy import Select, and_, select, update
@@ -167,9 +167,7 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         await db.flush()
         return new_agenda
 
-    async def mark_recurrence_generated(
-        self, db: AsyncSession, agenda_id: int
-    ) -> bool:
+    async def mark_recurrence_generated(self, db: AsyncSession, agenda_id: int) -> bool:
         """原子锁：标记日程为已生成下一重复实例，返回是否成功获取锁"""
         stmt = (
             update(Agenda)
@@ -180,11 +178,10 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         result = await db.execute(stmt)
         return result.rowcount > 0
 
-    async def get_expired_recurring_agendas(
-        self, db: AsyncSession
-    ) -> list[Agenda]:
-        """获取过期未生成的重复日程"""
-        from datetime import datetime
+    async def get_expired_recurring_agendas(self, db: AsyncSession) -> list[Agenda]:
+        """获取今天未生成下一实例的重复日程（只查今天，明天由明天扫描处理）"""
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow_start = today_start + timedelta(days=1)
 
         stmt = (
             select(Agenda)
@@ -192,7 +189,8 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
             .where(Agenda.recurrence_generated == 0)
             .where(Agenda.status != AgendaStatus.COMPLETED.value)
             .where(Agenda.start_time.isnot(None))
-            .where(Agenda.start_time < datetime.now())
+            .where(Agenda.start_time >= today_start)
+            .where(Agenda.start_time < tomorrow_start)
             .order_by(Agenda.start_time)
         )
         result = await db.execute(stmt)
