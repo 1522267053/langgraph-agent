@@ -1,6 +1,12 @@
 import request, { get } from './index'
 import type { ApiResponse, PaginatedResponse, PaginationParams } from '@/types/common'
-import type { WebhookConfig, WebhookCreate, WebhookUpdate, WebhookCallRecord, WebhookMessage } from '@/types/webhook'
+import type {
+  WebhookConfig,
+  WebhookCreate,
+  WebhookUpdate,
+  WebhookCallRecord,
+  WebhookMessage
+} from '@/types/webhook'
 
 export const webhookApi = {
   page(params: PaginationParams<WebhookConfig>) {

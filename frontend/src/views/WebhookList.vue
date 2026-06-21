@@ -482,11 +482,7 @@ onMounted(() => {
     </el-dialog>
 
     <!-- 查看详情弹窗 -->
-    <el-dialog
-      v-model="detailDialogVisible"
-      title="Webhook 详情"
-      width="600px"
-    >
+    <el-dialog v-model="detailDialogVisible" title="Webhook 详情" width="600px">
       <template v-if="detailWebhook">
         <el-descriptions :column="1" border>
           <el-descriptions-item label="名称">
@@ -496,7 +492,10 @@ onMounted(() => {
             {{ flowName(detailWebhook.flow_id) }}
           </el-descriptions-item>
           <el-descriptions-item label="流程类型">
-            <el-tag size="small" :type="flowType(detailWebhook.flow_id) === '智能体' ? 'success' : 'primary'">
+            <el-tag
+              size="small"
+              :type="flowType(detailWebhook.flow_id) === '智能体' ? 'success' : 'primary'"
+            >
               {{ flowType(detailWebhook.flow_id) }}
             </el-tag>
           </el-descriptions-item>
@@ -506,11 +505,7 @@ onMounted(() => {
           </el-descriptions-item>
           <el-descriptions-item label="触发 URL">
             <div class="url-display">
-              <el-input
-                :model-value="getWebhookUrl(detailWebhook)"
-                readonly
-                class="url-input"
-              >
+              <el-input :model-value="getWebhookUrl(detailWebhook)" readonly class="url-input">
                 <template #append>
                   <el-button :icon="CopyDocument" @click="copyUrl(getWebhookUrl(detailWebhook))">
                     复制
@@ -521,11 +516,7 @@ onMounted(() => {
           </el-descriptions-item>
           <el-descriptions-item label="查询列表 URL">
             <div class="url-display">
-              <el-input
-                :model-value="getQueryUrl(detailWebhook)"
-                readonly
-                class="url-input"
-              >
+              <el-input :model-value="getQueryUrl(detailWebhook)" readonly class="url-input">
                 <template #append>
                   <el-button :icon="CopyDocument" @click="copyUrl(getQueryUrl(detailWebhook))">
                     复制
@@ -542,7 +533,10 @@ onMounted(() => {
                 class="url-input"
               >
                 <template #append>
-                  <el-button :icon="CopyDocument" @click="copyUrl(getQueryCallDetailUrl(detailWebhook))">
+                  <el-button
+                    :icon="CopyDocument"
+                    @click="copyUrl(getQueryCallDetailUrl(detailWebhook))"
+                  >
                     复制
                   </el-button>
                 </template>
@@ -557,7 +551,10 @@ onMounted(() => {
                 class="url-input"
               >
                 <template #append>
-                  <el-button :icon="CopyDocument" @click="copyUrl(getQueryMessagesUrl(detailWebhook))">
+                  <el-button
+                    :icon="CopyDocument"
+                    @click="copyUrl(getQueryMessagesUrl(detailWebhook))"
+                  >
                     复制
                   </el-button>
                 </template>
@@ -571,7 +568,9 @@ onMounted(() => {
             {{ detailWebhook.callback_url || '无' }}
           </el-descriptions-item>
           <el-descriptions-item label="默认输入参数">
-            <pre v-if="detailWebhook.input_config" class="json-preview">{{ JSON.stringify(detailWebhook.input_config, null, 2) }}</pre>
+            <pre v-if="detailWebhook.input_config" class="json-preview">{{
+              JSON.stringify(detailWebhook.input_config, null, 2)
+            }}</pre>
             <span v-else>-</span>
           </el-descriptions-item>
           <el-descriptions-item label="调用次数">
