@@ -1724,7 +1724,10 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         """
         import time
 
-        from app.services.node_config_helper import fill_node_defaults, inject_llm_defaults
+        from app.services.node_config_helper import (
+            fill_node_defaults,
+            inject_llm_defaults,
+        )
         from app.services.global_config_service import global_config_service
 
         existing_nodes = await self._get_flow_nodes(db, flow_id)

@@ -105,6 +105,13 @@ async def startup() -> None:
     # ---- 加载通知配置 ----
     await _load_notification_config()
 
+    # ---- 同步内置技能（扫描 skills/ 目录） ----
+    from app.services.builtin_agent_service import builtin_agent_service
+
+    async with AsyncSessionLocal() as db:
+        await builtin_agent_service.sync_skills(db)
+    logger.info("[OK] Built-in skills synced")
+
     # ---- 启动定时任务调度器 ----
     await scheduler_service.start()
 
