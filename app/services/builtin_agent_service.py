@@ -5,6 +5,7 @@
 内置 Agent 是系统的默认入口，用户首页直接与之对话。
 """
 
+import hashlib
 import logging
 import re
 import shutil
@@ -98,6 +99,19 @@ def _discover_builtin_skills() -> list[dict]:
             }
         )
     return result
+
+
+def _dir_signature(path: Path) -> str:
+    """计算目录签名（所有文件相对路径 + 内容的 MD5），用于检测目录内容变化"""
+    if not path.is_dir():
+        return ""
+    hasher = hashlib.md5()
+    for file_path in sorted(path.rglob("*")):
+        if file_path.is_file():
+            rel = file_path.relative_to(path).as_posix()
+            hasher.update(rel.encode())
+            hasher.update(file_path.read_bytes())
+    return hasher.hexdigest()
 
 
 BUILTIN_AGENT_SYSTEM_PROMPT = """你是 AI Agent OS 的内置助手，是用户与系统交互的主要入口。
@@ -229,6 +243,10 @@ class BuiltinAgentService:
             await db.commit()
             logger.info("内置 Agent LLM 配置已同步: flow_id=%d", builtin_flow.id)
 
+    async def sync_skills(self, db: AsyncSession) -> None:
+        """启动时同步 skills/ 目录，注册未入库的内置技能"""
+        await self._ensure_skill(db)
+
     async def _ensure_skill(self, db: AsyncSession) -> list[dict]:
         """
         确保所有内置 Skill 已注册到 DB
@@ -250,6 +268,23 @@ class BuiltinAgentService:
             existing = result.scalar_one_or_none()
 
             if existing:
+                # 检查源目录和目标目录内容是否不同，不同则覆盖
+                source_path = get_internal_dir() / source_dir
+                upload_dir = (
+                    settings.get_absolute_path(settings.upload_dir)
+                    / "skills"
+                    / skill_name
+                )
+                if source_path.is_dir():
+                    source_sig = _dir_signature(source_path)
+                    target_sig = _dir_signature(upload_dir)
+                    if source_sig != target_sig:
+                        shutil.rmtree(upload_dir, ignore_errors=True)
+                        shutil.copytree(source_path, upload_dir)
+                        if existing.description != description:
+                            existing.description = description
+                            await db.commit()
+                        logger.info("内置 Skill 已更新: name=%s", skill_name)
                 registered.append({"id": existing.id, "name": skill_name})
                 continue
 
@@ -336,23 +371,26 @@ class BuiltinAgentService:
                 "node_name": "AI 助手",
                 "position_x": 350,
                 "position_y": 200,
-                "base_config": fill_node_defaults("llm", {
-                    "provider": provider_name,
-                    "model": model,
-                    "api_key": api_key,
-                    "base_url": base_url,
-                    "context_length": global_llm.get("context_length"),
-                    "system_prompt": BUILTIN_AGENT_SYSTEM_PROMPT,
-                    "user_prompt": "{{message}}",
-                    "max_tool_iterations": 100,
-                    "input_variables": [
-                        {
-                            "name": "message",
-                            "source": "input.message",
-                            "type": "string",
-                        }
-                    ],
-                }),
+                "base_config": fill_node_defaults(
+                    "llm",
+                    {
+                        "provider": provider_name,
+                        "model": model,
+                        "api_key": api_key,
+                        "base_url": base_url,
+                        "context_length": global_llm.get("context_length"),
+                        "system_prompt": BUILTIN_AGENT_SYSTEM_PROMPT,
+                        "user_prompt": "{{message}}",
+                        "max_tool_iterations": 100,
+                        "input_variables": [
+                            {
+                                "name": "message",
+                                "source": "input.message",
+                                "type": "string",
+                            }
+                        ],
+                    },
+                ),
             },
             {
                 "node_type": NodeType.END.value,
@@ -378,18 +416,62 @@ class BuiltinAgentService:
                     "技能",
                     100,
                     450,
-                    fill_node_defaults("skill", {"skill_ids": [s["id"] for s in skills]}),
+                    fill_node_defaults(
+                        "skill", {"skill_ids": [s["id"] for s in skills]}
+                    ),
                 )
             )
 
         tool_nodes.extend(
             [
-                ("api_tool", NodeType.API.value, "API 工具", 300, 450, fill_node_defaults("api")),
-                ("todo_tool", NodeType.TODO.value, "任务计划", 500, 450, fill_node_defaults("todo")),
-                ("python_tool", NodeType.PYTHON.value, "Python 工具", 700, 450, fill_node_defaults("python")),
-                ("shell_tool", NodeType.SHELL.value, "Shell 工具", 900, 450, fill_node_defaults("shell")),
-                ("memory_tool", NodeType.MEMORY.value, "记忆管理", 300, 600, fill_node_defaults("memory")),
-                ("agenda_tool", NodeType.AGENDA.value, "日程管理", 500, 600, fill_node_defaults("agenda")),
+                (
+                    "api_tool",
+                    NodeType.API.value,
+                    "API 工具",
+                    300,
+                    450,
+                    fill_node_defaults("api"),
+                ),
+                (
+                    "todo_tool",
+                    NodeType.TODO.value,
+                    "任务计划",
+                    500,
+                    450,
+                    fill_node_defaults("todo"),
+                ),
+                (
+                    "python_tool",
+                    NodeType.PYTHON.value,
+                    "Python 工具",
+                    700,
+                    450,
+                    fill_node_defaults("python"),
+                ),
+                (
+                    "shell_tool",
+                    NodeType.SHELL.value,
+                    "Shell 工具",
+                    900,
+                    450,
+                    fill_node_defaults("shell"),
+                ),
+                (
+                    "memory_tool",
+                    NodeType.MEMORY.value,
+                    "记忆管理",
+                    300,
+                    600,
+                    fill_node_defaults("memory"),
+                ),
+                (
+                    "agenda_tool",
+                    NodeType.AGENDA.value,
+                    "日程管理",
+                    500,
+                    600,
+                    fill_node_defaults("agenda"),
+                ),
             ]
         )
         for key, ntype, name, x, y, cfg in tool_nodes:

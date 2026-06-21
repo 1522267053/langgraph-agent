@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { Plus, Refresh, Edit, Delete, Link } from '@element-plus/icons-vue'
+import { Plus, Refresh, Edit, Delete, View, CopyDocument } from '@element-plus/icons-vue'
 import { webhookApi } from '@/api/webhook'
 import { flowApi } from '@/api/flow'
 import ActionColumn from '@/components/common/ActionColumn.vue'
@@ -251,12 +251,42 @@ async function handleDelete(row: WebhookConfig) {
   }
 }
 
-// ---- 复制 URL ----
-async function copyUrl(row: WebhookConfig) {
+// ---- 查看详情 ----
+const detailDialogVisible = ref(false)
+const detailWebhook = ref<WebhookConfig | null>(null)
+
+function showDetail(row: WebhookConfig) {
+  detailWebhook.value = row
+  detailDialogVisible.value = true
+}
+
+function getWebhookUrl(row: WebhookConfig): string {
   const protocol = location.protocol
   const host = location.host
-  const url = `${protocol}//${host}/api/webhook/trigger/${row.token}`
+  return `${protocol}//${host}/api/webhook/trigger/${row.token}`
+}
 
+function getQueryUrl(row: WebhookConfig): string {
+  const protocol = location.protocol
+  const host = location.host
+  return `${protocol}//${host}/api/webhook/query/${row.token}/calls`
+}
+
+function getQueryCallDetailUrl(row: WebhookConfig, callId?: number): string {
+  const protocol = location.protocol
+  const host = location.host
+  const id = callId || '{call_id}'
+  return `${protocol}//${host}/api/webhook/query/${row.token}/calls/${id}`
+}
+
+function getQueryMessagesUrl(row: WebhookConfig, callId?: number): string {
+  const protocol = location.protocol
+  const host = location.host
+  const id = callId || '{call_id}'
+  return `${protocol}//${host}/api/webhook/query/${row.token}/calls/${id}/messages`
+}
+
+async function copyUrl(url: string) {
   try {
     await navigator.clipboard.writeText(url)
     ElMessage.success('URL 已复制到剪贴板')
@@ -273,7 +303,7 @@ async function copyUrl(row: WebhookConfig) {
 // ---- 操作按钮 ----
 function getRowActions() {
   return [
-    { key: 'url', label: '复制URL', icon: Link, btnClass: 'action-url' },
+    { key: 'detail', label: '查看详情', icon: View, btnClass: 'action-detail' },
     { key: 'edit', label: '编辑', icon: Edit, btnClass: 'action-edit' },
     { key: 'delete', label: '删除', icon: Delete, btnClass: 'action-delete', danger: true }
   ]
@@ -281,8 +311,8 @@ function getRowActions() {
 
 function onRowAction(row: WebhookConfig, key: string) {
   switch (key) {
-    case 'url':
-      copyUrl(row)
+    case 'detail':
+      showDetail(row)
       break
     case 'edit':
       openEdit(row)
@@ -450,6 +480,112 @@ onMounted(() => {
         <el-button type="primary" :loading="formLoading" @click="handleSubmit">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 查看详情弹窗 -->
+    <el-dialog
+      v-model="detailDialogVisible"
+      title="Webhook 详情"
+      width="600px"
+    >
+      <template v-if="detailWebhook">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="名称">
+            {{ detailWebhook.name }}
+          </el-descriptions-item>
+          <el-descriptions-item label="关联流程">
+            {{ flowName(detailWebhook.flow_id) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="流程类型">
+            <el-tag size="small" :type="flowType(detailWebhook.flow_id) === '智能体' ? 'success' : 'primary'">
+              {{ flowType(detailWebhook.flow_id) }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag v-if="detailWebhook.is_enabled === 1" size="small" type="success">启用</el-tag>
+            <el-tag v-else size="small" type="danger">禁用</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="触发 URL">
+            <div class="url-display">
+              <el-input
+                :model-value="getWebhookUrl(detailWebhook)"
+                readonly
+                class="url-input"
+              >
+                <template #append>
+                  <el-button :icon="CopyDocument" @click="copyUrl(getWebhookUrl(detailWebhook))">
+                    复制
+                  </el-button>
+                </template>
+              </el-input>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item label="查询列表 URL">
+            <div class="url-display">
+              <el-input
+                :model-value="getQueryUrl(detailWebhook)"
+                readonly
+                class="url-input"
+              >
+                <template #append>
+                  <el-button :icon="CopyDocument" @click="copyUrl(getQueryUrl(detailWebhook))">
+                    复制
+                  </el-button>
+                </template>
+              </el-input>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item label="查询详情 URL">
+            <div class="url-display">
+              <el-input
+                :model-value="getQueryCallDetailUrl(detailWebhook)"
+                readonly
+                class="url-input"
+              >
+                <template #append>
+                  <el-button :icon="CopyDocument" @click="copyUrl(getQueryCallDetailUrl(detailWebhook))">
+                    复制
+                  </el-button>
+                </template>
+              </el-input>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item label="查询消息 URL">
+            <div class="url-display">
+              <el-input
+                :model-value="getQueryMessagesUrl(detailWebhook)"
+                readonly
+                class="url-input"
+              >
+                <template #append>
+                  <el-button :icon="CopyDocument" @click="copyUrl(getQueryMessagesUrl(detailWebhook))">
+                    复制
+                  </el-button>
+                </template>
+              </el-input>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item label="描述">
+            {{ detailWebhook.description || '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="回调 URL">
+            {{ detailWebhook.callback_url || '无' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="默认输入参数">
+            <pre v-if="detailWebhook.input_config" class="json-preview">{{ JSON.stringify(detailWebhook.input_config, null, 2) }}</pre>
+            <span v-else>-</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="调用次数">
+            {{ detailWebhook.call_count || 0 }}
+          </el-descriptions-item>
+          <el-descriptions-item label="最后调用">
+            {{ detailWebhook.last_call_time || '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="创建时间">
+            {{ detailWebhook.create_time || '-' }}
+          </el-descriptions-item>
+        </el-descriptions>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -500,5 +636,25 @@ onMounted(() => {
   font-size: 12px;
   color: #94a3b8;
   margin-top: 4px;
+}
+
+.url-display {
+  width: 100%;
+}
+
+.url-input {
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.json-preview {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 12px;
+  max-height: 200px;
+  overflow: auto;
+  margin: 0;
 }
 </style>
