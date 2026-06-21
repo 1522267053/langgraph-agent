@@ -380,6 +380,9 @@ class ShellTaskStatusInput(BaseModel):
     """查询后台Shell任务状态"""
 
     task_id: str = Field(..., description="后台任务ID")
+    wait_time: int = Field(
+        8, ge=8, le=120, description="等待时间（秒），最小8秒，最大120秒。等待期间会尝试获取最新输出，超时则返回当前状态。"
+    )
 
 
 class ShellTaskInputInput(BaseModel):
@@ -864,7 +867,7 @@ class ShellNodeHandler(BaseNodeHandler):
 
         # ---- shell_task_status ----
 
-        async def query_task_status(task_id: str) -> str:
+        async def query_task_status(task_id: str, wait_time: int = 8) -> str:
             _cleanup_expired_tasks()
             task = _background_tasks.get(task_id)
             if not task:
@@ -877,10 +880,15 @@ class ShellNodeHandler(BaseNodeHandler):
                 and task._monitor_task
                 and not task._monitor_task.done()
             ):
-                await asyncio.wait({task._monitor_task}, timeout=async_wait)
+                await asyncio.wait({task._monitor_task}, timeout=wait_time)
             result = {"success": True, **task.to_dict()}
             if task.stdout or task.stderr:
                 _apply_shell_output_truncation(result, task)
+            if task.status == "running":
+                result["hint"] = (
+                    "任务仍在后台运行中。如果预计还需较长时间，请告知用户任务正在执行，"
+                    "不要持续轮询消耗工具调用次数。用户可稍后再次查询状态。"
+                )
             return json.dumps(result, ensure_ascii=False)
 
         shell_task_status_tool = StructuredTool(
@@ -889,6 +897,8 @@ class ShellNodeHandler(BaseNodeHandler):
                 "查询后台Shell任务的执行状态和输出。"
                 "当 shell_executor 返回 task_id 时使用此工具获取进度。"
                 "返回字段: status(running/completed/failed/timeout), stdout, stderr, return_code, elapsed_seconds。"
+                "可通过 wait_time 参数指定等待秒数（最小8秒，最大120秒），等待期间会尝试获取最新输出。"
+                "注意：如果任务仍在运行，响应中会包含 hint 字段提示您不要持续轮询，应告知用户任务在后台执行。"
             ),
             func=None,
             coroutine=query_task_status,
