@@ -387,7 +387,7 @@ function handleDeleteMessage(msg: (typeof store.chatMessages)[0]) {
       }
       ElMessage.success('已删除，可重新发送')
     })
-    .catch(() => {})
+    .catch(() => { })
 }
 
 function handleRevertFrom(dbMsgId: number) {
@@ -403,7 +403,7 @@ function handleRevertFrom(dbMsgId: number) {
       }
       ElMessage.success('已删除')
     })
-    .catch(() => {})
+    .catch(() => { })
 }
 
 function formatToolApprovalArgs(args?: Record<string, unknown>): string {
@@ -439,14 +439,13 @@ function handleRejectTools() {
         <h1>{{ store.currentAgent?.name || 'AI 助手' }}</h1>
       </div>
       <div class="header-right">
-        <DisplayToggle
-          v-model:auto-scroll="autoScroll"
-          v-model:show-thinking="showThinking"
-          v-model:show-tool-calls="showToolCalls"
-        />
+        <DisplayToggle v-model:auto-scroll="autoScroll" v-model:show-thinking="showThinking"
+          v-model:show-tool-calls="showToolCalls" />
         <el-tooltip content="记忆" placement="bottom">
           <button class="header-action-btn" @click="showMemory = true">
-            <el-icon :size="18"><Notebook /></el-icon>
+            <el-icon :size="18">
+              <Notebook />
+            </el-icon>
             <span>记忆</span>
           </button>
         </el-tooltip>
@@ -461,13 +460,8 @@ function handleRejectTools() {
       </div>
     </header>
 
-    <div
-      ref="messagesContainer"
-      v-loading="store.messagesLoading"
-      element-loading-text="加载中..."
-      class="messages-container"
-      @scroll="handleMessagesScroll"
-    >
+    <div ref="messagesContainer" v-loading="store.messagesLoading" element-loading-text="加载中..."
+      class="messages-container" @scroll="handleMessagesScroll">
       <template v-if="!store.messagesLoading && store.chatMessages.length === 0">
         <div class="empty-state">
           <el-empty description="开始新的对话吧" />
@@ -481,25 +475,23 @@ function handleRejectTools() {
             <span></span>
           </div>
         </div>
-        <MessageItem
-          :messages="store.chatMessages"
-          :show-thinking="showThinking"
-          :show-tool-calls="showToolCalls"
-          :is-streaming="store.isStreaming"
-          @delete="handleDeleteMessage"
-          @revert="handleRevertFrom"
-          @preview="handleImagePreview"
-        />
+        <MessageItem :messages="store.chatMessages" :show-thinking="showThinking" :show-tool-calls="showToolCalls"
+          :is-streaming="store.isStreaming" @delete="handleDeleteMessage" @revert="handleRevertFrom"
+          @preview="handleImagePreview" />
       </div>
     </div>
 
     <div :class="['scroll-to-bottom', { hidden: isAtBottom }]" @click="scrollToBottom">
-      <el-icon :size="16"><Bottom /></el-icon>
+      <el-icon :size="16">
+        <Bottom />
+      </el-icon>
     </div>
 
     <div v-if="store.isCompressing" class="compress-overlay">
       <div class="compress-overlay-card">
-        <el-icon :size="24" class="is-loading"><Operation /></el-icon>
+        <el-icon :size="24" class="is-loading">
+          <Operation />
+        </el-icon>
         <span>正在压缩上下文...</span>
       </div>
     </div>
@@ -515,13 +507,8 @@ function handleRejectTools() {
         <div v-if="store.currentWaitData?.context" class="human-input-context">
           {{ store.currentWaitData.context }}
         </div>
-        <el-input
-          v-model="humanInputValue"
-          type="textarea"
-          :rows="3"
-          placeholder="请输入您的回答..."
-          @keydown.enter.ctrl="handleHumanInputSubmit"
-        />
+        <el-input v-model="humanInputValue" type="textarea" :rows="3" placeholder="请输入您的回答..."
+          @keydown.enter.ctrl="handleHumanInputSubmit" />
         <template #footer>
           <div style="display: flex; justify-content: space-between; width: 100%">
             <el-button :disabled="store.isStopping" @click="handleStop">取消执行</el-button>
@@ -534,7 +521,9 @@ function handleRejectTools() {
     <div v-if="store.isWaitingToolApproval" class="tool-approval-overlay">
       <el-card class="tool-approval-card">
         <div class="approval-header">
-          <el-icon style="color: #e6a23c; margin-right: 8px"><Warning /></el-icon>
+          <el-icon style="color: #e6a23c; margin-right: 8px">
+            <Warning />
+          </el-icon>
           <span v-if="store.subAgentApproval?.isSubAgent">
             子Agent「{{ store.subAgentApproval.agentName }}」请求执行以下工具：
           </span>
@@ -542,17 +531,10 @@ function handleRejectTools() {
           <span class="approval-countdown">{{ formatCountdown(store.approvalCountdown) }}</span>
         </div>
         <div class="approval-tools">
-          <div
-            v-for="tc in store.pendingToolCalls"
-            :key="tc.id || tc.name"
-            class="approval-tool-item"
-          >
+          <div v-for="tc in store.pendingToolCalls" :key="tc.id || tc.name" class="approval-tool-item">
             <div class="approval-tool-name">
-              <el-tag
-                :type="store.pendingApprovalNeeded.includes(tc.name) ? 'danger' : 'info'"
-                size="small"
-                style="margin-right: 6px"
-              >
+              <el-tag :type="store.pendingApprovalNeeded.includes(tc.name) ? 'danger' : 'info'" size="small"
+                style="margin-right: 6px">
                 {{ store.pendingApprovalNeeded.includes(tc.name) ? '需确认' : '普通' }}
               </el-tag>
               {{ tc.name }}
@@ -570,40 +552,23 @@ function handleRejectTools() {
     </div>
 
     <div v-if="store.flowPreview" class="flow-preview-wrapper">
-      <FlowPreviewCard
-        :flow-id="store.flowPreview.flow_id"
-        :flow-name="store.flowPreview.flow_name"
-        :nodes="store.flowPreview.nodes"
-        :edges="store.flowPreview.edges"
-        :deleted="store.flowPreview.deleted"
-        @close="store.flowPreview = null"
-      />
+      <FlowPreviewCard :flow-id="store.flowPreview.flow_id" :flow-name="store.flowPreview.flow_name"
+        :nodes="store.flowPreview.nodes" :edges="store.flowPreview.edges" :deleted="store.flowPreview.deleted"
+        @close="store.flowPreview = null" />
     </div>
 
     <div class="input-wrapper">
-      <ChatInput
-        v-model:input-message="inputMessage"
-        :fields="dynamicFields"
-        :is-streaming="store.isStreaming"
-        :is-stopping="store.isStopping"
-        :is-waiting-human="store.isWaitingHuman || store.isWaitingToolApproval"
-        :total-tokens="store.totalSessionTokens"
-        :latest-prompt-tokens="store.latestPromptTokens"
-        @send="handleChatSend"
-        @stop="handleStop"
-      />
+      <ChatInput v-model:input-message="inputMessage" :fields="dynamicFields" :is-streaming="store.isStreaming"
+        :is-stopping="store.isStopping" :is-waiting-human="store.isWaitingHuman || store.isWaitingToolApproval"
+        :total-tokens="store.totalSessionTokens" :latest-prompt-tokens="store.latestPromptTokens" @send="handleChatSend"
+        @stop="handleStop" />
     </div>
 
     <MemoryPanel v-model:visible="showMemory" :agent-id="agentId" />
 
     <Teleport to="body">
-      <el-image-viewer
-        v-if="imagePreviewVisible"
-        :url-list="imagePreviewUrls"
-        :initial-index="imagePreviewIndex"
-        @close="closeImagePreview"
-        @switch="handlePreviewSwitch"
-      />
+      <el-image-viewer v-if="imagePreviewVisible" :url-list="imagePreviewUrls" :initial-index="imagePreviewIndex"
+        @close="closeImagePreview" @switch="handlePreviewSwitch" />
     </Teleport>
   </div>
 </template>
@@ -660,10 +625,12 @@ export default {
 }
 
 @keyframes pulse {
+
   0%,
   100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.5;
   }
@@ -772,6 +739,7 @@ export default {
 }
 
 @keyframes load-more-pulse {
+
   0%,
   80%,
   100% {
@@ -963,16 +931,16 @@ export default {
   text-align: right;
 }
 
+.flow-preview-wrapper {
+  flex-shrink: 0;
+  padding: 5px 24px;
+  max-height: 250px;
+  overflow: hidden;
+}
+
 @media (max-width: 768px) {
   .messages-container {
     padding: 20px 16px;
-  }
-
-  .flow-preview-wrapper {
-    flex-shrink: 0;
-    padding: 5px 24px;
-    max-height: 250px;
-    overflow: hidden;
   }
 
   .input-wrapper {
