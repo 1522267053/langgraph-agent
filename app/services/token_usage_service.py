@@ -183,7 +183,7 @@ class TokenUsageService:
         return [
             {
                 "flow_id": row[0],
-                "flow_name": flow_name_map.get(row[0], ""),
+                "flow_name": flow_name_map.get(row[0]) or f"(已删除)#{row[0]}",
                 "flow_type": flow_type_map.get(row[0], ""),
                 "prompt_tokens": int(row[1]),
                 "completion_tokens": int(row[2]),
