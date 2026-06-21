@@ -44,6 +44,7 @@ class AgendaRecurrence(str, Enum):
 
     NONE = "none"
     DAILY = "daily"
+    WEEKDAY = "weekday"
     WEEKLY = "weekly"
     MONTHLY = "monthly"
 
@@ -86,7 +87,7 @@ class Agenda(DbBaseModel):
         String(50),
         nullable=False,
         default=AgendaRecurrence.NONE.value,
-        comment="重复规则：none/daily/weekly/monthly",
+        comment="重复规则：none/daily/weekday/weekly/monthly",
     )
     status: Mapped[int] = mapped_column(
         SmallInteger,
@@ -108,6 +109,12 @@ class Agenda(DbBaseModel):
         nullable=False,
         default=0,
         comment="是否已推送提醒：0=未推送/1=已推送",
+    )
+    recurrence_generated: Mapped[int] = mapped_column(
+        SmallInteger,
+        nullable=False,
+        default=0,
+        comment="是否已生成下一重复实例：0=否/1=是",
     )
 
     def __repr__(self) -> str:

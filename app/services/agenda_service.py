@@ -9,7 +9,7 @@ import logging
 from datetime import timedelta
 from typing import Optional, Tuple
 
-from sqlalchemy import Select, and_, select
+from sqlalchemy import Select, and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agenda import Agenda, AgendaRecurrence, AgendaStatus
@@ -120,6 +120,10 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         # 计算下一组时间
         if agenda.recurrence == AgendaRecurrence.DAILY.value:
             next_start = agenda.start_time + timedelta(days=1)
+        elif agenda.recurrence == AgendaRecurrence.WEEKDAY.value:
+            next_start = agenda.start_time + timedelta(days=1)
+            while next_start.weekday() >= 5:
+                next_start += timedelta(days=1)
         elif agenda.recurrence == AgendaRecurrence.WEEKLY.value:
             next_start = agenda.start_time + timedelta(days=7)
         elif agenda.recurrence == AgendaRecurrence.MONTHLY.value:
@@ -161,6 +165,37 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         db.add(new_agenda)
         await db.flush()
         return new_agenda
+
+    async def mark_recurrence_generated(
+        self, db: AsyncSession, agenda_id: int
+    ) -> bool:
+        """原子锁：标记日程为已生成下一重复实例，返回是否成功获取锁"""
+        stmt = (
+            update(Agenda)
+            .where(Agenda.id == agenda_id)
+            .where(Agenda.recurrence_generated == 0)
+            .values(recurrence_generated=1)
+        )
+        result = await db.execute(stmt)
+        return result.rowcount > 0
+
+    async def get_expired_recurring_agendas(
+        self, db: AsyncSession
+    ) -> list[Agenda]:
+        """获取过期未生成的重复日程"""
+        from datetime import datetime
+
+        stmt = (
+            select(Agenda)
+            .where(Agenda.recurrence != AgendaRecurrence.NONE.value)
+            .where(Agenda.recurrence_generated == 0)
+            .where(Agenda.status != AgendaStatus.COMPLETED.value)
+            .where(Agenda.start_time.isnot(None))
+            .where(Agenda.start_time < datetime.now())
+            .order_by(Agenda.start_time)
+        )
+        result = await db.execute(stmt)
+        return list(result.scalars().all())
 
 
 agenda_service = AgendaService()

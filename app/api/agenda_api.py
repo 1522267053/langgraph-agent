@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.base_api import BaseApi, RouteConfig
 from app.config.database import get_db
-from app.models.agenda import Agenda, AgendaStatus
+from app.models.agenda import Agenda, AgendaRecurrence, AgendaStatus
 from app.schemas.agenda_schema import (
     AgendaBase,
     AgendaCondition,
@@ -111,7 +111,7 @@ class AgendaApi(
 
         @self.router.post("/complete/{agenda_id}", response_model=ApiResponse)
         async def complete_agenda(agenda_id: int, db: AsyncSession = Depends(get_db)):
-            """标记日程为已完成"""
+            """标记日程为已完成，重复日程生成下一实例"""
             agenda = await agenda_service.get_by_id(db, agenda_id)
             agenda.status = AgendaStatus.COMPLETED.value
             agenda.completed_at = datetime.now()
@@ -119,6 +119,17 @@ class AgendaApi(
             from app.services.scheduler_service import scheduler_service
 
             scheduler_service.remove_agenda_reminder(agenda_id)
+
+            # 重复日程：原子锁获取后生成下一实例
+            if agenda.recurrence != AgendaRecurrence.NONE.value:
+                locked = await agenda_service.mark_recurrence_generated(db, agenda_id)
+                if locked:
+                    next_agenda = await agenda_service.create_next_recurrence(
+                        db, agenda
+                    )
+                    if next_agenda:
+                        scheduler_service.sync_agenda_reminder(next_agenda)
+
             await db.commit()
             await db.refresh(agenda)
             return ApiResponse.success(
