@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RefreshLeft, SetUp, View } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { CopyDocument, RefreshLeft, SetUp, View } from '@element-plus/icons-vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import TodoList from '@/components/common/TodoList.vue'
 import type { Segment } from '@/types/segment'
@@ -20,20 +21,12 @@ const emit = defineEmits<{
   (e: 'revert', dbMsgId: number): void
 }>()
 
-const thinkingDbMsgIds = computed(() => {
-  return new Set(props.segments.filter(s => s.type === 'thinking' && s.dbMsgId).map(s => s.dbMsgId))
-})
-
 const lastContentIdx = computed(() => {
   for (let i = props.segments.length - 1; i >= 0; i--) {
     if (props.segments[i].type === 'content') return i
   }
   return -1
 })
-
-function hasDuplicateRevertBtn(dbMsgId: number | undefined): boolean {
-  return !!dbMsgId && thinkingDbMsgIds.value.has(dbMsgId)
-}
 
 function isLastSegment(idx: number): boolean {
   return idx === props.segments.length - 1
@@ -106,6 +99,15 @@ function formatToolResult(result: unknown): string {
     return JSON.stringify(result, null, 2)
   } catch {
     return String(result)
+  }
+}
+
+async function handleCopy(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.error('复制失败')
   }
 }
 </script>
@@ -204,24 +206,34 @@ function formatToolResult(result: unknown): string {
     </div>
 
     <div v-else-if="segment.type === 'content'" class="message-content">
-      <el-tooltip
-        v-if="
-          !isStreaming &&
-          segment.dbMsgId &&
-          !hasDuplicateRevertBtn(segment.dbMsgId) &&
-          idx !== lastContentIdx
-        "
-        content="删除此条及之后的内容"
-        placement="top"
-      >
-        <el-button
-          :icon="RefreshLeft"
-          link
-          size="small"
-          class="content-revert-btn"
-          @click="emit('revert', segment.dbMsgId!)"
-        />
-      </el-tooltip>
+      <div class="content-actions">
+        <el-tooltip v-if="!isStreaming && segment.content" content="复制源文本" placement="top">
+          <el-button
+            :icon="CopyDocument"
+            link
+            size="small"
+            class="copy-btn"
+            @click="handleCopy(segment.content || '')"
+          />
+        </el-tooltip>
+        <el-tooltip
+          v-if="
+            !isStreaming &&
+            segment.dbMsgId &&
+            idx !== lastContentIdx
+          "
+          content="删除此条及之后的内容"
+          placement="top"
+        >
+          <el-button
+            :icon="RefreshLeft"
+            link
+            size="small"
+            class="content-revert-btn"
+            @click="emit('revert', segment.dbMsgId!)"
+          />
+        </el-tooltip>
+      </div>
       <MarkdownRenderer :content="segment.content || ''" />
     </div>
 
@@ -464,10 +476,26 @@ function formatToolResult(result: unknown): string {
   font-size: 15px;
 }
 
-.content-revert-btn {
+.content-actions {
   position: absolute;
-  top: 0px;
-  right: 0px;
+  top: 2px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.copy-btn {
+  color: #c0c4cc;
+  font-size: 14px;
+  transition: color 0.2s;
+}
+
+.copy-btn:hover {
+  color: #409eff;
+}
+
+.content-revert-btn {
   color: #c0c4cc;
   font-size: 14px;
   transition: color 0.2s;
