@@ -56,6 +56,6 @@ export const agendaApi = {
     return post<Agenda>(`/agenda/postpone/${id}`)
   },
   calendarEvents(start_date: string, end_date: string) {
-    return get<Agenda[]>(`/agenda/calendar-events?start_date=${start_date}&end_date=${end_date}`)
+    return post<Agenda[]>('/agenda/calendar-events', { start_date, end_date })
   }
 }

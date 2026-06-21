@@ -18,6 +18,7 @@ from app.schemas.agenda_schema import (
     AgendaCondition,
     AgendaCreate,
     AgendaUpdate,
+    CalendarEventsRequest,
 )
 from app.schemas.base_schema import ApiResponse
 from app.services.agenda_service import agenda_service
@@ -97,16 +98,17 @@ class AgendaApi(
     def _register_custom_routes(self):
         """注册自定义路由"""
 
-        @self.router.get(
+        @self.router.post(
             "/calendar-events", response_model=ApiResponse[list[AgendaBase]]
         )
         async def get_calendar_events(
-            start_date: str,
-            end_date: str,
+            body: CalendarEventsRequest,
             db: AsyncSession = Depends(get_db),
         ):
             """日历模式：按日期范围查询日程（不分页）"""
-            items = await agenda_service.get_by_date_range(db, start_date, end_date)
+            items = await agenda_service.get_by_date_range(
+                db, body.start_date, body.end_date
+            )
             views = AgendaBase.model_to_view_batch(items)
             return ApiResponse.success(data=views, msg="查询成功")
 
