@@ -128,7 +128,16 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 }
 ```
 
-**输入合并规则：** `{...(webhook.input_config), ...request_body}`
+**会话控制（Agent 类型）：** 可通过 `session_id` 字段指定目标会话（不传则新建）
+```json
+{
+  "session_id": 5,
+  "message": "继续上次的对话"
+}
+```
+`session_id` 是控制参数，不进入流程输入。仅 Agent 类型有效，Flow 类型忽略。
+
+**输入合并规则：** `{...(webhook.input_config), ...request_body}`（`session_id` 已被提取，不参与合并）
 
 **响应：**
 ```json
@@ -141,6 +150,13 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
   }
 }
 ```
+
+| 场景 | 响应中 session_id |
+|------|:----------------:|
+| 传了有效 `session_id` | ✅ 回显传入的值 |
+| 传了无效 `session_id` | ❌ 返回错误 |
+| 未传 `session_id`（Agent 类型） | ✅ 返回新建的 session_id |
+| 未传 `session_id`（Flow 类型） | ❌ 不返回（Flow 无会话概念） |
 
 `call_id` 可用于后续查询调用记录和消息。
 

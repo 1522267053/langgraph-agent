@@ -94,12 +94,34 @@ input_data = {**(webhook.input_config or {}), **request_body}
 
 优先级：请求 body > `input_config` 默认模板
 
+**特殊字段：** `session_id` 是控制参数，不进入 `input_data`，用于指定 Agent 类型的目标会话（见下方）。
+
+### 会话控制（Agent 类型）
+
+外部系统可在请求体中传入 `session_id` 控制使用哪个会话：
+
+```json
+POST /api/webhook/trigger/{token}
+{
+  "session_id": 5,
+  "message": "继续上次的对话"
+}
+```
+
+| 场景 | 行为 | 响应中 session_id |
+|------|------|:----------------:|
+| 传了 `session_id` | 校验会话存在且属于该 Agent → 复用该会话继续对话 | ✅ 回显传入的值 |
+| `session_id` 无效 | 返回错误，不执行流程 | ❌ |
+| 未传 `session_id` | 同步创建新会话（标题 `[Webhook] {webhook_name}`） | ✅ 返回新建的 session_id |
+
+`session_id` 对 Flow 类型无效（Flow 不涉及会话概念），Flow 类型触发响应中不含 `session_id`。
+
 ### 异步执行
 
 1. 创建 `WebhookCallRecord`（status=1 执行中）
 2. 后台 fire-and-forget 执行
 3. 按 `flow_type` 分流：
-   - **Agent** → 创建临时会话（标题 `[Webhook] {webhook_name}`），`input_data.message` 作为用户消息，其余字段作为 `params`
+   - **Agent** → 使用指定会话或创建临时会话，`input_data.message` 作为用户消息，其余字段作为 `params`
    - **Flow** → `flow_executor_service.execute_stream`，从 `flow_start` 事件捕获 `execution_id`
 4. 完成后更新 record 的 `status/output_data/finished_at`
 
@@ -140,6 +162,14 @@ curl -X POST "http://host/api/webhook/trigger/abc123..."
 curl -X POST "http://host/api/webhook/trigger/abc123..." \
   -H "Content-Type: application/json" \
   -d '{"message": "查询订单状态", "order_id": "ORD-2026-001"}'
+```
+
+### 指定会话触发（Agent 类型）
+
+```bash
+curl -X POST "http://host/api/webhook/trigger/abc123..." \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": 5, "message": "继续上次的对话"}'
 ```
 
 ### 查询调用记录列表
