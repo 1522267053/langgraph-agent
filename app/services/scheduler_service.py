@@ -295,7 +295,11 @@ class SchedulerService:
         try:
             async with AsyncSessionLocal() as db:
                 agenda = await agenda_service.get_by_id(db, agenda_id)
-                if not agenda or agenda.is_reminded == 1 or agenda.status == AgendaStatus.COMPLETED.value:
+                if (
+                    not agenda
+                    or agenda.is_reminded == 1
+                    or agenda.status == AgendaStatus.COMPLETED.value
+                ):
                     return
 
                 # 格式化开始时间
@@ -343,7 +347,7 @@ class SchedulerService:
             logger.error(f"日程提醒[{agenda_id}]推送失败: {e}", exc_info=True)
 
     async def _scan_expired_recurring_agendas(self) -> None:
-        """定时扫描过期重复日程，链式生成下一实例"""
+        """定时扫描今天过期的重复日程，生成下一实例（不链式生成，明天由明天扫描处理）"""
         from app.config.database import AsyncSessionLocal
         from app.services.agenda_service import agenda_service
 
@@ -361,21 +365,13 @@ class SchedulerService:
                     if not locked:
                         continue
 
-                    # 链式生成：以当前日程为基准，连续生成直到 next_start > now
-                    current = agenda
-                    max_rounds = 30
-                    for _ in range(max_rounds):
-                        next_agenda = await agenda_service.create_next_recurrence(
-                            db, current
-                        )
-                        if not next_agenda:
-                            break
+                    # 只生成一个下一实例，不做链式生成
+                    next_agenda = await agenda_service.create_next_recurrence(
+                        db, agenda
+                    )
+                    if next_agenda:
                         self.sync_agenda_reminder(next_agenda)
                         generated += 1
-                        # 如果下一实例的 start_time > now，停止链式生成
-                        if next_agenda.start_time and next_agenda.start_time > datetime.now():
-                            break
-                        current = next_agenda
 
                 if generated > 0:
                     await db.commit()
