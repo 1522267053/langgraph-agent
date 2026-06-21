@@ -49,8 +49,8 @@ const filteredBasicNodes = computed(() => {
 
 const filteredCardNodes = computed(() => {
   if (props.isAgent) {
-    // Agent 模式：llm + 所有工具类型（排除 card）
-    return cardNodes.filter(item => item.type === 'llm' || !flowExcludeTypes.has(item.type))
+    // Agent 模式：显示所有工具类型（包括 agenda、memory）
+    return cardNodes
   }
   // Flow 模式：排除 memory 和 agenda
   return cardNodes.filter(item => !flowExcludeTypes.has(item.type))
