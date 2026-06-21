@@ -82,20 +82,15 @@ class WebhookService(
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def record_call(self, db: AsyncSession, webhook_id: int) -> None:
-        """记录一次调用（更新调用次数和最后调用时间）"""
-        webhook = await self.get_by_id(db, webhook_id)
-        if webhook:
-            webhook.call_count = (webhook.call_count or 0) + 1
-            webhook.last_call_time = datetime.now()
-            await db.commit()
-
     # ---- Webhook 调用记录管理 ----
 
     async def create_call_record(
         self, db: AsyncSession, webhook: WebhookConfig, input_data: dict
     ) -> WebhookCallRecord:
-        """创建调用记录（触发时写入，status=执行中）"""
+        """创建调用记录（触发时写入，status=执行中），同时更新调用计数"""
+        webhook.call_count = (webhook.call_count or 0) + 1
+        webhook.last_call_time = datetime.now()
+
         record = WebhookCallRecord(
             webhook_id=webhook.id,
             flow_id=webhook.flow_id,
@@ -160,7 +155,7 @@ class WebhookService(
             "failed": ExecutionStatus.FAILED.value,
             "cancelled": ExecutionStatus.CANCELLED.value,
         }
-        return mapping.get(status_str, ExecutionStatus.SUCCESS.value)
+        return mapping.get(status_str, ExecutionStatus.FAILED.value)
 
     # ---- Webhook 调用记录查询（供免认证 API 使用） ----
 
@@ -168,7 +163,6 @@ class WebhookService(
         self, db: AsyncSession, token: str, page: int = 1, page_size: int = 20
     ) -> tuple[list[WebhookCallRecord], int]:
         """通过 token 查询调用记录列表（分页）"""
-        # 先校验 token 有效性
         webhook = await self.get_by_token(db, token)
         if not webhook:
             return [], 0
@@ -294,77 +288,109 @@ class WebhookService(
     # ---- 触发执行（含调用记录） ----
 
     async def trigger_flow(
-        self, db: AsyncSession, webhook: WebhookConfig, input_data: dict
+        self,
+        db: AsyncSession,
+        webhook: WebhookConfig,
+        input_data: dict,
+        session_id: Optional[int] = None,
     ) -> dict:
         """异步触发流程执行（含调用记录）
 
         后台执行流程，完成后通过 WebSocket 通知应用用户。
         如果配置了 callback_url，还会 POST 回调通知外部系统。
+        可指定 session_id 复用已有 Agent 会话（不传则新建，新建的 session_id 会同步返回）。
 
         Args:
             db: 数据库会话
             webhook: Webhook 配置
             input_data: 合并后的输入数据
+            session_id: 可选，Agent 类型时复用指定会话
 
         Returns:
-            {"status": "started", "webhook_id": webhook.id, "call_id": record.id}
+            {"status": "started", "webhook_id": webhook.id, "call_id": record.id, "session_id": ...}
         """
+        from app.services.flow_service import flow_service
+
         flow_id = webhook.flow_id
 
-        # 创建调用记录
+        # 查询流程类型和名称（复用现有 db）
+        flow = await flow_service.get_by_id(db, flow_id, raise_not_found=False)
+        flow_type = flow.flow_type if flow else None
+        flow_name = flow.name or ""
+
+        # Agent 类型：同步解析 session_id（新建或校验外部传入）
+        resolved_session_id = session_id
+        if flow_type == FlowType.AGENT.value:
+            if session_id is not None:
+                # 校验外部传入的 session_id（fail fast）
+                from app.models.agent_session import AgentSession
+
+                stmt = select(AgentSession).where(
+                    AgentSession.id == session_id,
+                    AgentSession.flow_id == flow_id,
+                    AgentSession.is_delete == 0,
+                )
+                result = await db.execute(stmt)
+                if not result.scalar_one_or_none():
+                    raise ValueError(f"会话 {session_id} 不存在或不属于该 Agent")
+            else:
+                # 新建会话
+                from app.services.agent_executor_service import agent_executor_service
+
+                session = await agent_executor_service.create_session(db, flow_id)
+                session.title = f"[Webhook] {webhook.name}"
+                resolved_session_id = session.id
+
+        # 创建调用记录（合并 call_count 更新）
         record = await self.create_call_record(db, webhook, input_data)
+
+        # Agent 类型：回填 ref
+        if resolved_session_id is not None:
+            await self.update_call_record_ref(
+                db, record.id, "session", resolved_session_id
+            )
 
         # 后台异步执行（fire-and-forget）
         asyncio.create_task(
             self._execute_webhook_flow(
                 flow_id=flow_id,
                 input_data=input_data,
-                flow_name="",
+                flow_name=flow_name,
+                flow_type=flow_type,
                 callback_url=webhook.callback_url,
                 webhook_name=webhook.name,
                 call_record_id=record.id,
+                session_id=resolved_session_id,
             )
         )
 
-        return {
+        result = {
             "status": "started",
             "webhook_id": webhook.id,
             "call_id": record.id,
         }
+        if resolved_session_id is not None:
+            result["session_id"] = resolved_session_id
+        return result
 
     async def _execute_webhook_flow(
         self,
         flow_id: int,
         input_data: dict,
         flow_name: str,
+        flow_type: Optional[str],
         callback_url: Optional[str],
         webhook_name: str,
         call_record_id: int,
+        session_id: Optional[int] = None,
     ) -> None:
         """后台执行 Webhook 触发的流程/智能体
 
         消费执行生成器直到完成，完成后发送 callback 回调。
         WebSocket 通知由各 executor service 的完成点自动处理。
-        根据 flow_type 分流：flow → flow_executor_service，agent → agent_executor_service。
-        执行过程中更新调用记录（ref 回填 + 状态更新）。
+        flow_type 和 flow_name 由 trigger_flow 传入，避免重复查询。
         """
         from app.config.database import AsyncSessionLocal
-
-        # 查询流程名称和类型（用于通知和分流）
-        flow_type = None
-        if not flow_name:
-            try:
-                async with AsyncSessionLocal() as db:
-                    from app.services.flow_service import flow_service
-
-                    flow = await flow_service.get_by_id(
-                        db, flow_id, raise_not_found=False
-                    )
-                    if flow:
-                        flow_name = flow.name or ""
-                        flow_type = flow.flow_type
-            except Exception:
-                pass
 
         output_data = None
         error_message = None
@@ -373,7 +399,7 @@ class WebhookService(
         try:
             if flow_type == FlowType.AGENT.value:
                 event_stream = self._execute_agent_via_webhook(
-                    flow_id, input_data, webhook_name, call_record_id
+                    flow_id, input_data, webhook_name, session_id
                 )
             else:
                 from app.services.flow_executor_service import (
@@ -452,23 +478,18 @@ class WebhookService(
             await self.update_callback_status(call_record_id, callback_status)
 
     async def _execute_agent_via_webhook(
-        self, flow_id: int, input_data: dict, webhook_name: str, call_record_id: int
+        self,
+        flow_id: int,
+        input_data: dict,
+        webhook_name: str,
+        session_id: int,
     ):
-        """通过 Webhook 触发 Agent 执行（创建临时会话）
+        """通过 Webhook 触发 Agent 执行
 
+        session_id 由 trigger_flow 同步创建或校验后传入，此处直接使用。
         参照 scheduled_task_service._execute_agent_task 的模式。
         """
         from app.services.agent_executor_service import agent_executor_service
-        from app.config.database import AsyncSessionLocal
-
-        async with AsyncSessionLocal() as db:
-            # 创建临时会话，标题标注来源
-            session = await agent_executor_service.create_session(db, flow_id)
-            session.title = f"[Webhook] {webhook_name}"
-            await db.commit()
-
-            # 回填调用记录的 ref
-            await self.update_call_record_ref(db, call_record_id, "session", session.id)
 
         # 提取 message 和额外参数
         message = (input_data or {}).get("message", "")
@@ -477,7 +498,7 @@ class WebhookService(
             params = None
 
         async for event in agent_executor_service.chat_stream(
-            session.id, message, params
+            session_id, message, params
         ):
             yield event
 

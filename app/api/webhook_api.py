@@ -7,6 +7,7 @@ Webhook API 路由
 """
 
 import logging
+from typing import Optional
 
 from fastapi import Depends, Body, Query
 from pydantic import BaseModel
@@ -35,6 +36,13 @@ class WebhookTriggerResponse(BaseModel):
 
     status: str
     webhook_id: int
+    call_id: int
+    session_id: Optional[int] = None
+
+
+def _to_record_response(r) -> WebhookCallRecordResponse:
+    """ORM 模型 → Schema 响应"""
+    return WebhookCallRecordResponse.model_validate(r)
 
 
 class WebhookApi(
@@ -79,6 +87,7 @@ class WebhookApi(
             """外部系统通过 token 触发流程执行
 
             输入参数合并优先级：请求体 > Webhook 默认配置。
+            可通过 session_id 指定 Agent 类型的目标会话（不传则新建）。
             执行异步进行，立即返回状态。
             """
             webhook = await webhook_service.get_by_token(db, token)
@@ -87,17 +96,18 @@ class WebhookApi(
             if not webhook.is_enabled:
                 return ApiResponse.error(msg="Webhook 已禁用")
 
+            # 提取 session_id（控制参数，不进入流程输入）
+            session_id = body.pop("session_id", None)
             # 合并输入：默认模板 < 请求体
             input_data = {**(webhook.input_config or {}), **body}
 
-            # 记录调用
-            await webhook_service.record_call(db, webhook.id)
-
-            # 异步触发执行
-            result = await webhook_service.trigger_flow(db, webhook, input_data)
+            # 异步触发执行（create_call_record 内部合并 call_count 更新）
+            result = await webhook_service.trigger_flow(
+                db, webhook, input_data, session_id=session_id
+            )
 
             return ApiResponse.success(
-                data=result,
+                data=WebhookTriggerResponse(**result),
                 msg="触发成功",
             )
 
@@ -135,24 +145,7 @@ class WebhookApi(
             records, total = await webhook_service.get_call_records_by_token(
                 db, token, page, page_size
             )
-            items = []
-            for r in records:
-                items.append(
-                    WebhookCallRecordResponse(
-                        id=r.id,
-                        webhook_id=r.webhook_id,
-                        flow_id=r.flow_id,
-                        ref_type=r.ref_type,
-                        ref_id=r.ref_id,
-                        input_data=r.input_data,
-                        status=r.status,
-                        output_data=r.output_data,
-                        error_message=r.error_message,
-                        callback_status=r.callback_status,
-                        started_at=r.started_at,
-                        finished_at=r.finished_at,
-                    )
-                )
+            items = [_to_record_response(r) for r in records]
             return ApiResponse.success(
                 data=WebhookCallRecordListResponse(total=total, items=items),
                 msg="查询成功",
@@ -174,20 +167,7 @@ class WebhookApi(
                 return ApiResponse.error(msg="调用记录不存在")
 
             return ApiResponse.success(
-                data=WebhookCallRecordResponse(
-                    id=record.id,
-                    webhook_id=record.webhook_id,
-                    flow_id=record.flow_id,
-                    ref_type=record.ref_type,
-                    ref_id=record.ref_id,
-                    input_data=record.input_data,
-                    status=record.status,
-                    output_data=record.output_data,
-                    error_message=record.error_message,
-                    callback_status=record.callback_status,
-                    started_at=record.started_at,
-                    finished_at=record.finished_at,
-                ),
+                data=_to_record_response(record),
                 msg="查询成功",
             )
 
@@ -217,21 +197,7 @@ class WebhookApi(
                 db, record, before_id, limit
             )
 
-            items = []
-            for m in messages:
-                items.append(
-                    WebhookMessageResponse(
-                        id=m.id,
-                        role=m.role,
-                        content=m.content,
-                        thinking=getattr(m, "thinking", None),
-                        tool_calls=getattr(m, "tool_calls", None),
-                        tool_call_id=getattr(m, "tool_call_id", None),
-                        status=getattr(m, "status", None),
-                        sequence=getattr(m, "sequence", None),
-                        created_at=m.create_time,
-                    )
-                )
+            items = [WebhookMessageResponse.model_validate(m) for m in messages]
             return ApiResponse.success(
                 data=WebhookMessageListResponse(total=total, items=items),
                 msg="查询成功",
