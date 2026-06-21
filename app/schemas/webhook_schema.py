@@ -105,7 +105,9 @@ class WebhookMessageResponse(BaseView):
     tool_call_id: Optional[str] = Field(None, description="工具调用ID")
     status: Optional[str] = Field(None, description="状态")
     sequence: Optional[int] = Field(None, description="排序序号")
-    created_at: Optional[ChinaDateTime] = Field(None, description="创建时间")
+    created_at: Optional[ChinaDateTime] = Field(
+        None, validation_alias="create_time", description="创建时间"
+    )
 
 
 class WebhookMessageListResponse(BaseView):
