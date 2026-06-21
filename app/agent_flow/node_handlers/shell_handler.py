@@ -381,7 +381,10 @@ class ShellTaskStatusInput(BaseModel):
 
     task_id: str = Field(..., description="后台任务ID")
     wait_time: int = Field(
-        8, ge=8, le=120, description="等待时间（秒），最小8秒，最大120秒。等待期间会尝试获取最新输出，超时则返回当前状态。"
+        8,
+        ge=8,
+        le=120,
+        description="等待时间（秒），最小8秒，最大120秒。等待期间会尝试获取最新输出，超时则返回当前状态。",
     )
 
 
