@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Check, Calendar, List } from '@element-plus/icons-vue'
 import FullCalendar from '@fullcalendar/vue3'
@@ -20,6 +20,128 @@ const loading = ref(false)
 const calendarLoading = ref(false)
 const allAgendas = ref<Agenda[]>([])
 const viewMode = ref<'list' | 'calendar'>('list')
+const listTab = ref<'upcoming' | 'history'>('upcoming')
+
+// ---- 滚动加载（每次 30 天窗口） ----
+const loadingMore = ref(false)
+const hasMore = ref(true)
+const sentinelEl = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | null = null
+
+const STEP_DAYS = 30
+const MAX_DAYS = 365
+const MS_PER_DAY = 86400000
+
+// 游标：已加载与未加载的边界日期
+const cursorDate = ref('')
+
+function fmtDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** 初始化游标到今天 */
+function initCursor() {
+  cursorDate.value = fmtDate(new Date())
+}
+
+/** 计算下一个 30 天窗口并推进游标，返回 null 表示到达上限 */
+function getNextRange(): { start: string; end: string } | null {
+  const todayStr = fmtDate(new Date())
+  const today = new Date(todayStr + 'T00:00:00')
+  const cursor = new Date(cursorDate.value + 'T00:00:00')
+
+  if (listTab.value === 'upcoming') {
+    const daysFromToday = Math.round((cursor.getTime() - today.getTime()) / MS_PER_DAY)
+    if (daysFromToday >= MAX_DAYS) return null
+    const start = cursorDate.value
+    const end = new Date(cursor.getTime() + (STEP_DAYS - 1) * MS_PER_DAY)
+    cursorDate.value = fmtDate(new Date(cursor.getTime() + STEP_DAYS * MS_PER_DAY))
+    return { start, end: fmtDate(end) }
+  } else {
+    const daysFromToday = Math.round((today.getTime() - cursor.getTime()) / MS_PER_DAY)
+    if (daysFromToday >= MAX_DAYS) return null
+    const end = new Date(cursor.getTime() - MS_PER_DAY)
+    const start = new Date(end.getTime() - (STEP_DAYS - 1) * MS_PER_DAY)
+    cursorDate.value = fmtDate(start)
+    return { start: fmtDate(start), end: fmtDate(end) }
+  }
+}
+
+function clientFilter(items: Agenda[]): Agenda[] {
+  if (queryParams.condition.title) {
+    const q = queryParams.condition.title.toLowerCase()
+    items = items.filter(i => i.title?.toLowerCase().includes(q))
+  }
+  if (queryParams.condition.category) {
+    items = items.filter(i => i.category === queryParams.condition.category)
+  }
+  if (queryParams.condition.status !== undefined && queryParams.condition.status !== null) {
+    items = items.filter(i => i.status === queryParams.condition.status)
+  }
+  return items
+}
+
+async function loadData() {
+  initCursor()
+  hasMore.value = true
+  loading.value = true
+  try {
+    const range = getNextRange()
+    if (range) {
+      const res = await agendaApi.calendarEvents(range.start, range.end)
+      if (res.data.code === 1) {
+        allAgendas.value = clientFilter(res.data.data as Agenda[])
+      }
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadMore() {
+  if (loadingMore.value || !hasMore.value || loading.value) return
+  const range = getNextRange()
+  if (!range) {
+    hasMore.value = false
+    return
+  }
+  loadingMore.value = true
+  try {
+    const res = await agendaApi.calendarEvents(range.start, range.end)
+    if (res.data.code === 1) {
+      const items = clientFilter(res.data.data as Agenda[])
+      allAgendas.value = [...allAgendas.value, ...items]
+      // 没有新数据时停止继续加载
+      hasMore.value = items.length > 0
+    }
+  } finally {
+    loadingMore.value = false
+  }
+}
+
+function setupObserver() {
+  if (observer) observer.disconnect()
+  observer = new IntersectionObserver(
+    entries => {
+      if (entries[0].isIntersecting) {
+        loadMore()
+      }
+    },
+    { rootMargin: '200px' }
+  )
+  if (sentinelEl.value) {
+    observer.observe(sentinelEl.value)
+  }
+}
+
+watch(
+  () => sentinelEl.value,
+  val => {
+    if (val) {
+      setupObserver()
+    }
+  }
+)
 
 const queryParams = reactive({
   condition: {
@@ -173,12 +295,12 @@ const groupedAgendas = computed(() => {
       groups[0].items.push(item)
     } else if (dateOnly === tomorrow) {
       groups[1].items.push(item)
+    } else if (dateOnly < today) {
+      groups[5].items.push(item)
     } else if (dateOnly >= thisWeek.start && dateOnly <= thisWeek.end) {
       groups[2].items.push(item)
     } else if (dateOnly >= nextWeek.start && dateOnly <= nextWeek.end) {
       groups[3].items.push(item)
-    } else if (dateOnly < today) {
-      groups[5].items.push(item)
     } else {
       groups[4].items.push(item)
     }
@@ -196,39 +318,18 @@ const groupedAgendas = computed(() => {
   return groups.filter(g => g.items.length > 0)
 })
 
-// ---- 数据加载 ----
-async function loadData() {
-  loading.value = true
-  try {
-    // 加载前后各 3 个月的数据
-    const now = new Date()
-    const startD = new Date(now.getFullYear(), now.getMonth() - 3, 1)
-    const endD = new Date(now.getFullYear(), now.getMonth() + 4, 0)
-    const fmt = (d: Date) =>
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    const res = await agendaApi.calendarEvents(fmt(startD), fmt(endD))
-    if (res.data.code === 1) {
-      let items = res.data.data as Agenda[]
-      // 客户端过滤
-      if (queryParams.condition.title) {
-        const q = queryParams.condition.title.toLowerCase()
-        items = items.filter(i => i.title?.toLowerCase().includes(q))
-      }
-      if (queryParams.condition.category) {
-        items = items.filter(i => i.category === queryParams.condition.category)
-      }
-      if (queryParams.condition.status !== undefined && queryParams.condition.status !== null) {
-        items = items.filter(i => i.status === queryParams.condition.status)
-      }
-      allAgendas.value = items
-    }
-  } finally {
-    loading.value = false
+const filteredGroups = computed(() => {
+  const groups = groupedAgendas.value
+  if (listTab.value === 'upcoming') {
+    return groups.filter(g => g.key !== 'earlier')
+  } else {
+    const earlier = groups.find(g => g.key === 'earlier')
+    return earlier ? [earlier] : []
   }
-}
+})
 
 function handleSearch() {
-  loadData()
+  listTab.value = 'upcoming'
 }
 
 function handleReset() {
@@ -276,7 +377,7 @@ const dialogVisible = ref(false)
 const dialogTitle = ref('新建日程')
 const isEdit = ref(false)
 const editId = ref<number | null>(null)
-const dateRange = ref<[Date, Date] | null>(null)
+const dialogDateRange = ref<[Date, Date] | null>(null)
 const remindDate = ref<Date | null>(null)
 
 const form = reactive({
@@ -305,7 +406,7 @@ function resetForm() {
   form.status = 0
   form.color = '#409EFF'
   form.remind_at = ''
-  dateRange.value = null
+  dialogDateRange.value = null
   remindDate.value = null
 }
 
@@ -334,7 +435,7 @@ function openEditDialog(row: Agenda) {
   form.remind_at = row.remind_at ?? ''
   const startD = parseDatetime(row.start_time)
   const endD = parseDatetime(row.end_time)
-  dateRange.value = startD && endD ? [startD, endD] : null
+  dialogDateRange.value = startD && endD ? [startD, endD] : null
   remindDate.value = parseDatetime(row.remind_at)
   dialogVisible.value = true
 }
@@ -501,17 +602,20 @@ async function loadCalendarEvents(start_date: string, end_date: string) {
 
 watch(viewMode, val => {
   if (val === 'calendar') {
-    // 初始加载当前月份数据，datesSet 会接管后续视图切换
-    const now = new Date()
-    const start = formatDate(now.toISOString())
-    const endMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-    const end = formatDate(endMonth.toISOString())
-    loadCalendarEvents(start, end)
+    // datesSet 回调会在日历初始化时自动加载
   }
+})
+
+watch(listTab, () => {
+  loadData()
 })
 
 onMounted(() => {
   loadData()
+})
+
+onBeforeUnmount(() => {
+  if (observer) observer.disconnect()
 })
 </script>
 
@@ -582,11 +686,29 @@ onMounted(() => {
       </el-form>
 
       <div v-loading="loading" class="card-panel agenda-list-panel">
-        <template v-if="groupedAgendas.length === 0">
+        <div class="list-tabs">
+          <div
+            class="list-tab-item"
+            :class="{ active: listTab === 'upcoming' }"
+            @click="listTab = 'upcoming'"
+          >
+            <span class="tab-icon">📋</span>
+            <span>今日和未来</span>
+          </div>
+          <div
+            class="list-tab-item"
+            :class="{ active: listTab === 'history' }"
+            @click="listTab = 'history'"
+          >
+            <span class="tab-icon">📂</span>
+            <span>查看以前</span>
+          </div>
+        </div>
+        <template v-if="filteredGroups.length === 0">
           <el-empty description="暂无日程" />
         </template>
         <template v-else>
-          <div v-for="group in groupedAgendas" :key="group.key" class="agenda-group">
+          <div v-for="group in filteredGroups" :key="group.key" class="agenda-group">
             <div class="group-header">
               <span class="group-label">{{ group.label }}</span>
               <span class="group-count">{{ group.items.length }} 项</span>
@@ -701,6 +823,14 @@ onMounted(() => {
             </div>
           </div>
         </template>
+        <div
+          ref="sentinelEl"
+          class="list-sentinel"
+          :class="{ 'is-loading': loadingMore }"
+        >
+          <span v-if="loadingMore">加载更多...</span>
+          <span v-else-if="!hasMore && filteredGroups.length > 0">已加载全部</span>
+        </div>
       </div>
     </template>
 
@@ -719,7 +849,7 @@ onMounted(() => {
         </el-form-item>
         <el-form-item label="时间范围">
           <el-date-picker
-            v-model="dateRange"
+            v-model="dialogDateRange"
             type="datetimerange"
             start-placeholder="开始时间"
             end-placeholder="结束时间"
@@ -898,6 +1028,46 @@ onMounted(() => {
   max-height: calc(100vh - 200px);
 }
 
+.list-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--el-border-color-light);
+  background: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.list-tab-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  border-bottom: 2px solid transparent;
+  user-select: none;
+}
+
+.list-tab-item:hover {
+  color: var(--el-text-color-primary);
+  background: var(--el-fill-color-lighter);
+}
+
+.list-tab-item.active {
+  color: var(--el-color-primary);
+  border-bottom-color: var(--el-color-primary);
+  background: transparent;
+}
+
+.tab-icon {
+  font-size: 16px;
+}
+
 .agenda-group {
   margin-bottom: 4px;
 }
@@ -1051,5 +1221,16 @@ onMounted(() => {
   .card-actions {
     opacity: 1;
   }
+}
+
+.list-sentinel {
+  text-align: center;
+  padding: 16px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.list-sentinel.is-loading {
+  color: var(--el-color-primary);
 }
 </style>

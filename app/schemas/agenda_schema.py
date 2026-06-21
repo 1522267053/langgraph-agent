@@ -4,7 +4,7 @@
 
 from typing import Optional
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from app.schemas.base_schema import BaseView, ChinaDateTime
 
@@ -50,3 +50,10 @@ class AgendaCondition(BaseView):
     creator_name: Optional[str] = Field(None, description="创建人名称")
     start_date: Optional[str] = Field(None, description="开始时间范围起（YYYY-MM-DD）")
     end_date: Optional[str] = Field(None, description="开始时间范围止（YYYY-MM-DD）")
+
+
+class CalendarEventsRequest(BaseModel):
+    """日历查询请求"""
+
+    start_date: str = Field(..., description="开始日期（YYYY-MM-DD）")
+    end_date: str = Field(..., description="结束日期（YYYY-MM-DD）")
