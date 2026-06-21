@@ -307,12 +307,23 @@ const groupedAgendas = computed(() => {
   }
 
   for (const g of groups) {
-    g.items.sort((a, b) => {
-      if (!a.start_time && !b.start_time) return 0
-      if (!a.start_time) return 1
-      if (!b.start_time) return -1
-      return a.start_time.localeCompare(b.start_time)
-    })
+    if (g.key === 'earlier') {
+      // 更早：倒序（最新的在最前面）
+      g.items.sort((a, b) => {
+        if (!a.start_time && !b.start_time) return 0
+        if (!a.start_time) return 1
+        if (!b.start_time) return -1
+        return b.start_time.localeCompare(a.start_time)
+      })
+    } else {
+      // 其他分组：正序
+      g.items.sort((a, b) => {
+        if (!a.start_time && !b.start_time) return 0
+        if (!a.start_time) return 1
+        if (!b.start_time) return -1
+        return a.start_time.localeCompare(b.start_time)
+      })
+    }
   }
 
   return groups.filter(g => g.items.length > 0)
