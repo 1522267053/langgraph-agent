@@ -71,6 +71,7 @@ const statusOptions = [
 const recurrenceOptions = [
   { label: '不重复', value: 'none' },
   { label: '每日', value: 'daily' },
+  { label: '仅工作日', value: 'weekday' },
   { label: '每周', value: 'weekly' },
   { label: '每月', value: 'monthly' }
 ]
@@ -623,6 +624,15 @@ onMounted(() => {
                       </template>
                     </span>
                     <span v-if="item.location" class="meta-location">{{ item.location }}</span>
+                    <span v-if="item.remind_at" class="meta-remind">
+                      提醒
+                      <template v-if="getDateOnly(item.remind_at) !== getDateOnly(item.start_time)">
+                        {{ formatDateLabel(item.remind_at) }} {{ item.remind_at.slice(11, 16) }}
+                      </template>
+                      <template v-else>
+                        {{ item.remind_at.slice(11, 16) }}
+                      </template>
+                    </span>
                   </div>
                 </div>
               </div>
@@ -981,6 +991,15 @@ onMounted(() => {
 
 .meta-location::before {
   content: '📍';
+  margin-right: 2px;
+}
+
+.meta-remind {
+  color: #f59e0b;
+}
+
+.meta-remind::before {
+  content: '🔔';
   margin-right: 2px;
 }
 

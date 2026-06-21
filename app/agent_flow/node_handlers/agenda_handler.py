@@ -281,7 +281,7 @@ class AgendaNodeHandler(BaseNodeHandler):
                     "创建一条日程。title 必填，其他参数可选。"
                     "时间格式：YYYY-MM-DD HH:MM:SS。"
                     "category: work/life/study/other, priority: 1低/2中/3高, "
-                    "recurrence: none/daily/weekly/monthly"
+                    "recurrence: none/daily/weekday/weekly/monthly"
                 ),
                 func=None,
                 coroutine=create_agenda,
@@ -332,7 +332,7 @@ class AgendaCreateInput(BaseModel):
     priority: int = Field(2, description="优先级：1=低/2=中/3=高")
     location: str = Field("", description="地点")
     remind_at: str = Field("", description="提醒时间 YYYY-MM-DD HH:MM:SS")
-    recurrence: str = Field("none", description="重复：none/daily/weekly/monthly")
+    recurrence: str = Field("none", description="重复：none/daily/weekday/weekly/monthly")
     description: str = Field("", description="备注")
 
 

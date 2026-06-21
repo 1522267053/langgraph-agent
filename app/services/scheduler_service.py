@@ -58,6 +58,14 @@ class SchedulerService:
             replace_existing=True,
             max_instances=1,
         )
+        self._scheduler.add_job(
+            self._scan_expired_recurring_agendas,
+            CronTrigger(minute="*/30"),
+            id="scan_expired_recurring_agendas",
+            name="扫描过期重复日程",
+            replace_existing=True,
+            max_instances=1,
+        )
         self._scheduler.start()
         logger.info(f"调度器已启动，文档处理任务间隔: {settings.doc_process_interval}s")
 
@@ -311,22 +319,72 @@ class SchedulerService:
                 # 标记为已推送
                 await agenda_service.mark_reminded(db, agenda_id)
 
-                # 重复日程：生成下一实例并注册提醒
+                # 重复日程：原子锁获取后生成下一实例并注册提醒
                 if agenda.recurrence != AgendaRecurrence.NONE.value:
-                    next_agenda = await agenda_service.create_next_recurrence(
-                        db, agenda
+                    locked = await agenda_service.mark_recurrence_generated(
+                        db, agenda_id
                     )
-                    if next_agenda:
-                        self.sync_agenda_reminder(next_agenda)
-                        await db.commit()
-                        logger.info(
-                            f"日程[{agenda_id}]重复生成下一实例[{next_agenda.id}]: "
-                            f"{next_agenda.start_time}"
+                    if locked:
+                        next_agenda = await agenda_service.create_next_recurrence(
+                            db, agenda
                         )
+                        if next_agenda:
+                            self.sync_agenda_reminder(next_agenda)
+                            await db.commit()
+                            logger.info(
+                                f"日程[{agenda_id}]重复生成下一实例[{next_agenda.id}]: "
+                                f"{next_agenda.start_time}"
+                            )
+                    else:
+                        await db.commit()
 
                 logger.info(f"日程提醒[{agenda_id}]已推送给 {username}")
         except Exception as e:
             logger.error(f"日程提醒[{agenda_id}]推送失败: {e}", exc_info=True)
+
+    async def _scan_expired_recurring_agendas(self) -> None:
+        """定时扫描过期重复日程，链式生成下一实例"""
+        from app.config.database import AsyncSessionLocal
+        from app.services.agenda_service import agenda_service
+
+        try:
+            async with AsyncSessionLocal() as db:
+                agendas = await agenda_service.get_expired_recurring_agendas(db)
+                if not agendas:
+                    return
+
+                generated = 0
+                for agenda in agendas:
+                    locked = await agenda_service.mark_recurrence_generated(
+                        db, agenda.id
+                    )
+                    if not locked:
+                        continue
+
+                    # 链式生成：以当前日程为基准，连续生成直到 next_start > now
+                    current = agenda
+                    max_rounds = 30
+                    for _ in range(max_rounds):
+                        next_agenda = await agenda_service.create_next_recurrence(
+                            db, current
+                        )
+                        if not next_agenda:
+                            break
+                        self.sync_agenda_reminder(next_agenda)
+                        generated += 1
+                        # 如果下一实例的 start_time > now，停止链式生成
+                        if next_agenda.start_time and next_agenda.start_time > datetime.now():
+                            break
+                        current = next_agenda
+
+                if generated > 0:
+                    await db.commit()
+                    logger.info(
+                        f"扫描过期重复日程完成，共处理 {len(agendas)} 条，"
+                        f"生成 {generated} 个新实例"
+                    )
+        except Exception as e:
+            logger.error(f"扫描过期重复日程失败: {e}", exc_info=True)
 
     async def _load_pending_agenda_reminders(self) -> None:
         """启动时加载所有未推送的日程提醒"""
