@@ -5,6 +5,7 @@
 """
 
 from datetime import datetime, timedelta
+from typing import Optional
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -112,7 +113,11 @@ class AgendaApi(
         @self.router.post("/complete/{agenda_id}", response_model=ApiResponse)
         async def complete_agenda(agenda_id: int, db: AsyncSession = Depends(get_db)):
             """标记日程为已完成，重复日程生成下一实例"""
-            agenda = await agenda_service.get_by_id(db, agenda_id)
+            agenda:Optional[Agenda] = await agenda_service.get_by_id(db, agenda_id)
+            if agenda is None:
+                return ApiResponse.error(
+                msg=f"日程记录[{agenda_id}]不存在"
+            )
             agenda.status = AgendaStatus.COMPLETED.value
             agenda.completed_at = datetime.now()
             # 完成后移除提醒调度
@@ -140,6 +145,10 @@ class AgendaApi(
         async def postpone_agenda(agenda_id: int, db: AsyncSession = Depends(get_db)):
             """延后提醒 15 分钟"""
             agenda = await agenda_service.get_by_id(db, agenda_id)
+            if agenda is None:
+                return ApiResponse.error(
+                msg=f"日程记录[{agenda_id}]不存在"
+            )
             new_remind = datetime.now() + timedelta(minutes=15)
             agenda.remind_at = new_remind
             agenda.is_reminded = 0

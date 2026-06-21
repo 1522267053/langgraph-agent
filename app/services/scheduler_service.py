@@ -288,14 +288,14 @@ class SchedulerService:
     async def _run_agenda_reminder(self, agenda_id: int) -> None:
         """日程提醒回调：定向推送给创建者，重复日程自动生成下一实例"""
         from app.config.database import AsyncSessionLocal
-        from app.models.agenda import AgendaRecurrence
+        from app.models.agenda import AgendaRecurrence, AgendaStatus
         from app.services.agenda_service import agenda_service
         from app.services.ws_manager import ws_manager
 
         try:
             async with AsyncSessionLocal() as db:
                 agenda = await agenda_service.get_by_id(db, agenda_id)
-                if not agenda or agenda.is_reminded == 1:
+                if not agenda or agenda.is_reminded == 1 or agenda.status == AgendaStatus.COMPLETED.value:
                     return
 
                 # 格式化开始时间

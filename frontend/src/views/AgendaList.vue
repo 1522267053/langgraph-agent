@@ -617,10 +617,20 @@ onMounted(() => {
                         {{ formatDateLabel(item.start_time) }} {{ item.start_time.slice(11, 16) }} → {{ formatDateLabel(item.end_time) }} {{ item.end_time.slice(11, 16) }}
                       </template>
                       <template v-else-if="item.end_time">
-                        {{ item.start_time.slice(11, 16) }}-{{ item.end_time.slice(11, 16) }}
+                        <template v-if="group.key === 'today' || group.key === 'tomorrow'">
+                          {{ item.start_time.slice(11, 16) }}-{{ item.end_time.slice(11, 16) }}
+                        </template>
+                        <template v-else>
+                          {{ formatDateLabel(item.start_time) }} {{ item.start_time.slice(11, 16) }}-{{ item.end_time.slice(11, 16) }}
+                        </template>
                       </template>
                       <template v-else>
-                        {{ item.start_time.slice(11, 16) }}
+                        <template v-if="group.key === 'today' || group.key === 'tomorrow'">
+                          {{ item.start_time.slice(11, 16) }}
+                        </template>
+                        <template v-else>
+                          {{ formatDateLabel(item.start_time) }} {{ item.start_time.slice(11, 16) }}
+                        </template>
                       </template>
                     </span>
                     <span v-if="item.location" class="meta-location">{{ item.location }}</span>
@@ -629,8 +639,11 @@ onMounted(() => {
                       <template v-if="getDateOnly(item.remind_at) !== getDateOnly(item.start_time)">
                         {{ formatDateLabel(item.remind_at) }} {{ item.remind_at.slice(11, 16) }}
                       </template>
-                      <template v-else>
+                      <template v-else-if="group.key === 'today' || group.key === 'tomorrow'">
                         {{ item.remind_at.slice(11, 16) }}
+                      </template>
+                      <template v-else>
+                        {{ formatDateLabel(item.remind_at) }} {{ item.remind_at.slice(11, 16) }}
                       </template>
                     </span>
                   </div>

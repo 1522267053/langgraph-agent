@@ -72,11 +72,12 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         return query, count_query
 
     async def get_unreminded_agendas(self, db: AsyncSession) -> list[Agenda]:
-        """获取所有设置了提醒但未推送的日程（不论是否过期）"""
+        """获取所有设置了提醒但未推送的日程（不论是否过期，排除已完成）"""
         stmt = select(Agenda).where(
             and_(
                 Agenda.remind_at.isnot(None),
                 Agenda.is_reminded == 0,
+                Agenda.status != AgendaStatus.COMPLETED.value,
             )
         )
         result = await db.execute(stmt)
