@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Check, Calendar, List } from '@element-plus/icons-vue'
 import FullCalendar from '@fullcalendar/vue3'
@@ -15,27 +15,17 @@ import type {
 } from '@fullcalendar/core'
 import { agendaApi } from '@/api/agenda'
 import type { Agenda, AgendaCondition } from '@/api/agenda'
-import type { PaginatedResponse } from '@/types/common'
-import ActionColumn from '@/components/common/ActionColumn.vue'
-import { useIsMobile } from '@/composables/useIsMobile'
-
-const { isMobile } = useIsMobile()
 
 const loading = ref(false)
 const calendarLoading = ref(false)
-const tableData = ref<Agenda[]>([])
-const total = ref(0)
+const allAgendas = ref<Agenda[]>([])
 const viewMode = ref<'list' | 'calendar'>('list')
 
 const queryParams = reactive({
-  page: 1,
-  page_size: 10,
   condition: {
     title: '',
     category: undefined as string | undefined,
-    status: undefined as number | undefined,
-    start_date: '',
-    end_date: ''
+    status: undefined as number | undefined
   } as AgendaCondition
 })
 
@@ -104,15 +94,132 @@ function parseDatetime(str: string | null | undefined): Date | null {
   return isNaN(d.getTime()) ? null : d
 }
 
+// ---- 日期分组工具 ----
+
+function getToday(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function getTomorrow(): string {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function getWeekRange(): { start: string; end: string } {
+  const now = new Date()
+  const dayOfWeek = now.getDay()
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
+  const monday = new Date(now)
+  monday.setDate(now.getDate() + mondayOffset)
+  const sunday = new Date(monday)
+  sunday.setDate(monday.getDate() + 6)
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return { start: fmt(monday), end: fmt(sunday) }
+}
+
+function getNextWeekRange(): { start: string; end: string } {
+  const now = new Date()
+  const dayOfWeek = now.getDay()
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
+  const nextMonday = new Date(now)
+  nextMonday.setDate(now.getDate() + mondayOffset + 7)
+  const nextSunday = new Date(nextMonday)
+  nextSunday.setDate(nextMonday.getDate() + 6)
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return { start: fmt(nextMonday), end: fmt(nextSunday) }
+}
+
+function formatDateLabel(dateStr: string): string {
+  if (!dateStr) return ''
+  const d = new Date(dateStr.replace(' ', 'T'))
+  const month = d.getMonth() + 1
+  const day = d.getDate()
+  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+  const wd = weekdays[d.getDay()]
+  return `${month}月${day}日 ${wd}`
+}
+
+function getDateOnly(dateStr: string | null | undefined): string {
+  if (!dateStr) return ''
+  return dateStr.slice(0, 10)
+}
+
+const groupedAgendas = computed(() => {
+  const today = getToday()
+  const tomorrow = getTomorrow()
+  const thisWeek = getWeekRange()
+  const nextWeek = getNextWeekRange()
+
+  const groups: { key: string; label: string; items: Agenda[] }[] = [
+    { key: 'today', label: `今天 ${formatDateLabel(today)}`, items: [] },
+    { key: 'tomorrow', label: `明天 ${formatDateLabel(tomorrow)}`, items: [] },
+    { key: 'this_week', label: `本周 (${formatDateLabel(thisWeek.start)}-${formatDateLabel(thisWeek.end)})`, items: [] },
+    { key: 'next_week', label: `下周 (${formatDateLabel(nextWeek.start)}-${formatDateLabel(nextWeek.end)})`, items: [] },
+    { key: 'future', label: '未来', items: [] },
+    { key: 'earlier', label: '更早', items: [] },
+    { key: 'no_date', label: '未设置时间', items: [] }
+  ]
+
+  for (const item of allAgendas.value) {
+    const dateOnly = getDateOnly(item.start_time)
+    if (!dateOnly) {
+      groups[6].items.push(item)
+    } else if (dateOnly === today) {
+      groups[0].items.push(item)
+    } else if (dateOnly === tomorrow) {
+      groups[1].items.push(item)
+    } else if (dateOnly >= thisWeek.start && dateOnly <= thisWeek.end) {
+      groups[2].items.push(item)
+    } else if (dateOnly >= nextWeek.start && dateOnly <= nextWeek.end) {
+      groups[3].items.push(item)
+    } else if (dateOnly < today) {
+      groups[5].items.push(item)
+    } else {
+      groups[4].items.push(item)
+    }
+  }
+
+  for (const g of groups) {
+    g.items.sort((a, b) => {
+      if (!a.start_time && !b.start_time) return 0
+      if (!a.start_time) return 1
+      if (!b.start_time) return -1
+      return a.start_time.localeCompare(b.start_time)
+    })
+  }
+
+  return groups.filter(g => g.items.length > 0)
+})
+
 // ---- 数据加载 ----
 async function loadData() {
   loading.value = true
   try {
-    const res = await agendaApi.page(queryParams)
+    // 加载前后各 3 个月的数据
+    const now = new Date()
+    const startD = new Date(now.getFullYear(), now.getMonth() - 3, 1)
+    const endD = new Date(now.getFullYear(), now.getMonth() + 4, 0)
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const res = await agendaApi.calendarEvents(fmt(startD), fmt(endD))
     if (res.data.code === 1) {
-      const data = res.data.data as PaginatedResponse<Agenda>
-      tableData.value = data.items
-      total.value = data.total
+      let items = res.data.data as Agenda[]
+      // 客户端过滤
+      if (queryParams.condition.title) {
+        const q = queryParams.condition.title.toLowerCase()
+        items = items.filter(i => i.title?.toLowerCase().includes(q))
+      }
+      if (queryParams.condition.category) {
+        items = items.filter(i => i.category === queryParams.condition.category)
+      }
+      if (queryParams.condition.status !== undefined && queryParams.condition.status !== null) {
+        items = items.filter(i => i.status === queryParams.condition.status)
+      }
+      allAgendas.value = items
     }
   } finally {
     loading.value = false
@@ -120,7 +227,6 @@ async function loadData() {
 }
 
 function handleSearch() {
-  queryParams.page = 1
   loadData()
 }
 
@@ -128,51 +234,12 @@ function handleReset() {
   queryParams.condition = {
     title: '',
     category: undefined,
-    status: undefined,
-    start_date: '',
-    end_date: ''
+    status: undefined
   }
-  handleSearch()
-}
-
-function handlePageChange() {
-  loadData()
-}
-
-function handleSizeChange() {
-  queryParams.page = 1
   loadData()
 }
 
 // ---- 行操作 ----
-function getRowActions(row: Agenda) {
-  return [
-    {
-      key: 'complete',
-      label: '完成',
-      icon: Check,
-      btnClass: 'action-success',
-      visible: row.status !== 2
-    },
-    { key: 'edit', label: '编辑', icon: Edit, btnClass: 'action-edit' },
-    { key: 'delete', label: '删除', icon: Delete, btnClass: 'action-delete', danger: true }
-  ].filter(a => a.visible !== false)
-}
-
-async function onRowAction(row: Agenda, key: string) {
-  switch (key) {
-    case 'complete':
-      await handleComplete(row)
-      break
-    case 'edit':
-      openEditDialog(row)
-      break
-    case 'delete':
-      await handleDelete(row)
-      break
-  }
-}
-
 async function handleComplete(row: Agenda) {
   try {
     await ElMessageBox.confirm(`确认将「${row.title}」标记为已完成？`, '提示', {
@@ -513,66 +580,104 @@ onMounted(() => {
         </el-form-item>
       </el-form>
 
-      <div class="card-panel">
-        <el-table v-loading="loading" :data="tableData" stripe>
-          <el-table-column prop="title" label="标题" min-width="160">
-            <template #default="{ row }">
-              <div class="agenda-title-cell">
-                <span v-if="row.color" class="color-dot" :style="{ backgroundColor: row.color }" />
-                <span :class="{ 'text-done': row.status === 2 }">{{ row.title }}</span>
+      <div v-loading="loading" class="card-panel agenda-list-panel">
+        <template v-if="groupedAgendas.length === 0">
+          <el-empty description="暂无日程" />
+        </template>
+        <template v-else>
+          <div v-for="group in groupedAgendas" :key="group.key" class="agenda-group">
+            <div class="group-header">
+              <span class="group-label">{{ group.label }}</span>
+              <span class="group-count">{{ group.items.length }} 项</span>
+            </div>
+            <div
+              v-for="item in group.items"
+              :key="item.id"
+              class="agenda-card"
+              :class="{ 'is-done': item.status === 2 }"
+            >
+              <div class="card-left">
+                <span
+                  v-if="item.color"
+                  class="color-dot"
+                  :style="{ backgroundColor: item.color }"
+                />
+                <div class="card-info">
+                  <div class="card-title" :class="{ 'text-done': item.status === 2 }">
+                    {{ item.title }}
+                    <span
+                      v-if="item.recurrence && item.recurrence !== 'none'"
+                      class="recurrence-badge"
+                    >{{ recurrenceOptions.find(o => o.value === item.recurrence)?.label }}</span>
+                  </div>
+                  <div class="card-meta">
+                    <span v-if="item.start_time" class="meta-time">
+                      <template v-if="item.end_time && getDateOnly(item.start_time) !== getDateOnly(item.end_time)">
+                        {{ formatDateLabel(item.start_time) }} {{ item.start_time.slice(11, 16) }} → {{ formatDateLabel(item.end_time) }} {{ item.end_time.slice(11, 16) }}
+                      </template>
+                      <template v-else-if="item.end_time">
+                        {{ item.start_time.slice(11, 16) }}-{{ item.end_time.slice(11, 16) }}
+                      </template>
+                      <template v-else>
+                        {{ item.start_time.slice(11, 16) }}
+                      </template>
+                    </span>
+                    <span v-if="item.location" class="meta-location">{{ item.location }}</span>
+                  </div>
+                </div>
               </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="category" label="分类" width="90" align="center">
-            <template #default="{ row }">
-              <el-tag :type="categoryMap[row.category]?.type" size="small">
-                {{ categoryMap[row.category]?.text || row.category }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="priority" label="优先级" width="80" align="center">
-            <template #default="{ row }">
-              <el-tag :type="priorityMap[row.priority]?.type" size="small" effect="plain">
-                {{ priorityMap[row.priority]?.text || '-' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="start_time" label="开始时间" width="170" />
-          <el-table-column prop="end_time" label="结束时间" width="170" />
-          <el-table-column prop="location" label="地点" min-width="120" show-overflow-tooltip />
-          <el-table-column prop="remind_at" label="提醒时间" width="170">
-            <template #default="{ row }">
-              <span v-if="row.remind_at" :class="{ 'text-muted': row.is_reminded === 1 }">
-                {{ row.remind_at }}
-              </span>
-              <span v-else class="text-muted">-</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="status" label="状态" width="90" align="center">
-            <template #default="{ row }">
-              <el-tag :type="statusMap[row.status]?.type" size="small">
-                {{ statusMap[row.status]?.text || '-' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" :width="isMobile ? 60 : 200" fixed="right">
-            <template #default="{ row }">
-              <ActionColumn :actions="getRowActions(row)" @action="onRowAction(row, $event)" />
-            </template>
-          </el-table-column>
-        </el-table>
-
-        <div class="pagination">
-          <el-pagination
-            v-model:current-page="queryParams.page"
-            v-model:page-size="queryParams.page_size"
-            :total="total"
-            :page-sizes="[10, 20, 50]"
-            layout="total, sizes, prev, pager, next"
-            @current-change="handlePageChange"
-            @size-change="handleSizeChange"
-          />
-        </div>
+              <div class="card-right">
+                <div class="card-tags">
+                  <el-tag
+                    v-if="item.category"
+                    :type="categoryMap[item.category]?.type"
+                    size="small"
+                  >
+                    {{ categoryMap[item.category]?.text || item.category }}
+                  </el-tag>
+                  <el-tag
+                    v-if="item.priority"
+                    :type="priorityMap[item.priority]?.type"
+                    size="small"
+                    effect="plain"
+                  >
+                    {{ priorityMap[item.priority]?.text }}
+                  </el-tag>
+                  <el-tag
+                    :type="statusMap[item.status ?? 0]?.type"
+                    size="small"
+                  >
+                    {{ statusMap[item.status ?? 0]?.text }}
+                  </el-tag>
+                </div>
+                <div class="card-actions">
+                  <el-button
+                    v-if="item.status !== 2"
+                    text
+                    size="small"
+                    type="success"
+                    :icon="Check"
+                    @click="handleComplete(item)"
+                  />
+                  <el-button
+                    text
+                    size="small"
+                    type="primary"
+                    :icon="Edit"
+                    @click="openEditDialog(item)"
+                  />
+                  <el-button
+                    text
+                    size="small"
+                    type="danger"
+                    :icon="Delete"
+                    @click="handleDelete(item)"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
       </div>
     </template>
 
@@ -690,16 +795,10 @@ onMounted(() => {
   gap: 12px;
 }
 
-.agenda-title-cell {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .color-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -739,6 +838,11 @@ onMounted(() => {
   text-decoration: line-through;
 }
 
+.calendar-panel :deep(.fc-day-sat),
+.calendar-panel :deep(.fc-day-sun) {
+  background-color: #fafafa;
+}
+
 .color-picker-row {
   display: flex;
   align-items: center;
@@ -762,5 +866,158 @@ onMounted(() => {
 
 .color-preset-dot:hover {
   border-color: var(--el-border-color-darker);
+}
+
+/* ---- 日期分组卡片布局 ---- */
+.agenda-list-panel {
+  padding: 0;
+  overflow-y: auto;
+  max-height: calc(100vh - 200px);
+}
+
+.agenda-group {
+  margin-bottom: 4px;
+}
+
+.agenda-group:last-child {
+  margin-bottom: 0;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid var(--el-border-color-light);
+  background: var(--el-fill-color-lighter);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.group-label {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+
+.group-count {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.agenda-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+  transition: background-color 0.15s;
+  gap: 12px;
+}
+
+.agenda-card:hover {
+  background-color: var(--el-fill-color-light);
+}
+
+.agenda-card.is-done {
+  opacity: 0.6;
+}
+
+.agenda-card:last-child {
+  border-bottom: none;
+}
+
+.card-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recurrence-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 400;
+  color: #0ea5e9;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 4px;
+  padding: 0 6px;
+  line-height: 18px;
+  flex-shrink: 0;
+}
+
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.meta-time {
+  font-family: monospace;
+}
+
+.meta-location::before {
+  content: '📍';
+  margin-right: 2px;
+}
+
+.card-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.card-tags {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.agenda-card:hover .card-actions {
+  opacity: 1;
+}
+
+@media (max-width: 768px) {
+  .card-right {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .card-actions {
+    opacity: 1;
+  }
 }
 </style>

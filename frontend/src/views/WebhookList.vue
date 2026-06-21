@@ -368,10 +368,11 @@ onMounted(() => {
 
     <div v-loading="loading" class="card-panel table-container">
       <el-table :data="tableData" style="width: 100%">
-        <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip>
+        <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">
-            <span class="wh-name">{{ row.name }}</span>
             <span v-if="row.description" class="wh-desc">{{ row.description }}</span>
+            <span v-else class="wh-no-desc">-</span>
           </template>
         </el-table-column>
         <el-table-column label="流程类型" width="100" align="center">
@@ -600,10 +601,12 @@ onMounted(() => {
 }
 
 .wh-desc {
-  display: block;
-  font-size: 12px;
-  color: #64748b;
-  margin-top: 2px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.wh-no-desc {
+  color: #cbd5e1;
 }
 
 .wh-flow-name {
