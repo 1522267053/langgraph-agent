@@ -4,6 +4,9 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Link, Warning, CircleCheck, QuestionFilled, Bell } from '@element-plus/icons-vue'
 import {
+  requestPermission as requestBrowserNotifyPermission
+} from '@/composables/useBrowserNotification'
+import {
   configApi,
   type ProviderInfo,
   type GlobalConfigData,
@@ -40,6 +43,17 @@ const loginUsername = ref('')
 const currentPassword = ref('')
 const hasUsername = computed(() => config.value.has_username ?? false)
 const executionNotificationEnabled = ref(true)
+const notifyPermission = computed(() => {
+  if (!('Notification' in window)) return 'unsupported'
+  return Notification.permission
+})
+
+async function handleRequestNotifyPermission() {
+  const granted = await requestBrowserNotifyPermission()
+  if (!granted) {
+    ElMessage.warning('浏览器通知权限已被拒绝，请在浏览器设置中允许通知')
+  }
+}
 
 const currentVersion = ref('0.1.0')
 const updateInfo = ref<UpdateCheckResult | null>(null)
@@ -466,6 +480,26 @@ function openDownloadUrl(): void {
                 </div>
               </div>
               <el-switch v-model="executionNotificationEnabled" />
+            </div>
+          </el-form-item>
+          <el-form-item>
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                width: 100%;
+              "
+            >
+              <div>
+                <div style="font-size: 14px; font-weight: 500">浏览器桌面通知</div>
+                <div style="font-size: 12px; color: #64748b; margin-top: 4px">
+                  流程/对话完成或日程提醒时，弹出系统级桌面通知（浏览器后台也能收到）
+                </div>
+              </div>
+              <el-button size="small" @click="handleRequestNotifyPermission">
+                {{ notifyPermission === 'granted' ? '已授权' : '请求通知权限' }}
+              </el-button>
             </div>
           </el-form-item>
           <el-form-item>

@@ -23,13 +23,14 @@ import {
   ChatLineSquare,
   Calendar
 } from '@element-plus/icons-vue'
-import { ElMessageBox } from 'element-plus'
+import { ElMessageBox, ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { useAgentStore } from '@/stores'
 import { authApi } from '@/api/auth'
 import { configApi, type UpdateCheckResult } from '@/api/config'
 import { connectWebSocket } from '@/composables/useWebSocket'
 import { agentApi } from '@/api/agent'
+import { requestPermission as requestNotifyPermission, isDenied } from '@/composables/useBrowserNotification'
 
 const route = useRoute()
 const router = useRouter()
@@ -86,6 +87,17 @@ async function checkAppUpdate(): Promise<void> {
 }
 
 let updateChecked = false
+let notifyPermissionRequested = false
+
+function handleAppClick() {
+  if (notifyPermissionRequested) return
+  notifyPermissionRequested = true
+  requestNotifyPermission().then(granted => {
+    if (!granted && isDenied()) {
+      ElMessage.warning('浏览器通知权限已被拒绝，请在浏览器设置中允许通知')
+    }
+  })
+}
 
 // 初始化 WebSocket 连接（全局通知）
 connectWebSocket()
@@ -327,7 +339,7 @@ function openDownloadUrl(): void {
 
 <template>
   <el-config-provider :locale="zhCn">
-    <div class="app-container">
+    <div class="app-container" @click="handleAppClick">
       <div v-if="forceUpgradeInfo" class="force-upgrade-banner">
         <span class="banner-text">
           发现新版本 {{ forceUpgradeInfo.latest_version }}，当前版本过低，请尽快升级
