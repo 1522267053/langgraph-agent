@@ -229,6 +229,7 @@ class AgendaNodeHandler(BaseNodeHandler):
                 update_data["location"] = location
             if remind_at:
                 update_data["remind_at"] = remind_at
+                update_data["is_reminded"] = 0  # 重置提醒标志，允许重新推送
             if description:
                 update_data["description"] = description
 
@@ -332,7 +333,9 @@ class AgendaCreateInput(BaseModel):
     priority: int = Field(2, description="优先级：1=低/2=中/3=高")
     location: str = Field("", description="地点")
     remind_at: str = Field("", description="提醒时间 YYYY-MM-DD HH:MM:SS")
-    recurrence: str = Field("none", description="重复：none/daily/weekday/weekly/monthly")
+    recurrence: str = Field(
+        "none", description="重复：none/daily/weekday/weekly/monthly"
+    )
     description: str = Field("", description="备注")
 
 

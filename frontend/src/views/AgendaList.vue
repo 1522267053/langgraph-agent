@@ -341,6 +341,7 @@ const filteredGroups = computed(() => {
 
 function handleSearch() {
   listTab.value = 'upcoming'
+  loadData()
 }
 
 function handleReset() {

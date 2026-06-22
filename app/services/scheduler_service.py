@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.date import DateTrigger
 
 from app.config.settings import settings
 
@@ -63,6 +62,15 @@ class SchedulerService:
             CronTrigger(minute="*/30"),
             id="scan_expired_recurring_agendas",
             name="扫描过期重复日程",
+            replace_existing=True,
+            max_instances=1,
+        )
+        self._scheduler.add_job(
+            self._check_pending_reminders,
+            "interval",
+            seconds=settings.reminder_check_interval,
+            id="check_pending_reminders",
+            name="日程提醒轮询",
             replace_existing=True,
             max_instances=1,
         )
@@ -220,70 +228,48 @@ class SchedulerService:
         if deleted > 0:
             logger.info(f"已清理 {deleted} 个过期临时文件")
 
+    # ---- 日程提醒轮询 ----
+
+    async def _check_pending_reminders(self) -> None:
+        """轮询检查并推送已到提醒时间的日程"""
+        from app.config.database import AsyncSessionLocal
+        from app.services.agenda_service import agenda_service
+
+        try:
+            async with AsyncSessionLocal() as db:
+                agendas = await agenda_service.get_unreminded_agendas(db)
+
+            now = datetime.now()
+            due = [a for a in agendas if a.remind_at <= now]
+            for agenda in due:
+                await self._run_agenda_reminder(agenda.id)
+
+            if due:
+                logger.info(f"日程提醒轮询: {len(due)} 个已到提醒时间")
+        except Exception as e:
+            logger.error(f"日程提醒轮询异常: {e}", exc_info=True)
+
     # ---- 日程提醒 ----
 
     def sync_agenda_reminder(self, agenda) -> None:
         """
-        同步日程提醒到调度器（注册或移除）
-
-        根据日程状态决定是否注册一次性提醒任务：
-        - 已完成 / 已软删除 / 无提醒时间 → 移除任务
-        - 提醒时间已过 → 不注册（由启动时批量补推）
-        - 提醒时间在未来 → 注册 DateTrigger 一次性任务
+        同步日程提醒到调度器（由轮询任务统一处理，此处仅做日志记录）
 
         Args:
             agenda: Agenda 模型实例
         """
-        if self._scheduler is None:
-            return
-
-        job_id = f"agenda_reminder_{agenda.id}"
-
-        # 先移除旧任务
-        try:
-            if self._scheduler.get_job(job_id):
-                self._scheduler.remove_job(job_id)
-        except Exception:
-            pass
-
-        # 无提醒时间 / 已完成 / 已软删除 → 不注册
         if (
-            not agenda.remind_at
-            or getattr(agenda, "status", 0) == 2
-            or getattr(agenda, "is_delete", 0) == 1
+            agenda.remind_at
+            and getattr(agenda, "status", 0) != 2
+            and getattr(agenda, "is_delete", 0) != 1
         ):
-            return
-
-        # 提醒时间已过 → 不注册过去时间的任务
-        if agenda.remind_at <= datetime.now():
-            return
-
-        try:
-            self._scheduler.add_job(
-                self._run_agenda_reminder,
-                DateTrigger(run_date=agenda.remind_at),
-                id=job_id,
-                name=f"日程提醒: {agenda.title}",
-                replace_existing=True,
-                max_instances=1,
-                args=[agenda.id],
+            logger.debug(
+                f"日程提醒已注册[{agenda.id}]: {agenda.remind_at}（由轮询任务处理）"
             )
-            logger.info(f"注册日程提醒[{job_id}]: {agenda.remind_at}")
-        except Exception as e:
-            logger.error(f"注册日程提醒[{agenda.id}]失败: {e}")
 
     def remove_agenda_reminder(self, agenda_id: int) -> None:
-        """从调度器移除日程提醒"""
-        if self._scheduler is None:
-            return
-
-        job_id = f"agenda_reminder_{agenda_id}"
-        try:
-            if self._scheduler.get_job(job_id):
-                self._scheduler.remove_job(job_id)
-                logger.info(f"移除日程提醒[{job_id}]")
-        except Exception as e:
-            logger.error(f"移除日程提醒[{job_id}]失败: {e}")
+        """移除日程提醒（轮询模式下无需操作，保留方法避免调用方报错）"""
+        pass
 
     async def _run_agenda_reminder(self, agenda_id: int) -> None:
         """日程提醒回调：定向推送给创建者，重复日程自动生成下一实例"""
@@ -295,11 +281,12 @@ class SchedulerService:
         try:
             async with AsyncSessionLocal() as db:
                 agenda = await agenda_service.get_by_id(db, agenda_id)
-                if (
-                    not agenda
-                    or agenda.is_reminded == 1
-                    or agenda.status == AgendaStatus.COMPLETED.value
-                ):
+                if not agenda or agenda.status == AgendaStatus.COMPLETED.value:
+                    return
+
+                # 原子标记已推送，防止重复触发
+                marked = await agenda_service.mark_reminded(db, agenda_id)
+                if not marked:
                     return
 
                 # 格式化开始时间
@@ -319,9 +306,6 @@ class SchedulerService:
                     start_time=start_str,
                     location=agenda.location,
                 )
-
-                # 标记为已推送
-                await agenda_service.mark_reminded(db, agenda_id)
 
                 # 重复日程：原子锁获取后生成下一实例并注册提醒
                 if agenda.recurrence != AgendaRecurrence.NONE.value:
@@ -383,7 +367,7 @@ class SchedulerService:
             logger.error(f"扫描过期重复日程失败: {e}", exc_info=True)
 
     async def _load_pending_agenda_reminders(self) -> None:
-        """启动时加载所有未推送的日程提醒"""
+        """启动时加载所有未推送的日程提醒，过期的立即触发推送（未来的由轮询处理）"""
         from app.config.database import AsyncSessionLocal
         from app.services.agenda_service import agenda_service
 
@@ -393,19 +377,15 @@ class SchedulerService:
 
             now = datetime.now()
             expired = [a for a in agendas if a.remind_at <= now]
-            future = [a for a in agendas if a.remind_at > now]
 
             # 过期的立即触发推送
             for agenda in expired:
                 await self._run_agenda_reminder(agenda.id)
 
-            # 未来的注册到调度器
-            for agenda in future:
-                self.sync_agenda_reminder(agenda)
-
             if agendas:
                 logger.info(
-                    f"加载日程提醒: {len(future)} 个待触发, {len(expired)} 个立即补推"
+                    f"加载日程提醒: {len(expired)} 个立即补推, "
+                    f"{len(agendas) - len(expired)} 个待轮询"
                 )
         except Exception as e:
             logger.error(f"加载日程提醒失败: {e}", exc_info=True)

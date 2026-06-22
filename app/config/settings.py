@@ -74,6 +74,11 @@ class Settings(BaseSettings):
         default=5, alias="DOC_PROCESS_BATCH_SIZE"
     )  # 每次最多处理的文档数
 
+    # 日程提醒轮询配置
+    reminder_check_interval: int = Field(
+        default=10, alias="REMINDER_CHECK_INTERVAL"
+    )  # 日程提醒轮询间隔（秒）
+
     # 登录密码配置（可选，为空则不启用登录保护）
     login_password: str = Field(default="", alias="LOGIN_PASSWORD")
 
