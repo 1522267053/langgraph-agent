@@ -97,14 +97,17 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         result = await db.execute(stmt)
         return list(result.scalars().all())
 
-    async def mark_reminded(self, db: AsyncSession, agenda_id: int) -> None:
-        """标记日程为已推送提醒"""
-        stmt = select(Agenda).where(Agenda.id == agenda_id)
+    async def mark_reminded(self, db: AsyncSession, agenda_id: int) -> bool:
+        """原子标记日程为已推送提醒，返回是否成功标记"""
+        stmt = (
+            update(Agenda)
+            .where(Agenda.id == agenda_id)
+            .where(Agenda.is_reminded == 0)
+            .values(is_reminded=1)
+        )
         result = await db.execute(stmt)
-        agenda = result.scalar_one_or_none()
-        if agenda:
-            agenda.is_reminded = 1
-            await db.commit()
+        await db.commit()
+        return result.rowcount > 0
 
     async def create_next_recurrence(
         self, db: AsyncSession, agenda: Agenda
