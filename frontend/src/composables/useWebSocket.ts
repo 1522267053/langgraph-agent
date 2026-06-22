@@ -1,6 +1,7 @@
 import { ref, h } from 'vue'
-import { ElNotification, ElButton } from 'element-plus'
+import { ElNotification, ElButton, ElMessage } from 'element-plus'
 import { agendaApi } from '@/api/agenda'
+import { notify, isDenied } from '@/composables/useBrowserNotification'
 
 interface ExecutionDoneData {
   execution_id: number | null
@@ -23,6 +24,7 @@ interface AgendaReminderData {
 
 interface WSMessage {
   type: 'execution_done' | 'agenda_reminder'
+  browser_notify?: boolean
   data: ExecutionDoneData | AgendaReminderData
 }
 
@@ -36,6 +38,7 @@ const MAX_RECONNECT_DELAY = 30000
 
 /** 当前正在通过 SSE 观看的 execution_id（用于跳过重复通知） */
 let watchingExecutionId: number | null = null
+let deniedNotified = false
 
 export function setWatchingExecution(id: number | null) {
   watchingExecutionId = id
@@ -51,14 +54,11 @@ function handleNotification(msg: WSMessage) {
     const data = msg.data as ExecutionDoneData
     const { flow_name, status, source, execution_id, last_user_message } = data
 
-    // 跳过用户正在通过 SSE 观看的执行
-    if (
+    // 跳过用户正在通过 SSE 观看的执行（避免重复弹窗）
+    const isWatching =
       execution_id !== null &&
       watchingExecutionId !== null &&
       execution_id === watchingExecutionId
-    ) {
-      return
-    }
 
     const typeLabel = source === 'agent' ? '对话' : '流程'
 
@@ -66,28 +66,44 @@ function handleNotification(msg: WSMessage) {
       return str.length > max ? str.slice(0, max) + '...' : str
     }
 
+    // 浏览器通知权限被拒时提示一次
+    if (msg.browser_notify !== false && isDenied() && !deniedNotified) {
+      deniedNotified = true
+      ElMessage.warning('浏览器通知权限已被拒绝，请在浏览器设置中允许通知以接收桌面通知')
+    }
+
     if (status === 'success') {
       const msgPreview = last_user_message
         ? `「${flow_name}：${truncate(last_user_message)}」执行完成`
         : `「${flow_name}」执行完成`
-      ElNotification({
-        type: 'success',
-        title: `${typeLabel}完成`,
-        message: msgPreview,
-        duration: 5000,
-        position: 'top-right'
-      })
+      if (!isWatching) {
+        ElNotification({
+          type: 'success',
+          title: `${typeLabel}完成`,
+          message: msgPreview,
+          duration: 5000,
+          position: 'top-right'
+        })
+      }
+      if (msg.browser_notify !== false) {
+        notify(`${typeLabel}完成`, { body: msgPreview, icon: '/logo.ico' })
+      }
     } else if (status === 'failed') {
       const msgPreview = last_user_message
         ? `「${flow_name}：${truncate(last_user_message)}」执行失败`
         : `「${flow_name}」执行失败`
-      ElNotification({
-        type: 'error',
-        title: `${typeLabel}失败`,
-        message: msgPreview,
-        duration: 0,
-        position: 'top-right'
-      })
+      if (!isWatching) {
+        ElNotification({
+          type: 'error',
+          title: `${typeLabel}失败`,
+          message: msgPreview,
+          duration: 0,
+          position: 'top-right'
+        })
+      }
+      if (msg.browser_notify !== false) {
+        notify(`${typeLabel}失败`, { body: msgPreview, icon: '/logo.ico' })
+      }
     }
   } else if (msg.type === 'agenda_reminder') {
     const data = msg.data as AgendaReminderData
@@ -141,6 +157,12 @@ function handleNotification(msg: WSMessage) {
         window.location.hash = '#/agenda'
       }
     })
+    if (msg.browser_notify !== false) {
+      notify(`日程提醒: ${data.title}`, {
+        body: parts.join(' | ') || '该日程开始了',
+        icon: '/logo.ico'
+      })
+    }
   }
 }
 

@@ -96,6 +96,7 @@ class WebSocketManager:
         error_message: Optional[str] = None,
         duration_ms: Optional[int] = None,
         last_user_message: Optional[str] = None,
+        browser_notify: bool = True,
     ) -> None:
         """广播执行完成通知（统一入口），受通知开关控制"""
         if not self._notification_enabled:
@@ -104,6 +105,7 @@ class WebSocketManager:
         await self.broadcast(
             {
                 "type": "execution_done",
+                "browser_notify": browser_notify,
                 "data": {
                     "execution_id": execution_id,
                     "flow_id": flow_id,
@@ -126,12 +128,14 @@ class WebSocketManager:
         description: Optional[str] = None,
         start_time: Optional[str] = None,
         location: Optional[str] = None,
+        browser_notify: bool = True,
     ) -> None:
         """定向推送日程提醒给指定用户（不受通知开关限制）"""
         await self.broadcast_to_user(
             username,
             {
                 "type": "agenda_reminder",
+                "browser_notify": browser_notify,
                 "data": {
                     "agenda_id": agenda_id,
                     "title": title,
