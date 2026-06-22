@@ -16,7 +16,11 @@ const emit = defineEmits<{
   (e: 'update:config', value: IntentRouterConfig): void
 }>()
 
-const { localConfig, updateConfig } = useConfigBase(() => props.config, emit)
+const { localConfig, updateConfig } = useConfigBase(() => ({
+  ...props.config,
+  intents: props.config?.intents ?? [],
+  input_variable: props.config?.input_variable ?? ''
+}), emit)
 
 // ---- 校验：意图 key 必须是 slug，不能重复，不能是保留字 ----
 const RESERVED_KEYS = new Set(['default', 'tools', 'true', 'false'])
@@ -106,8 +110,6 @@ function removeIntent(idx: number) {
   updateConfig()
 }
 
-const activeIntentIdx = ref<number>(0)
-
 // ---- 输出变量（只读展示） ----
 const outputVariables = [
   { name: 'intent', desc: '命中的意图 key' },
@@ -168,25 +170,22 @@ const downstreamRefExample = '{{nodes.节点key.intent}}'
         暂无意图，点击「添加意图」开始
       </div>
 
-      <el-collapse v-else v-model="activeIntentIdx" accordion>
-        <el-collapse-item v-for="(intent, idx) in localConfig.intents" :key="idx" :name="idx">
-          <template #title>
-            <div class="intent-header">
+      <div v-else class="intent-cards">
+        <div v-for="(intent, idx) in localConfig.intents" :key="idx" class="intent-card">
+          <div class="intent-card-header">
+            <div class="intent-card-title">
               <span class="intent-key-badge" :class="{ invalid: keyErrors[idx] }">
                 {{ intent.key || '(未命名)' }}
               </span>
+              <span v-if="intent.description" class="intent-desc-preview">
+                {{ intent.description }}
+              </span>
               <span v-if="keyErrors[idx]" class="intent-error">{{ keyErrors[idx] }}</span>
-              <el-button
-                type="danger"
-                size="small"
-                link
-                :icon="Delete"
-                @click.stop="removeIntent(idx)"
-              />
             </div>
-          </template>
+            <el-button type="danger" size="small" link :icon="Delete" @click="removeIntent(idx)" />
+          </div>
 
-          <el-form label-width="80px" size="small">
+          <el-form label-width="70px" size="small">
             <el-form-item label="Key" required>
               <el-input
                 v-model="intent.key"
@@ -284,8 +283,8 @@ const downstreamRefExample = '{{nodes.节点key.intent}}'
               </el-form-item>
             </template>
           </el-form>
-        </el-collapse-item>
-      </el-collapse>
+        </div>
+      </div>
     </div>
 
     <!-- 4. LLM 配置（仿 LlmConfig） -->
@@ -446,6 +445,44 @@ const downstreamRefExample = '{{nodes.节点key.intent}}'
   padding-right: 8px;
 }
 
+.intent-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.intent-card {
+  background: #f5f7fa;
+  border-radius: 6px;
+  padding: 12px;
+  border: 1px solid #e4e7ed;
+}
+
+.intent-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.intent-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.intent-desc-preview {
+  font-size: 12px;
+  color: #909399;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
 .intent-key-badge {
   font-family: 'Menlo', 'Monaco', monospace;
   font-size: 12px;
@@ -453,6 +490,7 @@ const downstreamRefExample = '{{nodes.节点key.intent}}'
   background: #ecf5ff;
   padding: 2px 8px;
   border-radius: 4px;
+  flex-shrink: 0;
 }
 
 .intent-key-badge.invalid {
@@ -463,7 +501,6 @@ const downstreamRefExample = '{{nodes.节点key.intent}}'
 .intent-error {
   color: #f56c6c;
   font-size: 12px;
-  flex: 1;
 }
 
 .regex-list {
