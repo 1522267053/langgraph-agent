@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import type { IntentItem, IntentRouterConfig } from './types'
 import { llmModels } from './types'
@@ -16,11 +16,20 @@ const emit = defineEmits<{
   (e: 'update:config', value: IntentRouterConfig): void
 }>()
 
+const isLoadingConfig = ref(false)
+
 const { localConfig, updateConfig } = useConfigBase(() => ({
   ...props.config,
   intents: props.config?.intents ?? [],
   input_variable: props.config?.input_variable ?? ''
-}), emit)
+}), emit, {
+  onBeforeUpdate: () => {
+    isLoadingConfig.value = true
+    nextTick(() => {
+      isLoadingConfig.value = false
+    })
+  }
+})
 
 // ---- 校验：意图 key 必须是 slug，不能重复，不能是保留字 ----
 const RESERVED_KEYS = new Set(['default', 'tools', 'true', 'false'])
@@ -84,7 +93,9 @@ watch(
   () => localConfig.value.provider,
   newP => {
     if (!newP) return
-    localConfig.value.model = ''
+    if (!isLoadingConfig.value) {
+      localConfig.value.model = ''
+    }
     const defaultBaseUrl = getProviderBaseUrl(newP)
     if (defaultBaseUrl && !localConfig.value.base_url) {
       localConfig.value.base_url = defaultBaseUrl
