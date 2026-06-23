@@ -84,7 +84,11 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         return list(result.scalars().all())
 
     async def get_by_date_range(
-        self, db: AsyncSession, start_date: str, end_date: str
+        self,
+        db: AsyncSession,
+        start_date: str,
+        end_date: str,
+        status: Optional[list[int]] = None,
     ) -> list[Agenda]:
         """按日期范围查询日程（日历模式用，不分页）"""
         end_dt = f"{end_date} 23:59:59"
@@ -94,6 +98,8 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
             .where(Agenda.start_time <= end_dt)
             .order_by(Agenda.start_time)
         )
+        if status:
+            stmt = stmt.where(Agenda.status.in_(status))
         result = await db.execute(stmt)
         return list(result.scalars().all())
 

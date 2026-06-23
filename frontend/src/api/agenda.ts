@@ -55,7 +55,9 @@ export const agendaApi = {
   postpone(id: number) {
     return post<Agenda>(`/agenda/postpone/${id}`)
   },
-  calendarEvents(start_date: string, end_date: string) {
-    return post<Agenda[]>('/agenda/calendar-events', { start_date, end_date })
+  calendarEvents(start_date: string, end_date: string, status?: number[]) {
+    const params: Record<string, any> = { start_date, end_date }
+    if (status) params.status = status
+    return post<Agenda[]>('/agenda/calendar-events', params)
   }
 }

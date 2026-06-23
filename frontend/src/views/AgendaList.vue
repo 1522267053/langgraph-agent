@@ -88,7 +88,8 @@ async function loadData() {
   try {
     const range = getNextRange()
     if (range) {
-      const res = await agendaApi.calendarEvents(range.start, range.end)
+      const statusFilter = listTab.value === 'incomplete' ? [0, 1] : undefined
+      const res = await agendaApi.calendarEvents(range.start, range.end, statusFilter)
       if (res.data.code === 1) {
         allAgendas.value = clientFilter(res.data.data as Agenda[])
       }
@@ -107,7 +108,8 @@ async function loadMore() {
   }
   loadingMore.value = true
   try {
-    const res = await agendaApi.calendarEvents(range.start, range.end)
+    const statusFilter = listTab.value === 'incomplete' ? [0, 1] : undefined
+    const res = await agendaApi.calendarEvents(range.start, range.end, statusFilter)
     if (res.data.code === 1) {
       const items = clientFilter(res.data.data as Agenda[])
       allAgendas.value = [...allAgendas.value, ...items]
@@ -335,11 +337,7 @@ const filteredGroups = computed(() => {
     return groups.filter(g => g.key !== 'earlier')
   } else if (listTab.value === 'incomplete') {
     const earlier = groups.find(g => g.key === 'earlier')
-    if (!earlier) return []
-    return [{
-      ...earlier,
-      items: earlier.items.filter(item => item.status !== 2)
-    }]
+    return earlier ? [earlier] : []
   } else {
     const earlier = groups.find(g => g.key === 'earlier')
     return earlier ? [earlier] : []
