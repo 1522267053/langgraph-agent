@@ -57,3 +57,6 @@ class CalendarEventsRequest(BaseModel):
 
     start_date: str = Field(..., description="开始日期（YYYY-MM-DD）")
     end_date: str = Field(..., description="结束日期（YYYY-MM-DD）")
+    status: Optional[list[int]] = Field(
+        None, description="状态筛选（如 [0, 1] 表示待办+进行中）"
+    )

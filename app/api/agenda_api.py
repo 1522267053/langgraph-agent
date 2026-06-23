@@ -107,7 +107,7 @@ class AgendaApi(
         ):
             """日历模式：按日期范围查询日程（不分页）"""
             items = await agenda_service.get_by_date_range(
-                db, body.start_date, body.end_date
+                db, body.start_date, body.end_date, body.status
             )
             views = AgendaBase.model_to_view_batch(items)
             return ApiResponse.success(data=views, msg="查询成功")
@@ -115,11 +115,9 @@ class AgendaApi(
         @self.router.post("/complete/{agenda_id}", response_model=ApiResponse)
         async def complete_agenda(agenda_id: int, db: AsyncSession = Depends(get_db)):
             """标记日程为已完成，重复日程生成下一实例"""
-            agenda:Optional[Agenda] = await agenda_service.get_by_id(db, agenda_id)
+            agenda: Optional[Agenda] = await agenda_service.get_by_id(db, agenda_id)
             if agenda is None:
-                return ApiResponse.error(
-                msg=f"日程记录[{agenda_id}]不存在"
-            )
+                return ApiResponse.error(msg=f"日程记录[{agenda_id}]不存在")
             agenda.status = AgendaStatus.COMPLETED.value
             agenda.completed_at = datetime.now()
             # 完成后移除提醒调度
@@ -148,9 +146,7 @@ class AgendaApi(
             """延后提醒 15 分钟"""
             agenda = await agenda_service.get_by_id(db, agenda_id)
             if agenda is None:
-                return ApiResponse.error(
-                msg=f"日程记录[{agenda_id}]不存在"
-            )
+                return ApiResponse.error(msg=f"日程记录[{agenda_id}]不存在")
             new_remind = datetime.now() + timedelta(minutes=15)
             agenda.remind_at = new_remind
             agenda.is_reminded = 0
