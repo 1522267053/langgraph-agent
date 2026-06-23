@@ -104,7 +104,6 @@ function setTrendOption(chart: echarts.ECharts) {
       {
         name: '输入 Token',
         type: 'line',
-        stack: 'total',
         areaStyle: { opacity: 0.3 },
         smooth: true,
         data: trendData.value.map(i => i.prompt_tokens)
@@ -112,7 +111,6 @@ function setTrendOption(chart: echarts.ECharts) {
       {
         name: '输出 Token',
         type: 'line',
-        stack: 'total',
         areaStyle: { opacity: 0.3 },
         smooth: true,
         data: trendData.value.map(i => i.completion_tokens)

@@ -20,7 +20,7 @@ const loading = ref(false)
 const calendarLoading = ref(false)
 const allAgendas = ref<Agenda[]>([])
 const viewMode = ref<'list' | 'calendar'>('list')
-const listTab = ref<'upcoming' | 'history'>('upcoming')
+const listTab = ref<'upcoming' | 'incomplete' | 'history'>('upcoming')
 
 // ---- 滚动加载（每次 30 天窗口） ----
 const loadingMore = ref(false)
@@ -333,6 +333,13 @@ const filteredGroups = computed(() => {
   const groups = groupedAgendas.value
   if (listTab.value === 'upcoming') {
     return groups.filter(g => g.key !== 'earlier')
+  } else if (listTab.value === 'incomplete') {
+    const earlier = groups.find(g => g.key === 'earlier')
+    if (!earlier) return []
+    return [{
+      ...earlier,
+      items: earlier.items.filter(item => item.status !== 2)
+    }]
   } else {
     const earlier = groups.find(g => g.key === 'earlier')
     return earlier ? [earlier] : []
@@ -706,6 +713,14 @@ onBeforeUnmount(() => {
           >
             <span class="tab-icon">📋</span>
             <span>今日和未来</span>
+          </div>
+          <div
+            class="list-tab-item"
+            :class="{ active: listTab === 'incomplete' }"
+            @click="listTab = 'incomplete'"
+          >
+            <span class="tab-icon">⏳</span>
+            <span>未完成</span>
           </div>
           <div
             class="list-tab-item"
