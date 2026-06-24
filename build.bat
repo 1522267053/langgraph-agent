@@ -69,7 +69,7 @@ echo.
 echo [4/5] Running PyInstaller (--onedir)...
 if exist "dist" rmdir /s /q dist
 if exist "build\langgraph_agent" rmdir /s /q "build\langgraph_agent"
-poetry run pyinstaller langgraph_agent.spec --noconfirm
+poetry run pyinstaller build.spec --noconfirm
 if errorlevel 1 goto :pyinstaller_failed
 echo [OK] PyInstaller build done
 goto :after_pyinstaller
