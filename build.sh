@@ -48,7 +48,7 @@ echo ""
 echo "[4/5] Running PyInstaller (--onedir)..."
 rm -rf dist
 rm -rf build/langgraph_agent
-poetry run pyinstaller langgraph_agent.spec --noconfirm
+poetry run pyinstaller build.spec --noconfirm
 echo "[OK] PyInstaller build done"
 
 echo ""
