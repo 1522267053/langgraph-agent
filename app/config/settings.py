@@ -117,7 +117,7 @@ class Settings(BaseSettings):
         alias="UVICORN_LOG_FORMAT",
     )
     uvicorn_access_log_format: str = Field(
-        default='%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s',
+        default='[%(asctime)s] [%(name)s] [%(levelname)s] - %(client_addr)s - "%(request_line)s" %(status_code)s',
         alias="UVICORN_ACCESS_LOG_FORMAT",
     )
 
