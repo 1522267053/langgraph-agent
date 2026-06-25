@@ -55,21 +55,25 @@ npm run format                # Prettier 格式化
 
 | 路径 | 页面 | 说明 |
 |------|------|------|
+| `/chat` / `/chat/:id` | AgentChat | AI 助手 / 智能体对话 |
 | `/flow` | FlowList | 流程和智能体列表管理 |
-| `/flow/create` | FlowEdit | 创建流程 |
-| `/flow/edit/:id` | FlowEdit | 编辑流程 |
+| `/flow/create` / `/flow/edit/:id` | FlowEdit | 创建/编辑流程 |
 | `/flow/files/:id` | FlowFiles | 流程文件管理 |
-| `/agent/create` | FlowEdit | 创建智能体 |
-| `/agent/edit/:id` | FlowEdit | 编辑智能体 |
-| `/agent/chat/:id` | AgentChat | 智能体对话 |
+| `/agent/create` / `/agent/edit/:id` | FlowEdit | 创建/编辑智能体 |
+| `/agent/files/:id` | FlowFiles | 智能体文件管理 |
 | `/execution` | ExecutionList | 执行记录 |
 | `/mcp-server` | McpServerList | MCP 服务器管理 |
 | `/skill-list` | SkillList | Skill 管理 |
 | `/knowledge` | KnowledgeList | 知识库管理 |
 | `/files` | FileList | 全局文件管理 |
+| `/scheduled-task` | ScheduledTaskList | 定时任务管理 |
+| `/agenda` | AgendaList | 日程管理 |
+| `/webhook` | WebhookList | Webhook 管理 |
+| `/statistics` | TokenStatistics | Token 统计 |
+| `/marketplace` | Marketplace | 资源市场 |
 | `/setup` | SetupWizard | 初始化配置向导 |
-| `/settings` | Settings | 系统设置（AI模型、向量模型、登录安全） |
-| `/login` | Login | 登录页（记住密码/自动登录） |
+| `/settings` | Settings | 系统设置 |
+| `/login` | Login | 登录页 |
 
 ## 项目结构
 
@@ -89,7 +93,7 @@ src/
 │   ├── FlowEditor/         # 流程编辑器
 │   │   ├── nodeRegistry.ts  #   节点注册表（自动发现 + 元数据 + hook，唯一数据源）
 │   │   ├── nodes/          #   节点组件（19 种 + BaseNode，import.meta.glob 自动注册）
-│   │   ├── config/         #   节点配置面板（19 种 + types.ts，import.meta.glob 自动注册）
+│   │   ├── config/         #   节点配置面板（19 种 + ApiFileItem，import.meta.glob 自动注册）
 │   │   ├── FlowCanvas.vue  #   Vue Flow 画布（快捷键、拖拽、连接）
 │   │   ├── ConfigPanel.vue #   右侧配置面板（component :is 动态渲染）
 │   │   ├── NodePanel.vue   #   左侧节点面板（从注册表派生节点列表）
@@ -137,7 +141,7 @@ src/
 │   ├── sse.ts              #   SSE 连接（fetch + ReadableStream 事件解析）
 │   ├── format.ts           #   日期/文件大小/JSON/工具参数格式化
 │   └── flowTransform.ts    #   后端 ↔ Vue Flow 数据转换
-├── views/                  # 页面组件（13 个）
+├── views/                  # 页面组件（17 个）
 ├── router/                 # 路由配置（hash 模式，全部懒加载）
 ├── App.vue                 # 根组件（侧边栏导航）
 ├── main.ts                 # 应用入口

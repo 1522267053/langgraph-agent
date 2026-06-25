@@ -229,7 +229,7 @@ langgraph-agent/
 │   ├── constants/              # 配置常量
 │   ├── stores/                 # Pinia 状态管理
 │   ├── types/                  # TypeScript 类型定义
-│   ├── views/                  # 页面组件（15 个）
+│   ├── views/                  # 页面组件（17 个）
 │   └── utils/                  # 工具函数
 ├── main.py                     # 后端入口
 ├── pyproject.toml              # Poetry 依赖配置
@@ -243,7 +243,7 @@ langgraph-agent/
 | 模式 | 说明 | 允许的节点 |
 |------|------|-----------|
 | **Flow** | 可视化工作流编排，Start → End 完整流程 | 全部 19 种节点 |
-| **Agent** | 对话式 AI 助手，单 LLM + 工具节点 | 排除 condition/card/loop |
+| **Agent** | 对话式 AI 助手，单 LLM + 工具节点 | 排除 card/loop，memory 和 agenda 仅 Agent 可用 |
 
 ### 节点类型
 
@@ -252,7 +252,7 @@ langgraph-agent/
 | **start** | 流程入口，定义输入参数 | Flow / Agent |
 | **end** | 流程出口，定义输出变量 | Flow / Agent |
 | **llm** | 大模型调用，ReAct 循环 + 流式推理 + 工具调用 | Flow / Agent |
-| **condition** | 条件分支，支持 AND/OR 逻辑和 12 种运算符 | Flow |
+| **condition** | 条件分支，支持 AND/OR 逻辑和 12 种运算符 | Flow / Agent |
 | **card** | 能力卡片，引用其他流程作为子图执行 | Flow |
 | **loop** | 循环节点，支持计数/条件/forEach 三种模式，顺序或并发执行 | Flow |
 | **intent_router** | 意图路由，LLM 判断意图后分支 | Flow |
