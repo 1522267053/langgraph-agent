@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount,nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Check, Calendar, List } from '@element-plus/icons-vue'
@@ -107,6 +107,13 @@ async function loadData() {
     }
   } finally {
     loading.value = false
+    // loadData 完成后，若 sentinel 仍可见（内容不足以撑满容器），
+    // 重新 observe 以触发一次 loadMore 探测下一窗口
+    await nextTick()
+    if (sentinelEl.value && observer) {
+      observer.unobserve(sentinelEl.value)
+      observer.observe(sentinelEl.value)
+    }
   }
 }
 
