@@ -5,7 +5,7 @@
 """
 
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -159,6 +159,12 @@ class AgendaApi(
             return ApiResponse.success(
                 data=AgendaBase.model_to_view(agenda), msg="已延后15分钟"
             )
+
+        @self.router.get("/tab-counts", response_model=ApiResponse[dict[str, Any]])
+        async def get_tab_counts(db: AsyncSession = Depends(get_db)):
+            """获取 Tab 角标数量（今日和未来 / 未完成）"""
+            counts = await agenda_service.get_tab_counts(db)
+            return ApiResponse.success(data=counts, msg="查询成功")
 
 
 agenda_api = AgendaApi()

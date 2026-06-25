@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Check, Calendar, List } from '@element-plus/icons-vue'
 import FullCalendar from '@fullcalendar/vue3'
@@ -20,7 +21,17 @@ const loading = ref(false)
 const calendarLoading = ref(false)
 const allAgendas = ref<Agenda[]>([])
 const viewMode = ref<'list' | 'calendar'>('list')
-const listTab = ref<'upcoming' | 'incomplete' | 'history'>('upcoming')
+
+// ---- Tab 角标计数（今日和未来 / 未完成，均仅统计未完成日程） ----
+const tabCounts = ref({ upcoming: 0, incomplete: 0 })
+
+const route = useRoute()
+// 支持深链 ?tab=incomplete 直接落到对应 Tab
+const validTabs = ['upcoming', 'incomplete', 'history'] as const
+const initialTab = validTabs.includes(route.query.tab as typeof validTabs[number])
+  ? (route.query.tab as 'upcoming' | 'incomplete' | 'history')
+  : 'upcoming'
+const listTab = ref<'upcoming' | 'incomplete' | 'history'>(initialTab)
 
 // ---- 滚动加载（每次 30 天窗口） ----
 const loadingMore = ref(false)
@@ -571,8 +582,26 @@ function refreshCalendar() {
 
 function refreshAfterChange() {
   loadData()
+  loadTabCounts()
   if (viewMode.value === 'calendar') {
     refreshCalendar()
+  }
+}
+
+/** 角标数字格式化：超过 99 显示 99+ */
+function formatCount(n: number): string {
+  return n > 99 ? '99+' : String(n)
+}
+
+/** 加载 Tab 角标计数（不跟随搜索条件，始终为各 Tab 未完成总数） */
+async function loadTabCounts() {
+  try {
+    const res = await agendaApi.tabCounts()
+    if (res.data.code === 1) {
+      tabCounts.value = res.data.data as { upcoming: number; incomplete: number }
+    }
+  } catch {
+    // 静默失败
   }
 }
 
@@ -629,6 +658,7 @@ watch(listTab, () => {
 
 onMounted(() => {
   loadData()
+  loadTabCounts()
 })
 
 onBeforeUnmount(() => {
@@ -711,6 +741,9 @@ onBeforeUnmount(() => {
           >
             <span class="tab-icon">📋</span>
             <span>今日和未来</span>
+            <span v-if="tabCounts.upcoming > 0" class="tab-count-badge">{{
+              formatCount(tabCounts.upcoming)
+            }}</span>
           </div>
           <div
             class="list-tab-item"
@@ -719,6 +752,9 @@ onBeforeUnmount(() => {
           >
             <span class="tab-icon">⏳</span>
             <span>未完成</span>
+            <span v-if="tabCounts.incomplete > 0" class="tab-count-badge">{{
+              formatCount(tabCounts.incomplete)
+            }}</span>
           </div>
           <div
             class="list-tab-item"
@@ -1091,6 +1127,22 @@ onBeforeUnmount(() => {
 
 .tab-icon {
   font-size: 16px;
+}
+
+.tab-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  background: var(--el-color-danger);
+  border-radius: 9px;
 }
 
 .agenda-group {

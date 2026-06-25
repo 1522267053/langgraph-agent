@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
-from sqlalchemy import Select, and_, select, update
+from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agenda import Agenda, AgendaRecurrence, AgendaStatus
@@ -102,6 +102,29 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
             stmt = stmt.where(Agenda.status.in_(status))
         result = await db.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_tab_counts(self, db: AsyncSession) -> dict[str, int]:
+        """统计 Tab 角标数量（仅未完成日程：待办 + 进行中）
+
+        - upcoming：今天及未来（含未设置时间）的未完成日程
+        - incomplete：已过期（start_time 早于今天）的未完成日程
+        """
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        not_done = [AgendaStatus.PENDING.value, AgendaStatus.IN_PROGRESS.value]
+
+        # 今日和未来：start_time >= 今天 或 未设置时间
+        upcoming_stmt = select(func.count(Agenda.id)).where(
+            Agenda.status.in_(not_done),
+            or_(Agenda.start_time >= today_start, Agenda.start_time.is_(None)),
+        )
+        # 未完成：start_time < 今天（已过期）
+        incomplete_stmt = select(func.count(Agenda.id)).where(
+            Agenda.status.in_(not_done),
+            Agenda.start_time < today_start,
+        )
+        upcoming = (await db.execute(upcoming_stmt)).scalar() or 0
+        incomplete = (await db.execute(incomplete_stmt)).scalar() or 0
+        return {"upcoming": upcoming, "incomplete": incomplete}
 
     async def mark_reminded(self, db: AsyncSession, agenda_id: int) -> bool:
         """原子标记日程为已推送提醒，返回是否成功标记"""
