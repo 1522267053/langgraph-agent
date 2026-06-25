@@ -40,11 +40,11 @@ src/
 │   └── common/           #   共享组件（AIMessageContent, ThinkingBlock, ExecutionResultContent, FlowInputForm, FilePickerDialog, ActionColumn, FilePreviewer, TodoList）
 ├── composables/          # 组合式函数（useSSE, useSSEHandlers, useStreamingMessage, useFlowExecution, useInputVariables, useConfigBase, useIsMobile, useSegmentBuilder, useAvailableVariables, useNodeSchema, useAutoScroll, useListPage）
 ├── constants/            # 静态常量（nodeTypes, llm, operators, status）
-├── router/               # Vue Router 配置（hash 模式，全部懒加载，18 条路由）
+├── router/               # Vue Router 配置（hash 模式，全部懒加载，22 条路由）
 ├── stores/               # Pinia 状态仓库（useFlowStore, useAgentStore 组合式 API 风格）
 ├── types/                # TypeScript 类型定义
 ├── utils/                # 工具函数（sse, flowTransform, format）
-├── views/                # 14 个页面组件
+├── views/                # 17 个页面组件
 ├── App.vue               # 根组件（含侧边栏导航，isEditorPage 控制全屏页）
 ├── main.ts               # 应用入口
 └── style.css             # 全局样式
