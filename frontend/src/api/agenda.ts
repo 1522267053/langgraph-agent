@@ -59,5 +59,8 @@ export const agendaApi = {
     const params: Record<string, any> = { start_date, end_date }
     if (status) params.status = status
     return post<Agenda[]>('/agenda/calendar-events', params)
+  },
+  tabCounts() {
+    return get<ApiResponse<{ upcoming: number; incomplete: number }>>('/agenda/tab-counts')
   }
 }

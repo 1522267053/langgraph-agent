@@ -23,13 +23,14 @@ import {
   ChatLineSquare,
   Calendar
 } from '@element-plus/icons-vue'
-import { ElMessageBox, ElMessage } from 'element-plus'
+import { ElMessageBox, ElMessage, ElNotification } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { useAgentStore } from '@/stores'
 import { authApi } from '@/api/auth'
 import { configApi, type UpdateCheckResult } from '@/api/config'
 import { connectWebSocket } from '@/composables/useWebSocket'
 import { agentApi } from '@/api/agent'
+import { agendaApi } from '@/api/agenda'
 import { requestPermission as requestNotifyPermission, isDenied } from '@/composables/useBrowserNotification'
 
 const route = useRoute()
@@ -88,6 +89,29 @@ async function checkAppUpdate(): Promise<void> {
 
 let updateChecked = false
 let notifyPermissionRequested = false
+let incompleteNotified = false
+
+/** 进入应用时查询未完成日程并弹窗提示（每会话仅一次） */
+async function checkIncompleteAgendas(): Promise<void> {
+  try {
+    const res = await agendaApi.tabCounts()
+    const count = res.data.data?.incomplete ?? 0
+    if (count > 0) {
+      ElNotification({
+        type: 'warning',
+        title: '未完成日程提醒',
+        message: `您有 ${count > 99 ? '99+' : count} 项未完成的日程，点击查看`,
+        duration: 0,
+        position: 'top-right',
+        onClick: () => {
+          window.location.hash = '#/agenda?tab=incomplete'
+        }
+      })
+    }
+  } catch {
+    // 静默失败（未登录等）
+  }
+}
 
 function handleAppClick() {
   if (notifyPermissionRequested) return
@@ -138,6 +162,11 @@ watch(
     if (!updateChecked) {
       updateChecked = true
       checkAppUpdate()
+    }
+    // 进入应用时提示未完成日程（每会话仅一次，排除 login/setup 等公开页）
+    if (!incompleteNotified && !route.meta?.public) {
+      incompleteNotified = true
+      checkIncompleteAgendas()
     }
   },
   { immediate: true }
