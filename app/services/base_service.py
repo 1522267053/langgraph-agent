@@ -187,12 +187,12 @@ class BaseService(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
             ```python
             def _build_count_query(self) -> Select:
                 # 如果基础查询有 JOIN，计数查询也需要相同的 JOIN
-                return select(func.count()).select_from(self.model).join(
+                return select(func.count(self.model.id)).select_from(self.model).join(
                     self.model.tags
                 )
             ```
         """
-        return select(func.count()).select_from(self.model)
+        return select(func.count(self.model.id)).select_from(self.model)
 
     def _set_creator_fields(self, db_obj: DbBaseModel) -> None:
         """
