@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, provide } from 'vue'
+import { ref, computed, watch, provide, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Setting,
@@ -23,7 +23,7 @@ import {
   ChatLineSquare,
   Calendar
 } from '@element-plus/icons-vue'
-import { ElMessageBox, ElMessage, ElNotification } from 'element-plus'
+import { ElMessageBox, ElMessage, ElNotification, ElButton } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { useAgentStore } from '@/stores'
 import { authApi } from '@/api/auth'
@@ -97,15 +97,26 @@ async function checkIncompleteAgendas(): Promise<void> {
     const res = await agendaApi.tabCounts()
     const count = res.data.data?.incomplete ?? 0
     if (count > 0) {
-      ElNotification({
+      const instance = ElNotification({
         type: 'warning',
         title: '未完成日程提醒',
-        message: `您有 ${count > 99 ? '99+' : count} 项未完成的日程，点击查看`,
+        message: h('div', { style: 'display:flex; align-items:center; gap:12px' }, [
+          h('span', `您有 ${count > 99 ? '99+' : count} 项未完成的日程`),
+          h(
+            ElButton,
+            {
+              type: 'primary',
+              size: 'small',
+              onClick: () => {
+                instance.close()
+                window.location.hash = '#/agenda?tab=incomplete'
+              }
+            },
+            () => '查看'
+          )
+        ]),
         duration: 0,
-        position: 'top-right',
-        onClick: () => {
-          window.location.hash = '#/agenda?tab=incomplete'
-        }
+        position: 'top-right'
       })
     }
   } catch {
