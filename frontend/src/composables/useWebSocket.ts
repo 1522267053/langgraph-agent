@@ -112,7 +112,7 @@ function handleNotification(msg: WSMessage) {
     if (data.location) parts.push(`地点: ${data.location}`)
     if (data.description) parts.push(data.description)
 
-    ElNotification({
+    const noti = ElNotification({
       type: 'warning',
       title: `日程提醒: ${data.title}`,
       message: h('div', [
@@ -126,7 +126,7 @@ function handleNotification(msg: WSMessage) {
               onClick: async () => {
                 try {
                   await agendaApi.complete(data.agenda_id)
-                  ElNotification.closeAll()
+                  noti.close()
                 } catch {
                   // ignore
                 }
@@ -141,7 +141,7 @@ function handleNotification(msg: WSMessage) {
               onClick: async () => {
                 try {
                   await agendaApi.postpone(data.agenda_id)
-                  ElNotification.closeAll()
+                  noti.close()
                 } catch {
                   // ignore
                 }
@@ -152,10 +152,7 @@ function handleNotification(msg: WSMessage) {
         ])
       ]),
       duration: 0,
-      position: 'top-right',
-      onClick: () => {
-        window.location.hash = '#/agenda'
-      }
+      position: 'top-right'
     })
     if (msg.browser_notify !== false) {
       notify(`日程提醒: ${data.title}`, {
