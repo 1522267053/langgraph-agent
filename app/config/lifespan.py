@@ -9,7 +9,7 @@ import logging
 import socket
 import sys
 
-from app.config.build_utils import BASE_DIR
+from app.config.build_utils import BASE_DIR, is_desktop_mode
 from app.config.database import AsyncSessionLocal, close_db, init_db
 from app.config.logging_config import cleanup_logs
 from app.config.settings import settings
@@ -118,8 +118,9 @@ async def startup() -> None:
     # ---- 打印自定义启动横幅 ----
     _log_startup_banner()
 
-    # ---- 打开浏览器 ----
-    asyncio.create_task(_open_browser())
+    # ---- 打开浏览器（桌面模式下跳过） ----
+    if not is_desktop_mode():
+        asyncio.create_task(_open_browser())
 
 
 async def shutdown() -> None:

@@ -31,7 +31,7 @@ import { configApi, type UpdateCheckResult } from '@/api/config'
 import { connectWebSocket } from '@/composables/useWebSocket'
 import { agentApi } from '@/api/agent'
 import { agendaApi } from '@/api/agenda'
-import { requestPermission as requestNotifyPermission, isDenied } from '@/composables/useBrowserNotification'
+import { requestPermission as requestNotifyPermission, isDenied, isPywebview } from '@/composables/useBrowserNotification'
 
 const route = useRoute()
 const router = useRouter()
@@ -125,6 +125,7 @@ async function checkIncompleteAgendas(): Promise<void> {
 }
 
 function handleAppClick() {
+  if (isPywebview()) return
   if (notifyPermissionRequested) return
   notifyPermissionRequested = true
   requestNotifyPermission().then(granted => {

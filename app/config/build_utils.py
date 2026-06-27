@@ -3,6 +3,7 @@
 提供运行时路径解析，兼容开发环境、PyInstaller 和 Nuitka 打包环境
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -81,6 +82,19 @@ def get_env_file() -> Path:
 
 
 BASE_DIR = get_base_dir()
+
+
+def is_desktop_mode() -> bool:
+    """
+    判断是否以桌面客户端模式运行（pywebview 窗口模式）
+
+    检测方式：检查是否存在 DESKTOP_MODE 环境变量
+    在 desktop.py 中设置该变量
+
+    Returns:
+        bool: 是否为桌面模式
+    """
+    return os.environ.get("DESKTOP_MODE", "").lower() in ("1", "true", "yes")
 
 
 def get_temp_dir() -> Path:

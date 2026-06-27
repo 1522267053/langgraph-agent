@@ -4,7 +4,8 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Link, Warning, CircleCheck, QuestionFilled, Bell } from '@element-plus/icons-vue'
 import {
-  requestPermission as requestBrowserNotifyPermission
+  requestPermission as requestBrowserNotifyPermission,
+  isPywebview
 } from '@/composables/useBrowserNotification'
 import {
   configApi,
@@ -44,11 +45,13 @@ const currentPassword = ref('')
 const hasUsername = computed(() => config.value.has_username ?? false)
 const executionNotificationEnabled = ref(true)
 const notifyPermission = computed(() => {
+  if (isPywebview()) return 'granted'
   if (!('Notification' in window)) return 'unsupported'
   return Notification.permission
 })
 
 async function handleRequestNotifyPermission() {
+  if (isPywebview()) return
   const granted = await requestBrowserNotifyPermission()
   if (!granted) {
     ElMessage.warning('浏览器通知权限已被拒绝，请在浏览器设置中允许通知')
