@@ -25,9 +25,10 @@ IS_WINDOWS = platform.system() == "Windows"
 NUITKA_EXT = ".cp312-win_amd64.pyd" if IS_WINDOWS else ".cpython-*.so"
 
 
-def run(cmd: list[str], desc: str) -> None:
+def run(cmd: list[str], desc: str, cwd: Path | None = None) -> None:
+    workdir = str(cwd if cwd is not None else PROJECT_ROOT)
     print(f"[{desc}]", flush=True)
-    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+    result = subprocess.run(cmd, cwd=workdir)
     if result.returncode != 0:
         print(f"[ERROR] {desc} failed (exit code {result.returncode})", file=sys.stderr)
         sys.exit(1)
@@ -63,17 +64,17 @@ def set_version(version: str) -> None:
 
 
 def build_frontend() -> None:
-    dist_index = PROJECT_ROOT / "frontend" / "dist" / "index.html"
+    frontend_dir = PROJECT_ROOT / "frontend"
+    dist_index = frontend_dir / "dist" / "index.html"
     if dist_index.exists():
         print("  Frontend dist exists, skip build")
         return
 
     print("  Frontend dist not found, building...")
-    frontend_dir = PROJECT_ROOT / "frontend"
     if IS_WINDOWS:
-        run(["cmd", "/c", "npm", "run", "build"], "npm run build")
+        run(["cmd", "/c", "npm", "run", "build"], "npm run build", cwd=frontend_dir)
     else:
-        run(["npm", "run", "build"], "npm run build")
+        run(["npm", "run", "build"], "npm run build", cwd=frontend_dir)
 
 
 def generate_static_imports() -> None:
