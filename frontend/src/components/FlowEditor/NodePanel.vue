@@ -39,7 +39,7 @@ const flowExcludeTypes = new Set(['memory', 'agenda'])
 
 const filteredBasicNodes = computed(() => {
   if (props.isAgent) {
-    return basicNodes.filter(item => item.type !== 'loop')
+    return basicNodes.filter(item => item.type !== 'loop' && item.type !== 'human')
   }
   if (store.isInSubView && store.subViewParentType === 'loop') {
     return basicNodes.filter(item => item.type !== 'loop')
