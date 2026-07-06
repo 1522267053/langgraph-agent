@@ -117,15 +117,14 @@ npm run dev
 > **源码保护**：项目的核心业务代码（`app/` 整个包）经 Nuitka 编译为二进制模块（`.pyd` / `.so`），打包后**不含任何 Python 源码文件**，第三方库仍为 `.pyc` 字节码。
 
 ```bash
-# Windows
-build.bat 0.2.0
+# 完整构建（Nuitka 编译 + PyInstaller 打包）
+poetry run python scripts/build.py 0.2.0
 
-# Linux / macOS
-chmod +x build.sh
-./build.sh 0.2.0
+# 跳过 Nuitka 编译（仅 PyInstaller 打包）
+poetry run python scripts/build.py 0.2.0 --skip-nuitka
 ```
 
-脚本自动执行以下 5 个步骤：
+脚本自动执行以下步骤：
 
 | 步骤 | 说明 |
 |------|------|

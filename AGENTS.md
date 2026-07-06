@@ -37,6 +37,8 @@ npm run format                          # Prettier 格式化
 
 路由注册在模块级（`create_app` 时）: `register_all_routers(app)` 扫描 `app/api/*.py`，每个文件必须导出 `router` 变量。
 
+打包构建: `poetry run python scripts/build.py <版本号>` 一键完成 Nuitka 编译 + PyInstaller 打包（支持 `--skip-nuitka` 跳过编译步骤）。
+
 打包环境（PyInstaller/Nuitka）通过 `scripts/generate_static_imports.py` 生成 `_static_imports.py` 替代文件系统扫描。
 
 ## 关键架构约定
