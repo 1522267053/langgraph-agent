@@ -242,7 +242,7 @@ langgraph-agent/
 | 模式 | 说明 | 允许的节点 |
 |------|------|-----------|
 | **Flow** | 可视化工作流编排，Start → End 完整流程 | 全部 19 种节点 |
-| **Agent** | 对话式 AI 助手，单 LLM + 工具节点 | 排除 card/loop，memory 和 agenda 仅 Agent 可用 |
+| **Agent** | 对话式 AI 助手，单 LLM + 工具节点 | 排除 card/loop/human，memory 和 agenda 仅 Agent 可用 |
 
 ### 节点类型
 
@@ -254,11 +254,11 @@ langgraph-agent/
 | **condition** | 条件分支，支持 AND/OR 逻辑和 12 种运算符 | Flow / Agent |
 | **card** | 能力卡片，引用其他流程作为子图执行 | Flow |
 | **loop** | 循环节点，支持计数/条件/forEach 三种模式，顺序或并发执行 | Flow |
-| **intent_router** | 意图路由，LLM 判断意图后分支 | Flow |
+| **intent_router** | 意图路由，LLM 判断意图后分支 | Flow / Agent |
 | **mcp** | MCP 工具提供者（不加入执行图，仅作为 LLM 工具发现源） | Flow / Agent |
 | **knowledge** | 知识库，三层导航 + AI 知识沉淀 | Flow / Agent |
 | **memory** | 三层记忆（热/温/冷），仅 Agent 模式可用 | Agent |
-| **human** | 人工输入，LangGraph interrupt 暂停等待用户响应 | Flow / Agent |
+| **human** | 人工输入，LangGraph interrupt 暂停等待用户响应 | Flow |
 | **api** | 外部 API 调用（GET/POST/PUT/DELETE），支持文件上传下载 | Flow / Agent |
 | **skill** | 技能加载，LLM 读取 Markdown 技能文档并自主执行 | Flow / Agent |
 | **python** | Python 代码沙箱执行，AST 级安全隔离 | Flow / Agent |

@@ -99,7 +99,7 @@ class FlowNodeApi(
         if node_type not in AGENT_ALLOWED_NODE_TYPES:
             raise FlowValidationError(
                 f"智能体不支持「{node_type}」类型的节点，"
-                f"仅支持：开始、结束、大模型调用和工具节点"
+                f"仅支持：开始、结束、大模型调用、条件、意图路由和工具节点"
             )
         if node_type in AGENT_UNIQUE_NODE_TYPES:
             stmt = select(func.count(FlowNode.id)).where(
@@ -123,7 +123,7 @@ class FlowNodeApi(
             if nt not in AGENT_ALLOWED_NODE_TYPES:
                 raise FlowValidationError(
                     f"智能体不支持「{nt}」类型的节点，"
-                    f"仅支持：开始、结束、大模型调用和工具节点"
+                    f"仅支持：开始、结束、大模型调用、条件、意图路由和工具节点"
                 )
         for ut in AGENT_UNIQUE_NODE_TYPES:
             count = node_types.count(ut)
