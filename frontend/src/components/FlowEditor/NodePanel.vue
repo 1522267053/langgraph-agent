@@ -34,12 +34,15 @@ const emit = defineEmits<{
 const basicNodes = getBasicPanelNodes()
 const cardNodes = getCardPanelNodes()
 
-// Agent 模式排除的工具类型（仅 Flow 模式显示）
+// Agent 模式排除的节点类型
+const agentExcludeTypes = new Set(['loop', 'human'])
+
+// Flow 模式排除的工具类型（仅 Agent 模式显示）
 const flowExcludeTypes = new Set(['memory', 'agenda'])
 
 const filteredBasicNodes = computed(() => {
   if (props.isAgent) {
-    return basicNodes.filter(item => item.type !== 'loop' && item.type !== 'human')
+    return basicNodes.filter(item => !agentExcludeTypes.has(item.type))
   }
   if (store.isInSubView && store.subViewParentType === 'loop') {
     return basicNodes.filter(item => item.type !== 'loop')
@@ -49,8 +52,7 @@ const filteredBasicNodes = computed(() => {
 
 const filteredCardNodes = computed(() => {
   if (props.isAgent) {
-    // Agent 模式：显示所有工具类型（包括 agenda、memory）
-    return cardNodes
+    return cardNodes.filter(item => !agentExcludeTypes.has(item.type))
   }
   // Flow 模式：排除 memory 和 agenda
   return cardNodes.filter(item => !flowExcludeTypes.has(item.type))
