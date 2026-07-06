@@ -223,8 +223,8 @@ _register(
                 node_type="llm",
                 node_key="llm",
                 node_name="LLM 自动回复",
-                position_x=150,
-                position_y=400,
+                position_x=450,
+                position_y=120,
                 base_config={
                     "user_prompt": "你是一个智能客服助手，请友好地回答用户问题。\n\n用户问题：{{input.message}}"
                 },
@@ -233,15 +233,15 @@ _register(
                 node_type="human",
                 node_key="human",
                 node_name="转人工",
-                position_x=400,
-                position_y=400,
+                position_x=450,
+                position_y=280,
             ),
             TemplateNode(
                 node_type="end",
                 node_key="end",
                 node_name="结束节点",
-                position_x=275,
-                position_y=550,
+                position_x=650,
+                position_y=200,
                 base_config={
                     "output_variables": [
                         {
