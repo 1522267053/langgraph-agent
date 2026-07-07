@@ -138,8 +138,6 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        "grpc",
-        "google",
         "watchfiles",
         "matplotlib",
         "tkinter",
