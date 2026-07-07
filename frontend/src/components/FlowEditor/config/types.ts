@@ -68,6 +68,10 @@ export interface LlmConfig {
   extra_body?: Record<string, unknown>
   reasoning_effort?: string
   context_length?: number
+  required_tools?: string[]
+  tool_check_script?: string
+  required_tools_max_retries?: number
+  required_tools_hint?: string
 }
 
 /** 条件节点配置 */

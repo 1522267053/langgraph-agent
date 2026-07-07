@@ -236,7 +236,12 @@ POST /api/ai/flow/{id}/edges/batch
 - 留空字段自动注入全局值
 - `user_prompt` 必填，`system_prompt` 强烈建议设置
 - `max_tool_iterations` 控制工具调用上限，测试时可设为 1 隔离干扰
-- 输出变量：`result`、`thinking`
+- 输出变量：`result`、`thinking`、`called_tools`（本次对话新调用的工具名列表）
+- **必需工具检查**：LLM 本轮未调用指定工具时，自动注入提醒消息让 LLM 重试。仅检查本次 ReAct 循环新调用的工具（内存收集，不查 DB 历史），重试在 LLM 内部完成，用户只看到最终回复（无多段回复问题）。两种模式二选一：
+  - **简单模式** `required_tools`: 必需工具名列表，如 `["send_wecom_message"]`，工具名精确匹配
+  - **高级模式** `tool_check_script`: 自定义检查脚本（留空走简单模式），复用 RestrictedPython 沙箱，签名 `def main(called_tools, last_result): return {"need_retry": bool, "hint": str}`，可写任意判断逻辑
+  - `required_tools_max_retries`: 最大提醒重试次数，默认 2
+  - `required_tools_hint`: 提醒消息模板，`{{tools}}` 占位符替换为缺失工具名（留空用默认模板）
 
 ### Python (`python`)
 - 用直接参数签名：`def main(message): ...`，不用 `**kwargs`

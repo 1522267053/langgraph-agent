@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Optional, Union
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
+    HumanMessage,
     SystemMessage,
 )
 from langchain_core.runnables import RunnableConfig
@@ -140,6 +141,23 @@ class LlmNodeConfig(BaseNodeConfig):
     )
     context_length: int = Field(
         0, description="模型上下文窗口大小（token 数，0 表示不限制）"
+    )
+    required_tools: list[str] = Field(
+        default_factory=list,
+        description="必需调用的工具名列表。LLM 本轮未调用时自动提醒重试（简单模式）",
+    )
+    tool_check_script: str = Field(
+        "",
+        description="自定义检查脚本（高级模式，留空走简单模式）。"
+        "签名: def main(called_tools, last_result): "
+        "return {'need_retry': bool, 'hint': str}",
+    )
+    required_tools_max_retries: int = Field(
+        2, description="必需工具未调用时的最大提醒重试次数"
+    )
+    required_tools_hint: str = Field(
+        "",
+        description="提醒消息模板，{{tools}} 占位符替换为缺失工具名（留空使用默认模板）",
     )
 
 
@@ -402,11 +420,12 @@ class LlmToolNodeHandler(BaseNodeHandler):
         # ReAct 循环 + 结果保存
         last_content = ""
         thinking_content: list[str] = []
+        called_tools: set[str] = set()
         output_names = self._get_output_var_names(node, ["result", "thinking"])
         result_name = output_names[0] if len(output_names) > 0 else "result"
         thinking_name = output_names[1] if len(output_names) > 1 else "thinking"
         try:
-            last_content, thinking_content = await self._run_react_loop(
+            last_content, thinking_content, called_tools = await self._run_react_loop(
                 llm_with_tools,
                 system_prompt,
                 msg_buf,
@@ -416,6 +435,10 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 writer,
                 max_tool_iterations,
                 context_length=cfg_context_length,
+                required_tools=cfg.required_tools,
+                tool_check_script=cfg.tool_check_script,
+                required_tools_max_retries=cfg.required_tools_max_retries,
+                required_tools_hint=cfg.required_tools_hint,
             )
             if last_content:
                 state.set_node_variable(node.node_key, result_name, last_content)
@@ -423,6 +446,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 state.set_node_variable(
                     node.node_key, thinking_name, "".join(thinking_content)
                 )
+            state.set_node_variable(node.node_key, "called_tools", list(called_tools))
             state.set_conversation_messages(node.node_key, list(msg_buf.messages))
             await msg_buf.save_to_db()
         except asyncio.CancelledError:
@@ -480,18 +504,24 @@ class LlmToolNodeHandler(BaseNodeHandler):
         max_tool_iterations: int,
         *,
         context_length: int = 0,
-    ) -> tuple[str, list[str]]:
+        required_tools: Optional[list[str]] = None,
+        tool_check_script: str = "",
+        required_tools_max_retries: int = 2,
+        required_tools_hint: str = "",
+    ) -> tuple[str, list[str], set[str]]:
         """ReAct 循环：流式调用 LLM → 处理工具调用 → 继续调用
 
         核心编排逻辑，调用 llm_stream 模块进行流式调用，
         调用 llm_tool_executor 模块处理工具调用。
 
         Returns:
-            (最后一条文本内容, 所有 thinking 片段)
+            (最后一条文本内容, 所有 thinking 片段, 本轮调用的工具名集合)
         """
         thinking_content: list[str] = []
         last_content = ""
         tool_call_count = 0
+        called_tools: set[str] = set()
+        retry_count = 0
 
         while True:
             messages = msg_buf.messages
@@ -612,8 +642,33 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 last_content = current_content
             thinking_content.extend(current_thinking)
 
-            # 无工具调用则结束循环
+            # 收集本轮调用的工具名（仅当前 ReAct 循环内新增调用，不查历史/DB）
+            if response and response.tool_calls:
+                called_tools.update(
+                    tc.get("name", "")
+                    if isinstance(tc, dict)
+                    else getattr(tc, "name", "")
+                    for tc in response.tool_calls
+                )
+
+            # 无工具调用时检查必需工具：未调用则注入提醒消息重试
             if not response or not response.tool_calls:
+                if (
+                    (tool_check_script or required_tools)
+                    and not self._check_interrupted(state)
+                    and retry_count < required_tools_max_retries
+                ):
+                    need_retry, hint = await self._evaluate_required_tools(
+                        required_tools or [],
+                        tool_check_script,
+                        called_tools,
+                        last_content,
+                        required_tools_hint,
+                    )
+                    if need_retry and hint:
+                        retry_count += 1
+                        msg_buf.append(HumanMessage(content=hint))
+                        continue
                 break
 
             # 处理工具调用
@@ -636,7 +691,70 @@ class LlmToolNodeHandler(BaseNodeHandler):
             if not should_continue:
                 break
 
-        return last_content, thinking_content
+        return last_content, thinking_content, called_tools
+
+    async def _evaluate_required_tools(
+        self,
+        required_tools: list[str],
+        tool_check_script: str,
+        called_tools: set[str],
+        last_result: str,
+        hint_template: str,
+    ) -> tuple[bool, str]:
+        """评估必需工具是否已调用，返回 (是否需要重试, 提醒消息)
+
+        高级模式（tool_check_script 非空）：在 RestrictedPython 沙箱中执行
+        自定义脚本，签名 def main(called_tools, last_result): return
+        {"need_retry": bool, "hint": str}。
+        简单模式：检查 called_tools 是否包含所有 required_tools，缺失则用
+        hint_template（{{tools}} 占位）生成提醒。
+
+        Args:
+            required_tools: 必需工具名列表（简单模式）
+            tool_check_script: 自定义检查脚本（高级模式，留空走简单模式）
+            called_tools: 本轮已调用的工具名集合
+            last_result: LLM 最后输出的文本内容
+            hint_template: 提醒消息模板（简单模式用，{{tools}} 占位）
+        """
+        # 高级模式：执行自定义检查脚本（复用 Python 节点的沙箱）
+        if tool_check_script:
+            try:
+                from app.agent_flow.node_handlers.python_handler import (
+                    PythonNodeHandler,
+                )
+
+                handler = PythonNodeHandler()
+                result = await handler._execute_python(
+                    tool_check_script,
+                    {
+                        "called_tools": list(called_tools),
+                        "last_result": last_result,
+                    },
+                    timeout=10,
+                )
+                if result.get("success"):
+                    ret = result.get("result")
+                    if isinstance(ret, dict):
+                        need_retry = bool(ret.get("need_retry", False))
+                        hint = str(ret.get("hint", "") or "")
+                        return need_retry, hint
+            except Exception as e:
+                logger.warning(f"必需工具检查脚本执行失败: {e}")
+            return False, ""
+
+        # 简单模式：工具名精确匹配
+        missing = [t for t in required_tools if t not in called_tools]
+        if not missing:
+            return False, ""
+
+        if hint_template:
+            hint = hint_template.replace("{{tools}}", "、".join(missing))
+        else:
+            hint = (
+                f"你尚未调用必需的工具：{'、'.join(missing)}。"
+                "请根据任务需要调用上述工具完成操作，不要直接给出最终回复。"
+            )
+        return True, hint
 
     # ---- 输入/输出内容（用于执行结果显示） ----
 

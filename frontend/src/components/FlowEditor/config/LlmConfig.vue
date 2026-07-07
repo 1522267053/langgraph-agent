@@ -41,6 +41,20 @@ if (!localConfig.value.capabilities) {
   }
 }
 
+// 必需工具检查默认值（兼容旧配置）
+if (!localConfig.value.required_tools) {
+  localConfig.value.required_tools = []
+}
+if (localConfig.value.tool_check_script === undefined) {
+  localConfig.value.tool_check_script = ''
+}
+if (!localConfig.value.required_tools_max_retries) {
+  localConfig.value.required_tools_max_retries = 2
+}
+if (localConfig.value.required_tools_hint === undefined) {
+  localConfig.value.required_tools_hint = ''
+}
+
 watch(
   () => props.config,
   () => {
@@ -52,6 +66,19 @@ watch(
         pdf: false,
         xlsx: false
       }
+    }
+    // 必需工具检查默认值（每次配置变化都补齐，防止被 useConfigBase 覆盖）
+    if (!localConfig.value.required_tools) {
+      localConfig.value.required_tools = []
+    }
+    if (localConfig.value.tool_check_script === undefined) {
+      localConfig.value.tool_check_script = ''
+    }
+    if (!localConfig.value.required_tools_max_retries) {
+      localConfig.value.required_tools_max_retries = 2
+    }
+    if (localConfig.value.required_tools_hint === undefined) {
+      localConfig.value.required_tools_hint = ''
     }
   }
 )
@@ -84,6 +111,31 @@ const currentModels = computed(() => {
 
 const selectedModelOption = computed(() => {
   return currentModels.value.find(m => m.value === localConfig.value.model)
+})
+
+// ---- 必需工具检查 ----
+// 使用独立 ref 控制，避免从配置反推导致开关/模式切换时状态弹回
+const enableRequiredTools = ref(
+  (localConfig.value.required_tools?.length ?? 0) > 0 || !!localConfig.value.tool_check_script
+)
+
+watch(enableRequiredTools, val => {
+  if (!val) {
+    localConfig.value.required_tools = []
+    localConfig.value.tool_check_script = ''
+    updateConfig()
+  }
+})
+
+const requiredToolsMode = ref(localConfig.value.tool_check_script ? 'script' : 'simple')
+
+watch(requiredToolsMode, val => {
+  if (val === 'simple') {
+    localConfig.value.tool_check_script = ''
+  } else {
+    localConfig.value.required_tools = []
+  }
+  updateConfig()
 })
 
 watch(
@@ -460,6 +512,70 @@ function handleExtraBodyBlur(): void {
           人工协助：通过拖动Human节点连接到此LLM节点
           <br />
           其他带有工具的节点：通过拖动其他节点连接到此LLM节点
+        </el-text>
+      </div>
+    </div>
+
+    <div class="config-section">
+      <div class="section-title">必需工具检查</div>
+      <el-form label-width="120px" size="small">
+        <el-form-item label="启用检查">
+          <el-switch v-model="enableRequiredTools" />
+          <el-text size="small" type="info" style="margin-left: 8px">
+            LLM 未调用必需工具时自动提醒重试
+          </el-text>
+        </el-form-item>
+        <template v-if="enableRequiredTools">
+          <el-form-item label="检查模式">
+            <el-radio-group v-model="requiredToolsMode">
+              <el-radio value="simple">工具名匹配</el-radio>
+              <el-radio value="script">自定义脚本</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="requiredToolsMode === 'simple'" label="必需工具名">
+            <el-select
+              v-model="localConfig.required_tools"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              placeholder="输入工具名后回车，如 send_wecom_message"
+              style="width: 100%"
+              @change="updateConfig"
+            />
+          </el-form-item>
+          <el-form-item v-else label="检查脚本">
+            <el-input
+              v-model="localConfig.tool_check_script"
+              type="textarea"
+              :rows="5"
+              placeholder="def main(called_tools, last_result): return {'need_retry': bool, 'hint': str}"
+              @blur="updateConfig"
+            />
+          </el-form-item>
+          <el-form-item label="最大重试次数">
+            <el-input-number
+              v-model="localConfig.required_tools_max_retries"
+              :min="1"
+              :max="10"
+              @change="updateConfig"
+            />
+          </el-form-item>
+          <el-form-item v-if="requiredToolsMode === 'simple'" label="提醒模板">
+            <el-input
+              v-model="localConfig.required_tools_hint"
+              type="textarea"
+              :rows="2"
+              placeholder="留空使用默认模板，{{tools}} 会被替换为缺失的工具名"
+              @blur="updateConfig"
+            />
+          </el-form-item>
+        </template>
+      </el-form>
+      <div class="config-hint">
+        <el-text size="small" type="info">
+          仅检查本次对话新调用的工具（不查历史）。Agent 模式下重试在 LLM
+          内部完成，用户只看到最终回复
         </el-text>
       </div>
     </div>
