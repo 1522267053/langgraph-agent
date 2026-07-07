@@ -15,6 +15,11 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 | GET | `/api/webhook/query/{token}/calls` | ❌ | 调用记录列表 |
 | GET | `/api/webhook/query/{token}/calls/{call_id}` | ❌ | 调用记录详情 |
 | GET | `/api/webhook/query/{token}/calls/{call_id}/messages` | ❌ | 调用消息列表 |
+| GET | `/api/webhook/query/{token}/sessions` | ❌ | Webhook 创建的会话列表 |
+| GET | `/api/webhook/query/{token}/sessions/{session_id}` | ❌ | 会话详情 |
+| GET | `/api/webhook/query/{token}/sessions/{session_id}/delete` | ❌ | 删除会话 |
+| GET | `/api/webhook/query/{token}/sessions/{session_id}/messages` | ❌ | 会话消息列表 |
+| GET | `/api/webhook/query/{token}/sessions/{session_id}/messages/{message_id}/delete` | ❌ | 删除会话消息 |
 
 ---
 
@@ -136,6 +141,8 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 }
 ```
 `session_id` 是控制参数，不进入流程输入。仅 Agent 类型有效，Flow 类型忽略。
+
+> **会话标记**：仅当「未传 `session_id` 由 Webhook 新建会话」时，会话写入 `webhook_id` 标记，后续可通过会话查询接口查到。外部传入复用的用户会话不写入标记，不会出现在 Webhook 会话列表中。
 
 **输入合并规则：** `{...(webhook.input_config), ...request_body}`（`session_id` 已被提取，不参与合并）
 
@@ -263,6 +270,100 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
   }
 }
 ```
+
+---
+
+## 会话与消息管理接口（免认证，仅 Agent 类型）
+
+所有 `/api/webhook/query/{token}/sessions/...` 接口**免 session 认证**，通过 URL 中的 token 鉴权。
+
+**重要：会话隔离** — 这些接口仅返回/操作 **该 Webhook 创建的会话**（`agent_session.webhook_id == webhook.id`）。用户在 UI 聊天产生的会话（`webhook_id` 为空）不可见、不可操作。外部触发时传入 `session_id` 复用的用户会话也不算 Webhook 创建，不会出现在会话列表中。
+
+### GET /api/webhook/query/{token}/sessions
+
+查询该 Webhook 创建的会话列表（分页）。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|------|------|:----:|:----:|------|
+| `token` | path | ✅ | — | Webhook token |
+| `page` | query | ❌ | 1 | 页码 |
+| `page_size` | query | ❌ | 20 | 每页条数（最大 100） |
+
+**响应：**
+```json
+{
+  "code": 1,
+  "data": {
+    "total": 12,
+    "items": [
+      {
+        "id": 5,
+        "flow_id": 1,
+        "title": "[Webhook] 订单处理",
+        "status": 1,
+        "created_at": "2026-06-21T08:30:00"
+      }
+    ]
+  }
+}
+```
+
+**会话字段：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | int | 会话 ID |
+| `flow_id` | int | 关联 Agent Flow ID |
+| `title` | string | 会话标题（Webhook 创建的默认 `[Webhook] {name}`） |
+| `status` | int | 1=活跃，0=已归档 |
+| `created_at` | datetime | 创建时间 |
+
+### GET /api/webhook/query/{token}/sessions/{session_id}
+
+查询会话详情（校验该会话由本 Webhook 创建）。响应同上单个会话对象。
+
+校验失败返回 `{code:0, msg:"会话不存在或不属于该Webhook"}`。
+
+### GET /api/webhook/query/{token}/sessions/{session_id}/delete
+
+删除指定会话（校验归属）。同时清理：
+- 会话所有消息（软删除）
+- LangGraph checkpoint（确保下次执行从 DB 重建历史）
+
+**响应：**
+```json
+{ "code": 1, "data": null, "msg": "删除成功" }
+```
+
+### GET /api/webhook/query/{token}/sessions/{session_id}/messages
+
+查询指定会话的消息列表（校验归属，游标分页）。
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|------|------|:----:|:----:|------|
+| `token` | path | ✅ | — | Webhook token |
+| `session_id` | path | ✅ | — | 会话 ID |
+| `before_id` | query | ❌ | null | 游标 ID（返回此 ID 之前的消息，用于向上翻页） |
+| `limit` | query | ❌ | 20 | 每页条数（最大 100） |
+
+**响应格式同** [调用消息列表](#get-apiwebhookquerytokencallscall_idmessages)，返回 `{total, items}`。
+
+### GET /api/webhook/query/{token}/sessions/{session_id}/messages/{message_id}/delete
+
+删除指定会话的 `message_id` **及其后所有消息**（校验归属）。
+
+用途：回滚到某条消息之前的状态。删除后自动清理 LangGraph checkpoint，下次执行将从剩余消息重建历史。
+
+**响应：**
+```json
+{ "code": 1, "data": null, "msg": "删除成功" }
+```
+
+消息不存在时返回 `{code:0, msg:"消息不存在"}`。
 
 ---
 

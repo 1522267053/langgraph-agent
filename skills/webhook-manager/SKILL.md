@@ -6,8 +6,9 @@ description: |
   (2) 用户想查看 Webhook 的触发记录和产生的会话消息
   (3) 用户需要外部系统通过 HTTP POST 触发流程执行
   (4) 用户想获取 Webhook 的触发 URL 或 token
+  (5) 用户想查询/删除 Webhook 创建的会话及其消息
 
-  触发词：「创建 webhook」「管理 webhook」「触发 webhook」「外部触发」「查询 webhook 记录」「webhook 回调」
+  触发词：「创建 webhook」「管理 webhook」「触发 webhook」「外部触发」「查询 webhook 记录」「webhook 回调」「webhook 会话」「webhook 消息」
 ---
 
 # Webhook Manager
@@ -23,6 +24,8 @@ description: |
 5. **异步执行**：触发后立即返回 `{"status":"started","webhook_id":...,"call_id":...}`，后台异步执行，不等待结果
 6. **`is_enabled=0` 时触发被拒**：返回 `"Webhook 已禁用"`
 7. **更新使用 `exclude_unset`**：未传字段保持不变，无法将字段更新为 `None`
+8. **会话隔离**：Webhook 创建的会话写入 `webhook_id` 标记。会话/消息查询接口**仅返回该 Webhook 创建的会话**，用户在 UI 聊天产生的会话不可见、不可操作。同一 flow 的多个 Webhook 也互相隔离
+9. **删除接口用 GET**：会话/消息删除均为 `GET .../delete` 风格（非 HTTP DELETE），与项目惯例一致
 
 ## API 速查
 
@@ -37,6 +40,11 @@ description: |
 | GET | `/api/webhook/query/{token}/calls` | ❌ | 调用记录列表 |
 | GET | `/api/webhook/query/{token}/calls/{call_id}` | ❌ | 调用记录详情 |
 | GET | `/api/webhook/query/{token}/calls/{call_id}/messages` | ❌ | 调用产生的消息列表 |
+| GET | `/api/webhook/query/{token}/sessions` | ❌ | **Webhook 创建的会话列表** |
+| GET | `/api/webhook/query/{token}/sessions/{session_id}` | ❌ | 会话详情 |
+| GET | `/api/webhook/query/{token}/sessions/{session_id}/delete` | ❌ | 删除会话 |
+| GET | `/api/webhook/query/{token}/sessions/{session_id}/messages` | ❌ | 会话消息列表 |
+| GET | `/api/webhook/query/{token}/sessions/{session_id}/messages/{message_id}/delete` | ❌ | 删除会话消息（含其后所有） |
 
 ## 创建 Webhook 流程
 
@@ -112,9 +120,11 @@ POST /api/webhook/trigger/{token}
 |------|------|:----------------:|
 | 传了 `session_id` | 校验会话存在且属于该 Agent → 复用该会话继续对话 | ✅ 回显传入的值 |
 | `session_id` 无效 | 返回错误，不执行流程 | ❌ |
-| 未传 `session_id` | 同步创建新会话（标题 `[Webhook] {webhook_name}`） | ✅ 返回新建的 session_id |
+| 未传 `session_id` | 同步创建新会话（标题 `[Webhook] {webhook_name}`，写入 `webhook_id` 标记） | ✅ 返回新建的 session_id |
 
 `session_id` 对 Flow 类型无效（Flow 不涉及会话概念），Flow 类型触发响应中不含 `session_id`。
+
+> **注意**：只有「未传 `session_id` 由 Webhook 新建」的会话才被标记为该 Webhook 的会话，可通过会话查询接口查到。外部传入复用的用户会话**不算 Webhook 创建**，不会出现在会话列表中。
 
 ### 异步执行
 
@@ -188,6 +198,45 @@ curl "http://host/api/webhook/query/abc123.../calls/10"
 
 ```bash
 curl "http://host/api/webhook/query/abc123.../calls/10/messages?limit=20"
+```
+
+## 会话与消息管理（仅 Agent 类型）
+
+通过 token 直接管理 **该 Webhook 创建的会话**及其中消息。用户在 UI 聊天产生的会话不在此列。
+
+### 查询会话列表
+
+```bash
+curl "http://host/api/webhook/query/abc123.../sessions?page=1&page_size=20"
+```
+
+### 查询会话详情
+
+```bash
+curl "http://host/api/webhook/query/abc123.../sessions/5"
+```
+
+### 删除会话（含消息 + checkpoint）
+
+```bash
+curl "http://host/api/webhook/query/abc123.../sessions/5/delete"
+```
+
+### 查询会话消息列表（游标分页）
+
+```bash
+# 首次加载（获取最新一页）
+curl "http://host/api/webhook/query/abc123.../sessions/5/messages?limit=20"
+
+# 向上翻页（before_id 为当前最早消息 ID）
+curl "http://host/api/webhook/query/abc123.../sessions/5/messages?limit=20&before_id=100"
+```
+
+### 删除会话消息（含其后所有消息）
+
+```bash
+# 删除 message_id=100 及其后所有消息，用于回滚到某条消息之前的状态
+curl "http://host/api/webhook/query/abc123.../sessions/5/messages/100/delete"
 ```
 
 ## 完整接口详情
