@@ -42,6 +42,8 @@ def _get_local_ips() -> list[str]:
 
 def _log_startup_banner() -> None:
     """打印自定义启动横幅，列出所有可访问地址"""
+    if settings.app_host in ["127.0.0.1", "localhost"]:
+        return
     port = settings.app_port
     addresses = ["127.0.0.1", *_get_local_ips()]
     logger.info("Uvicorn running on:")
