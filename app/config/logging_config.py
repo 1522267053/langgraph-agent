@@ -16,6 +16,27 @@ from app.config.build_utils import BASE_DIR
 logger = logging.getLogger(__name__)
 
 
+def _is_log_file(filename: str) -> bool:
+    """判断文件名是否为日志文件。
+
+    支持两种命名格式:
+    - app_2026-06-13.log
+    - app_2026-06-13.log.1 / app_2026-06-13.log.2 ...（大小轮转产生的切片）
+    """
+    name, ext = os.path.splitext(filename)
+    if ext != ".log":
+        # 检查 .log.N 形式（N 为正整数）
+        if not ext.startswith("."):
+            return False
+        parts = filename.rsplit(".", 2)
+        if len(parts) != 3 or parts[1] != "log":
+            return False
+        if not parts[2].isdigit():
+            return False
+        return True
+    return True
+
+
 class VideoRangeFilter(logging.Filter):
     """过滤视频 Range 请求（206 Partial Content）"""
 
@@ -59,7 +80,7 @@ def cleanup_logs(
         return 0
 
     for f in os.listdir(log_dir):
-        if not f.startswith(prefix) or not f.endswith(".log"):
+        if not f.startswith(prefix) or not _is_log_file(f):
             continue
         path = os.path.join(log_dir, f)
         if not os.path.isfile(path):
