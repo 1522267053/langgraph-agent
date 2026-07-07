@@ -2,6 +2,8 @@
 Agent会话模型
 """
 
+from typing import Optional
+
 from sqlalchemy import String, Integer, SmallInteger
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base_model import DbBaseModel
@@ -24,6 +26,12 @@ class AgentSession(DbBaseModel):
     )
     status: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, default=1, comment="状态：1=活跃，0=已归档"
+    )
+    webhook_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        default=None,
+        comment="创建该会话的 Webhook ID（用户聊天创建则为空）",
     )
 
     def __repr__(self) -> str:

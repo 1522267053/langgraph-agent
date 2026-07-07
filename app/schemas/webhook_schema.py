@@ -94,6 +94,37 @@ class WebhookCallRecordPageRequest(BaseView):
     page_size: int = Field(20, description="每页条数")
 
 
+# ---- Webhook 会话查询 Schema（仅 Agent 类型流程） ----
+
+
+class WebhookSessionResponse(BaseView):
+    """Webhook 查询会话响应"""
+
+    id: Optional[int] = Field(None, description="会话ID")
+    flow_id: Optional[int] = Field(None, description="关联的 Agent Flow ID")
+    title: Optional[str] = Field(None, description="会话标题")
+    status: Optional[int] = Field(None, description="状态：1=活跃，0=已归档")
+    created_at: Optional[ChinaDateTime] = Field(
+        None, validation_alias="create_time", description="创建时间"
+    )
+
+
+class WebhookSessionListResponse(BaseView):
+    """会话列表响应"""
+
+    total: int = Field(0, description="总数")
+    items: list[WebhookSessionResponse] = Field(
+        default_factory=list, description="会话列表"
+    )
+
+
+class WebhookSessionPageRequest(BaseView):
+    """会话分页请求"""
+
+    page: int = Field(1, description="页码")
+    page_size: int = Field(20, description="每页条数")
+
+
 class WebhookMessageResponse(BaseView):
     """Webhook 查询消息响应"""
 

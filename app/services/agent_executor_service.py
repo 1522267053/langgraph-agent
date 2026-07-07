@@ -163,9 +163,15 @@ class AgentExecutorService(BaseExecutorService):
 
         return sessions, total
 
-    async def create_session(self, db: AsyncSession, flow_id: int) -> AgentSession:
-        """创建新会话（公开方法）"""
-        return await self._create_session(db, flow_id)
+    async def create_session(
+        self, db: AsyncSession, flow_id: int, webhook_id: Optional[int] = None
+    ) -> AgentSession:
+        """创建新会话（公开方法）
+
+        Args:
+            webhook_id: 可选，由 Webhook 触发创建时传入，用于区分 Webhook 会话与用户聊天会话
+        """
+        return await self._create_session(db, flow_id, webhook_id)
 
     async def search_history(
         self, db: AsyncSession, flow_id: int, keyword: str
@@ -344,9 +350,13 @@ class AgentExecutorService(BaseExecutorService):
         total = await self._get_messages_count(db, session_id)
         return messages, total
 
-    async def _create_session(self, db: AsyncSession, flow_id: int) -> AgentSession:
+    async def _create_session(
+        self, db: AsyncSession, flow_id: int, webhook_id: Optional[int] = None
+    ) -> AgentSession:
         """创建新会话"""
-        session = AgentSession(flow_id=flow_id, title="新对话", status=1)
+        session = AgentSession(
+            flow_id=flow_id, title="新对话", status=1, webhook_id=webhook_id
+        )
         db.add(session)
         await db.commit()
         await db.refresh(session)

@@ -286,6 +286,45 @@ function getQueryMessagesUrl(row: WebhookConfig, callId?: number): string {
   return `${protocol}//${host}/api/webhook/query/${row.token}/calls/${id}/messages`
 }
 
+function getQuerySessionsUrl(row: WebhookConfig): string {
+  const protocol = location.protocol
+  const host = location.host
+  return `${protocol}//${host}/api/webhook/query/${row.token}/sessions`
+}
+
+function getQuerySessionDetailUrl(row: WebhookConfig, sessionId?: number): string {
+  const protocol = location.protocol
+  const host = location.host
+  const id = sessionId || '{session_id}'
+  return `${protocol}//${host}/api/webhook/query/${row.token}/sessions/${id}`
+}
+
+function getDeleteSessionUrl(row: WebhookConfig, sessionId?: number): string {
+  const protocol = location.protocol
+  const host = location.host
+  const id = sessionId || '{session_id}'
+  return `${protocol}//${host}/api/webhook/query/${row.token}/sessions/${id}/delete`
+}
+
+function getQuerySessionMessagesUrl(row: WebhookConfig, sessionId?: number): string {
+  const protocol = location.protocol
+  const host = location.host
+  const id = sessionId || '{session_id}'
+  return `${protocol}//${host}/api/webhook/query/${row.token}/sessions/${id}/messages`
+}
+
+function getDeleteSessionMessageUrl(
+  row: WebhookConfig,
+  sessionId?: number,
+  messageId?: number
+): string {
+  const protocol = location.protocol
+  const host = location.host
+  const sid = sessionId || '{session_id}'
+  const mid = messageId || '{message_id}'
+  return `${protocol}//${host}/api/webhook/query/${row.token}/sessions/${sid}/messages/${mid}/delete`
+}
+
 async function copyUrl(url: string) {
   try {
     await navigator.clipboard.writeText(url)
@@ -555,6 +594,96 @@ onMounted(() => {
                   <el-button
                     :icon="CopyDocument"
                     @click="copyUrl(getQueryMessagesUrl(detailWebhook))"
+                  >
+                    复制
+                  </el-button>
+                </template>
+              </el-input>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item label="查询会话列表 URL">
+            <div class="url-display">
+              <el-input
+                :model-value="getQuerySessionsUrl(detailWebhook)"
+                readonly
+                class="url-input"
+              >
+                <template #append>
+                  <el-button
+                    :icon="CopyDocument"
+                    @click="copyUrl(getQuerySessionsUrl(detailWebhook))"
+                  >
+                    复制
+                  </el-button>
+                </template>
+              </el-input>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item label="查询会话详情 URL">
+            <div class="url-display">
+              <el-input
+                :model-value="getQuerySessionDetailUrl(detailWebhook)"
+                readonly
+                class="url-input"
+              >
+                <template #append>
+                  <el-button
+                    :icon="CopyDocument"
+                    @click="copyUrl(getQuerySessionDetailUrl(detailWebhook))"
+                  >
+                    复制
+                  </el-button>
+                </template>
+              </el-input>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item label="删除会话 URL">
+            <div class="url-display">
+              <el-input
+                :model-value="getDeleteSessionUrl(detailWebhook)"
+                readonly
+                class="url-input"
+              >
+                <template #append>
+                  <el-button
+                    :icon="CopyDocument"
+                    @click="copyUrl(getDeleteSessionUrl(detailWebhook))"
+                  >
+                    复制
+                  </el-button>
+                </template>
+              </el-input>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item label="查询会话消息 URL">
+            <div class="url-display">
+              <el-input
+                :model-value="getQuerySessionMessagesUrl(detailWebhook)"
+                readonly
+                class="url-input"
+              >
+                <template #append>
+                  <el-button
+                    :icon="CopyDocument"
+                    @click="copyUrl(getQuerySessionMessagesUrl(detailWebhook))"
+                  >
+                    复制
+                  </el-button>
+                </template>
+              </el-input>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item label="删除会话消息 URL">
+            <div class="url-display">
+              <el-input
+                :model-value="getDeleteSessionMessageUrl(detailWebhook)"
+                readonly
+                class="url-input"
+              >
+                <template #append>
+                  <el-button
+                    :icon="CopyDocument"
+                    @click="copyUrl(getDeleteSessionMessageUrl(detailWebhook))"
                   >
                     复制
                   </el-button>

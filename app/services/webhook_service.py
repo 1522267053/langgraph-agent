@@ -285,6 +285,121 @@ class WebhookService(
         total = count_result.scalar() or 0
         return messages, total
 
+    # ---- Webhook 会话/消息管理（供免认证 API 使用，仅 Agent 类型流程） ----
+
+    async def get_sessions_by_token(
+        self, db: AsyncSession, token: str, page: int = 1, page_size: int = 20
+    ) -> tuple[list, int]:
+        """通过 token 查询该 Webhook 创建的会话列表（分页）
+
+        仅返回由该 Webhook 触发创建的会话（webhook_id 匹配），用户聊天会话不在此列。
+        """
+        from app.models.agent_session import AgentSession
+
+        webhook = await self.get_by_token(db, token)
+        if not webhook:
+            return [], 0
+
+        conditions = [
+            AgentSession.webhook_id == webhook.id,
+            AgentSession.is_delete == 0,
+        ]
+        count_stmt = select(func.count()).select_from(AgentSession).where(*conditions)
+        count_result = await db.execute(count_stmt)
+        total = count_result.scalar() or 0
+
+        offset = (page - 1) * page_size
+        stmt = (
+            select(AgentSession)
+            .where(*conditions)
+            .order_by(desc(AgentSession.id))
+            .offset(offset)
+            .limit(page_size)
+        )
+        result = await db.execute(stmt)
+        sessions = list(result.scalars().all())
+        return sessions, total
+
+    async def get_session_by_token(
+        self, db: AsyncSession, token: str, session_id: int
+    ) -> tuple[Optional[WebhookConfig], Optional[object]]:
+        """通过 token + session_id 获取会话，并校验会话由该 Webhook 创建
+
+        Returns:
+            (webhook, session)：webhook 不存在返回 (None, None)；
+            会话不存在或非该 Webhook 创建返回 (webhook, None)。
+        """
+        from app.services.agent_executor_service import agent_executor_service
+
+        webhook = await self.get_by_token(db, token)
+        if not webhook:
+            return None, None
+        session = await agent_executor_service._get_session(db, session_id)
+        if not session or session.webhook_id != webhook.id:
+            return webhook, None
+        return webhook, session
+
+    async def delete_session_by_token(
+        self, db: AsyncSession, token: str, session_id: int
+    ) -> tuple[bool, str]:
+        """通过 token 删除会话（含消息和 checkpoint）
+
+        Returns:
+            (success, msg)：(False, "Webhook 不存在") / (False, "会话不存在或不属于该Webhook") / (True, "")
+        """
+        from app.services.agent_executor_service import agent_executor_service
+
+        webhook, session = await self.get_session_by_token(db, token, session_id)
+        if not webhook:
+            return False, "Webhook 不存在"
+        if not session:
+            return False, "会话不存在或不属于该Webhook"
+        await agent_executor_service.delete_session(db, session_id)
+        return True, ""
+
+    async def get_session_messages_by_token(
+        self,
+        db: AsyncSession,
+        token: str,
+        session_id: int,
+        before_id: Optional[int] = None,
+        limit: int = 20,
+    ) -> tuple[list, int]:
+        """通过 token 查询指定会话的消息列表（游标分页）
+
+        会话归属校验失败返回 ([], 0)。
+        """
+        from app.services.agent_executor_service import agent_executor_service
+
+        _, session = await self.get_session_by_token(db, token, session_id)
+        if not session:
+            return [], 0
+        return await agent_executor_service.get_messages(
+            db, session_id, limit, before_id
+        )
+
+    async def delete_session_message_by_token(
+        self, db: AsyncSession, token: str, session_id: int, message_id: int
+    ) -> tuple[bool, str]:
+        """通过 token 删除指定会话的 message_id 及其后所有消息（含 checkpoint 清理）
+
+        Returns:
+            (success, msg)：校验失败 / 消息不存在均返回 (False, msg)。
+        """
+        from app.services.agent_executor_service import agent_executor_service
+
+        webhook, session = await self.get_session_by_token(db, token, session_id)
+        if not webhook:
+            return False, "Webhook 不存在"
+        if not session:
+            return False, "会话不存在或不属于该Webhook"
+        result = await agent_executor_service.delete_messages_from(
+            db, session_id, message_id
+        )
+        if result is None:
+            return False, "消息不存在"
+        return True, ""
+
     # ---- 触发执行（含调用记录） ----
 
     async def trigger_flow(
@@ -337,7 +452,9 @@ class WebhookService(
                 # 新建会话
                 from app.services.agent_executor_service import agent_executor_service
 
-                session = await agent_executor_service.create_session(db, flow_id)
+                session = await agent_executor_service.create_session(
+                    db, flow_id, webhook_id=webhook.id
+                )
                 session.title = f"[Webhook] {webhook.name}"
                 resolved_session_id = session.id
 
