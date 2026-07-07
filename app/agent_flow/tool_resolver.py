@@ -157,6 +157,57 @@ def filter_tools_by_intent(
     return result
 
 
+def get_node_label(node: FlowNode) -> str:
+    """获取节点中文标签"""
+    from app.constants.node_types import NODE_TYPE_LABELS
+
+    return NODE_TYPE_LABELS.get(node.node_type, node.node_name or node.node_key)
+
+
+def resolve_connected_tool_info(
+    flow: FlowLike,
+    llm_node_key: str,
+) -> list[dict]:
+    """
+    解析连接到LLM节点的所有工具信息（不执行，仅元数据）
+
+    调用各 handler 的 get_tool_info 获取工具名和描述。
+
+    Args:
+        flow: 流程对象
+        llm_node_key: LLM节点key
+
+    Returns:
+        list[dict]: [{node_key, node_type, node_label, tools: [{name, description}]}]
+    """
+    from app.agent_flow.handler_registry import NodeHandlerRegistry
+
+    tool_nodes = get_connected_tool_nodes(flow, llm_node_key)
+    result: list[dict] = []
+
+    for tool_node in tool_nodes:
+        handler_cls = NodeHandlerRegistry.get_handler_class(tool_node.node_type)
+        if not handler_cls:
+            handler_cls = NodeHandlerRegistry._get_factory_handler_class(
+                tool_node.node_type
+            )
+        if not handler_cls:
+            continue
+
+        tools = handler_cls.get_tool_info(tool_node)
+        if tools:
+            result.append(
+                {
+                    "node_key": tool_node.node_key,
+                    "node_type": tool_node.node_type,
+                    "node_label": get_node_label(tool_node),
+                    "tools": tools,
+                }
+            )
+
+    return result
+
+
 def is_tool_edge(edge) -> bool:
     """
     判断边是否是工具边

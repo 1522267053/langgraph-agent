@@ -282,6 +282,11 @@ class SubAgentNodeHandler(BaseNodeHandler):
             return True
         return False
 
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        node_key = node.node_key
+        return [{"name": f"ask_{node_key}", "description": "将任务委派给子Agent执行"}]
+
 
 async def _run_sub_agent(
     session_id: int,

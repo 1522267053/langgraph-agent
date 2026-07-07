@@ -543,3 +543,32 @@ class KnowledgeNodeHandler(BaseNodeHandler):
             "description": node_config.get("description", "三层知识库导航工具"),
         }
         return True
+
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        node_key = node.node_key
+        tool_prefix = f"knowledge_{node_key}"
+        return [
+            {
+                "name": f"{tool_prefix}_search",
+                "description": "全局语义搜索知识库段落内容",
+            },
+            {
+                "name": f"{tool_prefix}_title_search",
+                "description": "浏览知识库文档列表或标题树",
+            },
+            {
+                "name": f"{tool_prefix}_get_paragraphs",
+                "description": "获取指定标题下的所有段落",
+            },
+            {
+                "name": f"{tool_prefix}_adjacent",
+                "description": "查看指定段落的相邻段落",
+            },
+            {
+                "name": f"{tool_prefix}_title_lookup",
+                "description": "查看段落所属的标题位置",
+            },
+            {"name": f"{tool_prefix}_save_insight", "description": "保存知识沉淀"},
+            {"name": f"{tool_prefix}_delete_insight", "description": "删除知识沉淀"},
+        ]

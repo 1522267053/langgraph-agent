@@ -1546,6 +1546,19 @@ class ShellNodeHandler(BaseNodeHandler):
             file_search_tool,
         ]
 
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        return [
+            {"name": "shell_executor", "description": "在受限环境中执行Shell命令"},
+            {"name": "shell_task_status", "description": "查询后台Shell任务状态"},
+            {"name": "shell_task_input", "description": "向后台Shell任务发送输入"},
+            {"name": "shell_task_cancel", "description": "取消后台Shell任务"},
+            {"name": "file_read", "description": "读取文件内容"},
+            {"name": "text_editor", "description": "编辑文件内容"},
+            {"name": "file_write", "description": "写入文件"},
+            {"name": "file_search", "description": "搜索文件"},
+        ]
+
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
         """返回临时文件目录说明和文件工具使用指南，追加到 LLM system_prompt"""
         temp_dir = get_temp_dir()

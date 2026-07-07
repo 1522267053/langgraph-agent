@@ -15,6 +15,13 @@ import type {
   FlowSnapshot
 } from '@/types/flow'
 
+export interface ConnectedToolInfo {
+  node_key: string
+  node_type: string
+  node_label: string
+  tools: Array<{ name: string; description: string }>
+}
+
 export const flowApi = {
   page(params: PaginationParams<Flow>) {
     return request.post<ApiResponse<PaginatedResponse<Flow>>>('/flow/page', params)
@@ -70,6 +77,12 @@ export const flowApi = {
 
   duplicate(id: number) {
     return request.post<ApiResponse<Flow>>(`/flow/duplicate/${id}`)
+  },
+
+  getConnectedTools(flowId: number, nodeKey: string) {
+    return request.get<ApiResponse<ConnectedToolInfo[]>>(
+      `/flow/${flowId}/node/${nodeKey}/connected-tools`
+    )
   },
 
   // ---- 版本快照 ----

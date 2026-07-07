@@ -216,3 +216,7 @@ class HumanNodeHandler(BaseNodeHandler):
             "output_variable": feedback_name,
         }
         return True
+
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        return [{"name": "request_human_help", "description": "请求人工帮助"}]

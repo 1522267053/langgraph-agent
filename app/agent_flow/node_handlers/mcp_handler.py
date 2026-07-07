@@ -92,3 +92,31 @@ class McpNodeHandler(BaseNodeHandler):
             config.mcp_server_ids.extend([int(i) for i in mcp_ids])
             return True
         return False
+
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        """返回MCP服务器提供的工具名称（从缓存读取，不实际连接）"""
+        cfg = node.base_config or {}
+        mcp_server_ids = cfg.get("mcp_server_ids", [])
+        if not mcp_server_ids:
+            return []
+
+        try:
+            from app.agent_flow.mcp_manager import mcp_tool_manager
+
+            manager = mcp_tool_manager
+            tools = []
+            for sid in mcp_server_ids:
+                sid_int = int(sid)
+                cached = manager._tools_cache.get(sid_int)
+                if cached:
+                    for t in cached:
+                        tools.append(
+                            {
+                                "name": t.name,
+                                "description": t.description or "",
+                            }
+                        )
+            return tools
+        except Exception:
+            return []

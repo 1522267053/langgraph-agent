@@ -536,6 +536,18 @@ class BaseNodeHandler(ABC):
         return False
 
     @classmethod
+    def get_tool_info(cls, node: "FlowNode") -> list[dict]:
+        """返回工具元数据 [{name, description}]，不实际执行
+
+        Args:
+            node: 节点对象
+
+        Returns:
+            工具信息列表，每项包含 name 和 description 字段
+        """
+        return []
+
+    @classmethod
     def get_default_config(cls) -> dict:
         """
         返回节点配置的默认值字典

@@ -18,9 +18,45 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 | POST | `/api/ai/flow/{id}/nodes/batch/delete` | 批量删除节点（级联删边） |
 | POST | `/api/ai/flow/{id}/edges/batch` | 批量创建边 |
 | POST | `/api/ai/flow/{id}/edges/batch/delete` | 批量删除边 |
+| GET | `/api/ai/flow/{id}/node/{node_key}/connected-tools` | 查询 LLM 已连接的工具名 |
 | POST | `/api/execution/stream/{id}` | 执行 Flow（SSE） |
 | POST | `/api/agent/{id}/sessions` | 创建 Agent 会话 |
 | POST | `/api/agent/{id}/sessions/{sid}/chat` | Agent 聊天（SSE） |
+
+## 工具信息接口详情
+
+### GET /api/ai/flow/{flow_id}/node/{node_key}/connected-tools
+
+查询 LLM 节点当前通过工具边连接的所有工具名称和描述（不实际执行），用于配置 `required_tools`。
+
+**响应示例**:
+```json
+{
+  "code": 1,
+  "data": [
+    {
+      "node_key": "memory",
+      "node_type": "memory",
+      "node_label": "记忆",
+      "tools": [
+        {"name": "memory_save", "description": "保存记忆"},
+        {"name": "memory_search", "description": "语义搜索记忆"},
+        {"name": "memory_list", "description": "列出最近记忆"},
+        {"name": "memory_delete", "description": "批量删除记忆"},
+        {"name": "memory_get", "description": "按ID获取记忆"}
+      ]
+    },
+    {
+      "node_key": "python_1",
+      "node_type": "python",
+      "node_label": "Python 代码",
+      "tools": [
+        {"name": "python_executor_python_1", "description": "在沙箱环境中执行Python代码"}
+      ]
+    }
+  ]
+}
+```
 
 ## 执行接口详情
 

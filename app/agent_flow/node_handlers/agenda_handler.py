@@ -321,6 +321,15 @@ class AgendaNodeHandler(BaseNodeHandler):
 
         return tools
 
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        return [
+            {"name": "agenda_create", "description": "创建日程"},
+            {"name": "agenda_list", "description": "查询日程列表"},
+            {"name": "agenda_update", "description": "更新日程"},
+            {"name": "agenda_delete", "description": "删除日程"},
+        ]
+
 
 # ---- 工具参数 Schema ----
 

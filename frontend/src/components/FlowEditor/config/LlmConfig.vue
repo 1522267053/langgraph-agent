@@ -6,6 +6,8 @@ import type { LlmConfig } from './types'
 import { llmModels, variableFormatHint, CONTEXT_LENGTH_PRESETS } from './types'
 import { fieldTypeOptions, parseContextLength } from './types'
 import { aiProviderApi, type ProviderInfo } from '@/api/ai_provider'
+import { flowApi, type ConnectedToolInfo } from '@/api/flow'
+import { useFlowStore } from '@/stores/flowStore'
 import { useConfigBase } from '@/composables/useConfigBase'
 import { useInputVariables } from '@/composables/useInputVariables'
 import VariableSelector from '../components/VariableSelector.vue'
@@ -137,6 +139,38 @@ watch(requiredToolsMode, val => {
   }
   updateConfig()
 })
+
+// ---- 已连接工具下拉 ----
+
+const flowStore = useFlowStore()
+
+const connectedToolGroups = ref<ConnectedToolInfo[]>([])
+
+async function fetchConnectedTools(): Promise<void> {
+  const flowId = flowStore.flowInfo?.id
+  if (!flowId || !props.currentNodeId) {
+    connectedToolGroups.value = []
+    return
+  }
+  try {
+    const res = await flowApi.getConnectedTools(flowId, props.currentNodeId)
+    if (res.data.code === 1 && res.data.data) {
+      connectedToolGroups.value = res.data.data
+    } else {
+      connectedToolGroups.value = []
+    }
+  } catch {
+    connectedToolGroups.value = []
+  }
+}
+
+watch(
+  () => props.currentNodeId,
+  () => {
+    fetchConnectedTools()
+  },
+  { immediate: true }
+)
 
 watch(
   () => localConfig.value.provider,
@@ -539,10 +573,23 @@ function handleExtraBodyBlur(): void {
               filterable
               allow-create
               default-first-option
-              placeholder="输入工具名后回车，如 send_wecom_message"
+              placeholder="输入或选择工具名"
               style="width: 100%"
               @change="updateConfig"
-            />
+            >
+              <el-option-group
+                v-for="group in connectedToolGroups"
+                :key="group.node_key"
+                :label="group.node_label"
+              >
+                <el-option
+                  v-for="tool in group.tools"
+                  :key="tool.name"
+                  :label="tool.name"
+                  :value="tool.name"
+                />
+              </el-option-group>
+            </el-select>
           </el-form-item>
           <el-form-item v-else label="检查脚本">
             <el-input
