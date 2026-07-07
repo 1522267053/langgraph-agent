@@ -134,9 +134,10 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(DbBaseModel.metadata.create_all)
 
-    # 校验并自动更新表结构
-    # from app.utils.db_schema_validator import validate_and_update_db_schema
-    # await validate_and_update_db_schema(engine, DbBaseModel)
+    # 自动同步：为已存在的表补充缺失列（开发时给 model 加字段，重启即生效）
+    from app.utils.db_schema_validator import validate_and_update_db_schema
+
+    await validate_and_update_db_schema(engine, DbBaseModel.metadata)
 
 
 async def close_db():
