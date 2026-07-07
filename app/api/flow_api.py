@@ -120,6 +120,25 @@ class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
                 return ApiResponse.error(msg=str(e))
 
         @self.router.get(
+            "/{flow_id}/node/{node_key}/connected-tools",
+            summary="获取LLM节点已连接的工具信息",
+        )
+        async def get_connected_tools(
+            flow_id: int,
+            node_key: str,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """获取LLM节点通过工具边连接的所有工具名称和描述"""
+            from app.agent_flow.tool_resolver import resolve_connected_tool_info
+
+            flow = await flow_service.get_with_nodes_and_edges(db, flow_id)
+            if flow is None:
+                return ApiResponse.error(msg="流程不存在")
+
+            tools = resolve_connected_tool_info(flow, node_key)
+            return ApiResponse.success(data=tools)
+
+        @self.router.get(
             "/list/cards",
             response_model=ApiResponse[list[FlowBase]],
             summary="获取已保存为卡片的流程列表",

@@ -113,6 +113,12 @@ class AiFlowApi:
             methods=["GET"],
             summary="AI获取流程详情",
         )
+        self.router.add_api_route(
+            "/{flow_id}/node/{node_key}/connected-tools",
+            self.get_connected_tools,
+            methods=["GET"],
+            summary="AI获取LLM节点已连接的工具信息",
+        )
 
     async def create_flow(
         self,
@@ -367,6 +373,22 @@ class AiFlowApi:
             mermaid=mermaid,
         )
         return ApiResponse.success(data=detail, msg="查询成功")
+
+    async def get_connected_tools(
+        self,
+        flow_id: int,
+        node_key: str,
+        db: AsyncSession = Depends(get_db),
+    ):
+        """获取LLM节点已连接的工具信息，供AI配置 required_tools"""
+        from app.agent_flow.tool_resolver import resolve_connected_tool_info
+
+        flow = await flow_service.get_with_nodes_and_edges(db, flow_id)
+        if flow is None:
+            return ApiResponse.error(msg="流程不存在")
+
+        tools = resolve_connected_tool_info(flow, node_key)
+        return ApiResponse.success(data=tools)
 
     async def list_flows(
         self,

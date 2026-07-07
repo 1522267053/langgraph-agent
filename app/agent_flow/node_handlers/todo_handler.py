@@ -238,6 +238,13 @@ class TodoNodeHandler(BaseNodeHandler):
 
         return tools
 
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        return [
+            {"name": "todowrite", "description": "创建或更新任务列表"},
+            {"name": "todoread", "description": "读取当前任务计划列表"},
+        ]
+
 
 class TodoWriteInput(BaseModel):
     todos: str = Field(

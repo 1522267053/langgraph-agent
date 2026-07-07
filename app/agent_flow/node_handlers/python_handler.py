@@ -528,3 +528,13 @@ class PythonNodeHandler(BaseNodeHandler):
             coroutine=execute_preset_python,
             args_schema=ToolInput,
         )
+
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        node_key = node.node_key
+        cfg = node.base_config or {}
+        if cfg.get("use_preset_for_tool"):
+            tool_name = f"python_{node_key}"
+        else:
+            tool_name = f"python_executor_{node_key}"
+        return [{"name": tool_name, "description": "在沙箱环境中执行Python代码"}]

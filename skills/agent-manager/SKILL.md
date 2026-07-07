@@ -50,6 +50,14 @@ description: |
 | 批量创建 | `POST /api/ai/flow/{id}/edges/batch` |
 | 批量删除 | `POST /api/ai/flow/{id}/edges/batch/delete` |
 
+### 工具信息
+
+| 操作 | 接口 |
+|------|------|
+| 查询LLM已连接工具 | `GET /api/ai/flow/{flow_id}/node/{node_key}/connected-tools` |
+
+调用各工具节点的get_tool_info获取名称和描述（不实际执行），配置required_tools时先查此接口获取准确工具名。
+
 ### 执行
 
 > **说明**：以下接口中的 `{flow_id}` 和 `{agent_id}` 均为 `POST /api/ai/flow/create` 返回的 `id`。
@@ -128,10 +136,11 @@ POST /api/execution/human-input-stream/{execution_id}
 
 ```
 1. POST /api/ai/flow/create          # 创建（可同时设 input_schema）
-2. POST /api/ai/flow/{id}/nodes/batch    # 批量创建节点
-3. POST /api/ai/flow/{id}/edges/batch    # 批量创建边
-4. POST /api/ai/flow/{id}/nodes/batch/config  # 修正 end 的 output_variables
-5. POST /api/execution/stream/{id}       # 执行
+2. POST /api/ai/flow/{id}/nodes/batch    # 批量创建节点（含 LLM 和工具节点）
+3. POST /api/ai/flow/{id}/edges/batch    # 批量创建边（工具边连到 LLM）
+4. GET  /api/ai/flow/{id}/node/{llm_key}/connected-tools  # 查已连接的工具名（可选，配 required_tools 用）
+5. POST /api/ai/flow/{id}/nodes/batch/config  # 修正 end 的 output_variables + LLM 的 required_tools
+6. POST /api/execution/stream/{id}       # 执行
 ```
 
 ### 创建流程示例
@@ -238,7 +247,7 @@ POST /api/ai/flow/{id}/edges/batch
 - `max_tool_iterations` 控制工具调用上限，测试时可设为 1 隔离干扰
 - 输出变量：`result`、`thinking`、`called_tools`（本次对话新调用的工具名列表）
 - **必需工具检查**：LLM 本轮未调用指定工具时，自动注入提醒消息让 LLM 重试。仅检查本次 ReAct 循环新调用的工具（内存收集，不查 DB 历史），重试在 LLM 内部完成，用户只看到最终回复（无多段回复问题）。两种模式二选一：
-  - **简单模式** `required_tools`: 必需工具名列表，如 `["send_wecom_message"]`，工具名精确匹配
+  - **简单模式** `required_tools`: 必需工具名列表，如 `["send_wecom_message"]`，工具名精确匹配。**配置前先查 `GET /api/ai/flow/{id}/node/{node_key}/connected-tools`** 获取该 LLM 当前已连接的所有工具名
   - **高级模式** `tool_check_script`: 自定义检查脚本（留空走简单模式），复用 RestrictedPython 沙箱，签名 `def main(called_tools, last_result): return {"need_retry": bool, "hint": str}`，可写任意判断逻辑
   - `required_tools_max_retries`: 最大提醒重试次数，默认 2
   - `required_tools_hint`: 提醒消息模板，`{{tools}}` 占位符替换为缺失工具名（留空用默认模板）

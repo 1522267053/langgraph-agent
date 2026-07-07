@@ -834,3 +834,13 @@ class ApiNodeHandler(BaseNodeHandler):
             ),
         }
         return True
+
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        node_key = node.node_key
+        cfg = node.base_config or {}
+        if cfg.get("use_preset_for_tool"):
+            tool_name = f"api_{node_key}"
+        else:
+            tool_name = f"api_call_tool_{node_key}"
+        return [{"name": tool_name, "description": "API调用"}]

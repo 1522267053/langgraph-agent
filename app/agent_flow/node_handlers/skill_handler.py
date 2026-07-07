@@ -304,3 +304,7 @@ class SkillNodeHandler(BaseNodeHandler):
             }
             return True
         return False
+
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        return [{"name": "load_skill", "description": "加载技能文档(SKILLS.md)"}]

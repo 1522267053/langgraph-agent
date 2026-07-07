@@ -664,6 +664,16 @@ class MemoryNodeHandler(BaseNodeHandler):
             ),
         ]
 
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        return [
+            {"name": "memory_save", "description": "保存记忆"},
+            {"name": "memory_search", "description": "语义搜索记忆"},
+            {"name": "memory_list", "description": "列出最近记忆"},
+            {"name": "memory_delete", "description": "批量删除记忆"},
+            {"name": "memory_get", "description": "按ID获取记忆"},
+        ]
+
 
 # ---- 工具输入 Schema ----
 

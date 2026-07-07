@@ -504,3 +504,20 @@ class MediaGenNodeHandler(BaseNodeHandler):
                 output["media_result"] = value
 
         return output if output else None
+
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        node_key = node.node_key
+        cfg = node.base_config or {}
+        tools = []
+        for media_type, prefix in [
+            ("image", "generate_image"),
+            ("audio", "generate_audio"),
+            ("video", "generate_video"),
+        ]:
+            type_cfg = cfg.get(media_type, {})
+            if type_cfg.get("enabled"):
+                tools.append(
+                    {"name": f"{prefix}_{node_key}", "description": f"生成{media_type}"}
+                )
+        return tools if tools else []
