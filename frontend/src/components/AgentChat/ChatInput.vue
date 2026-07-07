@@ -3,7 +3,7 @@ import type { FlowIOField } from '@/types/flow'
 import type { FileInfo } from '@/api/file'
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Loading, Promotion } from '@element-plus/icons-vue'
+import { Loading, Promotion, Document, FolderOpened } from '@element-plus/icons-vue'
 import FilePickerDialog from '@/components/common/FilePickerDialog.vue'
 
 const props = defineProps<{
@@ -32,6 +32,19 @@ function formatTokenCount(tokens: number): string {
   if (tokens >= 1_000_000) return (tokens / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
   if (tokens >= 1_000) return (tokens / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
   return tokens.toLocaleString()
+}
+
+const FIELD_TYPE_LABELS: Record<string, string> = {
+  string: '文本',
+  number: '数字',
+  boolean: '布尔',
+  object: '对象',
+  array: '数组',
+  file_list: '文件'
+}
+
+function getTypeLabel(type: string): string {
+  return FIELD_TYPE_LABELS[type] || type
 }
 
 const paramFormData = reactive<Record<string, unknown>>({})
@@ -63,6 +76,17 @@ function resetParams(): void {
     paramFormData[field.name] = getDefaultValue(field.type)
   }
 }
+
+function isFieldFilled(field: FlowIOField): boolean {
+  const value = paramFormData[field.name]
+  if (field.type === 'boolean') return value === true
+  if (field.type === 'number') return value !== 0 && value != null
+  if (field.type === 'file_list') return Array.isArray(value) && value.length > 0
+  return typeof value === 'string' && value.trim() !== ''
+}
+
+const filledCount = computed(() => props.fields.filter(f => isFieldFilled(f)).length)
+const hasFilledParams = computed(() => filledCount.value > 0)
 
 function openFilePicker(fieldName: string): void {
   currentFileField.value = fieldName
@@ -155,27 +179,52 @@ function handleStop() {
         ></textarea>
         <div class="input-toolbar">
           <div class="toolbar-left">
-            <el-popover v-if="fields.length > 0" placement="top-start" :width="320" trigger="click">
+            <el-popover v-if="fields.length > 0" placement="top-start" :width="380" trigger="click">
               <template #reference>
-                <button class="toolbar-icon-btn">
+                <button class="toolbar-icon-btn" :class="{ active: hasFilledParams }">
                   <el-icon :size="18"><SetUp /></el-icon>
+                  <span v-if="hasFilledParams" class="param-dot"></span>
                 </button>
               </template>
               <div class="param-popover">
                 <div class="param-popover-header">
-                  <span class="param-popover-title">参数设置</span>
-                  <el-tag size="small" type="info" round>{{ fields.length }}</el-tag>
+                  <div class="param-popover-title-group">
+                    <span class="param-popover-title">参数设置</span>
+                    <el-tag
+                      size="small"
+                      :type="filledCount === fields.length ? 'success' : 'info'"
+                      round
+                    >
+                      {{ filledCount }}/{{ fields.length }}
+                    </el-tag>
+                  </div>
+                  <el-button size="small" text class="param-reset-btn" @click="resetParams">
+                    重置
+                  </el-button>
                 </div>
                 <div class="param-popover-body">
                   <div v-for="field in fields" :key="field.name" class="param-field">
-                    <div class="param-field-header">
-                      <span class="param-field-label">
-                        {{ field.description || field.name }}
-                        <span v-if="field.required" class="param-required">*</span>
-                      </span>
-                      <span class="param-field-name">{{ field.name }}</span>
+                    <div
+                      class="param-field-header"
+                      :class="{ 'is-inline': field.type === 'boolean' }"
+                    >
+                      <div class="param-field-label-group">
+                        <span class="param-field-label">
+                          {{ field.description || field.name }}
+                          <span v-if="field.required" class="param-required">*</span>
+                        </span>
+                        <el-tag size="small" class="param-type-tag" effect="plain">
+                          {{ getTypeLabel(field.type) }}
+                        </el-tag>
+                      </div>
+                      <el-switch
+                        v-if="field.type === 'boolean'"
+                        v-model="paramFormData[field.name] as boolean"
+                        size="small"
+                      />
+                      <span v-else class="param-field-name">{{ field.name }}</span>
                     </div>
-                    <div class="param-field-control">
+                    <div v-if="field.type !== 'boolean'" class="param-field-control">
                       <el-input
                         v-if="field.type === 'string'"
                         v-model="paramFormData[field.name] as string"
@@ -188,11 +237,6 @@ function handleStop() {
                         size="small"
                         style="width: 100%"
                       />
-                      <el-switch
-                        v-else-if="field.type === 'boolean'"
-                        v-model="paramFormData[field.name] as boolean"
-                        size="small"
-                      />
                       <el-input
                         v-else-if="field.type === 'object' || field.type === 'array'"
                         v-model="paramFormData[field.name] as string"
@@ -204,7 +248,7 @@ function handleStop() {
                         "
                         size="small"
                       />
-                      <template v-else-if="field.type === 'file_list'">
+                      <div v-else-if="field.type === 'file_list'" class="file-field">
                         <div
                           v-if="(paramFormData[field.name] as FileInfo[]).length > 0"
                           class="selected-files"
@@ -214,13 +258,27 @@ function handleStop() {
                             :key="f.id"
                             closable
                             size="small"
+                            type="info"
                             @close="removeFile(field.name, f.id)"
                           >
+                            <el-icon class="selected-file-icon"><Document /></el-icon>
                             {{ f.original_name }}
                           </el-tag>
                         </div>
-                        <el-button size="small" @click="openFilePicker(field.name)">
-                          选择文件
+                        <el-button
+                          size="small"
+                          plain
+                          class="file-pick-btn"
+                          @click="openFilePicker(field.name)"
+                        >
+                          <el-icon><FolderOpened /></el-icon>
+                          <span>
+                            {{
+                              (paramFormData[field.name] as FileInfo[]).length > 0
+                                ? '继续选择'
+                                : '选择文件'
+                            }}
+                          </span>
                         </el-button>
                         <FilePickerDialog
                           v-model="filePickerVisible"
@@ -232,7 +290,7 @@ function handleStop() {
                           :accept="field.accept"
                           @confirm="handleFilePickerConfirm"
                         />
-                      </template>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -302,10 +360,27 @@ export default {
 .param-popover-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
   padding-bottom: 10px;
   border-bottom: 1px solid #f1f5f9;
   margin-bottom: 10px;
+}
+
+.param-popover-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.param-reset-btn {
+  color: #94a3b8;
+  font-size: 12px;
+  height: auto;
+  padding: 2px 6px;
+}
+
+.param-reset-btn:hover {
+  color: #2563eb;
 }
 
 .param-popover-title {
@@ -335,6 +410,23 @@ export default {
   margin-bottom: 6px;
 }
 
+.param-field-header.is-inline {
+  margin-bottom: 0;
+}
+
+.param-field-label-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.param-type-tag {
+  transform: scale(0.85);
+  transform-origin: left center;
+  font-size: 11px;
+}
+
 .param-field-label {
   font-size: 13px;
   color: #334155;
@@ -354,6 +446,27 @@ export default {
 
 .param-field-control {
   width: 100%;
+}
+
+.file-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-pick-btn {
+  width: fit-content;
+}
+
+.selected-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.selected-file-icon {
+  margin-right: 2px;
+  vertical-align: -2px;
 }
 
 .input-box {
@@ -411,6 +524,7 @@ export default {
 }
 
 .toolbar-icon-btn {
+  position: relative;
   width: 32px;
   height: 32px;
   display: flex;
@@ -424,9 +538,25 @@ export default {
   transition: all 0.2s;
 }
 
-.toolbar-icon-btn:hover {
+.toolbar-icon-btn:hover,
+.toolbar-icon-btn.active {
   color: #2563eb;
   background: #fff;
+}
+
+.toolbar-icon-btn.active:hover {
+  background: #eff6ff;
+}
+
+.param-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  background: #2563eb;
+  border-radius: 50%;
+  border: 1.5px solid #f8fafc;
 }
 
 .toolbar-right {
