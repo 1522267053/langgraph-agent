@@ -9,7 +9,9 @@ import asyncio
 import os
 import re
 import hashlib
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
+
+import markdown_it
 from fastapi import UploadFile
 
 from app.config.settings import settings
@@ -386,7 +388,7 @@ class DocumentProcessor:
         """
         提取文本的标题层级结构
 
-        将文本按标题行拆分为多个区域，每个区域记录标题文本、级别和内容
+        使用 markdown-it 解析文本，正确识别 Markdown 标题并映射内容
 
         Args:
             text: 原始文本
@@ -394,113 +396,143 @@ class DocumentProcessor:
         Returns:
             标题区域列表 [{title_index, level, title, content}, ...]
         """
-        lines = text.split("\n")
+        normalized = self._normalize_headings(text)
+        md = markdown_it.MarkdownIt()
+        tokens = md.parse(normalized)
+
+        headings = []
+        for i, token in enumerate(tokens):
+            if token.type == "heading_open" and token.map:
+                level = int(token.tag[1])
+                inline_token = tokens[i + 1]
+                heading_text = (
+                    inline_token.content if inline_token.type == "inline" else ""
+                )
+                headings.append(
+                    {
+                        "level": level,
+                        "title": heading_text,
+                        "start_line": token.map[0],
+                        "end_line": token.map[1],
+                    }
+                )
+
+        lines = normalized.split("\n")
         sections = []
-        current_title = ""
-        current_level = 1
-        current_title_index = -1
-        current_content = []
         title_counter = 0
 
-        for line in lines:
-            stripped = line.strip()
+        if headings and headings[0]["start_line"] > 0:
+            pre_content = "\n".join(lines[: headings[0]["start_line"]]).strip()
+            if pre_content:
+                sections.append(
+                    {
+                        "title_index": -1,
+                        "level": 1,
+                        "title": "",
+                        "content": pre_content,
+                    }
+                )
 
-            if not stripped:
-                if current_content:
-                    current_content.append("")
-                continue
-
-            title_info = self._parse_title_line(stripped)
-
-            if title_info:
-                if current_content or current_title_index >= 0:
-                    content = "\n".join(current_content).strip()
-                    if content or current_title_index >= 0:
-                        sections.append(
-                            {
-                                "title_index": current_title_index,
-                                "level": current_level,
-                                "title": current_title,
-                                "content": content,
-                            }
-                        )
-
-                current_title = title_info["title"]
-                current_level = title_info["level"]
-                current_title_index = title_counter
-                title_counter += 1
-                current_content = []
+        for idx, heading in enumerate(headings):
+            content_start = heading["end_line"]
+            if idx + 1 < len(headings):
+                content_end = headings[idx + 1]["start_line"]
             else:
-                current_content.append(line)
+                content_end = len(lines)
 
-        if current_content or current_title_index >= 0:
-            content = "\n".join(current_content).strip()
+            content = "\n".join(lines[content_start:content_end]).strip()
+
             sections.append(
                 {
-                    "title_index": current_title_index,
-                    "level": current_level,
-                    "title": current_title,
+                    "title_index": title_counter,
+                    "level": heading["level"],
+                    "title": heading["title"],
                     "content": content,
+                }
+            )
+            title_counter += 1
+
+        if not sections:
+            sections.append(
+                {
+                    "title_index": 0,
+                    "level": 1,
+                    "title": "",
+                    "content": text.strip(),
                 }
             )
 
         return sections
 
-    def _parse_title_line(self, line: str) -> Optional[Dict[str, Any]]:
-        """
-        解析标题行，返回标题文本和级别
+    def _normalize_headings(self, text: str) -> str:
+        """将非标准标题格式（中文序号、全大写行等）转换为 Markdown # 标题"""
+        lines = text.split("\n")
+        result = []
+        in_code_block = False
 
-        Args:
-            line: 待解析的行
+        for line in lines:
+            stripped = line.strip()
 
-        Returns:
-            {"title": str, "level": int} 或 None
-        """
-        if len(line) > 100:
-            return None
-
-        for pattern, pattern_type in self.TITLE_PATTERNS:
-            match = pattern.match(line)
-            if not match:
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                in_code_block = not in_code_block
+                result.append(line)
                 continue
 
-            if pattern_type == "md":
-                prefix = match.group(1)
-                level = len(prefix)
-                title = line.lstrip("#").strip()
-                return {"title": title, "level": level}
+            if in_code_block:
+                result.append(line)
+                continue
 
-            if pattern_type == "cn_num":
-                cn_char = match.group(1)
-                level = self._cn_char_to_level(cn_char, default=2)
-                title = line
-                return {"title": title, "level": level}
+            if len(stripped) > 100 or stripped.startswith("|"):
+                result.append(line)
+                continue
 
-            if pattern_type == "num":
-                level = 2
-                title = line
-                return {"title": title, "level": level}
+            matched = False
+            for pattern, pattern_type in self.TITLE_PATTERNS:
+                match = pattern.match(stripped)
+                if not match:
+                    continue
 
-            if pattern_type == "cn_paren":
-                cn_char = match.group(1)
-                level = self._cn_char_to_level(cn_char, default=2) + 1
-                title = line
-                return {"title": title, "level": level}
+                if pattern_type == "md":
+                    result.append(line)
+                    matched = True
+                    break
 
-            if pattern_type == "num_paren":
-                level = 3
-                title = line
-                return {"title": title, "level": level}
+                if pattern_type == "cn_num":
+                    cn_char = match.group(1)
+                    level = self._cn_char_to_level(cn_char, default=2)
+                    result.append(f"{'#' * level} {stripped}")
+                    matched = True
+                    break
 
-            if pattern_type == "chapter":
-                level = 1
-                title = line
-                return {"title": title, "level": level}
+                if pattern_type == "num":
+                    result.append(f"## {stripped}")
+                    matched = True
+                    break
 
-        if line.isupper() and len(line) < 50:
-            return {"title": line, "level": 2}
+                if pattern_type == "cn_paren":
+                    cn_char = match.group(1)
+                    level = self._cn_char_to_level(cn_char, default=2) + 1
+                    result.append(f"{'#' * level} {stripped}")
+                    matched = True
+                    break
 
-        return None
+                if pattern_type == "num_paren":
+                    result.append(f"### {stripped}")
+                    matched = True
+                    break
+
+                if pattern_type == "chapter":
+                    result.append(f"# {stripped}")
+                    matched = True
+                    break
+
+            if not matched:
+                if stripped.isupper() and len(stripped) < 50:
+                    result.append(f"## {stripped}")
+                else:
+                    result.append(line)
+
+        return "\n".join(result)
 
     def _cn_char_to_level(self, cn_char: str, default: int = 2) -> int:
         """
@@ -855,6 +887,9 @@ class DocumentProcessor:
         for pattern in flat_patterns:
             if pattern.match(line):
                 return True
+
+        if line.startswith("|"):
+            return False
 
         if line.isupper() and len(line) < 50:
             return True
