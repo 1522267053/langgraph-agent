@@ -326,4 +326,11 @@ onMounted(() => {
   border-radius: 4px;
   cursor: pointer;
 }
+
+.preview-video {
+  max-width: 100%;
+  max-height: 80vh;
+  display: block;
+  margin: 0 auto;
+}
 </style>

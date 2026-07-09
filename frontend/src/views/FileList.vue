@@ -394,4 +394,11 @@ onMounted(() => {
   object-fit: cover;
   border-radius: 4px;
 }
+
+.preview-video {
+  max-width: 100%;
+  max-height: 80vh;
+  display: block;
+  margin: 0 auto;
+}
 </style>
