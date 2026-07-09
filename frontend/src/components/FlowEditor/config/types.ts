@@ -206,7 +206,6 @@ export interface MemoryConfig {
   consolidate_interval_days: number
 }
 
-
 /** 任务计划节点配置 */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface TodoConfig {}

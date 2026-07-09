@@ -337,7 +337,8 @@ function updateFormField(): void {
         <el-text size="small" type="info">
           输出变量: body（响应体）、status_code（状态码）、headers（响应头）
           <template v-if="localConfig.file_config?.download?.enabled">
-            ；下载二进制文件（图片/音频/视频）时返回 success + preview_url + download_url，聊天中可直接预览
+            ；下载二进制文件（图片/音频/视频）时返回 success + preview_url +
+            download_url，聊天中可直接预览
           </template>
         </el-text>
       </div>

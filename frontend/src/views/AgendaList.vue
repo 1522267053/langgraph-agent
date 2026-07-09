@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount,nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Check, Calendar, List } from '@element-plus/icons-vue'
@@ -28,7 +28,7 @@ const tabCounts = ref({ upcoming: 0, incomplete: 0 })
 const route = useRoute()
 // 支持深链 ?tab=incomplete 直接落到对应 Tab
 const validTabs = ['upcoming', 'incomplete', 'history'] as const
-const initialTab = validTabs.includes(route.query.tab as typeof validTabs[number])
+const initialTab = validTabs.includes(route.query.tab as (typeof validTabs)[number])
   ? (route.query.tab as 'upcoming' | 'incomplete' | 'history')
   : 'upcoming'
 const listTab = ref<'upcoming' | 'incomplete' | 'history'>(initialTab)
@@ -300,8 +300,16 @@ const groupedAgendas = computed(() => {
   const groups: { key: string; label: string; items: Agenda[] }[] = [
     { key: 'today', label: `今天 ${formatDateLabel(today)}`, items: [] },
     { key: 'tomorrow', label: `明天 ${formatDateLabel(tomorrow)}`, items: [] },
-    { key: 'this_week', label: `本周 (${formatDateLabel(thisWeek.start)}-${formatDateLabel(thisWeek.end)})`, items: [] },
-    { key: 'next_week', label: `下周 (${formatDateLabel(nextWeek.start)}-${formatDateLabel(nextWeek.end)})`, items: [] },
+    {
+      key: 'this_week',
+      label: `本周 (${formatDateLabel(thisWeek.start)}-${formatDateLabel(thisWeek.end)})`,
+      items: []
+    },
+    {
+      key: 'next_week',
+      label: `下周 (${formatDateLabel(nextWeek.start)}-${formatDateLabel(nextWeek.end)})`,
+      items: []
+    },
     { key: 'future', label: '未来', items: [] },
     { key: 'earlier', label: '更早', items: [] },
     { key: 'no_date', label: '未设置时间', items: [] }
@@ -748,9 +756,9 @@ onBeforeUnmount(() => {
           >
             <span class="tab-icon">📋</span>
             <span>今日和未来</span>
-            <span v-if="tabCounts.upcoming > 0" class="tab-count-badge">{{
-              formatCount(tabCounts.upcoming)
-            }}</span>
+            <span v-if="tabCounts.upcoming > 0" class="tab-count-badge">
+              {{ formatCount(tabCounts.upcoming) }}
+            </span>
           </div>
           <div
             class="list-tab-item"
@@ -759,9 +767,9 @@ onBeforeUnmount(() => {
           >
             <span class="tab-icon">⏳</span>
             <span>未完成</span>
-            <span v-if="tabCounts.incomplete > 0" class="tab-count-badge">{{
-              formatCount(tabCounts.incomplete)
-            }}</span>
+            <span v-if="tabCounts.incomplete > 0" class="tab-count-badge">
+              {{ formatCount(tabCounts.incomplete) }}
+            </span>
           </div>
           <div
             class="list-tab-item"
@@ -799,19 +807,28 @@ onBeforeUnmount(() => {
                     <span
                       v-if="item.recurrence && item.recurrence !== 'none'"
                       class="recurrence-badge"
-                    >{{ recurrenceOptions.find(o => o.value === item.recurrence)?.label }}</span>
+                    >
+                      {{ recurrenceOptions.find(o => o.value === item.recurrence)?.label }}
+                    </span>
                   </div>
                   <div class="card-meta">
                     <span v-if="item.start_time" class="meta-time">
-                      <template v-if="item.end_time && getDateOnly(item.start_time) !== getDateOnly(item.end_time)">
-                        {{ formatDateLabel(item.start_time) }} {{ item.start_time.slice(11, 16) }} → {{ formatDateLabel(item.end_time) }} {{ item.end_time.slice(11, 16) }}
+                      <template
+                        v-if="
+                          item.end_time &&
+                          getDateOnly(item.start_time) !== getDateOnly(item.end_time)
+                        "
+                      >
+                        {{ formatDateLabel(item.start_time) }} {{ item.start_time.slice(11, 16) }} →
+                        {{ formatDateLabel(item.end_time) }} {{ item.end_time.slice(11, 16) }}
                       </template>
                       <template v-else-if="item.end_time">
                         <template v-if="group.key === 'today' || group.key === 'tomorrow'">
                           {{ item.start_time.slice(11, 16) }}-{{ item.end_time.slice(11, 16) }}
                         </template>
                         <template v-else>
-                          {{ formatDateLabel(item.start_time) }} {{ item.start_time.slice(11, 16) }}-{{ item.end_time.slice(11, 16) }}
+                          {{ formatDateLabel(item.start_time) }}
+                          {{ item.start_time.slice(11, 16) }}-{{ item.end_time.slice(11, 16) }}
                         </template>
                       </template>
                       <template v-else>
@@ -856,10 +873,7 @@ onBeforeUnmount(() => {
                   >
                     {{ priorityMap[item.priority]?.text }}
                   </el-tag>
-                  <el-tag
-                    :type="statusMap[item.status ?? 0]?.type"
-                    size="small"
-                  >
+                  <el-tag :type="statusMap[item.status ?? 0]?.type" size="small">
                     {{ statusMap[item.status ?? 0]?.text }}
                   </el-tag>
                 </div>
@@ -891,11 +905,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </template>
-        <div
-          ref="sentinelEl"
-          class="list-sentinel"
-          :class="{ 'is-loading': loadingMore }"
-        >
+        <div ref="sentinelEl" class="list-sentinel" :class="{ 'is-loading': loadingMore }">
           <span v-if="loadingMore">加载更多...</span>
           <span v-else-if="!hasMore && filteredGroups.length > 0">已加载全部</span>
         </div>
