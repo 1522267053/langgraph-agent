@@ -329,6 +329,10 @@ class PythonNodeHandler(BaseNodeHandler):
                             content, mime_type, "tool_python", 0, filename
                         )
                         result["result"] = file_info
+                        result["preview_url"] = file_info.get("preview_url", "")
+                        result["mime_type"] = file_info.get("mime_type", "")
+                        result["file_name"] = file_info.get("file_name", "")
+                        result["download_url"] = file_info.get("download_url", "")
                     except Exception as e:
                         result["result"] = {
                             "success": False,

@@ -83,6 +83,18 @@ function openMediaPreview(segment: Segment): void {
   window.open(media.preview_url, '_blank')
 }
 
+function getMediaPreviewInfo(
+  segment: Segment
+): { preview_url: string; isVideo: boolean; isImage: boolean } | null {
+  const media = parseMediaResult(segment.tool?.result)
+  if (!media) return null
+  return {
+    preview_url: media.preview_url,
+    isVideo: (media.mime_type || '').startsWith('video/'),
+    isImage: (media.mime_type || '').startsWith('image/'),
+  }
+}
+
 function formatToolResult(result: unknown): string {
   if (result === undefined || result === null) return ''
   try {
@@ -193,6 +205,20 @@ async function handleCopy(text: string): Promise<void> {
           "
           class="tool-media-preview"
         >
+          <div v-if="getMediaPreviewInfo(segment)" class="media-inline-preview">
+            <video
+              v-if="getMediaPreviewInfo(segment)?.isVideo"
+              :src="getMediaPreviewInfo(segment)!.preview_url"
+              controls
+              preload="metadata"
+              class="media-video"
+            />
+            <img
+              v-else-if="getMediaPreviewInfo(segment)?.isImage"
+              :src="getMediaPreviewInfo(segment)!.preview_url"
+              class="media-image"
+            />
+          </div>
           <el-button :icon="View" size="small" @click="openMediaPreview(segment)">
             查看预览
           </el-button>
@@ -538,5 +564,22 @@ async function handleCopy(text: string): Promise<void> {
 
 .tool-media-preview {
   padding: 8px 12px;
+}
+
+.media-inline-preview {
+  margin-bottom: 8px;
+}
+
+.media-video {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 6px;
+}
+
+.media-image {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 6px;
+  cursor: pointer;
 }
 </style>
