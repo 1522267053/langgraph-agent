@@ -440,6 +440,23 @@ command: node scripts/seedance-wrapper.js check-pending
 - ❌ **你不需要**：读取文件、转 Base64、上传图床
 - ✅ **你只需要**：把这个路径直接传给 `--image-file`、`--video-file` 参数
 
+#### ✅ 规则 1a：上下文中有 [附件文件] 块时 → 从中提取 path 值
+
+如果消息上下文包含如下格式的附件列表：
+
+```
+[附件文件]
+- file_id=42, cat.jpg (image/jpeg), path=/projects/uploads/2026-07-09/abc.jpg
+- file_id=43, ref.png (image/png), path=/projects/uploads/2026-07-09/xyz.png
+```
+
+**提取每行的 `path=` 后的完整路径**（等号后到行尾的全部内容），传给 `--image-file` 参数。多个文件时按顺序传递多个 `--image-file`。不要用 file_id，要用 path 值。
+
+示例：
+```bash
+node seedance-wrapper.js create --prompt "..." --image-file "/projects/uploads/.../abc.jpg" --image-file "/projects/uploads/.../xyz.png"
+```
+
 #### ✅ 规则 2：用户发的是公网链接时 → 直接传 URL
 
 如果用户发的是 `http://` 或 `https://` 开头的公开链接：
