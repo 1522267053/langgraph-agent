@@ -77,6 +77,19 @@ function isMediaTool(result: unknown): boolean {
   return parseMediaResult(result) !== null
 }
 
+function mediaPreviewInfo(segment: Segment) {
+  return getMediaPreviewInfo(segment)
+}
+
+function isMediaSegment(segment: Segment): boolean {
+  return (
+    segment.type === 'tool' &&
+    !!segment.tool &&
+    segment.tool.status === 'success' &&
+    isMediaTool(segment.tool.result)
+  )
+}
+
 function openMediaPreview(segment: Segment): void {
   const media = parseMediaResult(segment.tool?.result)
   if (!media) return
@@ -198,24 +211,20 @@ async function handleCopy(text: string): Promise<void> {
           segment.tool.result !== undefined ? formatToolResult(segment.tool.result) : '执行失败'
         }}</pre>
         <div
-          v-if="
-            segment.tool.status === 'success' &&
-            isMediaTool(segment.tool.result) &&
-            parseMediaResult(segment.tool.result)
-          "
+          v-show="isMediaSegment(segment)"
           class="tool-media-preview"
         >
-          <div v-if="getMediaPreviewInfo(segment)" class="media-inline-preview">
+          <div v-show="mediaPreviewInfo(segment)?.isVideo" class="media-inline-preview">
             <video
-              v-if="getMediaPreviewInfo(segment)?.isVideo"
-              :src="getMediaPreviewInfo(segment)!.preview_url"
+              :src="mediaPreviewInfo(segment)?.preview_url || ''"
               controls
               preload="metadata"
               class="media-video"
             />
+          </div>
+          <div v-show="mediaPreviewInfo(segment)?.isImage" class="media-inline-preview">
             <img
-              v-else-if="getMediaPreviewInfo(segment)?.isImage"
-              :src="getMediaPreviewInfo(segment)!.preview_url"
+              :src="mediaPreviewInfo(segment)?.preview_url || ''"
               class="media-image"
             />
           </div>
