@@ -3,9 +3,7 @@ import { ref, computed, onMounted, watch, inject, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Link, Warning, CircleCheck, QuestionFilled, Bell } from '@element-plus/icons-vue'
-import {
-  requestPermission as requestBrowserNotifyPermission
-} from '@/composables/useBrowserNotification'
+import { requestPermission as requestBrowserNotifyPermission } from '@/composables/useBrowserNotification'
 import {
   configApi,
   type ProviderInfo,

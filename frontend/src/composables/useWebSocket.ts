@@ -56,9 +56,7 @@ function handleNotification(msg: WSMessage) {
 
     // 跳过用户正在通过 SSE 观看的执行（避免重复弹窗）
     const isWatching =
-      execution_id !== null &&
-      watchingExecutionId !== null &&
-      execution_id === watchingExecutionId
+      execution_id !== null && watchingExecutionId !== null && execution_id === watchingExecutionId
 
     const typeLabel = source === 'agent' ? '对话' : '流程'
 

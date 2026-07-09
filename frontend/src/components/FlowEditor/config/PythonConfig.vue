@@ -115,8 +115,8 @@ function updateVariableSource(index: number, source: string): void {
           <br />
           输出: {stdout: str, stderr: str, result: 函数返回的结果, success: true / false}
           <br />
-          生成媒体文件时，main() 返回
-          {"__save_file__": True, "content_base64": "&lt;base64&gt;", "mime_type": "image/png"} 可自动保存为文件并在聊天中预览
+          生成媒体文件时，main() 返回 {"__save_file__": True, "content_base64": "&lt;base64&gt;",
+          "mime_type": "image/png"} 可自动保存为文件并在聊天中预览
         </el-text>
       </div>
     </div>

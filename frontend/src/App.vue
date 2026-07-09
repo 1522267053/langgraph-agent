@@ -31,7 +31,10 @@ import { configApi, type UpdateCheckResult } from '@/api/config'
 import { connectWebSocket } from '@/composables/useWebSocket'
 import { agentApi } from '@/api/agent'
 import { agendaApi } from '@/api/agenda'
-import { requestPermission as requestNotifyPermission, isDenied } from '@/composables/useBrowserNotification'
+import {
+  requestPermission as requestNotifyPermission,
+  isDenied
+} from '@/composables/useBrowserNotification'
 
 const route = useRoute()
 const router = useRouter()

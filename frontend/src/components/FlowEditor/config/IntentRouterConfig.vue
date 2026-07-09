@@ -18,18 +18,22 @@ const emit = defineEmits<{
 
 const isLoadingConfig = ref(false)
 
-const { localConfig, updateConfig } = useConfigBase(() => ({
-  ...props.config,
-  intents: props.config?.intents ?? [],
-  input_variable: props.config?.input_variable ?? ''
-}), emit, {
-  onBeforeUpdate: () => {
-    isLoadingConfig.value = true
-    nextTick(() => {
-      isLoadingConfig.value = false
-    })
+const { localConfig, updateConfig } = useConfigBase(
+  () => ({
+    ...props.config,
+    intents: props.config?.intents ?? [],
+    input_variable: props.config?.input_variable ?? ''
+  }),
+  emit,
+  {
+    onBeforeUpdate: () => {
+      isLoadingConfig.value = true
+      nextTick(() => {
+        isLoadingConfig.value = false
+      })
+    }
   }
-})
+)
 
 // ---- 校验：意图 key 必须是 slug，不能重复，不能是保留字 ----
 const RESERVED_KEYS = new Set(['default', 'tools', 'true', 'false'])
