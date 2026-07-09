@@ -115,6 +115,7 @@ class AgentConversationService:
         session_id: int,
         node_key: Optional[str] = None,
         limit: int = 0,
+        capabilities: Optional[dict] = None,
     ) -> list[BaseMessage]:
         """获取对话历史，limit=0 表示不限制"""
         query = select(AgentMessage).where(
@@ -131,7 +132,9 @@ class AgentConversationService:
         result = await db.execute(query)
         messages = result.scalars().all()
 
-        langchain_messages = [await self._to_langchain_message(db, m) for m in messages]
+        langchain_messages = [
+            await self._to_langchain_message(db, m, capabilities) for m in messages
+        ]
         return self._validate_tool_pairs(langchain_messages)
 
     @staticmethod
@@ -198,10 +201,10 @@ class AgentConversationService:
         return result
 
     async def get_full_history(
-        self, db: AsyncSession, session_id: int
+        self, db: AsyncSession, session_id: int, capabilities: Optional[dict] = None
     ) -> list[BaseMessage]:
         """获取全流程对话历史"""
-        return await self.get_history(db, session_id, None)
+        return await self.get_history(db, session_id, None, capabilities=capabilities)
 
     async def get_max_sequence(
         self, db: AsyncSession, session_id: int, node_key: str = ""
@@ -217,7 +220,10 @@ class AgentConversationService:
         return max_seq if max_seq is not None else -1
 
     async def _to_langchain_message(
-        self, db: AsyncSession, msg: AgentMessage
+        self,
+        db: AsyncSession,
+        msg: AgentMessage,
+        capabilities: Optional[dict] = None,
     ) -> BaseMessage:
         """将数据库消息转换为 LangChain 消息（含附件的多模态重建）"""
         if msg.role == "system":
@@ -226,7 +232,9 @@ class AgentConversationService:
             content = msg.content or ""
             files = msg.files if isinstance(msg.files, list) else None
             if files:
-                content = await self._build_multimodal_content(db, content, files)
+                content = await self._build_multimodal_content(
+                    db, content, files, capabilities
+                )
             return HumanMessage(content=content)
         elif msg.role in ("ai", "assistant"):
             ai_msg = AIMessage(content=msg.content or "")
@@ -248,9 +256,18 @@ class AgentConversationService:
 
     @staticmethod
     async def _build_multimodal_content(
-        db: AsyncSession, text: str, files: list[dict]
+        db: AsyncSession,
+        text: str,
+        files: list[dict],
+        capabilities: Optional[dict] = None,
     ) -> str | list[dict]:
-        """根据附件文件信息重建多模态 content 列表"""
+        """根据附件文件信息重建多模态 content 列表
+
+        图片附件仅在 capabilities["image"] 开启时才注入 image_url 块，
+        与 media_resolver.collect_media_blocks 行为保持一致，避免向不支持
+        视觉的模型发送 image_url 内容导致 400 错误。
+        """
+        image_enabled = bool((capabilities or {}).get("image"))
         parts: list[dict] = [{"type": "text", "text": text}]
 
         for file_info in files:
@@ -258,6 +275,9 @@ class AgentConversationService:
             mime_type = file_info.get("mime_type", "")
 
             if not file_id or not mime_type.startswith("image/"):
+                continue
+
+            if not image_enabled:
                 continue
 
             try:

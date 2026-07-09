@@ -82,6 +82,7 @@ class ConversationService:
         execution_id: int,
         node_key: Optional[str] = None,
         limit: int = 50,
+        capabilities: Optional[dict] = None,
     ) -> list[BaseMessage]:
         """获取对话历史"""
         query = select(ConversationMessage).where(
@@ -102,7 +103,11 @@ class ConversationService:
         return [self._to_langchain_message(m) for m in messages]
 
     async def get_full_history(
-        self, db: AsyncSession, execution_id: int, limit: int = 0
+        self,
+        db: AsyncSession,
+        execution_id: int,
+        limit: int = 0,
+        capabilities: Optional[dict] = None,
     ) -> list[BaseMessage]:
         """获取全流程对话历史，limit=0 表示不限制"""
         return await self.get_history(db, execution_id, None, limit)

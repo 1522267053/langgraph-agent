@@ -367,13 +367,16 @@ async def load_history_from_db(
         return []
 
     max_history_turns = node_config.get("max_history_turns", 10)
+    capabilities = node_config.get("capabilities", {})
     id_param = session_id if session_id else execution_id
 
     # Agent 模式：始终加载全部对话历史
     if session_id:
         try:
             async with db_session_factory() as db:
-                messages = await conversation_service.get_full_history(db, id_param)
+                messages = await conversation_service.get_full_history(
+                    db, id_param, capabilities=capabilities
+                )
                 return list(messages)
         except Exception:
             return []
@@ -387,11 +390,15 @@ async def load_history_from_db(
         async with db_session_factory() as db:
             if history_mode == "flow":
                 messages = await conversation_service.get_full_history(
-                    db, id_param, limit=max_history_turns * 4
+                    db, id_param, limit=max_history_turns * 4, capabilities=capabilities
                 )
             else:
                 messages = await conversation_service.get_history(
-                    db, id_param, node_key, limit=max_history_turns * 4
+                    db,
+                    id_param,
+                    node_key,
+                    limit=max_history_turns * 4,
+                    capabilities=capabilities,
                 )
             return list(messages)
     except Exception:
