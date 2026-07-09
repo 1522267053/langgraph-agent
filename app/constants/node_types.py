@@ -17,7 +17,6 @@ NODE_TYPE_LABELS: dict[str, str] = {
     "memory": "记忆",
     "todo": "任务计划",
     "intent_router": "意图路由",
-    "media_gen": "媒体生成",
     "sub_agent": "子Agent",
     "agenda": "日程",
 }

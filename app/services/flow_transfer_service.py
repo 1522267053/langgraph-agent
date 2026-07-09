@@ -311,16 +311,10 @@ class FlowTransferService:
         return config
 
     def _strip_api_keys(self, config: dict, node_type: Optional[str]) -> dict:
-        """移除 LLM 和 MediaGen 节点中的 api_key 和 base_url"""
+        """移除 LLM 节点中的 api_key 和 base_url"""
         if node_type == "llm":
             config.pop("api_key", None)
             config.pop("base_url", None)
-        elif node_type == "media_gen":
-            for media_key in ("image", "audio", "video"):
-                media_cfg = config.get(media_key)
-                if isinstance(media_cfg, dict):
-                    media_cfg.pop("api_key", None)
-                    media_cfg.pop("base_url", None)
         return config
 
     def _serialize_edge(self, edge: FlowEdge) -> dict:

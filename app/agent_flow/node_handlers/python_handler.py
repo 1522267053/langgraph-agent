@@ -313,6 +313,27 @@ class PythonNodeHandler(BaseNodeHandler):
                 loop.run_in_executor(None, run_code), timeout=timeout
             )
             result["result"] = exec_result
+
+            if isinstance(exec_result, dict) and exec_result.get("__save_file__"):
+                import base64
+
+                from app.utils.media_file import save_media_bytes
+
+                content_b64 = exec_result.get("content_base64", "")
+                mime_type = exec_result.get("mime_type", "application/octet-stream")
+                filename = exec_result.get("filename", "")
+                if content_b64:
+                    try:
+                        content = base64.b64decode(content_b64)
+                        file_info = await save_media_bytes(
+                            content, mime_type, "tool_python", 0, filename
+                        )
+                        result["result"] = file_info
+                    except Exception as e:
+                        result["result"] = {
+                            "success": False,
+                            "error": f"文件保存失败: {e}",
+                        }
         except asyncio.TimeoutError:
             raise
         except SyntaxError as e:
@@ -434,9 +455,14 @@ class PythonNodeHandler(BaseNodeHandler):
 参数类型说明:
 {param_list}
 
-允许导入的模块: math, json, re, datetime, collections, itertools, functools, decimal, statistics, hashlib, uuid, copy, dataclasses 等。
-禁止导入危险模块（os, sys, subprocess, socket等），禁止访问 __dunder__ 属性。
-返回值将作为执行结果。"""
+        允许导入的模块: math, json, re, datetime, collections, itertools, functools, decimal, statistics, hashlib, uuid, copy, dataclasses 等。
+        禁止导入危险模块（os, sys, subprocess, socket等），禁止访问 __dunder__ 属性。
+        返回值将作为执行结果。
+
+        ## 文件保存约定
+        当 main() 返回以下格式时，内容将自动保存为文件并在聊天中预览：
+          {"__save_file__": True, "content_base64": "<base64编码的字节>", "mime_type": "image/png", "filename": "xxx.png"}
+        可用于生成图片/音频/视频后保存展示。base64 不会出现在对话里，只返回预览链接。"""
 
         async def execute_python(code: str, input_data: str = "{}") -> str:
             try:

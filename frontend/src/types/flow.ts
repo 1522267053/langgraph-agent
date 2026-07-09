@@ -20,7 +20,6 @@ export type CardNodeType =
   | 'shell'
   | 'memory'
   | 'todo'
-  | 'media_gen'
   | 'sub_agent'
   | 'agenda'
 

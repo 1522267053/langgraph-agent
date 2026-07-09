@@ -130,7 +130,9 @@ POST /api/execution/human-input-stream/{execution_id}
 |--|-----------------|----------------|
 | 结构 | start→llm→end + 工具节点 | 任意 DAG |
 | LLM | 仅限 1 个 | 不限 |
-| 支持节点 | start/end/condition/intent_router/llm + 工具节点(mcp/knowledge/skill/python/shell/memory/todo/agenda/api/media_gen/sub_agent) | 所有 18 种节点类型 |
+| 支持节点 | start/end/condition/intent_router/llm + 工具节点(mcp/knowledge/skill/python/shell/memory/todo/agenda/api/sub_agent) | 所有节点类型 |
+
+> **媒体文件生成**: python 工具的 main() 返回 `{"__save_file__": true, "content_base64": ..., "mime_type": ...}` 可自动保存并在聊天中预览；api 工具设置 download_file=true 下载二进制文件同样自动预览。详见 references/api.md。
 
 ## 创建流程（完整步骤）
 

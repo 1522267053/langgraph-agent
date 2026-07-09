@@ -242,17 +242,7 @@ memory 分类: `decision/preference/lesson/relation/event/task/other`
 
 ⚠️ `ref_flow_id` 是**独立顶层字段**，仅创建时可设，`batch/config` 不能改，修改需删节点重建。
 
-### media_gen
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `media_type` | string | `image` / `audio` / `video` |
-| `image/audio/video` | object | `{enabled, provider, model, api_key, base_url, params}` |
-
-启用为工具时提供 `generate_{type}_{nodeKey}` 工具。
-
 ---
-
 ## 边 Handle 配对
 
 | source_handle | target_handle | 说明 |
@@ -267,3 +257,17 @@ memory 分类: `decision/preference/lesson/relation/event/task/other`
 - 仅 1 个 LLM 节点
 - 允许: condition, intent_router
 - 禁止: loop, card, human
+
+## 生成媒体文件（图片/音频/视频）
+
+通过 python 或 api 工具节点生成媒体文件，自动保存并在聊天中预览。
+
+### python 工具方式
+main() 返回以下格式时，文件自动落盘并在聊天中预览：
+```json
+{"__save_file__": true, "content_base64": "<base64编码>", "mime_type": "image/png", "filename": "optional.png"}
+```
+base64 不会出现在对话中，只返回 `success + preview_url`，前端自动展示"查看预览"按钮。
+
+### api 工具方式
+设置 `download_file=true`，当响应 Content-Type 为二进制类型（image/*, audio/*, video/*）时，文件自动下载保存。返回结果含 `success + preview_url + download_url`。

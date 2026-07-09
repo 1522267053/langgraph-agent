@@ -126,7 +126,7 @@ export const flowApi = {
 ```typescript
 // nodeRegistry.ts — 组件由 import.meta.glob 自动发现，无需手动 import
 // 放入 nodes/*Node.vue / config/*Config.vue 即自动注册
-// PascalCase → snake_case 转换：MediaGenNode.vue → media_gen
+// PascalCase → snake_case 转换：IntentRouterNode.vue → intent_router
 
 // 注册表 entry（nodeRegistry.ts 中定义）
 {

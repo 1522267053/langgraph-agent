@@ -932,7 +932,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
     ) -> Optional[str]:
         """校验非工具边不能连接工具节点。
 
-        工具节点（skill/mcp/memory/knowledge/python/shell/api/todo/media_gen）
+        工具节点（skill/mcp/memory/knowledge/python/shell/api/todo）
         只能通过工具边（source_handle=tools）连接到 LLM 节点，不能出现在普通流程边中。
 
         Args:

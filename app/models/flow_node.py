@@ -29,7 +29,6 @@ class NodeType(str, Enum):
     MEMORY = "memory"
     TODO = "todo"
     LOOP = "loop"
-    MEDIA_GEN = "media_gen"
     INTENT_ROUTER = "intent_router"
     SUB_AGENT = "sub_agent"
     AGENDA = "agenda"
@@ -50,7 +49,6 @@ BASIC_NODE_TYPES: List[NodeType] = [
     NodeType.MEMORY,
     NodeType.MCP,
     NodeType.TODO,
-    NodeType.MEDIA_GEN,
     NodeType.INTENT_ROUTER,
     NodeType.SUB_AGENT,
     NodeType.AGENDA,
@@ -68,7 +66,6 @@ AGENT_ALLOWED_NODE_TYPES: List[str] = [
     NodeType.MEMORY.value,
     NodeType.TODO.value,
     NodeType.API.value,
-    NodeType.MEDIA_GEN.value,
     NodeType.CONDITION.value,
     NodeType.INTENT_ROUTER.value,
     NodeType.SUB_AGENT.value,
@@ -84,7 +81,6 @@ AGENT_TOOL_NODE_TYPES: set[str] = {
     NodeType.MEMORY.value,
     NodeType.TODO.value,
     NodeType.API.value,
-    NodeType.MEDIA_GEN.value,
     NodeType.SUB_AGENT.value,
     NodeType.AGENDA.value,
 }
@@ -114,7 +110,6 @@ NODE_SOURCE_HANDLES: dict[str, set[str]] = {
     NodeType.SHELL.value: {"tools"},
     NodeType.MEMORY.value: {"tools"},
     NodeType.TODO.value: {"tools"},
-    NodeType.MEDIA_GEN.value: {"default", "tools"},
     # 意图路由：default + 每个意图 key 动态生成 handle（前端动态生成）
     NodeType.INTENT_ROUTER.value: {"default"},
     NodeType.SUB_AGENT.value: {"tools"},
@@ -137,7 +132,6 @@ NODE_TARGET_HANDLES: dict[str, set[str]] = {
     NodeType.SHELL.value: set(),
     NodeType.MEMORY.value: set(),
     NodeType.TODO.value: set(),
-    NodeType.MEDIA_GEN.value: {"default"},
     NodeType.INTENT_ROUTER.value: {"default"},
     NodeType.SUB_AGENT.value: set(),
     NodeType.AGENDA.value: set(),

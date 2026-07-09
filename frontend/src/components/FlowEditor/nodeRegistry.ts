@@ -23,7 +23,6 @@ import {
   Monitor,
   Notebook,
   List,
-  PictureFilled,
   Avatar,
   Calendar,
   Postcard
@@ -35,7 +34,7 @@ import type { NodeVariable, FlowIOField, FieldType } from '@/types/flow'
 const nodeModules = import.meta.glob('./nodes/*Node.vue', { eager: true })
 const configModules = import.meta.glob('./config/*Config.vue', { eager: true })
 
-/** PascalCase → snake_case（MediaGen → media_gen, IntentRouter → intent_router） */
+/** PascalCase → snake_case（IntentRouter → intent_router） */
 function pascalToSnake(name: string): string {
   return name
     .replace(/([A-Z])/g, '_$1')
@@ -141,39 +140,6 @@ function ensureInputVars(vars: NodeVariable[]): NodeVariable[] {
 }
 
 // ---- 默认配置常量 ----
-
-const MEDIA_GEN_DEFAULTS = {
-  media_type: 'image',
-  image: {
-    enabled: true,
-    provider: 'openai_compatible',
-    model: 'dall-e-3',
-    api_key: '',
-    base_url: '',
-    params: {}
-  },
-  audio: {
-    enabled: false,
-    provider: 'openai_compatible',
-    model: 'tts-1',
-    api_key: '',
-    base_url: '',
-    params: {}
-  },
-  video: {
-    enabled: false,
-    provider: 'minimax',
-    model: 'video-01',
-    api_key: '',
-    base_url: '',
-    params: {}
-  },
-  output_variables: [
-    { name: 'url', source: '', type: 'string' },
-    { name: 'media_type', source: '', type: 'string' }
-  ],
-  input_variables: []
-}
 
 // ---- 注册表数据 ----
 
@@ -558,24 +524,6 @@ const registry: Record<string, NodeRegistryEntry> = {
     iconBgColor: '#f8fafc',
     defaultConfig: () => ({}),
     initConfig: () => ({})
-  },
-
-  media_gen: {
-    label: '媒体生成',
-    description: '生成图片、音频、视频',
-    category: 'tool',
-    icon: PictureFilled,
-    iconColor: '#a855f7',
-    iconBgColor: '#faf5ff',
-    defaultConfig: () => ({ ...MEDIA_GEN_DEFAULTS }),
-    initConfig: (rawConfig, ctx) => {
-      if (!rawConfig || Object.keys(rawConfig).length === 0) return { ...MEDIA_GEN_DEFAULTS }
-      const config = { ...rawConfig }
-      config.input_variables = resolveInputVars(rawConfig, 'media_gen', ctx)
-      config.output_variables = resolveOutputVars(rawConfig, 'media_gen', ctx)
-      return config
-    },
-    getExtraProps: ctx => ({ nodeId: ctx.selectedNodeId })
   },
 
   sub_agent: {
