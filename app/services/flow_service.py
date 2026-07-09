@@ -121,32 +121,6 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             raise ValueError(f"名称「{obj_in.name}」已存在")
         return await super().create(db, obj_in)
 
-    async def fix_agent_input_schema(self, db: AsyncSession) -> int:
-        """批量补偿：对所有 input_schema 为 NULL 的 Agent 设置默认值
-
-        用于修复旧版本创建的 Agent 缺少 input_schema 的问题。
-        在应用启动时调用一次。
-
-        Returns:
-            修复的 Agent 数量
-        """
-        from sqlalchemy import update as sql_update
-
-        stmt = (
-            sql_update(Flow)
-            .where(
-                Flow.flow_type == FlowType.AGENT.value,
-                Flow.input_schema.is_(None),
-                Flow.is_delete == 0,
-            )
-            .values(input_schema=DEFAULT_AGENT_INPUT_SCHEMA)
-        )
-        result = await db.execute(stmt)
-        await db.commit()
-        count = result.rowcount
-        if count:
-            logger.info("已为 %d 个 Agent 补充默认 input_schema", count)
-        return count
 
     async def duplicate_flow(self, db: AsyncSession, flow_id: int) -> Flow:
         """复制流程或智能体（含全部节点和边）
