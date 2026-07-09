@@ -62,7 +62,7 @@ function handleImageClick(file: FileItem) {
         @click="handleImageClick(file)"
       />
       <div v-else-if="isVideo(file.mime_type)" class="file-media-wrapper">
-        <video :src="getFileUrl(file)" controls preload="metadata" class="file-video" />
+        <video :src="getFileUrl(file)" controls preload="none" class="file-video" />
       </div>
       <div v-else-if="isAudio(file.mime_type)" class="file-media-wrapper">
         <audio :src="getFileUrl(file)" controls class="file-audio" />

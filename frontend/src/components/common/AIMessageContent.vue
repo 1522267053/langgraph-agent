@@ -104,7 +104,7 @@ function getMediaPreviewInfo(
   return {
     preview_url: media.preview_url,
     isVideo: (media.mime_type || '').startsWith('video/'),
-    isImage: (media.mime_type || '').startsWith('image/'),
+    isImage: (media.mime_type || '').startsWith('image/')
   }
 }
 
@@ -210,23 +210,17 @@ async function handleCopy(text: string): Promise<void> {
         <pre v-if="segment.tool.status === 'error'" class="tool-content tool-content-error">{{
           segment.tool.result !== undefined ? formatToolResult(segment.tool.result) : '执行失败'
         }}</pre>
-        <div
-          v-show="isMediaSegment(segment)"
-          class="tool-media-preview"
-        >
+        <div v-show="isMediaSegment(segment)" class="tool-media-preview">
           <div v-show="mediaPreviewInfo(segment)?.isVideo" class="media-inline-preview">
             <video
               :src="mediaPreviewInfo(segment)?.preview_url || ''"
               controls
-              preload="metadata"
+              preload="none"
               class="media-video"
             />
           </div>
           <div v-show="mediaPreviewInfo(segment)?.isImage" class="media-inline-preview">
-            <img
-              :src="mediaPreviewInfo(segment)?.preview_url || ''"
-              class="media-image"
-            />
+            <img :src="mediaPreviewInfo(segment)?.preview_url || ''" class="media-image" />
           </div>
           <el-button :icon="View" size="small" @click="openMediaPreview(segment)">
             查看预览
@@ -250,11 +244,7 @@ async function handleCopy(text: string): Promise<void> {
           />
         </el-tooltip>
         <el-tooltip
-          v-if="
-            !isStreaming &&
-            segment.dbMsgId &&
-            idx !== lastContentIdx
-          "
+          v-if="!isStreaming && segment.dbMsgId && idx !== lastContentIdx"
           content="删除此条及之后的内容"
           placement="top"
         >
