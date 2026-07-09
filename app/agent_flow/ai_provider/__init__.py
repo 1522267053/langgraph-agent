@@ -1,22 +1,17 @@
 """
 统一 AI 提供商抽象层
 
-覆盖 LLM 聊天模型和媒体生成能力（图片/音频/视频）。
 通过装饰器自动注册，新增提供商只需在 ai_provider/ 下新建文件并用 @register 装饰。
 """
 
 from app.agent_flow.ai_provider.base import (
-    BaseAIProvider,
-    MediaGenFieldDef,
-    MediaResult,
     AIProviderRegistry,
+    BaseAIProvider,
 )
 
 __all__ = [
-    "BaseAIProvider",
-    "MediaGenFieldDef",
-    "MediaResult",
     "AIProviderRegistry",
+    "BaseAIProvider",
     "create_provider",
 ]
 

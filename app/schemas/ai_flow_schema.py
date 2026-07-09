@@ -36,7 +36,6 @@ VALID_NODE_TYPES = {
     "shell",
     "memory",
     "todo",
-    "media_gen",
     "intent_router",
 }
 

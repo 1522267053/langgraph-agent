@@ -388,12 +388,13 @@ class ApiNodeHandler(BaseNodeHandler):
                 await db.refresh(file_obj)
 
             return {
-                "file_id": file_obj.id,
-                "original_name": file_obj.original_name,
-                "file_type": file_obj.file_type,
-                "file_size": file_obj.file_size,
-                "mime_type": file_obj.mime_type,
+                "success": True,
+                "preview_url": f"/{file_obj.file_path}",
                 "download_url": f"/api/file/download/{file_obj.id}",
+                "file_name": file_obj.original_name,
+                "mime_type": file_obj.mime_type,
+                "file_id": file_obj.id,
+                "file_size": file_obj.file_size,
             }
         except Exception as e:
             logger.error("保存下载文件失败: %s", e)
@@ -601,7 +602,11 @@ class ApiNodeHandler(BaseNodeHandler):
 
         return StructuredTool(
             name=f"api_call_tool_{node.node_key}",
-            description="API调用",
+            description=(
+                "通用API调用工具，支持任意HTTP请求(GET/POST/PUT/DELETE/PATCH)。"
+                " 设置 download_file=True 且响应为二进制文件（图片/音频/视频等）时，"
+                " 文件将自动保存并在聊天中预览。"
+            ),
             func=None,
             coroutine=call_api,
             args_schema=ApiCallInput,
@@ -738,10 +743,7 @@ class ApiNodeHandler(BaseNodeHandler):
                 result.get("_suggested_name", ""),
             )
             if file_info:
-                return json.dumps(
-                    {"success": True, "downloaded_file": file_info},
-                    ensure_ascii=False,
-                )
+                return json.dumps(file_info, ensure_ascii=False)
             return json.dumps(
                 {"success": False, "error": "文件下载保存失败"},
                 ensure_ascii=False,

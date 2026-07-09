@@ -156,7 +156,7 @@ src/
 |------|------|------------|
 | **基础** | start, end, condition, loop, intent_router | 标准 I/O |
 | **LLM** | llm | 标准 I/O + 工具输入（orange） |
-| **工具** | mcp, api, skill, knowledge, python, shell, memory, todo, media_gen, sub_agent, agenda | 纯工具输出（green→tools） |
+| **工具** | mcp, api, skill, knowledge, python, shell, memory, todo, sub_agent, agenda | 纯工具输出（green→tools） |
 | **交互** | human, card | 标准 I/O + 工具输出 |
 
 Handle 颜色约定：green=输入、blue=输出、orange=工具、red=假分支

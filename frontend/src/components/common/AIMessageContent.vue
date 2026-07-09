@@ -40,8 +40,6 @@ function isThinkingInProgress(idx: number): boolean {
   return true
 }
 
-const MEDIA_TOOL_PREFIX = 'generate_'
-
 const expandedArgsSegments = ref(new Set<number>())
 
 function toggleArgsFormat(idx: number): void {
@@ -75,8 +73,8 @@ function parseMediaResult(
   return null
 }
 
-function isMediaTool(name: string): boolean {
-  return name.startsWith(MEDIA_TOOL_PREFIX)
+function isMediaTool(result: unknown): boolean {
+  return parseMediaResult(result) !== null
 }
 
 function openMediaPreview(segment: Segment): void {
@@ -190,7 +188,7 @@ async function handleCopy(text: string): Promise<void> {
         <div
           v-if="
             segment.tool.status === 'success' &&
-            isMediaTool(segment.tool.name) &&
+            isMediaTool(segment.tool.result) &&
             parseMediaResult(segment.tool.result)
           "
           class="tool-media-preview"

@@ -206,25 +206,6 @@ export interface MemoryConfig {
   consolidate_interval_days: number
 }
 
-/** 媒体生成单项配置（图片/音频/视频，params 由 Provider 驱动） */
-export interface MediaGenItemConfig {
-  enabled: boolean
-  provider: string
-  model: string
-  api_key: string
-  base_url: string
-  params: Record<string, unknown>
-}
-
-/** 媒体生成节点配置 */
-export interface MediaGenNodeConfig {
-  media_type: 'image' | 'audio' | 'video'
-  image: MediaGenItemConfig
-  audio: MediaGenItemConfig
-  video: MediaGenItemConfig
-  input_variables: NodeVariable[]
-  output_variables: NodeVariable[]
-}
 
 /** 任务计划节点配置 */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -408,15 +389,6 @@ export const fieldTypeOptions: { value: FieldType; label: string }[] = [
 /** 变量格式提示文本 */
 export function variableFormatHint(variableStr: string): string {
   return `{{ ${variableStr} }}`
-}
-
-/** 媒体生成供应商默认模型 */
-export const mediaGenProviderModels: Record<string, string> = {
-  openai_compatible_image: 'dall-e-3',
-  openai_compatible_audio: 'tts-1',
-  minimax_image: 'image-01',
-  minimax_video: 'video-01',
-  minimax_audio: 'speech-01-turbo'
 }
 
 /** 重导出类型 */

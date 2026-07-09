@@ -265,7 +265,6 @@ langgraph-agent/
 | **shell** | Shell 命令执行 | Flow / Agent |
 | **todo** | 任务计划，LLM 自主进行任务拆分与进度跟踪 | Flow / Agent |
 | **agenda** | 日程管理，LLM 自主创建/查询/更新/删除日程 | Flow / Agent |
-| **media_gen** | 媒体生成（图片/音频/视频） | Flow / Agent |
 | **sub_agent** | 子 Agent 调用，引用已发布的 Agent 作为子任务执行器 | Flow / Agent |
 
 ### 变量引用

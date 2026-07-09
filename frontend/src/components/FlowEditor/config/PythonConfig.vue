@@ -114,6 +114,9 @@ function updateVariableSource(index: number, source: string): void {
           定义 main 函数，参数名与输入变量名称一致，return 返回结果
           <br />
           输出: {stdout: str, stderr: str, result: 函数返回的结果, success: true / false}
+          <br />
+          生成媒体文件时，main() 返回
+          {"__save_file__": True, "content_base64": "&lt;base64&gt;", "mime_type": "image/png"} 可自动保存为文件并在聊天中预览
         </el-text>
       </div>
     </div>
