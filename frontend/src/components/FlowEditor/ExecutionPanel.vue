@@ -264,31 +264,8 @@ function handleResumeExecution(exec: FlowExecution, event: Event) {
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
   z-index: 10;
-  transition:
-    opacity 0.2s,
-    background 0.2s;
   margin: 0 auto;
-  opacity: 1;
-}
-
-.scroll-to-bottom.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.scroll-to-bottom:hover {
-  background: #ecf5ff;
-  color: #409eff;
 }
 
 .history-content {

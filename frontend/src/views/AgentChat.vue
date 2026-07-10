@@ -15,6 +15,7 @@ import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import ChatInput from '@/components/AgentChat/ChatInput.vue'
 import FlowPreviewCard from '@/components/common/FlowPreviewCard.vue'
 import { useToolOutputStore } from '@/stores/toolOutput'
+import { useAutoScroll } from '@/composables/useAutoScroll'
 
 import 'highlight.js/styles/vs2015.css'
 
@@ -23,6 +24,22 @@ const store = useAgentStore()
 const toolOutputStore = useToolOutputStore()
 
 const messagesContainer = ref<HTMLElement | null>(null)
+
+const { autoScroll, isAtBottom, scrollToBottom, handleScroll } = useAutoScroll(messagesContainer, [
+  () => store.chatMessages.length,
+  () => store.textContent,
+  () => store.thinkingContent,
+  () => store.chatMessages.reduce((n, m) => n + m.segments.length, 0),
+  () =>
+    store.chatMessages.reduce(
+      (n, m) =>
+        n + m.segments.filter(s => s.type === 'tool' && s.tool?.status !== 'running').length,
+      0
+    ),
+  () => store.isStreaming,
+  () => store.todos.length
+])
+
 const humanInputValue = ref('')
 
 const imagePreviewVisible = ref(false)
@@ -75,18 +92,12 @@ function saveDisplayPrefs() {
   )
 }
 
-const autoScroll = ref(true)
-const userScrolledUp = ref(false)
 const showThinking = ref(true)
 const showToolCalls = ref(true)
 
 loadDisplayPrefs()
 
 watch([autoScroll, showThinking, showToolCalls], saveDisplayPrefs)
-
-watch(autoScroll, val => {
-  if (val) userScrolledUp.value = false
-})
 
 watch(
   () => route.params.id,
@@ -126,7 +137,6 @@ watch(
   }
 )
 
-const isAtBottom = ref(true)
 const isLoadingMore = ref(false)
 const loadMoreSentinel = ref<HTMLElement | null>(null)
 let loadMoreObserver: IntersectionObserver | null = null
@@ -216,65 +226,6 @@ watch(
     }
   }
 )
-
-watch(
-  [
-    () => store.chatMessages.length,
-    () => store.textContent,
-    () => store.thinkingContent,
-    () => store.chatMessages.reduce((n, m) => n + m.segments.length, 0),
-    () =>
-      store.chatMessages.reduce(
-        (n, m) =>
-          n + m.segments.filter(s => s.type === 'tool' && s.tool?.status !== 'running').length,
-        0
-      ),
-    () => store.isStreaming,
-    () => store.todos.length
-  ],
-  () => {
-    if (autoScroll.value && !userScrolledUp.value) {
-      nextTick(() => {
-        if (userScrolledUp.value) return
-        requestAnimationFrame(() => {
-          autoScrollToBottom()
-        })
-      })
-    }
-  }
-)
-
-let _programmaticScroll = false
-
-function autoScrollToBottom() {
-  if (!messagesContainer.value) return
-  _programmaticScroll = true
-  const el = messagesContainer.value
-  el.scrollTop = el.scrollHeight
-  isAtBottom.value = true
-  requestAnimationFrame(() => {
-    _programmaticScroll = false
-  })
-}
-
-function scrollToBottom() {
-  if (!messagesContainer.value) return
-  messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-  isAtBottom.value = true
-  userScrolledUp.value = false
-}
-
-function handleMessagesScroll() {
-  if (!messagesContainer.value || _programmaticScroll) return
-  const { scrollTop, scrollHeight, clientHeight } = messagesContainer.value
-  const atBottom = scrollHeight - scrollTop - clientHeight <= 50
-  isAtBottom.value = atBottom
-  if (atBottom) {
-    userScrolledUp.value = false
-  } else {
-    userScrolledUp.value = true
-  }
-}
 
 function initLoadMoreObserver() {
   if (!messagesContainer.value || !loadMoreSentinel.value) return
@@ -477,7 +428,7 @@ function handleRejectTools() {
       v-loading="store.messagesLoading"
       element-loading-text="加载中..."
       class="messages-container"
-      @scroll="handleMessagesScroll"
+      @scroll="handleScroll"
     >
       <template v-if="!store.messagesLoading && store.chatMessages.length === 0">
         <div class="empty-state">
@@ -735,25 +686,7 @@ export default {
   bottom: 210px;
   left: 50%;
   transform: translateX(-50%);
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
   z-index: 50;
-  transition:
-    opacity 0.2s,
-    background 0.2s;
-  opacity: 1;
-}
-
-.scroll-to-bottom.hidden {
-  opacity: 0;
-  pointer-events: none;
 }
 
 .scroll-to-bottom:hover {
