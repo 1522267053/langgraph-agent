@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Optional, TYPE_CHECKING
 
 import httpx
@@ -370,9 +370,7 @@ class ApiNodeHandler(BaseNodeHandler):
         try:
             await asyncio.to_thread(_write_bytes, absolute_path, content)
 
-            original_name = suggested_name or f"downloaded.{ext}"
-            if not original_name.endswith(f".{ext}"):
-                original_name = f"{original_name}.{ext}"
+            original_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
 
             async with AsyncSessionLocal() as db:
                 file_obj = File(
