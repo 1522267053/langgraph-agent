@@ -9,14 +9,18 @@ import type { FlowIOField } from '@/types/flow'
 import DisplayToggle from '@/components/AgentChat/DisplayToggle.vue'
 import MemoryPanel from '@/components/AgentChat/MemoryPanel.vue'
 import MessageItem from '@/components/AgentChat/MessageItem.vue'
+import RunningToolBadge from '@/components/AgentChat/RunningToolBadge.vue'
+import ToolOutputDrawer from '@/components/AgentChat/ToolOutputDrawer.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import ChatInput from '@/components/AgentChat/ChatInput.vue'
 import FlowPreviewCard from '@/components/common/FlowPreviewCard.vue'
+import { useToolOutputStore } from '@/stores/toolOutput'
 
 import 'highlight.js/styles/vs2015.css'
 
 const route = useRoute()
 const store = useAgentStore()
+const toolOutputStore = useToolOutputStore()
 
 const messagesContainer = ref<HTMLElement | null>(null)
 const humanInputValue = ref('')
@@ -136,6 +140,8 @@ const inputMessage = ref('')
 const showMemory = ref(false)
 
 onMounted(async () => {
+  toolOutputStore.registerWsHandler()
+  toolOutputStore.loadRunning()
   const id = route.params.id as string
   const sessionId = route.query.sessionId as string
   try {
@@ -185,6 +191,8 @@ onUnmounted(() => {
   store.resetState()
   store.stopCompressPolling()
   store.stopSavePolling()
+  toolOutputStore.stopPolling()
+  toolOutputStore.unregisterWsHandler()
   loadMoreObserver?.disconnect()
   loadMoreObserver = null
 })
@@ -460,6 +468,7 @@ function handleRejectTools() {
             <span>压缩</span>
           </button>
         </el-tooltip>
+        <RunningToolBadge />
       </div>
     </header>
 
@@ -603,6 +612,7 @@ function handleRejectTools() {
     </div>
 
     <MemoryPanel v-model:visible="showMemory" :agent-id="agentId" />
+    <ToolOutputDrawer />
 
     <Teleport to="body">
       <el-image-viewer

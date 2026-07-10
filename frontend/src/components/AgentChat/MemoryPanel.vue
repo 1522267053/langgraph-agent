@@ -5,6 +5,10 @@ import { Delete, Download, Upload, Search, CircleClose } from '@element-plus/ico
 import { memoryApi } from '@/api/memory'
 import { configApi } from '@/api/config'
 import type { Memory, MemoryExportItem, MemorySearchHit } from '@/api/memory'
+import { useIsMobile } from '@/composables/useIsMobile'
+
+const { isMobile } = useIsMobile()
+const drawerSize = computed(() => (isMobile.value ? '100%' : '340px'))
 
 const props = defineProps<{
   agentId: number | null
@@ -388,7 +392,7 @@ watch(
     :model-value="visible"
     title="记忆管理"
     direction="rtl"
-    size="340px"
+    :size="drawerSize"
     :close-on-click-modal="true"
     @update:model-value="handleClose"
   >

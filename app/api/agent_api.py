@@ -357,6 +357,47 @@ class AgentApi:
             )
             return ApiResponse.success(data=result, msg="查询成功")
 
+        # ---- 后台工具任务管理 ----
+
+        @self.router.get(
+            "/tools/running",
+            response_model=ApiResponse,
+            summary="获取运行中的后台工具任务",
+        )
+        async def get_running_tools():
+            """获取所有运行中和最近完成的后台 Shell 任务"""
+            from app.agent_flow.node_handlers.shell_handler import get_running_tasks
+
+            return ApiResponse.success(data=get_running_tasks())
+
+        @self.router.get(
+            "/tools/{task_id}/status",
+            response_model=ApiResponse,
+            summary="获取后台工具任务状态",
+        )
+        async def get_tool_status(task_id: str):
+            """获取单个后台任务的详细状态和输出"""
+            from app.agent_flow.node_handlers.shell_handler import get_task_by_id
+
+            result = get_task_by_id(task_id)
+            if not result:
+                return ApiResponse.error(msg="任务不存在或已过期")
+            return ApiResponse.success(data=result)
+
+        @self.router.post(
+            "/tools/{task_id}/cancel",
+            response_model=ApiResponse,
+            summary="取消后台工具任务",
+        )
+        async def cancel_tool(task_id: str):
+            """取消正在运行的后台 Shell 任务"""
+            from app.agent_flow.node_handlers.shell_handler import cancel_task_by_id
+
+            result = await cancel_task_by_id(task_id)
+            if result.get("success"):
+                return ApiResponse.success(data=result, msg="任务已取消")
+            return ApiResponse.error(msg=result.get("error", "取消失败"))
+
 
 agent_api = AgentApi()
 router = agent_api.router
