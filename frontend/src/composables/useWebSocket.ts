@@ -22,10 +22,25 @@ interface AgendaReminderData {
   location?: string | null
 }
 
+interface ToolOutputStartData {
+  task_id: string
+  tool_name: string
+  command: string
+  stdout: string
+  stderr: string
+}
+
+interface ToolOutputEndData {
+  task_id: string
+  status: string
+  return_code: number | null
+  elapsed_seconds: number | null
+}
+
 interface WSMessage {
-  type: 'execution_done' | 'agenda_reminder'
+  type: 'execution_done' | 'agenda_reminder' | 'tool_output_start' | 'tool_output_end'
   browser_notify?: boolean
-  data: ExecutionDoneData | AgendaReminderData
+  data: ExecutionDoneData | AgendaReminderData | ToolOutputStartData | ToolOutputEndData
 }
 
 const ws = ref<WebSocket | null>(null)
@@ -39,6 +54,14 @@ const MAX_RECONNECT_DELAY = 30000
 /** 当前正在通过 SSE 观看的 execution_id（用于跳过重复通知） */
 let watchingExecutionId: number | null = null
 let deniedNotified = false
+
+/** 工具输出回调（store 注册） */
+type ToolOutputHandler = (type: 'tool_output_start' | 'tool_output_end', data: Record<string, unknown>) => void
+let toolOutputHandler: ToolOutputHandler | null = null
+
+export function setToolOutputHandler(handler: ToolOutputHandler | null) {
+  toolOutputHandler = handler
+}
 
 export function setWatchingExecution(id: number | null) {
   watchingExecutionId = id
@@ -157,6 +180,10 @@ function handleNotification(msg: WSMessage) {
         body: parts.join(' | ') || '该日程开始了',
         icon: '/logo.ico'
       })
+    }
+  } else if (msg.type === 'tool_output_start' || msg.type === 'tool_output_end') {
+    if (toolOutputHandler) {
+      toolOutputHandler(msg.type, msg.data as Record<string, unknown>)
     }
   }
 }

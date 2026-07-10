@@ -46,47 +46,18 @@ class ShellNodeConfig(BaseNodeConfig):
 
 
 BLOCKED_COMMANDS = {
-    # Windows 危险命令
+    # Windows 毁灭性命令
     "format",
     "diskpart",
-    "reg",
-    "sc",
-    "netsh",
-    "bitsadmin",
-    "shutdown",
-    "reboot",
-    "mstsc",
-    "eventvwr",
-    "wmic",
-    "taskkill",
-    "schtasks",
     "bcdedit",
     "cipher",
-    # Linux 危险命令
-    "sudo",
-    "su",
-    "shutdown",
-    "reboot",
+    # Linux 毁灭性命令
     "mkfs",
     "mkswap",
-    "killall",
-    "systemctl",
-    "service",
-    "crontab",
-    "at",
     "fdisk",
     "parted",
     "gdisk",
-    "iptables",
-    "ip6tables",
-    "sysctl",
     "shred",
-    "useradd",
-    "usermod",
-    "userdel",
-    "groupadd",
-    "groupmod",
-    "groupdel",
 }
 
 DANGEROUS_PATTERNS = [
@@ -136,20 +107,12 @@ DANGEROUS_PATTERNS = [
     r"\bwget\b.*\|\s*(ba)?sh",  # wget | sh
     r"\bnc\b.*-e\s+(ba)?sh",  # nc 反弹 shell
     r"\bncat\b.*-e\s+(ba)?sh",  # ncat 反弹 shell
-    # 6. Windows 服务与用户管理
-    r"\bnet\s+stop\b",  # 停止 Windows 服务
-    r"\bnet\s+start\b",  # 启动 Windows 服务
+    # 6. Windows 用户管理（防止锁死系统）
     r"\bnet\s+user\b",  # Windows 用户管理
     r"\bnet\s+localgroup\b",  # Windows 用户组管理
-    # 7. Linux 进程终止（扩大覆盖面）
-    r"\bkill\s+-9\b",  # 强制终止进程
-    r"\bkill\s+(-[0-9]+\s+)?(?!1\b)\d+\b",  # kill 任意非 init 进程
-    r"\bpkill\s+(?!init\b)",  # pkill 按模式杀进程（排除已有 init 规则）
-    # 8. 包管理卸载（防止破坏运行环境）
-    r"\bpip\s+uninstall\b",  # Python 包卸载
-    r"\bnpm\s+uninstall\b",  # npm 包卸载
-    r"\bpoetry\s+remove\b",  # Poetry 依赖移除
-    r"\bconda\s+remove\b",  # Conda 包移除
+    # 7. Linux 进程终止（仅保留杀 init 进程的保护）
+    r"\bkill\s+(-9\s+)?1\b",  # 杀死 init 进程
+    r"\bpkill\s+(-9\s+)?init",  # 杀死 init
 ]
 
 
@@ -489,6 +452,7 @@ class BackgroundShellTask:
     start_time: datetime = field(default_factory=datetime.now)
     end_time: Optional[datetime] = None
     process: Optional[asyncio.subprocess.Process] = None
+    username: str = ""
     _monitor_task: Optional[asyncio.Task] = field(default=None, repr=False)
     _stdin_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _stdout_bytes: bytearray = field(default_factory=bytearray, repr=False)
@@ -514,6 +478,53 @@ class BackgroundShellTask:
 
 _background_tasks: dict[str, BackgroundShellTask] = {}
 _task_expire_seconds: int = 300
+
+
+async def _notify_tool_start(task: BackgroundShellTask) -> None:
+    """任务转后台时通过 WS 通知前端"""
+    if not task.username:
+        return
+    try:
+        from app.services.ws_manager import ws_manager
+
+        await ws_manager.broadcast_to_user(
+            task.username,
+            {
+                "type": "tool_output_start",
+                "data": {
+                    "task_id": task.task_id,
+                    "tool_name": "shell_executor",
+                    "command": task.command,
+                    "stdout": _decode_output(bytes(task._stdout_bytes)),
+                    "stderr": _decode_output(bytes(task._stderr_bytes)),
+                },
+            },
+        )
+    except Exception:
+        pass
+
+
+async def _notify_tool_end(task: BackgroundShellTask) -> None:
+    """任务结束时通过 WS 通知前端"""
+    if not task.username:
+        return
+    try:
+        from app.services.ws_manager import ws_manager
+
+        await ws_manager.broadcast_to_user(
+            task.username,
+            {
+                "type": "tool_output_end",
+                "data": {
+                    "task_id": task.task_id,
+                    "status": task.status,
+                    "return_code": task.return_code,
+                    "elapsed_seconds": task.to_dict().get("elapsed_seconds"),
+                },
+            },
+        )
+    except Exception:
+        pass
 
 
 async def _read_stream(
@@ -578,6 +589,7 @@ async def _monitor_process(
                 await process.stdin.wait_closed()
             except Exception:
                 pass
+        await _notify_tool_end(task)
 
 
 def _cleanup_expired_tasks() -> None:
@@ -594,6 +606,81 @@ def _cleanup_expired_tasks() -> None:
         task = _background_tasks.pop(tid, None)
         if task and task._monitor_task and not task._monitor_task.done():
             task._monitor_task.cancel()
+
+
+def get_running_tasks() -> list[dict]:
+    """获取所有运行中和最近完成的后台任务（供 REST API 调用）"""
+    _cleanup_expired_tasks()
+    result = []
+    for task in _background_tasks.values():
+        if task.status == "running":
+            result.append(
+                {
+                    **task.to_dict(),
+                    "stdout": _decode_output(bytes(task._stdout_bytes)),
+                    "stderr": _decode_output(bytes(task._stderr_bytes)),
+                }
+            )
+    return result
+
+
+def get_task_by_id(task_id: str) -> Optional[dict]:
+    """获取单个任务详情（供 REST API 调用）"""
+    _cleanup_expired_tasks()
+    task = _background_tasks.get(task_id)
+    if not task:
+        return None
+    return {
+        **task.to_dict(),
+        "stdout": _decode_output(bytes(task._stdout_bytes)),
+        "stderr": _decode_output(bytes(task._stderr_bytes)),
+    }
+
+
+async def cancel_task_by_id(task_id: str) -> dict:
+    """取消后台任务（供 REST API 调用），返回结果 dict"""
+    task = _background_tasks.get(task_id)
+    if not task:
+        return {"success": False, "error": f"任务 {task_id} 不存在或已过期"}
+    if task.status != "running":
+        return {
+            "success": False,
+            "error": f"任务已结束（status={task.status}）",
+            **task.to_dict(),
+        }
+
+    process = task.process
+    if not process:
+        return {"success": False, "error": "进程引用丢失"}
+
+    if task._monitor_task and not task._monitor_task.done():
+        task._monitor_task.cancel()
+
+    if process.stdin and not process.stdin.is_closing():
+        try:
+            process.stdin.close()
+        except Exception:
+            pass
+
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+
+    try:
+        await asyncio.wait_for(asyncio.shield(process.wait()), timeout=5)
+    except (asyncio.TimeoutError, Exception):
+        await _force_kill_process_tree(process)
+        try:
+            await asyncio.wait_for(process.wait(), timeout=3)
+        except (asyncio.TimeoutError, Exception):
+            pass
+
+    task.status = "cancelled"
+    task.return_code = process.returncode
+    task.end_time = datetime.now()
+
+    return {"success": True, "message": "任务已取消", **task.to_dict()}
 
 
 async def _force_kill_process_tree(process: asyncio.subprocess.Process) -> None:
@@ -846,10 +933,28 @@ class ShellNodeHandler(BaseNodeHandler):
                 _apply_shell_output_truncation(result, task)
                 return json.dumps(result, ensure_ascii=False)
 
+            # 任务超过 async_wait 秒仍未完成 → 转为后台任务，通知前端
+            try:
+                from app.config.database import AsyncSessionLocal
+                from app.services.global_config_service import global_config_service
+
+                async with AsyncSessionLocal() as db:
+                    task.username = (
+                        await global_config_service.get_username(db) or "default"
+                    )
+            except Exception:
+                task.username = "default"
+            await _notify_tool_start(task)
+
             result = {
                 "success": True,
                 "async": True,
-                "message": f"命令仍在执行中，请使用 shell_task_status 工具查询进度（task_id: {task.task_id}）",
+                "message": (
+                    f"命令仍在后台执行中（task_id: {task.task_id}）。"
+                    f"可用 shell_task_status 查询进度，但建议最多查询1-2次。"
+                    f"若仍未完成，告知用户任务在后台运行（用户可在界面查看实时输出），"
+                    f"等待用户询问结果时再查询。"
+                ),
                 **task.to_dict(),
             }
             _apply_shell_output_truncation(result, task)
@@ -859,9 +964,11 @@ class ShellNodeHandler(BaseNodeHandler):
             name="shell_executor",
             description=(
                 f"在受限环境中执行Shell命令。{system_info}。"
-                f"命令执行等待 {async_wait} 秒，若未完成则返回 task_id，"
-                f"之后可用 shell_task_status 查询进度，用 shell_task_input 向进程发送输入。"
-                f"禁止危险命令: sudo, rm -rf /, format, diskpart, shutdown, reboot等。"
+                f"命令执行等待 {async_wait} 秒，若未完成则转为后台任务并返回 task_id。"
+                f"之后可用 shell_task_status 查询进度（建议最多1-2次），"
+                f"若仍未完成则告知用户任务在后台运行，等待用户询问结果时再查询。"
+                f"用 shell_task_input 向进程发送输入，用 shell_task_cancel 终止任务。"
+                f"禁止危险命令: rm -rf /, format, mkfs, dd写入设备, fork炸弹等。"
             ),
             func=None,
             coroutine=execute_shell,
@@ -889,8 +996,9 @@ class ShellNodeHandler(BaseNodeHandler):
                 _apply_shell_output_truncation(result, task)
             if task.status == "running":
                 result["hint"] = (
-                    "任务仍在后台运行中。如果预计还需较长时间，请告知用户任务正在执行，"
-                    "不要持续轮询消耗工具调用次数。用户可稍后再次查询状态。"
+                    "任务仍在后台运行中。请告知用户任务正在后台执行，"
+                    "用户可在聊天界面查看实时输出。不要继续轮询，"
+                    "等待用户主动询问结果时再调用此工具查询。"
                 )
             return json.dumps(result, ensure_ascii=False)
 
@@ -899,9 +1007,9 @@ class ShellNodeHandler(BaseNodeHandler):
             description=(
                 "查询后台Shell任务的执行状态和输出。"
                 "当 shell_executor 返回 task_id 时使用此工具获取进度。"
+                "建议最多查询2次，若仍未完成则告知用户任务在后台运行，等待用户主动询问时再查询。"
                 "返回字段: status(running/completed/failed/timeout), stdout, stderr, return_code, elapsed_seconds。"
-                "可通过 wait_time 参数指定等待秒数（最小8秒，最大120秒），等待期间会尝试获取最新输出。"
-                "注意：如果任务仍在运行，响应中会包含 hint 字段提示您不要持续轮询，应告知用户任务在后台执行。"
+                "可通过 wait_time 参数指定等待秒数（最小8秒，最大120秒）。"
             ),
             func=None,
             coroutine=query_task_status,
