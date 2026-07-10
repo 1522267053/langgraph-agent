@@ -600,3 +600,30 @@ body {
     max-height: none;
   }
 }
+
+/* scroll-to-bottom 按钮 — 共享视觉样式（定位由各组件 scoped 覆盖） */
+.scroll-to-bottom {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    opacity 0.2s,
+    background 0.2s;
+  opacity: 1;
+}
+
+.scroll-to-bottom.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.scroll-to-bottom:hover {
+  background: #ecf5ff;
+  color: #409eff;
+}

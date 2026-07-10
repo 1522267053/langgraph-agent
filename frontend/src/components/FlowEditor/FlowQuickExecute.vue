@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onUnmounted, nextTick } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
 import { flowApi } from '@/api/flow'
 import type { FlowIOField } from '@/types/flow'
 import { Bottom } from '@element-plus/icons-vue'
@@ -7,6 +7,7 @@ import FlowInputForm from '@/components/common/FlowInputForm.vue'
 import ExecutionResultContent from '@/components/common/ExecutionResultContent.vue'
 import HumanInputDialog from '@/components/FlowEditor/HumanInputDialog.vue'
 import { useFlowExecution } from '@/composables/useFlowExecution'
+import { useAutoScroll } from '@/composables/useAutoScroll'
 
 const props = defineProps<{
   visible: boolean
@@ -48,8 +49,10 @@ const inputFormRef = ref<InstanceType<typeof FlowInputForm>>()
 
 // ---- 滚动控制 ----
 const resultPanelRef = ref<HTMLElement | null>(null)
-const autoScroll = ref(true)
-const isAtBottom = ref(true)
+const { isAtBottom, scrollToBottom, handleScroll } = useAutoScroll(resultPanelRef, [
+  nodeExecutions,
+  streamingContent
+])
 
 watch(
   () => props.visible,
@@ -71,39 +74,6 @@ watch(
     }
   }
 )
-
-function scrollToBottom(): void {
-  nextTick(() => {
-    if (resultPanelRef.value) {
-      resultPanelRef.value.scrollTop = resultPanelRef.value.scrollHeight
-      autoScroll.value = true
-      isAtBottom.value = true
-    }
-  })
-}
-
-watch(
-  nodeExecutions,
-  () => {
-    if (autoScroll.value) scrollToBottom()
-  },
-  { deep: true }
-)
-watch(
-  streamingContent,
-  () => {
-    if (autoScroll.value) scrollToBottom()
-  },
-  { deep: true }
-)
-
-function handleResultScroll(): void {
-  if (!resultPanelRef.value) return
-  const { scrollTop, scrollHeight, clientHeight } = resultPanelRef.value
-  const atBottom = scrollHeight - scrollTop - clientHeight <= 50
-  isAtBottom.value = atBottom
-  autoScroll.value = atBottom
-}
 
 // ---- 表单提交 ----
 function confirmExecute(): void {
@@ -175,7 +145,7 @@ onUnmounted(() => {
       <!-- 右侧：执行结果 -->
       <div class="right-panel">
         <div class="panel-title">执行结果</div>
-        <div ref="resultPanelRef" class="result-scroll" @scroll="handleResultScroll">
+        <div ref="resultPanelRef" class="result-scroll" @scroll="handleScroll">
           <ExecutionResultContent
             v-if="hasExecution"
             :execution="currentExecution"
@@ -291,31 +261,8 @@ onUnmounted(() => {
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
   z-index: 10;
-  transition:
-    opacity 0.2s,
-    background 0.2s;
   margin: 0 auto;
-  opacity: 1;
-}
-
-.scroll-to-bottom.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.scroll-to-bottom:hover {
-  background: #ecf5ff;
-  color: #409eff;
 }
 </style>
 
