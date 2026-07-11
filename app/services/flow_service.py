@@ -59,7 +59,15 @@ DEFAULT_AGENT_INPUT_SCHEMA: dict = {
             "type": "string",
             "description": "用户消息",
             "required": True,
-        }
+        },
+        {
+            "name": "files",
+            "type": "file_list",
+            "description": "上传文件",
+            "multiple": True,
+            "max_size": 20,
+            "required": False,
+        },
     ]
 }
 
@@ -120,7 +128,6 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         if result.scalar_one_or_none():
             raise ValueError(f"名称「{obj_in.name}」已存在")
         return await super().create(db, obj_in)
-
 
     async def duplicate_flow(self, db: AsyncSession, flow_id: int) -> Flow:
         """复制流程或智能体（含全部节点和边）

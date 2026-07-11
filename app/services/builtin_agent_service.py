@@ -361,7 +361,15 @@ class BuiltinAgentService:
                             "type": "string",
                             "description": "用户消息",
                             "required": True,
-                        }
+                        },
+                        {
+                            "name": "files",
+                            "type": "file_list",
+                            "description": "上传文件",
+                            "multiple": True,
+                            "max_size": 20,
+                            "required": False,
+                        },
                     ]
                 },
             },

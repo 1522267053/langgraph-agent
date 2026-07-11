@@ -240,7 +240,12 @@ class SchedulerService:
                 agendas = await agenda_service.get_unreminded_agendas(db)
 
             now = datetime.now()
-            due = [a for a in agendas if a.remind_at <= now]
+            due = [
+                a
+                for a in agendas
+                if a.remind_at <= now
+                and not (a.recurrence == "weekday" and now.weekday() >= 5)
+            ]
             for agenda in due:
                 await self._run_agenda_reminder(agenda.id)
 
@@ -376,7 +381,12 @@ class SchedulerService:
                 agendas = await agenda_service.get_unreminded_agendas(db)
 
             now = datetime.now()
-            expired = [a for a in agendas if a.remind_at <= now]
+            expired = [
+                a
+                for a in agendas
+                if a.remind_at <= now
+                and not (a.recurrence == "weekday" and now.weekday() >= 5)
+            ]
 
             # 过期的立即触发推送
             for agenda in expired:
