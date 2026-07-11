@@ -179,6 +179,12 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         next_remind = None
         if agenda.remind_at:
             next_remind = next_start + timedelta(seconds=offset)
+            # 仅工作日重复：提醒落在周末则跳过该次提醒
+            if (
+                agenda.recurrence == AgendaRecurrence.WEEKDAY.value
+                and next_remind.weekday() >= 5
+            ):
+                next_remind = None
 
         new_agenda = Agenda(
             title=agenda.title,

@@ -39,7 +39,10 @@ class FileApi(BaseApi[FileModel, FileBase, FileCondition, FileView, FileView]):
             source_type: Optional[str] = Form(None, description="来源类型：flow/agent"),
             db: AsyncSession = Depends(get_db),
         ):
-            file_obj = await file_service.upload_file(db, file, source_type)
+            try:
+                file_obj = await file_service.upload_file(db, file, source_type)
+            except ValueError as e:
+                return ApiResponse.error(msg=str(e))
             view = FileView.model_to_view(file_obj)
             view.download_url = f"/api/file/download/{file_obj.id}"
             view.preview_url = file_obj.preview_url or f"/{file_obj.file_path}"

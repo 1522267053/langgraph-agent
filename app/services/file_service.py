@@ -98,9 +98,16 @@ class FileService(BaseService[File, FileBase, FileUpdate]):
         absolute_path.parent.mkdir(parents=True, exist_ok=True)
 
         content = await file.read()
-        await asyncio.to_thread(_write_bytes, absolute_path, content)
-
         file_size = len(content)
+
+        max_bytes = settings.max_upload_size * 1024 * 1024
+        if file_size > max_bytes:
+            raise ValueError(
+                f"文件大小 {file_size / 1024 / 1024:.1f}MB 超过限制"
+                f"（最大 {settings.max_upload_size}MB）"
+            )
+
+        await asyncio.to_thread(_write_bytes, absolute_path, content)
         mime_type = file.content_type or "application/octet-stream"
         file_type = ext.lstrip(".")
 
