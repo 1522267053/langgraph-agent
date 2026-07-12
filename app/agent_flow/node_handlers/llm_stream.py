@@ -11,6 +11,8 @@ import asyncio
 import logging
 from typing import Callable, Optional
 
+import httpcore
+import httpx
 import openai
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessageChunk, BaseMessage
@@ -25,11 +27,16 @@ from langgraph.types import StreamWriter
 
 logger = logging.getLogger(__name__)
 
-# 可重试的错误类型（限流、网络、超时）
+# 可重试的错误类型（限流、网络、超时、流式响应中途连接断开）
 _RETRYABLE_ERRORS = (
     openai.RateLimitError,
     openai.APIConnectionError,
     openai.APITimeoutError,
+    # 流式响应读取阶段连接中断，openai SDK 不会包装为 APIConnectionError，需单独捕获
+    httpx.ReadError,
+    httpx.RemoteProtocolError,
+    httpx.LocalProtocolError,
+    httpcore.ReadError,
 )
 
 # 重试间隔（秒），最多重试 len(_RETRY_DELAYS) 次
