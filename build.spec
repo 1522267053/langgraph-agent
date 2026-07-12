@@ -127,13 +127,17 @@ hiddenimports = [
     "jsonpatch",
     "tiktoken",
     "tokenizers",
-    # 系统托盘（pystray + Pillow）
-    "pystray",
-    "pystray._win32",
-    "PIL",
-    "PIL.IcoImagePlugin",
-    "PIL.PngImagePlugin",
 ]
+
+# 系统托盘仅 Windows 打包需要
+if platform.system() == "Windows":
+    hiddenimports.extend([
+        "pystray",
+        "pystray._win32",
+        "PIL",
+        "PIL.IcoImagePlugin",
+        "PIL.PngImagePlugin",
+    ])
 
 a = Analysis(
     ["main.py"],
