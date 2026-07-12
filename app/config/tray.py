@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 
-from app.config.build_utils import BASE_DIR, get_internal_dir
+from app.config.build_utils import BASE_DIR, IS_WINDOWS, get_internal_dir
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -163,7 +163,7 @@ def _open_browser() -> None:
 def _open_logs_dir() -> None:
     log_dir = BASE_DIR / settings.log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
-    if sys.platform == "win32":
+    if IS_WINDOWS:
         os.startfile(str(log_dir))
 
 
