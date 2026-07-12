@@ -6,6 +6,11 @@
 import sys
 from pathlib import Path
 
+# ---- 平台常量（sys.platform）----
+IS_WINDOWS = sys.platform == "win32"
+IS_LINUX = sys.platform == "linux"
+IS_MACOS = sys.platform == "darwin"
+
 
 def _is_nuitka() -> bool:
     """判断是否为 Nuitka 编译环境"""
@@ -22,6 +27,12 @@ def _is_packaged() -> bool:
     return _is_pyinstaller() or _is_nuitka()
 
 
+# ---- 运行环境常量 ----
+IS_PACKAGED = _is_packaged()
+# Windows 打包：启用系统托盘 + 加载页；Linux 打包走普通 uvicorn
+IS_WIN_PACKAGED = IS_PACKAGED and IS_WINDOWS
+
+
 def get_base_dir() -> Path:
     """
     获取项目根目录（exe 同级目录，用于存放 .env / uploads / logs 等运行时文件）
@@ -33,7 +44,7 @@ def get_base_dir() -> Path:
     Returns:
         Path: 项目根目录
     """
-    if _is_packaged():
+    if IS_PACKAGED:
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent.parent
 

@@ -7,9 +7,8 @@
 import asyncio
 import logging
 import socket
-import sys
 
-from app.config.build_utils import BASE_DIR
+from app.config.build_utils import BASE_DIR, IS_WINDOWS, IS_WIN_PACKAGED
 from app.config.database import AsyncSessionLocal, close_db, init_db
 from app.config.logging_config import cleanup_logs
 from app.config.settings import settings
@@ -69,7 +68,7 @@ async def _open_browser() -> None:
     """延迟打开浏览器"""
     url = f"http://127.0.0.1:{settings.app_port}/"
     await asyncio.sleep(0.2)
-    if sys.platform == "win32":
+    if IS_WINDOWS:
         import subprocess
 
         CREATE_BREAKAWAY = 0x01000000
@@ -120,10 +119,8 @@ async def startup() -> None:
     # ---- 打印自定义启动横幅 ----
     _log_startup_banner()
 
-    # ---- 打开浏览器（打包环境由加载页处理，避免重复打开标签页） ----
-    from app.config.build_utils import _is_packaged
-
-    if not _is_packaged():
+    # ---- 打开浏览器（Windows 打包由加载页处理，避免重复打开标签页） ----
+    if not IS_WIN_PACKAGED:
         asyncio.create_task(_open_browser())
 
 
