@@ -120,8 +120,11 @@ async def startup() -> None:
     # ---- 打印自定义启动横幅 ----
     _log_startup_banner()
 
-    # ---- 打开浏览器 ----
-    asyncio.create_task(_open_browser())
+    # ---- 打开浏览器（打包环境由加载页处理，避免重复打开标签页） ----
+    from app.config.build_utils import _is_packaged
+
+    if not _is_packaged():
+        asyncio.create_task(_open_browser())
 
 
 async def shutdown() -> None:
