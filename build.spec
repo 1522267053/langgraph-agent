@@ -28,6 +28,7 @@ datas = [
     ("frontend/dist", "frontend/dist"),
     ("skills", "skills"),
     ("app/utils/_static_imports.py", "app/utils"),
+    ("logo.ico", "."),
 ]
 
 # ---- 收集 chromadb migrations（关键：缺少会导致运行时 SQL 错误） ----
@@ -126,6 +127,12 @@ hiddenimports = [
     "jsonpatch",
     "tiktoken",
     "tokenizers",
+    # 系统托盘（pystray + Pillow）
+    "pystray",
+    "pystray._win32",
+    "PIL",
+    "PIL.IcoImagePlugin",
+    "PIL.PngImagePlugin",
 ]
 
 a = Analysis(
@@ -166,7 +173,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,
+    console=False,
     icon=os.path.join(project_root, "logo.ico"),
 )
 

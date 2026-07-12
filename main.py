@@ -2,9 +2,22 @@
 FastAPI 应用主入口
 """
 
+import os
 import sys
 
-if sys.platform == "win32":
+from app.config.build_utils import _is_packaged
+
+# ---- 打包（无控制台）环境：尽早重定向 stdout/stderr 到 devnull ----
+if _is_packaged():
+    _devnull = open(os.devnull, "w")
+    sys.stdout = _devnull
+    sys.stderr = _devnull
+    # 立即打开加载页（在重型 import 之前，争取 1 秒内弹出浏览器）
+    from app.config.tray import open_loading_page
+
+    open_loading_page()
+
+if sys.platform == "win32" and not _is_packaged():
     import colorama
 
     colorama.init()
@@ -23,12 +36,17 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    import uvicorn
+    if _is_packaged():
+        from app.config.tray import run_with_tray
 
-    uvicorn.run(
-        app,
-        host=settings.app_host,
-        port=settings.app_port,
-        log_config=get_uvicorn_log_config(),
-        timeout_keep_alive=300,
-    )
+        run_with_tray(app)
+    else:
+        import uvicorn
+
+        uvicorn.run(
+            app,
+            host=settings.app_host,
+            port=settings.app_port,
+            log_config=get_uvicorn_log_config(),
+            timeout_keep_alive=300,
+        )
