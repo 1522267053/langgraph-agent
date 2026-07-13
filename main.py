@@ -13,6 +13,12 @@ if IS_WIN_PACKAGED:
     sys.stdout = _devnull
     sys.stderr = _devnull
     # 立即打开加载页（在重型 import 之前，争取 1 秒内弹出浏览器）
+    from app.config.tray import handle_duplicate_instance
+
+    # 单实例检测：已有实例运行则打开其浏览器并退出新进程
+    if handle_duplicate_instance():
+        sys.exit(0)
+
     from app.config.tray import open_loading_page
 
     open_loading_page()

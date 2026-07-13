@@ -55,6 +55,27 @@ _LOADING_HTML = """<!DOCTYPE html>
 </html>"""
 
 
+def handle_duplicate_instance() -> bool:
+    """单实例守卫：若已有实例运行，打开其浏览器并返回 True。
+
+    通过探测健康端点判断是否已有实例。仅在打包环境由 main.py 最早调用，
+    命中后调用方应 sys.exit(0) 退出新进程，避免出现重复托盘图标。
+    """
+
+    url = f"http://127.0.0.1:{settings.app_port}/api/health"
+    try:
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            if resp.status != 200:
+                return False
+            body = resp.read().decode("utf-8", errors="ignore")
+            if "running" in body:
+                _open_browser()
+                return True
+    except (urllib.error.URLError, ConnectionError, OSError):
+        pass
+    return False
+
+
 def open_loading_page() -> None:
     """启动临时 HTTP 服务返回加载页，并立即用浏览器打开。
 
