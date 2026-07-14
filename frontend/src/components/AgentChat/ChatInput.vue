@@ -3,7 +3,7 @@ import type { FlowIOField } from '@/types/flow'
 import type { FileInfo } from '@/api/file'
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Loading, Promotion, Document, FolderOpened } from '@element-plus/icons-vue'
+import { Loading, Promotion, Document, FolderOpened, QuestionFilled } from '@element-plus/icons-vue'
 import FilePickerDialog from '@/components/common/FilePickerDialog.vue'
 
 const props = defineProps<{
@@ -213,6 +213,13 @@ function handleStop() {
                           {{ field.description || field.name }}
                           <span v-if="field.required" class="param-required">*</span>
                         </span>
+                        <el-tooltip
+                          v-if="field.placeholder"
+                          :content="field.placeholder"
+                          placement="top"
+                        >
+                          <el-icon class="param-hint-icon"><QuestionFilled /></el-icon>
+                        </el-tooltip>
                         <el-tag size="small" class="param-type-tag" effect="plain">
                           {{ getTypeLabel(field.type) }}
                         </el-tag>
@@ -431,6 +438,13 @@ export default {
   font-size: 13px;
   color: #334155;
   font-weight: 400;
+}
+
+.param-hint-icon {
+  color: #909399;
+  cursor: help;
+  font-size: 14px;
+  flex-shrink: 0;
 }
 
 .param-required {

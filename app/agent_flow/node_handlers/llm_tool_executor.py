@@ -31,6 +31,7 @@ from app.agent_flow.tool_resolver import (
     filter_tools_by_intent,
     get_connected_tool_edges,
 )
+from app.config.build_utils import get_agent_work_dir
 from app.models.flow_node import FlowNode
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,14 @@ async def setup_tool_handlers(
         # 注入 _agent_id（记忆节点等需要知道当前 Agent 的 ID）
         if hasattr(handler, "_agent_id") and hasattr(flow, "id"):
             handler._agent_id = flow.id
+
+        # 注入 _working_dir（仅 Agent 类型，Shell 节点用作 cwd）
+        if (
+            hasattr(handler, "_working_dir")
+            and getattr(flow, "flow_type", None) == "agent"
+            and hasattr(flow, "id")
+        ):
+            handler._working_dir = get_agent_work_dir(flow.id)
 
         # 注入 writer、resolve_context、llm_config
         if hasattr(handler, "_writer"):

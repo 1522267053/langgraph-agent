@@ -22,6 +22,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import StreamWriter
 from pydantic import BaseModel, Field
 
+from app.agent_flow.execution_context import get_execution_context
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.agent_flow.node_handlers.base_handler import (
@@ -30,7 +31,7 @@ from app.agent_flow.node_handlers.base_handler import (
     NodeVariable,
 )
 from app.agent_flow.tool_output_truncate import smart_truncate_output
-from app.config.build_utils import BASE_DIR, get_temp_dir
+from app.config.build_utils import BASE_DIR, get_agent_work_dir, get_temp_dir
 from app.models.flow_node import FlowNode
 
 
@@ -722,6 +723,26 @@ class ShellNodeHandler(BaseNodeHandler):
 
     ConfigClass = ShellNodeConfig
 
+    _working_dir: Optional[Path] = None
+
+    def _resolve_working_dir(self) -> Optional[Path]:
+        """解析当前 Shell 执行的工作目录
+
+        优先级：
+        1. self._working_dir（由 llm_tool_executor 仅对 Agent 类型注入）
+        2. ExecutionContext 中的 flow 信息（Shell 节点执行路径），仅 Agent 类型生效
+        3. 返回 None（Flow 类型，保持默认 cwd）
+        """
+        if self._working_dir is not None:
+            return self._working_dir
+        ctx = get_execution_context()
+        if ctx and ctx.expanded_flow is not None:
+            flow_type = getattr(ctx.expanded_flow, "flow_type", None)
+            flow_id = getattr(ctx.expanded_flow, "id", None) or ctx.flow_id
+            if flow_type == "agent" and flow_id:
+                return get_agent_work_dir(flow_id)
+        return None
+
     async def execute(
         self,
         node: FlowNode,
@@ -791,6 +812,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 stderr=asyncio.subprocess.PIPE,
                 shell=True,
                 env=env,
+                cwd=self._resolve_working_dir(),
             )
 
             try:
@@ -908,6 +930,7 @@ class ShellNodeHandler(BaseNodeHandler):
                     stderr=asyncio.subprocess.PIPE,
                     shell=True,
                     env=env,
+                    cwd=self._resolve_working_dir(),
                 )
             except Exception as e:
                 return json.dumps(
@@ -1567,7 +1590,11 @@ class ShellNodeHandler(BaseNodeHandler):
             include: Optional[str] = None,
             literal_text: bool = False,
         ) -> str:
-            search_root = Path(path).resolve() if path else BASE_DIR
+            search_root = (
+                Path(path).resolve()
+                if path
+                else (self._resolve_working_dir() or BASE_DIR)
+            )
 
             is_valid, error_msg = _validate_file_path(str(search_root))
             if not is_valid:
@@ -1670,8 +1697,9 @@ class ShellNodeHandler(BaseNodeHandler):
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
         """返回临时文件目录说明和文件工具使用指南，追加到 LLM system_prompt"""
         temp_dir = get_temp_dir()
+        working_dir = self._resolve_working_dir()
         current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return (
+        lines = [
             "\n\n## Shell 与文件操作\n"
             "你已连接 Shell 执行节点。先用 file_search 在项目中搜索目标，再用 file_read 读取文件内容，用 text_editor 精确替换；创建新文件用 file_write\n"
             "### 输出控制（重要）\n"
@@ -1680,5 +1708,11 @@ class ShellNodeHandler(BaseNodeHandler):
             "- file_read 单次最多读取 100 行，大文件用 offset 参数分段读取\n"
             "- file_search 递归搜索文件内容（正则匹配），跨文件快速定位目标位置\n"
             "- 禁止用 cat 读取大文件，始终使用 file_read\n"
-            f"\n临时文件输出目录: `{temp_dir}`，当前时间: {current_time_str}"
-        )
+            f"\n临时文件输出目录: `{temp_dir}`（会被定时清理，勿存放重要数据）"
+        ]
+        if working_dir is not None:
+            lines.append(
+                f"当前工作目录（持久化）: `{working_dir}`，Shell 命令默认在此目录下执行，文件操作优先使用此目录"
+            )
+        lines.append(f"当前时间: {current_time_str}")
+        return "\n".join(lines)

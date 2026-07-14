@@ -94,8 +94,36 @@ def get_env_file() -> Path:
 BASE_DIR = get_base_dir()
 
 
+def get_workspace_dir() -> Path:
+    """获取全局工作空间根目录（BASE_DIR/workspace/），不存在则自动创建"""
+    workspace = BASE_DIR / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    return workspace
+
+
 def get_temp_dir() -> Path:
-    """获取临时文件目录（BASE_DIR/temp/），不存在则自动创建"""
-    temp_dir = BASE_DIR / "temp"
+    """获取全局临时文件目录（BASE_DIR/workspace/temp/），不存在则自动创建
+
+    供 Flow 和 Agent 共用，存放工具输出截断日志等临时文件，定时清理（7天）。
+    """
+    temp_dir = get_workspace_dir() / "temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     return temp_dir
+
+
+def get_agent_work_dir(flow_id: int) -> Path:
+    """获取指定 Agent 的持久化工作目录（BASE_DIR/workspace/agents/{flow_id}/）
+
+    仅 Agent（flow_type="agent"）使用，作为 Shell 执行的 cwd 和 file_search 默认根目录。
+    该目录下的文件不会被定时清理，Agent 被删除时也不自动清理。
+    """
+    work_dir = get_agents_base_dir() / str(flow_id)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    return work_dir
+
+
+def get_agents_base_dir() -> Path:
+    """获取所有 Agent 工作目录的根目录（BASE_DIR/workspace/agents/），不存在则自动创建"""
+    agents_dir = get_workspace_dir() / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    return agents_dir

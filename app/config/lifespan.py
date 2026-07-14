@@ -8,7 +8,13 @@ import asyncio
 import logging
 import socket
 
-from app.config.build_utils import BASE_DIR, IS_WINDOWS, IS_WIN_PACKAGED
+from app.config.build_utils import (
+    BASE_DIR,
+    IS_WINDOWS,
+    IS_WIN_PACKAGED,
+    get_agents_base_dir,
+    get_temp_dir,
+)
 from app.config.database import AsyncSessionLocal, close_db, init_db
 from app.config.logging_config import cleanup_logs
 from app.config.settings import settings
@@ -99,7 +105,8 @@ async def startup() -> None:
     load_all_providers()
 
     # ---- 初始化数据库 ----
-    (BASE_DIR / "temp").mkdir(parents=True, exist_ok=True)
+    get_temp_dir()  # 确保 workspace/temp/ 存在
+    get_agents_base_dir()  # 确保 workspace/agents/ 存在
     await init_db()
     logger.info("[OK] Database initialized")
 
