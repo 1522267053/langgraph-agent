@@ -79,6 +79,7 @@ function handleImageClick(file: FileItem) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  margin-top: 8px;
 }
 
 .file-previewer-item {
