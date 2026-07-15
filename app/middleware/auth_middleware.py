@@ -70,8 +70,6 @@ EXEMPT_PATHS = {
     "/api/config/providers",
     "/api/config/check-update",
     "/api/health",
-    "/api/webhook/trigger",
-    "/api/webhook/query",
 }
 
 # 仅在未初始化时豁免认证的路径（初始化后需登录才能访问）

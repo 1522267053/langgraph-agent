@@ -157,6 +157,17 @@ async def setup_tool_handlers(
     # 按优先级排序：静态内容靠前，动态内容（如记忆）靠后，利于 LLM 缓存命中
     prompt_hints.sort(key=lambda x: (x[0], x[1]))
 
+    # 注入 WS 远程工具（如有客户端注册）
+    from app.agent_flow.ws_tool_context import _current_ws_conn
+
+    ws_conn = _current_ws_conn.get()
+    if ws_conn and ws_conn.registered_tools:
+        from app.agent_flow.remote_tool_builder import create_remote_tool
+
+        for tool_def in ws_conn.registered_tools:
+            if isinstance(tool_def, dict) and tool_def.get("name"):
+                tools.append(create_remote_tool(tool_def, ws_conn))
+
     # 去重：同名工具只保留第一个（子 Agent 等节点可能产生重复的通用工具）
     seen_names = set()
     unique_tools = []

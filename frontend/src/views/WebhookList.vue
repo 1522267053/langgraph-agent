@@ -106,7 +106,6 @@ const formData = reactive<WebhookCreate & { id?: number }>({
   name: '',
   description: '',
   input_config: undefined,
-  callback_url: '',
   is_enabled: 1
 })
 
@@ -146,7 +145,6 @@ watch(
       inputConfigText.value = ''
       return
     }
-    // 从已加载的流程列表中查找 input_schema
     const flow = allFlows.value.find(f => f.id === newId)
     const fields = (flow as Flow & { input_schema?: { fields?: FlowIOField[] } })?.input_schema
       ?.fields
@@ -159,7 +157,6 @@ function resetForm() {
   formData.name = ''
   formData.description = ''
   formData.input_config = undefined
-  formData.callback_url = ''
   formData.is_enabled = 1
   formData.id = undefined
   inputConfigText.value = ''
@@ -178,7 +175,6 @@ function openEdit(row: WebhookConfig) {
   formData.flow_id = row.flow_id
   formData.name = row.name
   formData.description = row.description || ''
-  formData.callback_url = row.callback_url || ''
   formData.is_enabled = row.is_enabled
   inputConfigText.value = row.input_config ? JSON.stringify(row.input_config, null, 2) : ''
   dialogVisible.value = true
@@ -194,7 +190,6 @@ async function handleSubmit() {
     return
   }
 
-  // 解析 input_config
   if (inputConfigText.value.trim()) {
     try {
       formData.input_config = JSON.parse(inputConfigText.value)
@@ -215,7 +210,6 @@ async function handleSubmit() {
         name: formData.name,
         description: formData.description || undefined,
         input_config: formData.input_config,
-        callback_url: formData.callback_url || undefined,
         is_enabled: formData.is_enabled
       })
       ElMessage.success('更新成功')
@@ -225,7 +219,6 @@ async function handleSubmit() {
         name: formData.name,
         description: formData.description || undefined,
         input_config: formData.input_config,
-        callback_url: formData.callback_url || undefined,
         is_enabled: formData.is_enabled
       })
       ElMessage.success('创建成功')
@@ -260,77 +253,18 @@ function showDetail(row: WebhookConfig) {
   detailDialogVisible.value = true
 }
 
-function getWebhookUrl(row: WebhookConfig): string {
-  const protocol = location.protocol
+function getWsUrl(row: WebhookConfig): string {
+  const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
   const host = location.host
-  return `${protocol}//${host}/api/webhook/trigger/${row.token}`
-}
-
-function getQueryUrl(row: WebhookConfig): string {
-  const protocol = location.protocol
-  const host = location.host
-  return `${protocol}//${host}/api/webhook/query/${row.token}/calls`
-}
-
-function getQueryCallDetailUrl(row: WebhookConfig, callId?: number): string {
-  const protocol = location.protocol
-  const host = location.host
-  const id = callId || '{call_id}'
-  return `${protocol}//${host}/api/webhook/query/${row.token}/calls/${id}`
-}
-
-function getQueryMessagesUrl(row: WebhookConfig, callId?: number): string {
-  const protocol = location.protocol
-  const host = location.host
-  const id = callId || '{call_id}'
-  return `${protocol}//${host}/api/webhook/query/${row.token}/calls/${id}/messages`
-}
-
-function getQuerySessionsUrl(row: WebhookConfig): string {
-  const protocol = location.protocol
-  const host = location.host
-  return `${protocol}//${host}/api/webhook/query/${row.token}/sessions`
-}
-
-function getQuerySessionDetailUrl(row: WebhookConfig, sessionId?: number): string {
-  const protocol = location.protocol
-  const host = location.host
-  const id = sessionId || '{session_id}'
-  return `${protocol}//${host}/api/webhook/query/${row.token}/sessions/${id}`
-}
-
-function getDeleteSessionUrl(row: WebhookConfig, sessionId?: number): string {
-  const protocol = location.protocol
-  const host = location.host
-  const id = sessionId || '{session_id}'
-  return `${protocol}//${host}/api/webhook/query/${row.token}/sessions/${id}/delete`
-}
-
-function getQuerySessionMessagesUrl(row: WebhookConfig, sessionId?: number): string {
-  const protocol = location.protocol
-  const host = location.host
-  const id = sessionId || '{session_id}'
-  return `${protocol}//${host}/api/webhook/query/${row.token}/sessions/${id}/messages`
-}
-
-function getDeleteSessionMessageUrl(
-  row: WebhookConfig,
-  sessionId?: number,
-  messageId?: number
-): string {
-  const protocol = location.protocol
-  const host = location.host
-  const sid = sessionId || '{session_id}'
-  const mid = messageId || '{message_id}'
-  return `${protocol}//${host}/api/webhook/query/${row.token}/sessions/${sid}/messages/${mid}/delete`
+  return `${protocol}://${host}/ws/trigger/${row.token}`
 }
 
 async function copyUrl(url: string) {
   try {
     await navigator.clipboard.writeText(url)
-    ElMessage.success('URL 已复制到剪贴板')
+    ElMessage.success('已复制到剪贴板')
   } catch {
-    ElMessageBox.alert(url, 'Webhook URL', {
+    ElMessageBox.alert(url, 'WebSocket URL', {
       confirmButtonText: '复制',
       callback: () => {
         navigator.clipboard.writeText(url).then(() => ElMessage.success('已复制'))
@@ -432,12 +366,6 @@ onMounted(() => {
             <el-tag v-else size="small" type="danger">禁用</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="回调 URL" min-width="200" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span v-if="row.callback_url" class="wh-callback">{{ row.callback_url }}</span>
-            <span v-else class="wh-no-callback">无</span>
-          </template>
-        </el-table-column>
         <el-table-column prop="call_count" label="调用次数" width="100" align="center">
           <template #default="{ row }">
             <span class="wh-count">{{ row.call_count || 0 }}</span>
@@ -503,13 +431,7 @@ onMounted(() => {
             :rows="4"
             placeholder='{"key": "value"}'
           />
-          <div class="form-tip">请求体参数会覆盖模板中的同名键</div>
-        </el-form-item>
-        <el-form-item label="回调 URL">
-          <el-input
-            v-model="formData.callback_url"
-            placeholder="执行完成后 POST 通知此 URL（可选）"
-          />
+          <div class="form-tip">execute 指令的参数会覆盖模板中的同名键</div>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="formData.is_enabled" :active-value="1" :inactive-value="0" />
@@ -522,7 +444,7 @@ onMounted(() => {
     </el-dialog>
 
     <!-- 查看详情弹窗 -->
-    <el-dialog v-model="detailDialogVisible" title="Webhook 详情" width="600px">
+    <el-dialog v-model="detailDialogVisible" title="Webhook 详情" width="700px">
       <template v-if="detailWebhook">
         <el-descriptions :column="1" border>
           <el-descriptions-item label="名称">
@@ -543,148 +465,11 @@ onMounted(() => {
             <el-tag v-if="detailWebhook.is_enabled === 1" size="small" type="success">启用</el-tag>
             <el-tag v-else size="small" type="danger">禁用</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="触发 URL">
+          <el-descriptions-item label="WebSocket 地址">
             <div class="url-display">
-              <el-input :model-value="getWebhookUrl(detailWebhook)" readonly class="url-input">
+              <el-input :model-value="getWsUrl(detailWebhook)" readonly class="url-input">
                 <template #append>
-                  <el-button :icon="CopyDocument" @click="copyUrl(getWebhookUrl(detailWebhook))">
-                    复制
-                  </el-button>
-                </template>
-              </el-input>
-            </div>
-          </el-descriptions-item>
-          <el-descriptions-item label="查询列表 URL">
-            <div class="url-display">
-              <el-input :model-value="getQueryUrl(detailWebhook)" readonly class="url-input">
-                <template #append>
-                  <el-button :icon="CopyDocument" @click="copyUrl(getQueryUrl(detailWebhook))">
-                    复制
-                  </el-button>
-                </template>
-              </el-input>
-            </div>
-          </el-descriptions-item>
-          <el-descriptions-item label="查询详情 URL">
-            <div class="url-display">
-              <el-input
-                :model-value="getQueryCallDetailUrl(detailWebhook)"
-                readonly
-                class="url-input"
-              >
-                <template #append>
-                  <el-button
-                    :icon="CopyDocument"
-                    @click="copyUrl(getQueryCallDetailUrl(detailWebhook))"
-                  >
-                    复制
-                  </el-button>
-                </template>
-              </el-input>
-            </div>
-          </el-descriptions-item>
-          <el-descriptions-item label="查询消息 URL">
-            <div class="url-display">
-              <el-input
-                :model-value="getQueryMessagesUrl(detailWebhook)"
-                readonly
-                class="url-input"
-              >
-                <template #append>
-                  <el-button
-                    :icon="CopyDocument"
-                    @click="copyUrl(getQueryMessagesUrl(detailWebhook))"
-                  >
-                    复制
-                  </el-button>
-                </template>
-              </el-input>
-            </div>
-          </el-descriptions-item>
-          <el-descriptions-item label="查询会话列表 URL">
-            <div class="url-display">
-              <el-input
-                :model-value="getQuerySessionsUrl(detailWebhook)"
-                readonly
-                class="url-input"
-              >
-                <template #append>
-                  <el-button
-                    :icon="CopyDocument"
-                    @click="copyUrl(getQuerySessionsUrl(detailWebhook))"
-                  >
-                    复制
-                  </el-button>
-                </template>
-              </el-input>
-            </div>
-          </el-descriptions-item>
-          <el-descriptions-item label="查询会话详情 URL">
-            <div class="url-display">
-              <el-input
-                :model-value="getQuerySessionDetailUrl(detailWebhook)"
-                readonly
-                class="url-input"
-              >
-                <template #append>
-                  <el-button
-                    :icon="CopyDocument"
-                    @click="copyUrl(getQuerySessionDetailUrl(detailWebhook))"
-                  >
-                    复制
-                  </el-button>
-                </template>
-              </el-input>
-            </div>
-          </el-descriptions-item>
-          <el-descriptions-item label="删除会话 URL">
-            <div class="url-display">
-              <el-input
-                :model-value="getDeleteSessionUrl(detailWebhook)"
-                readonly
-                class="url-input"
-              >
-                <template #append>
-                  <el-button
-                    :icon="CopyDocument"
-                    @click="copyUrl(getDeleteSessionUrl(detailWebhook))"
-                  >
-                    复制
-                  </el-button>
-                </template>
-              </el-input>
-            </div>
-          </el-descriptions-item>
-          <el-descriptions-item label="查询会话消息 URL">
-            <div class="url-display">
-              <el-input
-                :model-value="getQuerySessionMessagesUrl(detailWebhook)"
-                readonly
-                class="url-input"
-              >
-                <template #append>
-                  <el-button
-                    :icon="CopyDocument"
-                    @click="copyUrl(getQuerySessionMessagesUrl(detailWebhook))"
-                  >
-                    复制
-                  </el-button>
-                </template>
-              </el-input>
-            </div>
-          </el-descriptions-item>
-          <el-descriptions-item label="删除会话消息 URL">
-            <div class="url-display">
-              <el-input
-                :model-value="getDeleteSessionMessageUrl(detailWebhook)"
-                readonly
-                class="url-input"
-              >
-                <template #append>
-                  <el-button
-                    :icon="CopyDocument"
-                    @click="copyUrl(getDeleteSessionMessageUrl(detailWebhook))"
-                  >
+                  <el-button :icon="CopyDocument" @click="copyUrl(getWsUrl(detailWebhook))">
                     复制
                   </el-button>
                 </template>
@@ -693,9 +478,6 @@ onMounted(() => {
           </el-descriptions-item>
           <el-descriptions-item label="描述">
             {{ detailWebhook.description || '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="回调 URL">
-            {{ detailWebhook.callback_url || '无' }}
           </el-descriptions-item>
           <el-descriptions-item label="默认输入参数">
             <pre v-if="detailWebhook.input_config" class="json-preview">{{
@@ -713,6 +495,60 @@ onMounted(() => {
             {{ detailWebhook.create_time || '-' }}
           </el-descriptions-item>
         </el-descriptions>
+
+        <!-- 协议说明 -->
+        <el-collapse class="proto-guide">
+          <el-collapse-item title="WebSocket 协议说明" name="protocol">
+            <div class="proto-section">
+              <h4>客户端 → 服务端 指令</h4>
+              <pre class="code-block">
+// 发送执行指令（Agent 类型）
+{"action": "execute", "message": "你好"}
+
+// 指定会话执行（多轮对话）
+{"action": "execute", "message": "继续", "session_id": 123}
+
+// 注册远程工具（Agent 可反向调用客户端函数）
+{"action": "register_tools", "tools": [
+  {"name": "get_data", "description": "查询数据",
+   "parameters": {"type": "object",
+     "properties": {"query": {"type": "string"}},
+     "required": ["query"]}}
+]}
+
+// 返回工具执行结果（回应 tool_invoke）
+{"action": "tool_result", "call_id": "xxx", "result": "结果"}
+
+// 创建 / 切换 / 列表 / 删除 会话
+{"action": "create_session", "title": "新对话"}
+{"action": "switch_session", "session_id": 123}
+{"action": "list_sessions"}
+{"action": "delete_session", "session_id": 123}
+
+// 心跳
+"ping"</pre
+              >
+            </div>
+            <div class="proto-section">
+              <h4>服务端 → 客户端 事件</h4>
+              <pre class="code-block">
+// 连接确认
+{"type": "connected", "data": {"flow_type": "agent", ...}}
+
+// 执行事件（实时流式，同 SSE）
+{"type": "node_content", "data": {"content": "你好"}}   // LLM 逐字输出
+{"type": "tool_call_start", "data": {"tool_name": "..."}}
+{"type": "flow_done", "data": {"status": "success"}}
+
+// 远程工具调用请求
+{"type": "tool_invoke", "data": {"call_id": "xxx", "name": "get_data", "args": {...}}}
+
+// 心跳响应
+"pong"</pre
+              >
+            </div>
+          </el-collapse-item>
+        </el-collapse>
       </template>
     </el-dialog>
   </div>
@@ -722,11 +558,6 @@ onMounted(() => {
 .header-actions {
   display: flex;
   gap: 12px;
-}
-
-.wh-name {
-  font-weight: 600;
-  color: #1e293b;
 }
 
 .wh-desc {
@@ -746,16 +577,6 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-}
-
-.wh-callback {
-  font-size: 12px;
-  color: #3b82f6;
-  font-family: monospace;
-}
-
-.wh-no-callback {
-  color: #cbd5e1;
 }
 
 .wh-count {
@@ -787,5 +608,32 @@ onMounted(() => {
   max-height: 200px;
   overflow: auto;
   margin: 0;
+}
+
+.proto-guide {
+  margin-top: 16px;
+}
+
+.proto-section {
+  margin-bottom: 12px;
+}
+
+.proto-section h4 {
+  font-size: 13px;
+  color: #1e293b;
+  margin: 0 0 6px 0;
+}
+
+.code-block {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 10px;
+  font-size: 12px;
+  font-family: 'Courier New', monospace;
+  overflow-x: auto;
+  margin: 0;
+  line-height: 1.6;
+  color: #334155;
 }
 </style>
