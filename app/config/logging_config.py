@@ -54,6 +54,20 @@ class UvicornStartupFilter(logging.Filter):
         return "Uvicorn running on http://0.0.0.0" not in record.getMessage()
 
 
+class AsyncioConnectionResetFilter(logging.Filter):
+    """过滤 asyncio 记录的客户端连接重置噪音（WinError 10054）。
+
+    加载页跳转等场景下浏览器强制 RST 连接，Windows ProactorEventLoop 的
+    socket.shutdown 会抛 ConnectionResetError，asyncio 默认把它记为 ERROR，
+    但这类异常均属客户端主动断开，不影响功能。仅过滤 asyncio logger。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name == "asyncio" and record.exc_info:
+            return not isinstance(record.exc_info[1], ConnectionResetError)
+        return True
+
+
 def cleanup_logs(
     log_dir: str,
     base_name: str,
@@ -278,6 +292,9 @@ def get_uvicorn_log_config() -> dict:
         "uvicorn_startup": {
             "()": "app.config.logging_config.UvicornStartupFilter",
         },
+        "asyncio_conn_reset": {
+            "()": "app.config.logging_config.AsyncioConnectionResetFilter",
+        },
     }
     for handler_key in ("access", "console_access", "file_access"):
         if handler_key in log_config["handlers"]:
@@ -290,6 +307,14 @@ def get_uvicorn_log_config() -> dict:
             handler["filters"].append("uvicorn_startup")
         else:
             handler["filters"] = ["uvicorn_startup"]
+
+    # 过滤 asyncio 连接重置噪音（asyncio logger 走这两个 handler）
+    for handler_key in ("console_default", "file_default"):
+        handler = log_config["handlers"][handler_key]
+        if "filters" in handler:
+            handler["filters"].append("asyncio_conn_reset")
+        else:
+            handler["filters"] = ["asyncio_conn_reset"]
 
     # 抑制 asyncio socket.send() 警告
     log_config["loggers"]["asyncio"] = {

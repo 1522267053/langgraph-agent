@@ -5,6 +5,7 @@
 通过菜单可打开浏览器、打开日志目录、重启服务、退出。
 """
 
+from http import HTTPStatus
 import http.server
 import logging
 import os
@@ -100,13 +101,10 @@ def open_loading_page() -> None:
 
     class _LoadingHandler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            self.send_response(200)
+            self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(html.encode("utf-8"))
-
-        def log_message(self, *args):
-            pass
 
     _loading_server = http.server.HTTPServer(("127.0.0.1", 0), _LoadingHandler)
     port = _loading_server.server_address[1]
