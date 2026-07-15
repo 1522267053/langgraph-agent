@@ -162,6 +162,14 @@ a = Analysis(
         "IPython",
         "jupyter",
     ],
+    module_collection_options={
+        # app 已由 Nuitka 编译为 app.*.pyd 并通过 binaries 提供。
+        # do_not_include：PyInstaller 仍递归分析 app 内的 import（发现
+        # fastapi/sqlalchemy/langchain 等第三方依赖），但不把 app/**/*.py
+        # 的字节码收集进 PYZ。从而避免运行时 FrozenInstaller 优先命中
+        # PYZ、让 Nuitka 编译产物被静默影子加载导致代码保护失效。
+        "app": "do_not_include",
+    },
     noarchive=False,
 )
 
