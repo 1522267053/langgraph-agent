@@ -8,6 +8,7 @@
 import http.server
 import logging
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -60,9 +61,21 @@ def handle_duplicate_instance() -> bool:
 
     通过探测健康端点判断是否已有实例。仅在打包环境由 main.py 最早调用，
     命中后调用方应 sys.exit(0) 退出新进程，避免出现重复托盘图标。
+
+    先用原生 socket 快速探测端口（连接被拒绝时立即返回，不等满超时），
+    端口开放时才走 HTTP 确认是否为本应用。
     """
 
-    url = f"http://127.0.0.1:{settings.app_port}/api/health"
+    port = settings.app_port
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(0.3)
+    try:
+        sock.connect(("127.0.0.1", port))
+        sock.close()
+    except OSError:
+        return False
+
+    url = f"http://127.0.0.1:{port}/api/health"
     try:
         with urllib.request.urlopen(url, timeout=2) as resp:
             if resp.status != 200:
@@ -107,8 +120,14 @@ def stop_loading_server() -> None:
     """关闭加载页 HTTP 服务（主服务就绪后调用）"""
     global _loading_server
     if _loading_server is not None:
-        threading.Thread(target=_loading_server.shutdown, daemon=True).start()
+        server = _loading_server
         _loading_server = None
+
+        def _stop() -> None:
+            server.shutdown()  # 停止 serve_forever 循环
+            server.server_close()  # 关闭 socket 释放资源
+
+        threading.Thread(target=_stop, daemon=True, name="loading-server-stop").start()
 
 
 def _start_uvicorn(app) -> None:
