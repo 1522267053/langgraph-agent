@@ -56,7 +56,10 @@ let watchingExecutionId: number | null = null
 let deniedNotified = false
 
 /** 工具输出回调（store 注册） */
-type ToolOutputHandler = (type: 'tool_output_start' | 'tool_output_end', data: Record<string, unknown>) => void
+type ToolOutputHandler = (
+  type: 'tool_output_start' | 'tool_output_end',
+  data: Record<string, unknown>
+) => void
 let toolOutputHandler: ToolOutputHandler | null = null
 
 export function setToolOutputHandler(handler: ToolOutputHandler | null) {

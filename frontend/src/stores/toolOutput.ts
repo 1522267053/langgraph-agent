@@ -52,7 +52,12 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
     triggerReactivity()
   }
 
-  function endTask(taskId: string, status: string, returnCode: number | null, elapsed: number | null) {
+  function endTask(
+    taskId: string,
+    status: string,
+    returnCode: number | null,
+    elapsed: number | null
+  ) {
     const task = tools.value.get(taskId)
     if (task) {
       task.status = status as RunningTool['status']
