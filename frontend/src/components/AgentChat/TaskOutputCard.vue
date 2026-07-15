@@ -73,9 +73,7 @@ async function handleCancel(taskId: string) {
       <span v-if="task.status === 'running'" class="task-timer">
         {{ Math.floor((Date.now() - task.startTime) / 1000) }}s
       </span>
-      <span v-else-if="task.elapsed_seconds" class="task-timer">
-        {{ task.elapsed_seconds }}s
-      </span>
+      <span v-else-if="task.elapsed_seconds" class="task-timer">{{ task.elapsed_seconds }}s</span>
       <span v-if="task.return_code !== null" class="task-rc">rc={{ task.return_code }}</span>
     </div>
 
