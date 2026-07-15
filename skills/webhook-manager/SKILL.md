@@ -1,33 +1,32 @@
 ---
 name: webhook-manager
 description: |
-  创建、管理、触发和查询 Webhook。适用场景：
-  (1) 用户要求创建或管理 Webhook（将流程/智能体暴露为 HTTP 接口）
-  (2) 用户想查看 Webhook 的触发记录和产生的会话消息
-  (3) 用户需要外部系统通过 HTTP POST 触发流程执行
-  (4) 用户想获取 Webhook 的触发 URL 或 token
-  (5) 用户想查询/删除 Webhook 创建的会话及其消息
+  创建、管理 Webhook，通过 WebSocket 触发流程/智能体执行。
+  适用场景：
+  (1) 用户要求创建或管理 Webhook
+  (2) 外部系统通过 WebSocket 连接触发流程执行，实时接收流式结果
+  (3) 注册远程工具，让 Agent 反向调用客户端函数
+  (4) 管理会话（创建/切换/列表/删除）
 
-  触发词：「创建 webhook」「管理 webhook」「触发 webhook」「外部触发」「查询 webhook 记录」「webhook 回调」「webhook 会话」「webhook 消息」
+  触发词：「创建 webhook」「管理 webhook」「websocket 触发」「远程工具」「webhook 会话」「注册工具」
 ---
 
 # Webhook Manager
 
 服务器：`http://127.0.0.1:8000`
 
-## 核心规则（必须遵守）
+## 核心规则
 
-1. **token 自动生成不可指定**：创建时后端 `uuid.uuid4().hex` 自动生成 64 位 token，请求中传 `token` 字段会被忽略
-2. **trigger 接口免认证**：`POST /api/webhook/trigger/{token}` 无需 session cookie，通过 URL 中的 token 鉴权
-3. **query 接口免认证**：`GET /api/webhook/query/{token}/...` 同样通过 token 鉴权，外部系统可直接查询调用记录和消息
-4. **其余接口需登录态**：CRUD 接口（`/api/webhook/page/create/update/delete/get`）需要 session cookie
-5. **异步执行**：触发后立即返回 `{"status":"started","webhook_id":...,"call_id":...}`，后台异步执行，不等待结果
-6. **`is_enabled=0` 时触发被拒**：返回 `"Webhook 已禁用"`
-7. **更新使用 `exclude_unset`**：未传字段保持不变，无法将字段更新为 `None`
-8. **会话隔离**：Webhook 创建的会话写入 `webhook_id` 标记。会话/消息查询接口**仅返回该 Webhook 创建的会话**，用户在 UI 聊天产生的会话不可见、不可操作。同一 flow 的多个 Webhook 也互相隔离
-9. **删除接口用 GET**：会话/消息删除均为 `GET .../delete` 风格（非 HTTP DELETE），与项目惯例一致
+1. **WebSocket 触发**：外部客户端通过 `ws://host/ws/trigger/{token}` 连接，以 JSON 指令驱动执行
+2. **token 自动生成**：创建 Webhook 时后端 `uuid.uuid4().hex` 生成 token
+3. **实时流式返回**：执行结果通过 WebSocket 逐 token 流式推送（node_content/tool_call/flow_done 等），无需轮询
+4. **Agent 专属功能**：远程工具注册、会话管理（创建/切换/列表/删除/消息查询）仅 Agent 类型支持。Flow 类型调用会返回 `"仅 Agent 类型支持"` 错误
+5. **并发限制**：同一连接同时只允许一个 execute 执行
+6. **CRUD 需登录态**：管理接口（`/api/webhook/page/create/update/delete`）需要 session cookie
+7. **输入合并**：`input_data = {**webhook.input_config, **客户端参数}`（排除 `action` 和 `session_id`），客户端参数覆盖默认模板
+8. **工具名前缀**：远程工具自动加 `remote__` 前缀避免与流程内工具冲突，超时 120 秒
 
-## API 速查
+## 管理接口（HTTP）
 
 | 方法 | 路径 | 认证 | 用途 |
 |------|------|:--:|------|
@@ -35,210 +34,179 @@ description: |
 | POST | `/api/webhook/create` | ✅ | 创建（自动生成 token） |
 | POST | `/api/webhook/update` | ✅ | 更新 |
 | GET | `/api/webhook/delete/{id}` | ✅ | 软删除 |
-| GET | `/api/webhook/get/{id}/url` | ✅ | 获取触发 URL |
-| POST | `/api/webhook/trigger/{token}` | ❌ | **外部触发** |
-| GET | `/api/webhook/query/{token}/calls` | ❌ | 调用记录列表 |
-| GET | `/api/webhook/query/{token}/calls/{call_id}` | ❌ | 调用记录详情 |
-| GET | `/api/webhook/query/{token}/calls/{call_id}/messages` | ❌ | 调用产生的消息列表 |
-| GET | `/api/webhook/query/{token}/sessions` | ❌ | **Webhook 创建的会话列表** |
-| GET | `/api/webhook/query/{token}/sessions/{session_id}` | ❌ | 会话详情 |
-| GET | `/api/webhook/query/{token}/sessions/{session_id}/delete` | ❌ | 删除会话 |
-| GET | `/api/webhook/query/{token}/sessions/{session_id}/messages` | ❌ | 会话消息列表 |
-| GET | `/api/webhook/query/{token}/sessions/{session_id}/messages/{message_id}/delete` | ❌ | 删除会话消息（含其后所有） |
+| GET | `/api/webhook/get/{id}/url` | ✅ | 获取 WebSocket 地址 |
 
-## 创建 Webhook 流程
-
-```
-1. POST /api/webhook/create     # 创建（关联 flow_id）
-2. GET /api/webhook/get/{id}/url  # 获取触发 URL
-3. 外部系统 POST 触发 URL        # 执行流程
-4. GET /api/webhook/query/{token}/calls  # 查询调用记录
-```
-
-### 创建示例
+## 创建 Webhook
 
 ```json
 POST /api/webhook/create
 {
   "name": "订单处理",
   "flow_id": 1,
-  "description": "处理外部订单系统回调",
-  "input_config": {
-    "message": "请处理新订单"
-  },
-  "callback_url": "https://external.com/callback",
+  "description": "处理外部订单",
+  "input_config": {"message": "请处理新订单"},
   "is_enabled": 1
 }
 ```
 
-响应中 `token` 字段即为外部触发凭据。
+## WebSocket 触发
 
-### 获取触发 URL
+### 连接
 
 ```
-GET /api/webhook/get/{id}/url
+ws://host/ws/trigger/{token}
 ```
 
-响应：
+连接成功后收到：
+```json
+{"type": "connected", "data": {"webhook_id": 1, "webhook_name": "订单处理", "flow_id": 1, "flow_type": "agent"}}
+```
+
+> **建议**：连接后检查 `data.flow_type`。`"agent"` 才支持远程工具和会话管理，`"flow"` 仅支持 `execute`。非 Agent 类型调用 register_tools 或会话操作会收到 `{"type":"error","data":{"message":"仅 Agent 类型支持..."}}`。
+
+### 客户端指令一览
+
+| 指令 | 用途 | 适用类型 |
+|------|------|:------:|
+| `execute` | 发送消息/数据触发执行 | 全部 |
+| `register_tools` | 注册远程工具 | 仅 Agent |
+| `unregister_tools` | 注销所有远程工具 | 仅 Agent |
+| `tool_result` | 返回工具执行结果（回应 tool_invoke） | 仅 Agent |
+| `create_session` | 创建新会话 | 仅 Agent |
+| `switch_session` | 切换当前会话 | 仅 Agent |
+| `list_sessions` | 查询会话列表 | 仅 Agent |
+| `delete_session` | 删除会话（含消息 + checkpoint） | 仅 Agent |
+| `get_messages` | 查询会话历史消息（游标分页） | 仅 Agent |
+| `delete_message` | 删除指定消息及其后所有消息 | 仅 Agent |
+| `ping`（纯文本） | 心跳，服务端回 `pong` | 全部 |
+
+### 执行指令
+
+```json
+{"action": "execute", "message": "你好"}
+```
+
+指定已有会话（多轮对话）：
+```json
+{"action": "execute", "message": "继续", "session_id": 5}
+```
+
+Flow 类型（无 message，用 input_data）：
+```json
+{"action": "execute", "city": "北京"}
+```
+
+执行后服务端实时推送事件：
+```json
+{"type": "call_started", "data": {"call_id": 10, "session_id": 5}}
+{"type": "flow_start", "data": {"flow_id": 1, "execution_id": 5}}
+{"type": "node_content", "data": {"content": "你好"}}
+{"type": "node_content", "data": {"content": "！"}}
+{"type": "flow_done", "data": {"status": "success", "output_data": {"content": "你好！"}}}
+```
+
+## 远程工具注册
+
+> **仅 Agent 类型支持**：Webhook 必须关联「智能体」流程。关联「流程」类型的 Webhook 注册工具无效，Agent 无法发现和调用。
+
+客户端注册函数工具后，Agent 执行中可反向调用：
+
 ```json
 {
-  "code": 1,
-  "data": {
-    "url": "/api/webhook/trigger/abc123...",
-    "token": "abc123..."
-  }
+  "action": "register_tools",
+  "tools": [
+    {
+      "name": "query_database",
+      "description": "查询本地数据库",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sql": {"type": "string", "description": "SQL查询语句"}
+        },
+        "required": ["sql"]
+      }
+    }
+  ]
 }
 ```
 
-前端拼接 `host` 后得到完整 URL：`http://host/api/webhook/trigger/abc123...`
-
-## 触发机制
-
-### 输入合并
-
-```
-input_data = {**(webhook.input_config or {}), **request_body}
-```
-
-优先级：请求 body > `input_config` 默认模板
-
-**特殊字段：** `session_id` 是控制参数，不进入 `input_data`，用于指定 Agent 类型的目标会话（见下方）。
-
-### 会话控制（Agent 类型）
-
-外部系统可在请求体中传入 `session_id` 控制使用哪个会话：
-
+Agent 调用工具时，服务端发送：
 ```json
-POST /api/webhook/trigger/{token}
-{
-  "session_id": 5,
-  "message": "继续上次的对话"
-}
+{"type": "tool_invoke", "data": {"call_id": "abc-123", "name": "query_database", "args": {"sql": "SELECT * FROM users"}}}
 ```
 
-| 场景 | 行为 | 响应中 session_id |
-|------|------|:----------------:|
-| 传了 `session_id` | 校验会话存在且属于该 Agent → 复用该会话继续对话 | ✅ 回显传入的值 |
-| `session_id` 无效 | 返回错误，不执行流程 | ❌ |
-| 未传 `session_id` | 同步创建新会话（标题 `[Webhook] {webhook_name}`，写入 `webhook_id` 标记） | ✅ 返回新建的 session_id |
-
-`session_id` 对 Flow 类型无效（Flow 不涉及会话概念），Flow 类型触发响应中不含 `session_id`。
-
-> **注意**：只有「未传 `session_id` 由 Webhook 新建」的会话才被标记为该 Webhook 的会话，可通过会话查询接口查到。外部传入复用的用户会话**不算 Webhook 创建**，不会出现在会话列表中。
-
-### 异步执行
-
-1. 创建 `WebhookCallRecord`（status=1 执行中）
-2. 后台 fire-and-forget 执行
-3. 按 `flow_type` 分流：
-   - **Agent** → 使用指定会话或创建临时会话，`input_data.message` 作为用户消息，其余字段作为 `params`
-   - **Flow** → `flow_executor_service.execute_stream`，从 `flow_start` 事件捕获 `execution_id`
-4. 完成后更新 record 的 `status/output_data/finished_at`
-
-### 回调通知
-
-配置了 `callback_url` 时，执行完成后 POST 回调：
-
+客户端执行后返回结果：
 ```json
-POST {callback_url}
-{
-  "webhook_name": "订单处理",
-  "flow_id": 1,
-  "call_id": 10,
-  "session_id": 5,
-  "execution_id": null,
-  "status": "success",
-  "output_data": {"result": "处理完成"},
-  "error": null,
-  "timestamp": "2026-06-21T08:30:00"
-}
+{"action": "tool_result", "call_id": "abc-123", "result": "[{\"id\": 1, \"name\": \"张三\"}]"}
 ```
 
-- Agent 类型：`session_id` 非空，`execution_id` 为 null
-- Flow 类型：`execution_id` 非空，`session_id` 为 null
-- 回调失败不影响流程执行，仅记录 `callback_status=failed`
+工具超时默认 120 秒。工具名自动加 `remote__` 前缀避免冲突。
 
-## 外部触发示例（curl）
+## Python 客户端示例
 
-### 基础触发
+```python
+import asyncio
+import json
+import websockets
 
-```bash
-curl -X POST "http://host/api/webhook/trigger/abc123..."
+async def main():
+    async with websockets.connect("ws://host/ws/trigger/TOKEN") as ws:
+        # 注册远程工具
+        await ws.send(json.dumps({
+            "action": "register_tools",
+            "tools": [{"name": "get_time", "description": "获取当前时间",
+                       "parameters": {"type": "object", "properties": {}}}]
+        }))
+
+        # 发送执行指令
+        await ws.send(json.dumps({"action": "execute", "message": "现在几点？"}))
+
+        # 接收事件
+        async for msg in ws:
+            data = json.loads(msg)
+            if data["type"] == "tool_invoke":
+                # Agent 调用了远程工具
+                await ws.send(json.dumps({
+                    "action": "tool_result",
+                    "call_id": data["data"]["call_id"],
+                    "result": "14:30"
+                }))
+            elif data["type"] == "flow_done":
+                print("执行完成")
+                break
+
+asyncio.run(main())
 ```
 
-### 带输入参数触发
-
-```bash
-curl -X POST "http://host/api/webhook/trigger/abc123..." \
-  -H "Content-Type: application/json" \
-  -d '{"message": "查询订单状态", "order_id": "ORD-2026-001"}'
-```
-
-### 指定会话触发（Agent 类型）
-
-```bash
-curl -X POST "http://host/api/webhook/trigger/abc123..." \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": 5, "message": "继续上次的对话"}'
-```
-
-### 查询调用记录列表
-
-```bash
-curl "http://host/api/webhook/query/abc123.../calls?page=1&page_size=10"
-```
-
-### 查询单条调用记录详情
-
-```bash
-curl "http://host/api/webhook/query/abc123.../calls/10"
-```
-
-### 查询调用产生的消息
-
-```bash
-curl "http://host/api/webhook/query/abc123.../calls/10/messages?limit=20"
-```
-
-## 会话与消息管理（仅 Agent 类型）
-
-通过 token 直接管理 **该 Webhook 创建的会话**及其中消息。用户在 UI 聊天产生的会话不在此列。
-
-### 查询会话列表
-
-```bash
-curl "http://host/api/webhook/query/abc123.../sessions?page=1&page_size=20"
-```
-
-### 查询会话详情
-
-```bash
-curl "http://host/api/webhook/query/abc123.../sessions/5"
-```
-
-### 删除会话（含消息 + checkpoint）
-
-```bash
-curl "http://host/api/webhook/query/abc123.../sessions/5/delete"
-```
-
-### 查询会话消息列表（游标分页）
-
-```bash
-# 首次加载（获取最新一页）
-curl "http://host/api/webhook/query/abc123.../sessions/5/messages?limit=20"
-
-# 向上翻页（before_id 为当前最早消息 ID）
-curl "http://host/api/webhook/query/abc123.../sessions/5/messages?limit=20&before_id=100"
-```
-
-### 删除会话消息（含其后所有消息）
-
-```bash
-# 删除 message_id=100 及其后所有消息，用于回滚到某条消息之前的状态
-curl "http://host/api/webhook/query/abc123.../sessions/5/messages/100/delete"
-```
-
-## 完整接口详情
+## 完整协议详情
 
 见 [references/api.md](references/api.md)。
+
+## 客户端示例代码
+
+见 [references/ws_client_example.py](references/ws_client_example.py)，包含 5 个完整示例：
+
+| 编号 | 名称 | 演示内容 |
+|------|------|---------|
+| 1 | 最简执行 | 连接 → 发消息 → 逐 token 接收流式回复 |
+| 2 | 远程工具 | 注册 `get_local_time`/`calculate` 函数，Agent 调用后回传结果 |
+| 3 | 会话管理 | 创建多会话、多轮对话、切换、列表 |
+| 4 | 封装客户端类 | 后台 task 自动处理 `tool_invoke`，适合集成到实际项目 |
+| 5 | 指定 session_id 继续 | 用已知 session_id 跨连接恢复上下文（先创建，后恢复） |
+
+运行方式：
+
+```bash
+pip install websockets
+
+# 交互式选择示例
+WS_TOKEN=你的token python references/ws_client_example.py
+
+# 直接运行指定示例
+WS_TOKEN=你的token python references/ws_client_example.py 2     # 远程工具
+
+# 示例 5：先创建会话
+WS_TOKEN=你的token python references/ws_client_example.py 5
+# 示例 5：用返回的 session_id 恢复
+WS_TOKEN=你的token python references/ws_client_example.py 5 123
+```

@@ -77,3 +77,6 @@ def register_websocket_routes(app: FastAPI) -> None:
     app.router.routes.insert(
         0, WebSocketRoute("/ws/notifications", endpoint=notification_ws)
     )
+    from app.api.ws_trigger_api import register_trigger_ws_routes
+
+    register_trigger_ws_routes(app)
