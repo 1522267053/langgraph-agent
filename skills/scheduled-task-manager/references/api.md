@@ -30,11 +30,15 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |------|------|:----:|:----:|------|
 | `name` | string | ✅ | — | 任务名称（全局唯一） |
-| `cron_expression` | string | ✅ | — | 5 字段 Cron 表达式 |
+| `schedule_type` | string | ❌ | `cron` | 调度类型：`cron`=循环执行，`once`=执行一次 |
+| `cron_expression` | string | ⚠️ | — | 5 字段 Cron 表达式（`schedule_type=cron` 时必填） |
+| `run_at` | datetime | ⚠️ | — | 单次运行时间（`schedule_type=once` 时必填，须为未来时间，格式 `YYYY-MM-DD HH:MM:SS`） |
 | `target_type` | string | ✅ | — | `flow` / `agent` |
 | `target_id` | int | ❌ | — | 目标流程 ID |
 | `input_data` | object | ❌ | null | 预设输入参数 |
 | `is_enabled` | int | ❌ | 0 | 0=禁用，1=启用 |
+
+> ⚠️ `cron_expression` 与 `run_at` 二选一，由 `schedule_type` 决定哪个必填。
 
 **响应：**
 ```json
@@ -43,7 +47,9 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
   "data": {
     "id": 1,
     "name": "每日数据汇总",
+    "schedule_type": "cron",
     "cron_expression": "0 8 * * *",
+    "run_at": null,
     "target_type": "flow",
     "target_id": 1,
     "input_data": {"message": "请汇总昨日数据"},
@@ -66,7 +72,9 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 |------|------|:----:|------|
 | `id` | int | ✅ | 任务 ID |
 | `name` | string | ❌ | 名称 |
+| `schedule_type` | string | ❌ | 调度类型：传 `once` 时校验 `run_at`，传 `cron` 时校验 `cron_expression` |
 | `cron_expression` | string | ❌ | Cron 表达式 |
+| `run_at` | datetime | ❌ | 单次运行时间（须为未来时间） |
 | `target_type` | string | ❌ | 目标类型 |
 | `target_id` | int | ❌ | 目标 ID |
 | `input_data` | object | ❌ | 输入参数 |
@@ -86,7 +94,8 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
   "condition": {
     "name": "每日",
     "is_enabled": null,
-    "target_type": null
+    "target_type": null,
+    "schedule_type": null
   }
 }
 ```
@@ -98,6 +107,7 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 | `name` | string | 名称关键词（等值匹配，非模糊） |
 | `is_enabled` | int | 精确匹配启用状态 |
 | `target_type` | string | 精确匹配目标类型 |
+| `schedule_type` | string | 精确匹配调度类型（`cron` / `once`） |
 
 ### GET /api/scheduled-task/get/{id}
 
@@ -212,7 +222,9 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 |------|------|------|
 | `id` | int | 主键 |
 | `name` | string | 任务名称（全局唯一） |
-| `cron_expression` | string | 5 字段 Cron 表达式 |
+| `schedule_type` | string | 调度类型：`cron`=循环执行，`once`=执行一次 |
+| `cron_expression` | string | 5 字段 Cron 表达式（`cron` 模式使用，可空） |
+| `run_at` | datetime | 单次运行时间（`once` 模式使用，可空） |
 | `target_type` | string | 目标类型：`flow` / `agent` |
 | `target_id` | int | 目标流程 ID |
 | `input_data` | object | 预设输入参数 |
@@ -261,6 +273,13 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 |:---|------|
 | `flow` | 流程 |
 | `agent` | 智能体 |
+
+### ScheduleType
+
+| 值 | 含义 | 必填字段 | 执行方式 |
+|:---|------|----------|----------|
+| `cron` | 循环执行（默认） | `cron_expression` | 按 Cron 周期触发，持续执行 |
+| `once` | 执行一次 | `run_at`（未来时间） | 到达 `run_at` 触发一次，执行完毕自动禁用 |
 
 ## Cron 表达式参考
 

@@ -7,7 +7,9 @@ import type { PaginatedResponse, PaginationParams, ApiResponse } from '@/types/c
 export interface ScheduledTask {
   id?: number
   name?: string
+  schedule_type?: string
   cron_expression?: string
+  run_at?: string
   target_type?: string
   target_id?: number
   input_data?: Record<string, unknown>
