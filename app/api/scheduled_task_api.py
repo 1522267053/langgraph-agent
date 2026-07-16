@@ -84,11 +84,38 @@ class ScheduledTaskApi(
                 detail="目标流程包含人类帮助节点，不支持作为定时任务目标",
             )
 
+    @staticmethod
+    def _validate_schedule(data) -> None:
+        """校验调度配置：cron 模式需 cron_expression，once 模式需 run_at"""
+        from datetime import datetime
+
+        from fastapi import HTTPException
+
+        schedule_type = (data.schedule_type or "cron") if data else "cron"
+        if schedule_type == "once":
+            if not getattr(data, "run_at", None):
+                raise HTTPException(
+                    status_code=400,
+                    detail="单次执行任务必须设置运行时间（run_at）",
+                )
+            if data.run_at.replace(tzinfo=None) < datetime.now():
+                raise HTTPException(
+                    status_code=400,
+                    detail="运行时间不能早于当前时间",
+                )
+        else:
+            if not (getattr(data, "cron_expression", None) or "").strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="循环执行任务必须设置 Cron 表达式",
+                )
+
     async def create(
         self, db: AsyncSession, data: ScheduledTaskCreate
     ) -> ScheduledTask:
-        """创建 - 校验名称唯一性 + 流程目标合法性，启用时注册调度"""
+        """创建 - 校验名称唯一性 + 调度配置 + 流程目标合法性，启用时注册调度"""
         await self._check_name_unique(db, data.name)
+        self._validate_schedule(data)
         await self._check_flow_target(db, data.target_type, data.target_id)
         task = await self.service.create(db, data)
         if task.is_enabled == 1:
@@ -100,9 +127,11 @@ class ScheduledTaskApi(
     async def update(
         self, db: AsyncSession, data: ScheduledTaskUpdate
     ) -> ScheduledTask | None:
-        """更新 - 校验名称唯一性 + 流程目标合法性，同步调度"""
+        """更新 - 校验名称唯一性 + 调度配置 + 流程目标合法性，同步调度"""
         if data.name is not None:
             await self._check_name_unique(db, data.name, exclude_id=data.id)
+        if data.schedule_type is not None:
+            self._validate_schedule(data)
         if data.target_type is not None and data.target_id is not None:
             await self._check_flow_target(db, data.target_type, data.target_id)
         task = await self.service.update(db, data)

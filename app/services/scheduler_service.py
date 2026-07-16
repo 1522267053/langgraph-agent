@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
 from app.config.settings import settings
 
@@ -116,11 +117,32 @@ class SchedulerService:
             return
 
         job_id = f"scheduled_task_{task.id}"
-        cron_expr = getattr(task, "cron_expression", "")
-        if not cron_expr:
-            return
+        schedule_type = getattr(task, "schedule_type", "cron") or "cron"
+        job_name = f"定时任务: {getattr(task, 'name', task.id)}"
 
         try:
+            if schedule_type == "once":
+                run_at = getattr(task, "run_at", None)
+                if not run_at:
+                    logger.warning(f"定时任务[{task.id}] once 模式未设置 run_at，跳过")
+                    return
+                self._scheduler.add_job(
+                    self._run_scheduled_task,
+                    DateTrigger(run_date=run_at),
+                    id=job_id,
+                    name=job_name,
+                    replace_existing=True,
+                    max_instances=1,
+                    misfire_grace_time=24 * 3600,
+                    args=[task.id],
+                )
+                logger.info(f"注册单次任务[{job_id}]: 运行时间 {run_at}")
+                return
+
+            # cron 模式
+            cron_expr = getattr(task, "cron_expression", "") or ""
+            if not cron_expr:
+                return
             parts = cron_expr.strip().split()
             # Quartz 的 ? 表示"不指定"，等价于标准 cron 的 *
             parts = ["*" if p == "?" else p for p in parts]
@@ -138,7 +160,7 @@ class SchedulerService:
                     day_of_week=parts[4],
                 ),
                 id=job_id,
-                name=f"定时任务: {getattr(task, 'name', task.id)}",
+                name=job_name,
                 replace_existing=True,
                 max_instances=1,
                 args=[task.id],
@@ -198,6 +220,13 @@ class SchedulerService:
 
                 await scheduled_task_service._execute_task(task)
                 logger.info(f"定时任务[{task.name}]执行完成")
+
+                # 单次任务执行完成后自动禁用（DateTrigger 已自动移除 job）
+                if getattr(task, "schedule_type", "cron") == "once":
+                    task.is_enabled = 0
+                    task.next_run_time = None
+                    await db.commit()
+                    logger.info(f"单次任务[{task.name}]执行完成，已自动禁用")
         except Exception as e:
             logger.error(f"定时任务[{task_id}]执行异常: {e}", exc_info=True)
 

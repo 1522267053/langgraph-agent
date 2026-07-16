@@ -20,6 +20,13 @@ class ScheduledTaskTargetType(str, Enum):
     AGENT = "agent"
 
 
+class ScheduleType(str, Enum):
+    """调度类型"""
+
+    CRON = "cron"
+    ONCE = "once"
+
+
 class TriggerType(int, Enum):
     """触发类型"""
 
@@ -45,8 +52,19 @@ class ScheduledTask(DbBaseModel):
     __tablename__ = "scheduled_task"
 
     name: Mapped[str] = mapped_column(String(255), nullable=False, comment="任务名称")
-    cron_expression: Mapped[str] = mapped_column(
-        String(100), nullable=False, comment="Cron表达式"
+    schedule_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=ScheduleType.CRON.value,
+        comment="调度类型：cron=循环执行, once=执行一次",
+    )
+    cron_expression: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, comment="Cron表达式（schedule_type=cron 时使用）"
+    )
+    run_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="单次执行的运行时间（schedule_type=once 时使用）",
     )
     target_type: Mapped[str] = mapped_column(
         String(20),
@@ -76,7 +94,7 @@ class ScheduledTask(DbBaseModel):
     def __repr__(self) -> str:
         return (
             f"<ScheduledTask(id={self.id}, name={self.name}, "
-            f"cron={self.cron_expression}, enabled={self.is_enabled})>"
+            f"schedule_type={self.schedule_type}, enabled={self.is_enabled})>"
         )
 
 

@@ -51,6 +51,11 @@ const targetMap: Record<string, string> = {
   agent: 'Agent'
 }
 
+const scheduleTypeMap: Record<string, { text: string; type: 'primary' | 'warning' }> = {
+  cron: { text: '循环', type: 'primary' },
+  once: { text: '单次', type: 'warning' }
+}
+
 async function loadData() {
   loading.value = true
   try {
@@ -201,7 +206,9 @@ const inputFormRef = ref<InstanceType<typeof FlowInputForm>>()
 
 const form = reactive({
   name: '',
+  schedule_type: 'cron' as string,
   cron_expression: '0 8 * * *',
+  run_at: '' as string,
   target_type: 'flow' as string,
   target_id: undefined as number | undefined,
   is_enabled: 0 as number,
@@ -210,7 +217,9 @@ const form = reactive({
 
 function resetForm() {
   form.name = ''
+  form.schedule_type = 'cron'
   form.cron_expression = '0 8 * * *'
+  form.run_at = ''
   form.target_type = 'flow'
   form.target_id = undefined
   form.is_enabled = 0
@@ -236,7 +245,9 @@ async function openEditDialog(row: ScheduledTask) {
   isEdit.value = true
   editId.value = row.id!
   form.name = row.name || ''
+  form.schedule_type = row.schedule_type || 'cron'
   form.cron_expression = row.cron_expression || '0 8 * * *'
+  form.run_at = row.run_at || ''
   form.target_type = row.target_type || 'flow'
   form.target_id = row.target_id
   form.is_enabled = row.is_enabled ?? 0
@@ -359,9 +370,20 @@ async function handleSubmit() {
     ElMessage.warning('请输入任务名称')
     return
   }
-  if (!form.cron_expression.trim()) {
-    ElMessage.warning('请输入Cron表达式')
-    return
+  if (form.schedule_type === 'cron') {
+    if (!form.cron_expression.trim()) {
+      ElMessage.warning('请输入Cron表达式')
+      return
+    }
+  } else {
+    if (!form.run_at) {
+      ElMessage.warning('请选择运行时间')
+      return
+    }
+    if (new Date(form.run_at).getTime() < Date.now()) {
+      ElMessage.warning('运行时间不能早于当前时间')
+      return
+    }
   }
   if (!form.target_id) {
     ElMessage.warning('请选择执行目标')
@@ -381,30 +403,25 @@ async function handleSubmit() {
 
   dialogLoading.value = true
   try {
+    const payload: Partial<ScheduledTask> = {
+      name: form.name,
+      schedule_type: form.schedule_type,
+      cron_expression: form.schedule_type === 'cron' ? form.cron_expression : undefined,
+      run_at: form.schedule_type === 'once' ? form.run_at : undefined,
+      target_type: form.target_type,
+      target_id: form.target_id,
+      is_enabled: form.is_enabled,
+      input_data: inputData
+    }
     if (isEdit.value) {
-      const res = await scheduledTaskApi.update({
-        id: editId.value,
-        name: form.name,
-        cron_expression: form.cron_expression,
-        target_type: form.target_type,
-        target_id: form.target_id,
-        is_enabled: form.is_enabled,
-        input_data: inputData
-      })
+      const res = await scheduledTaskApi.update({ id: editId.value, ...payload })
       if (res.data.code === 1) {
         ElMessage.success('更新成功')
         dialogVisible.value = false
         loadData()
       }
     } else {
-      const res = await scheduledTaskApi.create({
-        name: form.name,
-        cron_expression: form.cron_expression,
-        target_type: form.target_type,
-        target_id: form.target_id,
-        is_enabled: form.is_enabled,
-        input_data: inputData
-      })
+      const res = await scheduledTaskApi.create(payload)
       if (res.data.code === 1) {
         ElMessage.success('创建成功')
         dialogVisible.value = false
@@ -495,9 +512,17 @@ async function loadLogs() {
       <el-table v-loading="loading" :data="tableData" stripe>
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="name" label="任务名称" min-width="150" />
-        <el-table-column prop="cron_expression" label="Cron 表达式" width="130">
+        <el-table-column label="调度类型" width="90" align="center">
           <template #default="{ row }">
-            <code>{{ row.cron_expression }}</code>
+            <el-tag :type="scheduleTypeMap[row.schedule_type || 'cron']?.type" size="small">
+              {{ scheduleTypeMap[row.schedule_type || 'cron']?.text }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="调度配置" width="170">
+          <template #default="{ row }">
+            <code v-if="(row.schedule_type || 'cron') === 'cron'">{{ row.cron_expression }}</code>
+            <span v-else>{{ row.run_at || '-' }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="target_type" label="执行目标" width="100">
@@ -552,40 +577,60 @@ async function loadLogs() {
         <el-form-item label="启用" required>
           <el-switch v-model="form.is_enabled" :active-value="1" :inactive-value="0" />
         </el-form-item>
-        <el-form-item required>
-          <template #label>
-            Cron 表达式
-            <el-tooltip placement="top">
-              <template #content>
-                <div style="line-height: 1.8">
-                  <div><b>格式：分 时 日 月 周</b></div>
-                  <div>分：0-59</div>
-                  <div>时：0-23</div>
-                  <div>日：1-31</div>
-                  <div>月：1-12</div>
-                  <div>周：0-6（0=周日）</div>
-                  <div style="margin-top: 4px">特殊符号：* 任意，/ 间隔，- 范围，, 列表</div>
-                  <div>示例：*/5 * * * * = 每5分钟</div>
-                </div>
-              </template>
-              <el-icon style="vertical-align: -2px; margin-left: 2px; color: #94a3b8; cursor: help">
-                <QuestionFilled />
-              </el-icon>
-            </el-tooltip>
-          </template>
-          <el-input v-model="form.cron_expression" placeholder="分 时 日 月 周" />
+        <el-form-item label="调度类型" required>
+          <el-radio-group v-model="form.schedule_type">
+            <el-radio value="cron">循环执行</el-radio>
+            <el-radio value="once">执行一次</el-radio>
+          </el-radio-group>
         </el-form-item>
-        <el-form-item label="">
-          <div class="cron-presets">
-            <el-button
-              v-for="preset in cronPresets"
-              :key="preset.value"
-              size="small"
-              @click="applyPreset(preset.value)"
-            >
-              {{ preset.label }}
-            </el-button>
-          </div>
+        <template v-if="form.schedule_type === 'cron'">
+          <el-form-item required>
+            <template #label>
+              Cron 表达式
+              <el-tooltip placement="top">
+                <template #content>
+                  <div style="line-height: 1.8">
+                    <div><b>格式：分 时 日 月 周</b></div>
+                    <div>分：0-59</div>
+                    <div>时：0-23</div>
+                    <div>日：1-31</div>
+                    <div>月：1-12</div>
+                    <div>周：0-6（0=周日）</div>
+                    <div style="margin-top: 4px">特殊符号：* 任意，/ 间隔，- 范围，, 列表</div>
+                    <div>示例：*/5 * * * * = 每5分钟</div>
+                  </div>
+                </template>
+                <el-icon style="vertical-align: -2px; margin-left: 2px; color: #94a3b8; cursor: help">
+                  <QuestionFilled />
+                </el-icon>
+              </el-tooltip>
+            </template>
+            <el-input v-model="form.cron_expression" placeholder="分 时 日 月 周" />
+          </el-form-item>
+          <el-form-item label="">
+            <div class="cron-presets">
+              <el-button
+                v-for="preset in cronPresets"
+                :key="preset.value"
+                size="small"
+                @click="applyPreset(preset.value)"
+              >
+                {{ preset.label }}
+              </el-button>
+            </div>
+          </el-form-item>
+        </template>
+        <el-form-item v-else label="运行时间" required>
+          <el-date-picker
+            v-model="form.run_at"
+            type="datetime"
+            placeholder="选择运行时间"
+            format="YYYY-MM-DD HH:mm"
+            value-format="YYYY-MM-DD HH:mm:ss"
+            :disabled-date="(date: Date) => date.getTime() < Date.now() - 24 * 3600 * 1000"
+            style="width: 100%"
+          />
+          <div class="once-tip">到达指定时间后执行一次，执行完毕自动禁用</div>
         </el-form-item>
         <el-form-item label="执行目标" required>
           <el-radio-group v-model="form.target_type" @change="handleTargetTypeChange">
@@ -718,6 +763,13 @@ async function loadLogs() {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.once-tip {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.4;
 }
 
 .loading-more,

@@ -11,7 +11,13 @@ class ScheduledTaskBase(BaseView):
     """定时任务基础模型"""
 
     name: Optional[str] = Field(None, description="任务名称")
+    schedule_type: Optional[str] = Field(
+        None, description="调度类型：cron=循环执行, once=执行一次"
+    )
     cron_expression: Optional[str] = Field(None, description="Cron表达式")
+    run_at: Optional[ChinaDateTime] = Field(
+        None, description="单次执行的运行时间（once 模式）"
+    )
     target_type: Optional[str] = Field(
         None, description="执行目标类型：self/flow/agent"
     )
@@ -27,7 +33,7 @@ class ScheduledTaskCreate(ScheduledTaskBase):
     """创建定时任务"""
 
     name: str = Field(..., description="任务名称")
-    cron_expression: str = Field(..., description="Cron表达式")
+    schedule_type: str = Field("cron", description="调度类型")
     target_type: str = Field(..., description="执行目标类型")
 
 
@@ -43,6 +49,7 @@ class ScheduledTaskCondition(BaseView):
     name: Optional[str] = Field(None, description="任务名称")
     is_enabled: Optional[int] = Field(None, description="是否启用")
     target_type: Optional[str] = Field(None, description="执行目标类型")
+    schedule_type: Optional[str] = Field(None, description="调度类型")
 
 
 class ScheduledTaskLogBase(BaseView):

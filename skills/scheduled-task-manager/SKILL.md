@@ -3,11 +3,12 @@ name: scheduled-task-manager
 description: |
   创建、管理、触发和查询定时任务(Cron/Scheduled Task)。适用场景：
   (1) 用户要求创建定时任务，按 Cron 表达式周期执行流程或智能体
-  (2) 用户想查看、修改、启用/禁用或删除已有的定时任务
-  (3) 用户需要手动触发定时任务立即执行
-  (4) 用户想查看定时任务的执行日志和历史记录
+  (2) 用户要求在指定时间只执行一次流程或智能体（schedule_type=once）
+  (3) 用户想查看、修改、启用/禁用或删除已有的定时任务
+  (4) 用户需要手动触发定时任务立即执行
+  (5) 用户想查看定时任务的执行日志和历史记录
 
-  触发词：「创建定时任务」「管理定时任务」「cron调度」「周期执行」「手动触发」「定时任务日志」「定时任务」
+  触发词：「创建定时任务」「管理定时任务」「cron调度」「周期执行」「单次执行」「指定时间执行」「执行一次」「手动触发」「定时任务日志」「定时任务」
 ---
 
 # Scheduled Task Manager
@@ -17,12 +18,15 @@ description: |
 ## 核心规则（必须遵守）
 
 1. **任务名称全局唯一**：创建和更新时校验，不能与已有任务重名
-2. **Cron 5 字段**：格式为 `分 时 日 月 周`，无秒字段。支持 `*`、`/`、`-`、`,`、`?`（`?` 自动转为 `*`）
-3. **目标 Flow 不能含 human 节点**：创建、更新、启用、手动触发四个时机均校验，包含 human 节点则拒绝
-4. **启用后才注册到调度器**：`is_enabled=0` 时任务不执行，需 `toggle` 启用
-5. **并发控制**：`max_instances=1`，同一任务上次未完成时跳过本次触发
-6. **所有接口需登录态**：`/api/scheduled-task/*` 全部需要 session cookie 认证
-7. **更新使用 `exclude_unset`**：未传字段保持不变，无法将字段更新为 `None`
+2. **两种调度类型**（`schedule_type`）：
+   - `cron`（默认）：循环执行，必须提供 `cron_expression`（5 字段）
+   - `once`：在指定时间执行一次，必须提供 `run_at`（未来时间，格式 `YYYY-MM-DD HH:MM:SS`），到达时间后触发执行，**执行完毕自动禁用**（`is_enabled` 置 0）
+3. **Cron 5 字段**（仅 `schedule_type=cron`）：格式为 `分 时 日 月 周`，无秒字段。支持 `*`、`/`、`-`、`,`、`?`（`?` 自动转为 `*`）
+4. **目标 Flow 不能含 human 节点**：创建、更新、启用、手动触发四个时机均校验，包含 human 节点则拒绝
+5. **启用后才注册到调度器**：`is_enabled=0` 时任务不执行，需 `toggle` 启用
+6. **并发控制**：`max_instances=1`，同一任务上次未完成时跳过本次触发
+7. **所有接口需登录态**：`/api/scheduled-task/*` 全部需要 session cookie 认证
+8. **更新使用 `exclude_unset`**：未传字段保持不变，无法将字段更新为 `None`
 
 ## API 速查
 
@@ -42,16 +46,17 @@ description: |
 ```
 1. POST /api/scheduled-task/create    # 创建（is_enabled=0，未注册到调度器）
 2. POST /api/scheduled-task/toggle/{id}  # 启用（注册到调度器，写入 next_run_time）
-3. 等待 Cron 触发 或 POST /api/scheduled-task/trigger/{id} 手动触发
+3. 等待调度触发（cron 周期 / once 到点） 或 POST /api/scheduled-task/trigger/{id} 手动触发
 4. POST /api/scheduled-task/logs/page    # 查询执行日志
 ```
 
-### 创建示例
+### 创建示例（循环执行）
 
 ```json
 POST /api/scheduled-task/create
 {
   "name": "每日数据汇总",
+  "schedule_type": "cron",
   "cron_expression": "0 8 * * *",
   "target_type": "flow",
   "target_id": 1,
@@ -61,6 +66,25 @@ POST /api/scheduled-task/create
   "is_enabled": 0
 }
 ```
+
+### 创建示例（执行一次）
+
+```json
+POST /api/scheduled-task/create
+{
+  "name": "月末一次性报表",
+  "schedule_type": "once",
+  "run_at": "2026-07-31 23:50:00",
+  "target_type": "flow",
+  "target_id": 1,
+  "input_data": {
+    "message": "生成本月报表"
+  },
+  "is_enabled": 1
+}
+```
+
+> `once` 任务启用后到达 `run_at` 自动执行一次，执行完毕自动禁用。若服务重启时已过 `run_at` 但在 24 小时内，启动时会立即补执行。
 
 ### 启用
 
