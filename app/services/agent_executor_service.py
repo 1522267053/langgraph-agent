@@ -44,6 +44,7 @@ class AgentExecutorService(BaseExecutorService):
     def __init__(self):
         super().__init__()
         self._compressing_sessions: set[int] = set()
+        self._compress_results: dict[int, dict] = {}
         self._running_sessions: set[int] = set()
         self._pending_save_sessions: set[int] = set()
         self._streaming_tasks: Dict[str, asyncio.Task] = {}
@@ -1013,9 +1014,20 @@ class AgentExecutorService(BaseExecutorService):
 
         try:
             async with AsyncSessionLocal() as db:
-                await self.compress_session(db, session_id)
+                result = await self.compress_session(db, session_id)
+                self._compress_results[session_id] = result
         except Exception as e:
             logger.error(f"后台压缩会话上下文失败: session_id={session_id}, error={e}")
+            self._compress_results[session_id] = {
+                "summary": None,
+                "kept_count": 0,
+                "removed_count": 0,
+                "error": f"后台压缩异常: {e}",
+            }
+
+    def pop_compress_result(self, session_id: int) -> dict | None:
+        """读取并清理压缩结果，每个结果只返回一次"""
+        return self._compress_results.pop(session_id, None)
 
     async def compress_session(
         self, db: AsyncSession, session_id: int

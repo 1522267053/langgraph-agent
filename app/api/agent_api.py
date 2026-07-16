@@ -335,7 +335,19 @@ class AgentApi:
             is_compressing = await agent_executor_service.is_compressing_session(
                 db, session_id
             )
-            return ApiResponse.success(data={"compressing": is_compressing})
+            if is_compressing:
+                return ApiResponse.success(data={"status": "compressing"})
+            result = agent_executor_service.pop_compress_result(session_id)
+            if result:
+                error = result.get("error")
+                return ApiResponse.success(
+                    data={
+                        "status": "failed" if error else "done",
+                        "error": error,
+                        "removed_count": result.get("removed_count", 0),
+                    }
+                )
+            return ApiResponse.success(data={"status": "done"})
 
         @self.router.post(
             "/{id}/search",

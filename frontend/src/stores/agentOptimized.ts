@@ -217,7 +217,7 @@ export const useAgentStore = defineStore('agent', () => {
     // 检查会话是否正在压缩（页面刷新/重选场景）
     try {
       const statusRes = await agentApi.compressStatus(agentId, session.id)
-      if (statusRes.data.code === 1 && statusRes.data.data?.compressing) {
+      if (statusRes.data.code === 1 && statusRes.data.data?.status === 'compressing') {
         startCompressPolling(agentId, session.id)
       }
     } catch {
@@ -876,12 +876,15 @@ export const useAgentStore = defineStore('agent', () => {
     const check = async () => {
       try {
         const res = await agentApi.compressStatus(agentId, sessionId)
-        if (res.data.code === 1 && res.data.data?.compressing) {
+        if (res.data.code === 1 && res.data.data?.status === 'compressing') {
           isCompressing.value = true
         } else if (isCompressing.value) {
+          const data = res.data.code === 1 ? res.data.data : null
           isCompressing.value = false
           stopCompressPolling()
-          if (currentAgent.value && currentSession.value) {
+          if (data?.status === 'failed') {
+            ElMessage.error(data?.error || '上下文压缩失败')
+          } else if (currentAgent.value && currentSession.value) {
             await selectSession(currentAgent.value.id, currentSession.value)
           }
         } else {
