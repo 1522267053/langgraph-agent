@@ -434,7 +434,7 @@ async def should_auto_compress(
                 select(AgentMessage.prompt_tokens)
                 .where(
                     AgentMessage.session_id == session_id,
-                    AgentMessage.role == "assistant",
+                    AgentMessage.role == "ai",
                     AgentMessage.is_delete == 0,
                 )
                 .order_by(AgentMessage.id.desc())

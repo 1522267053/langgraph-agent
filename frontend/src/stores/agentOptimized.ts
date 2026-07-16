@@ -275,26 +275,26 @@ export const useAgentStore = defineStore('agent', () => {
     let currentAssistant: StreamingMessage | null = null
 
     for (const msg of dbMessages) {
-      const role = msg.role === 'human' ? 'user' : msg.role === 'ai' ? 'assistant' : msg.role
+    const role = msg.role
 
-      if (role === 'user') {
+      if (role === 'human') {
         if (currentAssistant) {
           result.push(currentAssistant)
           currentAssistant = null
         }
         result.push({
           id: `msg-${msg.id}`,
-          role: 'user',
+          role: 'human',
           content: msg.original_content || msg.content,
           segments: [{ type: 'content', content: msg.original_content || msg.content }],
           files: msg.files as MessageFile[] | undefined,
           createdAt: new Date(msg.created_at || Date.now())
         })
-      } else if (role === 'assistant') {
+      } else if (role === 'ai') {
         if (!currentAssistant) {
           currentAssistant = {
             id: `msg-${msg.id}`,
-            role: 'assistant',
+            role: 'ai',
             content: '',
             segments: [],
             createdAt: new Date(msg.created_at || Date.now())

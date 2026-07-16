@@ -228,7 +228,7 @@ class AgentConversationService:
         """将数据库消息转换为 LangChain 消息（含附件的多模态重建）"""
         if msg.role == "system":
             return SystemMessage(content=msg.content or "")
-        elif msg.role in ("human", "user"):
+        elif msg.role == "human":
             content = msg.content or ""
             files = msg.files if isinstance(msg.files, list) else None
             if files:
@@ -236,7 +236,7 @@ class AgentConversationService:
                     db, content, files, capabilities
                 )
             return HumanMessage(content=content)
-        elif msg.role in ("ai", "assistant"):
+        elif msg.role == "ai":
             ai_msg = AIMessage(content=msg.content or "")
             if msg.tool_calls:
                 ai_msg.tool_calls = msg.tool_calls

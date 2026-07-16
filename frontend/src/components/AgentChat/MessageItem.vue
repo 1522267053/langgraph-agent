@@ -23,11 +23,11 @@ const emit = defineEmits<{
 }>()
 
 function isCompressMarker(msg: StreamingMessage): boolean {
-  return msg.role === 'user' && msg.content.startsWith(COMPRESS_MARKER)
+  return msg.role === 'human' && msg.content.startsWith(COMPRESS_MARKER)
 }
 
 function isCompressSummary(msg: StreamingMessage, index: number): boolean {
-  if (msg.role !== 'assistant') return false
+  if (msg.role !== 'ai') return false
   const prev = props.messages[index - 1]
   return !!prev && isCompressMarker(prev)
 }
@@ -35,7 +35,7 @@ function isCompressSummary(msg: StreamingMessage, index: number): boolean {
 const hasTextContent = computed(() => {
   if (!props.isStreaming) return false
   const last = props.messages.at(-1)
-  if (!last || last.role !== 'assistant') return true
+  if (!last || last.role !== 'ai') return true
   return !last.segments || last.segments.length === 0
 })
 
@@ -60,17 +60,17 @@ function isLastMessage(idx: number): boolean {
       </div>
       <div v-else :class="['message', msg.role, 'animate-fade-in']">
         <div class="message-avatar">
-          <div v-if="msg.role === 'user'" class="avatar avatar-user">U</div>
+          <div v-if="msg.role === 'human'" class="avatar avatar-user">U</div>
           <div v-else class="avatar avatar-ai">
             <el-icon :size="16"><ChatDotRound /></el-icon>
           </div>
         </div>
         <div class="message-body">
           <div class="message-header">
-            <span class="role-name">{{ msg.role === 'user' ? '你' : 'AI' }}</span>
+            <span class="role-name">{{ msg.role === 'human' ? '你' : 'AI' }}</span>
             <span class="message-time">{{ formatChatTime(msg.createdAt) }}</span>
             <el-tooltip
-              v-if="msg.role === 'user' && !isStreaming"
+              v-if="msg.role === 'human' && !isStreaming"
               content="回退到此消息"
               placement="top"
             >
@@ -84,7 +84,7 @@ function isLastMessage(idx: number): boolean {
             </el-tooltip>
           </div>
 
-          <template v-if="msg.role === 'assistant' && msg.segments && msg.segments.length > 0">
+          <template v-if="msg.role === 'ai' && msg.segments && msg.segments.length > 0">
             <AIMessageContent
               :segments="msg.segments"
               :show-thinking="showThinking"

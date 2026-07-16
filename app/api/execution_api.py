@@ -263,17 +263,9 @@ class ExecutionApi(
             result = await db.execute(query)
             messages = result.scalars().all()
 
-            role_mapping = {
-                "system": "system",
-                "human": "user",
-                "ai": "assistant",
-                "tool": "tool",
-            }
-
             formatted_messages = []
             for msg in messages:
-                role = role_mapping.get(msg.role, msg.role)
-                item = {"role": role, "content": msg.content or ""}
+                item = {"role": msg.role, "content": msg.content or ""}
                 if msg.name:
                     item["name"] = msg.name
                 if msg.tool_calls:
