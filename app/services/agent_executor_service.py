@@ -1152,8 +1152,15 @@ class AgentExecutorService(BaseExecutorService):
             summary = (
                 extract_text_content(response.content).strip()
                 if response.content
-                else "（无摘要内容）"
+                else ""
             )
+            if summary == "":
+                return {
+                    "summary": None,
+                    "kept_count": total,
+                    "removed_count": 0,
+                    "error": f"LLM调用失败: 返回结果为空",
+                }
             # 提取压缩 LLM 调用的 token 用量
             compress_usage = extract_token_usage(response)
         except Exception as e:
