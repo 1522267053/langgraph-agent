@@ -169,7 +169,7 @@ export default {
   margin-bottom: 32px;
 }
 
-.message.user {
+.message.human {
   flex-direction: row-reverse;
 }
 
@@ -178,7 +178,7 @@ export default {
   margin-right: 14px;
 }
 
-.message.user .message-avatar {
+.message.human .message-avatar {
   margin-right: 0;
   margin-left: 14px;
 }
@@ -211,11 +211,11 @@ export default {
   min-width: 0;
 }
 
-.message.user .message-body {
+.message.human .message-body {
   text-align: right;
 }
 
-.message.user .message-body :deep(.file-previewer) {
+.message.human .message-body :deep(.file-previewer) {
   justify-content: flex-end;
 }
 
@@ -225,7 +225,7 @@ export default {
   margin-bottom: 8px;
 }
 
-.message.user .message-header {
+.message.human .message-header {
   justify-content: flex-end;
 }
 
@@ -251,7 +251,7 @@ export default {
   color: #ef4444;
 }
 
-.message.user .message-content {
+.message.human .message-content {
   white-space: pre-wrap;
   background: #2563eb;
   color: #fff;
