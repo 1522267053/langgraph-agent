@@ -12,7 +12,7 @@ import asyncio
 import logging
 from typing import Optional, AsyncGenerator, Dict, Any, List
 
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import Command
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -311,7 +311,7 @@ class AgentExecutorService(BaseExecutorService):
 
         user_message_content = ""
         for msg in messages_to_delete:
-            if msg.role == "human" or msg.role == "user":
+            if msg.role == "human":
                 user_message_content = msg.original_content or msg.content
                 break
 
@@ -427,46 +427,6 @@ class AgentExecutorService(BaseExecutorService):
         await db.commit()
         await db.refresh(message)
         return message
-
-    async def _load_history_to_langchain(
-        self, db: AsyncSession, session_id: int, limit: int = 50
-    ) -> List:
-        """
-        加载对话历史并转换为LangChain消息格式
-
-        Args:
-            db: 数据库会话
-            session_id: 会话ID
-            limit: 最大消息数
-
-        Returns:
-            LangChain消息列表
-        """
-        messages = await self._get_messages(db, session_id, limit)
-        result = []
-
-        for msg in messages:
-            if msg.role == "system":
-                result.append(SystemMessage(content=msg.content))
-            elif msg.role == "user":
-                result.append(HumanMessage(content=msg.content))
-            elif msg.role == "assistant":
-                if msg.tool_calls:
-                    result.append(
-                        AIMessage(content=msg.content, tool_calls=msg.tool_calls)
-                    )
-                else:
-                    result.append(AIMessage(content=msg.content))
-            elif msg.role == "tool":
-                from langchain_core.messages import ToolMessage
-
-                result.append(
-                    ToolMessage(
-                        content=msg.content, tool_call_id=msg.tool_call_id or ""
-                    )
-                )
-
-        return result
 
     async def _resolve_input_params(
         self,
@@ -1101,7 +1061,7 @@ class AgentExecutorService(BaseExecutorService):
         # 构建压缩文本（跳过 tool 消息）
         conversation_lines = []
         for msg in all_messages:
-            role_label = {"human": "用户", "user": "用户", "assistant": "AI"}.get(
+            role_label = {"human": "用户", "ai": "AI", "tool": "工具"}.get(
                 msg.role, msg.role
             )
             if msg.role == "tool":
@@ -1111,7 +1071,6 @@ class AgentExecutorService(BaseExecutorService):
         conversation_text = "\n".join(conversation_lines)
 
         # 调用 LLM 总结
-        from langchain_core.messages import HumanMessage, SystemMessage
 
         try:
             provider_name = llm_config.get("provider", "deepseek")
@@ -1125,7 +1084,7 @@ class AgentExecutorService(BaseExecutorService):
             llm = provider.create_chat_model(
                 model=llm_config.get("model", ""),
                 temperature=0.3,
-                max_tokens=2048,
+                max_tokens=4096,
             )
             summary_prompt = (
                 "你是一个对话上下文压缩助手。请将以下对话历史压缩为结构化摘要。\n\n"
@@ -1159,7 +1118,7 @@ class AgentExecutorService(BaseExecutorService):
                     "summary": None,
                     "kept_count": total,
                     "removed_count": 0,
-                    "error": f"LLM调用失败: 返回结果为空",
+                    "error": "LLM调用失败: 返回结果为空",
                 }
             # 提取压缩 LLM 调用的 token 用量
             compress_usage = extract_token_usage(response)
@@ -1184,7 +1143,7 @@ class AgentExecutorService(BaseExecutorService):
         )
         summary_user = AgentMessage(
             session_id=session_id,
-            role="user",
+            role="human",
             content=user_content,
             sequence=0,
         )
@@ -1194,7 +1153,7 @@ class AgentExecutorService(BaseExecutorService):
         # 插入摘要助手消息（保存压缩 LLM 的 token 用量）
         summary_kwargs: dict[str, Any] = {
             "session_id": session_id,
-            "role": "assistant",
+            "role": "ai",
             "content": summary,
             "sequence": 1,
         }

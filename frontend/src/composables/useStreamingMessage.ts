@@ -27,7 +27,7 @@ export interface MessageFile {
 /** 流式消息 */
 export interface StreamingMessage {
   id: string
-  role: 'user' | 'assistant'
+  role: 'human' | 'ai'
   content: string
   thinking?: string
   tools?: ToolCall[]
@@ -70,10 +70,10 @@ export function useStreamingMessage() {
    */
   function getOrCreateStreamingMessage(): StreamingMessage {
     let lastMsg = messages.value[messages.value.length - 1]
-    if (!lastMsg || lastMsg.role !== 'assistant') {
+    if (!lastMsg || lastMsg.role !== 'ai') {
       lastMsg = {
         id: `streaming-${Date.now()}`,
-        role: 'assistant',
+        role: 'ai',
         content: '',
         segments: [],
         createdAt: new Date()
@@ -89,7 +89,7 @@ export function useStreamingMessage() {
   function addUserMessage(content: string, files?: MessageFile[]): void {
     messages.value.push({
       id: `user-${Date.now()}`,
-      role: 'user',
+      role: 'human',
       content,
       segments: [{ type: 'content', content }],
       files,
@@ -183,7 +183,7 @@ export function useStreamingMessage() {
     result?: unknown
   ): void {
     const msg = messages.value[messages.value.length - 1]
-    if (msg?.role !== 'assistant' || !msg.segments) return
+    if (msg?.role !== 'ai' || !msg.segments) return
 
     msg.segments = updateToolInSegments(msg.segments, name, status, result)
 
@@ -220,7 +220,7 @@ export function useStreamingMessage() {
     total_tokens: number
   ): void {
     const msg = messages.value[messages.value.length - 1]
-    if (msg?.role !== 'assistant') return
+    if (msg?.role !== 'ai') return
     msg.prompt_tokens = (msg.prompt_tokens || 0) + prompt_tokens
     msg.completion_tokens = (msg.completion_tokens || 0) + completion_tokens
     msg.total_tokens = (msg.total_tokens || 0) + total_tokens
