@@ -14,7 +14,7 @@ from datetime import datetime
 import websockets
 
 SERVER_HOST = os.environ.get("WS_HOST", "127.0.0.1:8000")
-WS_TOKEN = os.environ.get("WS_TOKEN", "e25fdb4eeeac4d0b96f2f9dbef3c55e0")
+WS_TOKEN = os.environ.get("WS_TOKEN", "YOUR_WS_TOKEN_HERE")
 
 
 def _url():
@@ -198,7 +198,7 @@ class WsGatewayWSClient:
 
     def __init__(self, url):
         self.url = url
-        self.ws = None
+        self.ws:websockets.ClientConnection = None
         self._funcs = {}
         self._schemas = []
         self._done = None
@@ -209,7 +209,7 @@ class WsGatewayWSClient:
         self._schemas.append({"name": name, "description": description, "parameters": parameters})
 
     async def connect(self):
-        self.ws = await websockets.connect(self.url)
+        self.ws:websockets.ClientConnection = await websockets.connect(self.url)
         conn = json.loads(await self.ws.recv())
         self.flow_type = conn["data"].get("flow_type")
         if self._schemas and self.flow_type != "agent":
