@@ -11,7 +11,6 @@
 4. agenda_delete - 删除日程
 """
 
-import json
 from datetime import datetime
 from typing import Optional
 
@@ -89,7 +88,7 @@ class AgendaNodeHandler(BaseNodeHandler):
             remind_at: str = "",
             recurrence: str = "none",
             description: str = "",
-        ) -> str:
+        ) -> dict:
             """创建日程"""
             username = await get_current_username()
 
@@ -127,15 +126,12 @@ class AgendaNodeHandler(BaseNodeHandler):
                     await db.commit()
                     await db.refresh(agenda)
 
-            return json.dumps(
-                {
-                    "success": True,
-                    "id": agenda.id,
-                    "title": agenda.title,
-                    "message": f"日程「{title}」创建成功",
-                },
-                ensure_ascii=False,
-            )
+            return {
+                "success": True,
+                "id": agenda.id,
+                "title": agenda.title,
+                "message": f"日程「{title}」创建成功",
+            }
 
         async def list_agendas(
             status: int = -1,
@@ -144,7 +140,7 @@ class AgendaNodeHandler(BaseNodeHandler):
             start_date: str = "",
             end_date: str = "",
             limit: int = 20,
-        ) -> str:
+        ) -> dict:
             """查询日程列表"""
             username = await get_current_username()
             async with AsyncSessionLocal() as db:
@@ -193,7 +189,7 @@ class AgendaNodeHandler(BaseNodeHandler):
                 }
                 for item in items
             ]
-            return json.dumps({"agendas": data, "total": len(data)}, ensure_ascii=False)
+            return {"agendas": data, "total": len(data)}
 
         async def update_agenda(
             id: int,
@@ -206,7 +202,7 @@ class AgendaNodeHandler(BaseNodeHandler):
             location: str = "",
             remind_at: str = "",
             description: str = "",
-        ) -> str:
+        ) -> dict:
             """更新日程"""
             update_data: dict = {"id": id}
             if title:
@@ -244,20 +240,14 @@ class AgendaNodeHandler(BaseNodeHandler):
                     scheduler_service.sync_agenda_reminder(agenda)
                     await db.commit()
                     await db.refresh(agenda)
-                    return json.dumps(
-                        {
-                            "success": True,
-                            "id": agenda.id,
-                            "message": f"日程「{agenda.title}」更新成功",
-                        },
-                        ensure_ascii=False,
-                    )
-                return json.dumps(
-                    {"success": False, "message": f"日程(id={id})不存在"},
-                    ensure_ascii=False,
-                )
+                    return {
+                        "success": True,
+                        "id": agenda.id,
+                        "message": f"日程「{agenda.title}」更新成功",
+                    }
+                return {"success": False, "message": f"日程(id={id})不存在"}
 
-        async def delete_agenda(id: int) -> str:
+        async def delete_agenda(id: int) -> dict:
             """删除日程"""
             async with AsyncSessionLocal() as db:
                 try:
@@ -265,15 +255,9 @@ class AgendaNodeHandler(BaseNodeHandler):
 
                     scheduler_service.remove_agenda_reminder(id)
                     await agenda_service.delete(db, id)
-                    return json.dumps(
-                        {"success": True, "message": f"日程(id={id})已删除"},
-                        ensure_ascii=False,
-                    )
+                    return {"success": True, "message": f"日程(id={id})已删除"}
                 except Exception as e:
-                    return json.dumps(
-                        {"success": False, "message": f"删除失败: {e}"},
-                        ensure_ascii=False,
-                    )
+                    return {"success": False, "message": f"删除失败: {e}"}
 
         tools: list[BaseTool] = [
             StructuredTool(

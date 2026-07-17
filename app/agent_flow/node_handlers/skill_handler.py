@@ -4,7 +4,6 @@ Skill 节点处理器
 处理 Skill 节点的执行，提供 load_skill 工具供 LLM 调用
 """
 
-import json
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
@@ -141,21 +140,14 @@ class SkillNodeHandler(BaseNodeHandler):
 
         return "\n".join(lines)
 
-    async def _load_skill_markdown(self, skill: Skill) -> str:
-        """
-        从 skill_path 读取 Markdown 文件内容，并生成目录树形结构
-        """
+    async def _load_skill_markdown(self, skill: Skill) -> dict:
         if not skill.skill_path:
-            return json.dumps(
-                {"error": f"技能 '{skill.name}' 未配置文件路径"}, ensure_ascii=False
-            )
+            return {"error": f"技能 '{skill.name}' 未配置文件路径"}
 
         skill_file = settings.get_absolute_path(skill.skill_path)
 
         if not skill_file.exists():
-            return json.dumps(
-                {"error": f"技能文件不存在: {skill.skill_path}"}, ensure_ascii=False
-            )
+            return {"error": f"技能文件不存在: {skill.skill_path}"}
 
         try:
             content = skill_file.read_text(encoding="utf-8")
@@ -169,19 +161,14 @@ class SkillNodeHandler(BaseNodeHandler):
                     tree_lines.append(subtree)
                 current_directory_structure = "\n".join(tree_lines)
 
-            return json.dumps(
-                {
-                    "skill_name": skill.name,
-                    "description": skill.description,
-                    "content": content,
-                    "current_directory_structure": current_directory_structure,
-                },
-                ensure_ascii=False,
-            )
+            return {
+                "skill_name": skill.name,
+                "description": skill.description,
+                "content": content,
+                "current_directory_structure": current_directory_structure,
+            }
         except Exception as e:
-            return json.dumps(
-                {"error": f"读取技能文件失败: {str(e)}"}, ensure_ascii=False
-            )
+            return {"error": f"读取技能文件失败: {str(e)}"}
 
     async def execute(
         self,
@@ -243,30 +230,23 @@ class SkillNodeHandler(BaseNodeHandler):
         handler = self
         skill_ids_set = set(s.id for s in skills)
 
-        async def load_skill(skill_name: str) -> str:
+        async def load_skill(skill_name: str) -> dict:
             try:
                 async with AsyncSessionLocal() as db:
                     handler.db_session = db
                     target_skill = await handler._get_skill_by_name(skill_name)
                     if not target_skill:
-                        return json.dumps(
-                            {"error": f"技能不存在: {skill_name}"}, ensure_ascii=False
-                        )
+                        return {"error": f"技能不存在: {skill_name}"}
 
                     if target_skill.id not in skill_ids_set:
                         available_names = ", ".join([s.name for s in skills])
-                        return json.dumps(
-                            {
-                                "error": f"当前节点配置的技能为: {available_names}，不支持加载 '{skill_name}'"
-                            },
-                            ensure_ascii=False,
-                        )
+                        return {
+                            "error": f"当前节点配置的技能为: {available_names}，不支持加载 '{skill_name}'"
+                        }
 
                     return await handler._load_skill_markdown(target_skill)
             except Exception as e:
-                return json.dumps(
-                    {"error": f"加载技能失败: {str(e)}"}, ensure_ascii=False
-                )
+                return {"error": f"加载技能失败: {str(e)}"}
 
         skill_desc_list = [
             f"技能名称(id={s.id})：{s.name}\n" + f"技能描述：{s.description}\n"

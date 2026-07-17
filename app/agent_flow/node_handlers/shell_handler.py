@@ -911,9 +911,7 @@ class ShellNodeHandler(BaseNodeHandler):
         async def execute_shell(command: str) -> str:
             is_valid, error_msg = validate_command(command)
             if not is_valid:
-                return json.dumps(
-                    {"error": error_msg, "success": False}, ensure_ascii=False
-                )
+                return {"error": error_msg, "success": False}
 
             _cleanup_expired_tasks()
 
@@ -933,10 +931,7 @@ class ShellNodeHandler(BaseNodeHandler):
                     cwd=self._resolve_working_dir(),
                 )
             except Exception as e:
-                return json.dumps(
-                    {"error": f"启动进程失败: {e}", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"启动进程失败: {e}", "success": False}
 
             task = BackgroundShellTask(
                 task_id=str(uuid.uuid4()),
@@ -954,7 +949,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 _background_tasks.pop(task.task_id, None)
                 result = {"success": True, **task.to_dict()}
                 _apply_shell_output_truncation(result, task)
-                return json.dumps(result, ensure_ascii=False)
+                return result
 
             # 任务超过 async_wait 秒仍未完成 → 转为后台任务，通知前端
             try:
@@ -981,7 +976,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 **task.to_dict(),
             }
             _apply_shell_output_truncation(result, task)
-            return json.dumps(result, ensure_ascii=False)
+            return result
 
         shell_tool = StructuredTool(
             name="shell_executor",
@@ -1004,10 +999,7 @@ class ShellNodeHandler(BaseNodeHandler):
             _cleanup_expired_tasks()
             task = _background_tasks.get(task_id)
             if not task:
-                return json.dumps(
-                    {"error": f"任务 {task_id} 不存在或已过期", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"任务 {task_id} 不存在或已过期", "success": False}
             if (
                 task.status == "running"
                 and task._monitor_task
@@ -1023,7 +1015,7 @@ class ShellNodeHandler(BaseNodeHandler):
                     "用户可在聊天界面查看实时输出。不要继续轮询，"
                     "等待用户主动询问结果时再调用此工具查询。"
                 )
-            return json.dumps(result, ensure_ascii=False)
+            return result
 
         shell_task_status_tool = StructuredTool(
             name="shell_task_status",
@@ -1045,38 +1037,23 @@ class ShellNodeHandler(BaseNodeHandler):
             _cleanup_expired_tasks()
             task = _background_tasks.get(task_id)
             if not task:
-                return json.dumps(
-                    {"error": f"任务 {task_id} 不存在或已过期", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"任务 {task_id} 不存在或已过期", "success": False}
             if task.status != "running":
-                return json.dumps(
-                    {
-                        "error": f"任务已结束（status={task.status}），无法发送输入",
-                        "success": False,
-                        **task.to_dict(),
-                    },
-                    ensure_ascii=False,
-                )
+                return {
+                    "error": f"任务已结束（status={task.status}），无法发送输入",
+                    "success": False,
+                    **task.to_dict(),
+                }
             process = task.process
             if not process or not process.stdin or process.stdin.is_closing():
-                return json.dumps(
-                    {"error": "进程 stdin 已关闭，无法发送输入", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": "进程 stdin 已关闭，无法发送输入", "success": False}
             try:
                 async with task._stdin_lock:
                     process.stdin.write((input_text + "\n").encode("utf-8"))
                     await process.stdin.drain()
             except Exception as e:
-                return json.dumps(
-                    {"error": f"发送输入失败: {e}", "success": False},
-                    ensure_ascii=False,
-                )
-            return json.dumps(
-                {"success": True, "message": "输入已发送", **task.to_dict()},
-                ensure_ascii=False,
-            )
+                return {"error": f"发送输入失败: {e}", "success": False}
+            return {"success": True, "message": "输入已发送", **task.to_dict()}
 
         shell_task_input_tool = StructuredTool(
             name="shell_task_input",
@@ -1096,25 +1073,16 @@ class ShellNodeHandler(BaseNodeHandler):
             _cleanup_expired_tasks()
             task = _background_tasks.get(task_id)
             if not task:
-                return json.dumps(
-                    {"error": f"任务 {task_id} 不存在或已过期", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"任务 {task_id} 不存在或已过期", "success": False}
             if task.status != "running":
-                return json.dumps(
-                    {
-                        "error": f"任务已结束（status={task.status}），无法取消",
-                        "success": False,
-                        **task.to_dict(),
-                    },
-                    ensure_ascii=False,
-                )
+                return {
+                    "error": f"任务已结束（status={task.status}），无法取消",
+                    "success": False,
+                    **task.to_dict(),
+                }
             process = task.process
             if not process:
-                return json.dumps(
-                    {"error": "进程引用丢失", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": "进程引用丢失", "success": False}
 
             if task._monitor_task and not task._monitor_task.done():
                 task._monitor_task.cancel()
@@ -1143,10 +1111,7 @@ class ShellNodeHandler(BaseNodeHandler):
             task.return_code = process.returncode
             task.end_time = datetime.now()
 
-            return json.dumps(
-                {"success": True, "message": "任务已取消", **task.to_dict()},
-                ensure_ascii=False,
-            )
+            return {"success": True, "message": "任务已取消", **task.to_dict()}
 
         shell_task_cancel_tool = StructuredTool(
             name="shell_task_cancel",
@@ -1167,52 +1132,35 @@ class ShellNodeHandler(BaseNodeHandler):
         ) -> str:
             is_valid, error_msg = _validate_file_path(file_path)
             if not is_valid:
-                return json.dumps(
-                    {"error": error_msg, "success": False}, ensure_ascii=False
-                )
+                return {"error": error_msg, "success": False}
 
             path = Path(file_path).resolve()
             if not path.exists():
-                return json.dumps(
-                    {"error": f"文件不存在: {file_path}", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"文件不存在: {file_path}", "success": False}
             if not path.is_file():
-                return json.dumps(
-                    {"error": f"路径不是文件: {file_path}", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"路径不是文件: {file_path}", "success": False}
 
             file_size = path.stat().st_size
             if file_size > MAX_FILE_SIZE:
-                return json.dumps(
-                    {
-                        "error": f"文件过大（{file_size} 字节），最大支持 {MAX_FILE_SIZE} 字节",
-                        "success": False,
-                    },
-                    ensure_ascii=False,
-                )
+                return {
+                    "error": f"文件过大（{file_size} 字节），最大支持 {MAX_FILE_SIZE} 字节",
+                    "success": False,
+                }
 
             try:
                 raw, _encoding = _detect_and_read(path)
             except Exception as e:
-                return json.dumps(
-                    {"error": f"文件读取失败: {e}", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"文件读取失败: {e}", "success": False}
 
             total_chars = len(raw)
 
             # ---- 字符模式 ----
             if start_char is not None:
                 if offset is not None:
-                    return json.dumps(
-                        {
-                            "error": "start_char 和 offset 不能同时使用，请选择一种模式",
-                            "success": False,
-                        },
-                        ensure_ascii=False,
-                    )
+                    return {
+                        "error": "start_char 和 offset 不能同时使用，请选择一种模式",
+                        "success": False,
+                    }
                 s = max(0, start_char)
                 e = min(end_char, total_chars) if end_char is not None else total_chars
                 content = raw[s:e]
@@ -1226,7 +1174,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 }
                 if e < total_chars:
                     result["has_more"] = True
-                return json.dumps(result, ensure_ascii=False)
+                return result
 
             # ---- 行模式 ----
             lines = raw.splitlines()
@@ -1252,7 +1200,7 @@ class ShellNodeHandler(BaseNodeHandler):
             }
             if end < total_lines:
                 result["has_more"] = True
-            return json.dumps(result, ensure_ascii=False)
+            return result
 
         file_read_tool = StructuredTool(
             name="file_read",
@@ -1280,62 +1228,42 @@ class ShellNodeHandler(BaseNodeHandler):
         ) -> str:
             is_valid, error_msg = _validate_writable_path(file_path)
             if not is_valid:
-                return json.dumps(
-                    {"error": error_msg, "success": False}, ensure_ascii=False
-                )
+                return {"error": error_msg, "success": False}
 
             path = Path(file_path).resolve()
             if not path.exists():
-                return json.dumps(
-                    {"error": f"文件不存在: {file_path}", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"文件不存在: {file_path}", "success": False}
 
             if old_string == new_string:
-                return json.dumps(
-                    {
-                        "error": "old_string 与 new_string 相同，无需替换",
-                        "success": False,
-                    },
-                    ensure_ascii=False,
-                )
+                return {
+                    "error": "old_string 与 new_string 相同，无需替换",
+                    "success": False,
+                }
 
             file_size = path.stat().st_size
             if file_size > MAX_FILE_SIZE:
-                return json.dumps(
-                    {
-                        "error": f"文件过大（{file_size} 字节），最大支持 {MAX_FILE_SIZE} 字节",
-                        "success": False,
-                    },
-                    ensure_ascii=False,
-                )
+                return {
+                    "error": f"文件过大（{file_size} 字节），最大支持 {MAX_FILE_SIZE} 字节",
+                    "success": False,
+                }
 
             try:
                 raw, encoding = _detect_and_read(path)
             except Exception as e:
-                return json.dumps(
-                    {"error": f"文件读取失败: {e}", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"文件读取失败: {e}", "success": False}
 
             if old_string not in raw:
-                return json.dumps(
-                    {
-                        "error": "未找到要替换的原始文本（old_string），请检查是否与文件内容完全一致（包括缩进和换行）",
-                        "success": False,
-                    },
-                    ensure_ascii=False,
-                )
+                return {
+                    "error": "未找到要替换的原始文本（old_string），请检查是否与文件内容完全一致（包括缩进和换行）",
+                    "success": False,
+                }
 
             count = raw.count(old_string)
             if count > 1 and not replace_all:
-                return json.dumps(
-                    {
-                        "error": f"找到 {count} 处匹配，请缩小 old_string 范围使其唯一匹配，或设置 replace_all=True 替换所有匹配",
-                        "success": False,
-                    },
-                    ensure_ascii=False,
-                )
+                return {
+                    "error": f"找到 {count} 处匹配，请缩小 old_string 范围使其唯一匹配，或设置 replace_all=True 替换所有匹配",
+                    "success": False,
+                }
 
             if replace_all:
                 new_raw = raw.replace(old_string, new_string)
@@ -1345,23 +1273,17 @@ class ShellNodeHandler(BaseNodeHandler):
             try:
                 _atomic_write(path, new_raw, encoding=encoding)
             except Exception as e:
-                return json.dumps(
-                    {"error": f"文件写入失败: {e}", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"文件写入失败: {e}", "success": False}
 
             replaced_count = count if replace_all else 1
             diff = _diff_preview(old_string, new_string)
-            return json.dumps(
-                {
-                    "success": True,
-                    "file_path": str(path),
-                    "replaced_count": replaced_count,
-                    "message": f"成功替换 {replaced_count} 处文本",
-                    "diff": diff,
-                },
-                ensure_ascii=False,
-            )
+            return {
+                "success": True,
+                "file_path": str(path),
+                "replaced_count": replaced_count,
+                "message": f"成功替换 {replaced_count} 处文本",
+                "diff": diff,
+            }
 
         text_editor_tool = StructuredTool(
             name="text_editor",

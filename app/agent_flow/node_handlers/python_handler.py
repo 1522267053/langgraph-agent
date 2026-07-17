@@ -468,7 +468,7 @@ class PythonNodeHandler(BaseNodeHandler):
           {"__save_file__": True, "content_base64": "<base64编码的字节>", "mime_type": "image/png", "filename": "xxx.png"}
         可用于生成图片/音频/视频后保存展示。base64 不会出现在对话里，只返回预览链接。"""
 
-        async def execute_python(code: str, input_data: str = "{}") -> str:
+        async def execute_python(code: str, input_data: str = "{}") -> dict:
             try:
                 input_vars = json.loads(input_data) if input_data else {}
             except json.JSONDecodeError:
@@ -476,16 +476,11 @@ class PythonNodeHandler(BaseNodeHandler):
 
             try:
                 result = await handler._execute_python(code, input_vars, timeout)
-                return json.dumps(result, ensure_ascii=False)
+                return result
             except asyncio.TimeoutError:
-                return json.dumps(
-                    {"error": f"执行超时（{timeout}秒）", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"执行超时（{timeout}秒）", "success": False}
             except Exception as e:
-                return json.dumps(
-                    {"error": str(e), "success": False}, ensure_ascii=False
-                )
+                return {"error": str(e), "success": False}
 
         return StructuredTool(
             name=f"python_executor_{node.node_key}",
@@ -536,20 +531,15 @@ class PythonNodeHandler(BaseNodeHandler):
             cfg.description or f"执行 {node.node_name or node.node_key} Python代码"
         )
 
-        async def execute_preset_python(**kwargs) -> str:
+        async def execute_preset_python(**kwargs) -> dict:
             input_vars = {k: v for k, v in kwargs.items() if k != "_dummy"}
             try:
                 result = await handler._execute_python(code, input_vars, timeout)
-                return json.dumps(result, ensure_ascii=False)
+                return result
             except asyncio.TimeoutError:
-                return json.dumps(
-                    {"error": f"执行超时（{timeout}秒）", "success": False},
-                    ensure_ascii=False,
-                )
+                return {"error": f"执行超时（{timeout}秒）", "success": False}
             except Exception as e:
-                return json.dumps(
-                    {"error": str(e), "success": False}, ensure_ascii=False
-                )
+                return {"error": str(e), "success": False}
 
         return StructuredTool(
             name=tool_name,

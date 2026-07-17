@@ -588,7 +588,7 @@ class ApiNodeHandler(BaseNodeHandler):
             body: str = "",
             upload_fields: str = "",
             download_file: bool = False,
-        ) -> str:
+        ) -> dict:
             return await handler._call_api_json(
                 api_url,
                 method,
@@ -647,7 +647,7 @@ class ApiNodeHandler(BaseNodeHandler):
         tool_name = f"api_{node.node_key}"
         description = cfg.description or f"调用 {node.node_name or node.node_key} API"
 
-        async def call_preset_api(**kwargs) -> str:
+        async def call_preset_api(**kwargs) -> dict:
             context = {k: v for k, v in kwargs.items() if k != "_dummy"}
 
             def _simple_render(template: str) -> str:
@@ -686,21 +686,7 @@ class ApiNodeHandler(BaseNodeHandler):
         body: str,
         upload_fields: str = "",
         download_file: bool = False,
-    ) -> str:
-        """
-        执行API调用并返回JSON字符串（供工具调用）
-
-        Args:
-            url: 请求地址
-            method: 请求方法
-            headers: 请求头JSON字符串
-            body: 请求体JSON字符串
-            upload_fields: 上传文件配置JSON数组
-            download_file: 是否下载响应文件
-
-        Returns:
-            JSON格式的响应结果
-        """
+    ) -> dict:
         request_headers = {}
         if headers:
             try:
@@ -741,17 +727,10 @@ class ApiNodeHandler(BaseNodeHandler):
                 result.get("_suggested_name", ""),
             )
             if file_info:
-                return json.dumps(file_info, ensure_ascii=False)
-            return json.dumps(
-                {"success": False, "error": "文件下载保存失败"},
-                ensure_ascii=False,
-            )
+                return file_info
+            return {"success": False, "error": "文件下载保存失败"}
 
-        # 清理内部字段
-        return json.dumps(
-            {k: v for k, v in result.items() if not k.startswith("_")},
-            ensure_ascii=False,
-        )
+        return {k: v for k, v in result.items() if not k.startswith("_")}
 
     # ---- 输入/输出内容 ----
 
