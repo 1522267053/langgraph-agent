@@ -89,10 +89,7 @@ class LlmNodeConfig(BaseNodeConfig):
     provider: str = Field(
         "",
         description="供应商标识（留空则使用系统全局默认）",
-        json_schema_extra={
-            "options": [
-            ]
-        },
+        json_schema_extra={"options": []},
     )
     model: str = Field("", description="模型名称（留空则使用系统全局默认）")
     api_key: Optional[str] = Field(None, description="API Key")

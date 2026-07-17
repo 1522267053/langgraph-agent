@@ -371,22 +371,20 @@ class MemoryNodeHandler(BaseNodeHandler):
         ) -> str:
             agent_id = handler._get_agent_id()
             if not agent_id:
-                return json.dumps({"error": "无法获取Agent ID"}, ensure_ascii=False)
+                return {"error": "无法获取Agent ID"}
 
             now_ts = time.time()
 
             try:
                 items = json.loads(memories)
             except json.JSONDecodeError:
-                return json.dumps(
-                    {"error": "memories 参数必须是合法的 JSON 数组"}, ensure_ascii=False
-                )
+                return {"error": "memories 参数必须是合法的 JSON 数组"}
 
             if not isinstance(items, list):
                 items = [items]
 
             if not items:
-                return json.dumps({"error": "memories 不能为空"}, ensure_ascii=False)
+                return {"error": "memories 不能为空"}
 
             async with AsyncSessionLocal() as db:
                 results = []
@@ -499,7 +497,7 @@ class MemoryNodeHandler(BaseNodeHandler):
                         "message": "热记忆整理失败，将在下次保存时重试",
                     }
 
-            return json.dumps(response_data, ensure_ascii=False)
+            return response_data
 
         async def search_memory(
             query: str,
@@ -510,7 +508,7 @@ class MemoryNodeHandler(BaseNodeHandler):
         ) -> str:
             agent_id = handler._get_agent_id()
             if not agent_id:
-                return json.dumps({"error": "无法获取Agent ID"}, ensure_ascii=False)
+                return {"error": "无法获取Agent ID"}
 
             cat_list = (
                 [c.strip() for c in categories.split(",")] if categories else None
@@ -558,9 +556,7 @@ class MemoryNodeHandler(BaseNodeHandler):
                         db, mid, threshold=auto_promote_threshold
                     )
 
-                return json.dumps(
-                    {"results": items, "total": len(items)}, ensure_ascii=False
-                )
+                return {"results": items, "total": len(items)}
 
         async def list_memory(
             limit: int = max_results,
@@ -569,7 +565,7 @@ class MemoryNodeHandler(BaseNodeHandler):
         ) -> str:
             agent_id = handler._get_agent_id()
             if not agent_id:
-                return json.dumps({"error": "无法获取Agent ID"}, ensure_ascii=False)
+                return {"error": "无法获取Agent ID"}
 
             async with AsyncSessionLocal() as db:
                 memories = await memory_service.get_recent(
@@ -581,18 +577,16 @@ class MemoryNodeHandler(BaseNodeHandler):
                 )
 
                 results = [_format_memory(m) for m in memories]
-                return json.dumps(
-                    {"results": results, "total": len(results)}, ensure_ascii=False
-                )
+                return {"results": results, "total": len(results)}
 
-        async def delete_memory(memory_ids: str) -> str:
+        async def delete_memory(memory_ids: str) -> dict:
             agent_id = handler._get_agent_id()
             if not agent_id:
-                return "无法获取Agent ID"
+                return {"error": "无法获取Agent ID"}
 
             ids = [int(i.strip()) for i in memory_ids.split(",") if i.strip()]
             if not ids:
-                return "未提供有效的记忆ID"
+                return {"error": "未提供有效的记忆ID"}
 
             async with AsyncSessionLocal() as db:
                 valid_memories = await memory_service.get_by_ids(db, agent_id, ids)
@@ -603,24 +597,25 @@ class MemoryNodeHandler(BaseNodeHandler):
                         await memory_service.delete(db, mid)
                         deleted_ids.append(mid)
                 await db.commit()
-                return f"已删除 {len(deleted_ids)} 条记忆 (ID: {', '.join(str(i) for i in deleted_ids)})"
+                return {
+                    "success": True,
+                    "deleted_count": len(deleted_ids),
+                    "deleted_ids": deleted_ids,
+                }
 
-        async def get_memory(memory_ids: str) -> str:
-            """通过 ID 批量获取记忆的完整内容"""
+        async def get_memory(memory_ids: str) -> dict:
             agent_id = handler._get_agent_id()
             if not agent_id:
-                return json.dumps({"error": "无法获取Agent ID"}, ensure_ascii=False)
+                return {"error": "无法获取Agent ID"}
 
             ids = [int(i.strip()) for i in memory_ids.split(",") if i.strip()]
             if not ids:
-                return json.dumps({"error": "未提供有效的记忆ID"}, ensure_ascii=False)
+                return {"error": "未提供有效的记忆ID"}
 
             async with AsyncSessionLocal() as db:
                 memories = await memory_service.get_by_ids(db, agent_id, ids)
                 items = [_format_memory(m) for m in memories]
-                return json.dumps(
-                    {"results": items, "total": len(items)}, ensure_ascii=False
-                )
+                return {"results": items, "total": len(items)}
 
         return [
             StructuredTool(

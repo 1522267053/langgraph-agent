@@ -100,16 +100,16 @@ class TodoNodeHandler(BaseNodeHandler):
     async def get_tool(self, node: FlowNode) -> list[BaseTool]:
         handler = self
 
-        async def write_todos(todos: str) -> str:
+        async def write_todos(todos: str) -> dict:
             """写入/更新任务计划列表"""
             ref_type, ref_id = handler._resolve_context()
             if not ref_type or not ref_id:
-                return "无法获取上下文信息"
+                return {"error": "无法获取上下文信息"}
 
             try:
                 items = json.loads(todos)
             except json.JSONDecodeError:
-                return "todos 参数必须是合法的 JSON 数组"
+                return {"error": "todos 参数必须是合法的 JSON 数组"}
 
             if not isinstance(items, list):
                 items = [items]
@@ -137,7 +137,7 @@ class TodoNodeHandler(BaseNodeHandler):
                 )
 
             if not validated:
-                return "任务列表不能为空"
+                return {"error": "任务列表不能为空"}
 
             async with AsyncSessionLocal() as db:
                 result = await todo_service.update_ref_todos(
@@ -148,13 +148,13 @@ class TodoNodeHandler(BaseNodeHandler):
             handler._last_todos = [
                 {**item, "id": r["id"]} for item, r in zip(validated, result)
             ]
-            return f"已更新任务列表（{len(result)}条）"
+            return {"success": True, "count": len(result), "todos": handler._last_todos}
 
-        async def read_todos() -> str:
+        async def read_todos() -> dict:
             """读取当前任务计划列表"""
             ref_type, ref_id = handler._resolve_context()
             if not ref_type or not ref_id:
-                return json.dumps({"error": "无法获取上下文信息"}, ensure_ascii=False)
+                return {"error": "无法获取上下文信息"}
 
             async with AsyncSessionLocal() as db:
                 items = await todo_service.get_by_ref(db, ref_type, ref_id)
@@ -169,15 +169,13 @@ class TodoNodeHandler(BaseNodeHandler):
                 }
                 for item in items
             ]
-            return json.dumps(
-                {"todos": result, "total": len(result)}, ensure_ascii=False
-            )
+            return {"todos": result, "total": len(result)}
 
         # 保存 handler 引用，用于 writer 回调
         self._write_todos_func = write_todos
         self._last_todos = []
 
-        async def write_todos_with_event(todos: str) -> str:
+        async def write_todos_with_event(todos: str) -> dict:
             """写入任务列表并通过 SSE 推送更新事件"""
             result_str = await write_todos(todos)
             if self._writer and self._last_todos:
@@ -187,7 +185,7 @@ class TodoNodeHandler(BaseNodeHandler):
                     pass
             return result_str
 
-        async def read_todos_with_event() -> str:
+        async def read_todos_with_event() -> dict:
             """读取任务列表并通过 SSE 推送更新事件"""
             ref_type, ref_id = handler._resolve_context()
             result_str = await read_todos()
