@@ -1,28 +1,23 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, inject, type Ref } from 'vue'
+import { ref, computed, onMounted, inject, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Link, Warning, CircleCheck, QuestionFilled, Bell } from '@element-plus/icons-vue'
+import { Link, Warning, CircleCheck, Bell } from '@element-plus/icons-vue'
 import { requestPermission as requestBrowserNotifyPermission } from '@/composables/useBrowserNotification'
 import {
   configApi,
-  type ProviderInfo,
   type GlobalConfigData,
   type UpdateConfigRequest,
   type UpdateCheckResult,
   hashPassword
 } from '@/api/config'
 import { useMarketplaceStore } from '@/stores/marketplaceStore'
-import {
-  llmModels,
-  CONTEXT_LENGTH_PRESETS,
-  parseContextLength
-} from '@/components/FlowEditor/config/types'
+import { parseContextLength } from '@/components/FlowEditor/config/types'
+import AiProviderConfig from '@/components/common/AiProviderConfig.vue'
 const router = useRouter()
 const marketplaceStore = useMarketplaceStore()
 const loading = ref(true)
 const saving = ref(false)
-const providers = ref<ProviderInfo[]>([])
 
 const config = ref<GlobalConfigData>({})
 const selectedProvider = ref('')
@@ -65,31 +60,10 @@ function clearAutoLoginData() {
   localStorage.removeItem('saved_username')
 }
 
-const currentProvider = computed(() => {
-  return providers.value.find(p => p.name === selectedProvider.value)
-})
-
-const modelOptions = computed(() => {
-  return llmModels[selectedProvider.value] || []
-})
-
-watch(model, val => {
-  const found = modelOptions.value.find(m => m.value === val)
-  if (found?.context_length) {
-    contextLength.value = found.context_length
-  } else {
-    contextLength.value = undefined
-  }
-})
-
 async function loadConfig() {
   try {
-    const [configRes, providerRes] = await Promise.all([
-      configApi.getConfig(),
-      configApi.getProviders()
-    ])
+    const configRes = await configApi.getConfig()
     config.value = configRes.data.data || {}
-    providers.value = providerRes.data.data || []
 
     selectedProvider.value = config.value.provider || ''
     model.value = config.value.model || ''
@@ -110,13 +84,6 @@ onMounted(async () => {
   marketplaceStore.loadStatus()
   checkForUpdates()
 })
-
-function onProviderChange() {
-  const provider = currentProvider.value
-  if (provider) {
-    baseUrl.value = provider.default_base_url
-  }
-}
 
 async function handleSave() {
   if (
@@ -261,81 +228,23 @@ function openDownloadUrl(): void {
         </template>
 
         <el-form label-position="top">
-          <el-form-item label="AI 供应商">
-            <el-select
-              v-model="selectedProvider"
-              placeholder="请选择供应商"
-              class="full-width"
-              @change="onProviderChange"
-            >
-              <el-option v-for="p in providers" :key="p.name" :label="p.label" :value="p.name" />
-            </el-select>
-          </el-form-item>
+          <AiProviderConfig
+            v-model:provider="selectedProvider"
+            v-model:model="model"
+            v-model:api-key="apiKey"
+            v-model:base-url="baseUrl"
+            v-model:context-length="contextLength"
+            show-context-length
+            :reset-on-provider-change="false"
+            label-position="top"
+            :api-key-placeholder="
+              config.api_key_masked ? `当前: ${config.api_key_masked}` : '请输入 API Key'
+            "
+          />
 
-          <el-form-item label="API Key">
-            <el-input
-              v-model="apiKey"
-              type="password"
-              :placeholder="
-                config.api_key_masked ? `当前: ${config.api_key_masked}` : '请输入 API Key'
-              "
-              show-password
-              clearable
-            />
-          </el-form-item>
-
-          <el-form-item label="模型">
-            <el-select
-              v-if="modelOptions.length > 0"
-              v-model="model"
-              placeholder="请选择模型"
-              class="full-width"
-              filterable
-              clearable
-            >
-              <el-option
-                v-for="m in modelOptions"
-                :key="m.value"
-                :label="m.label"
-                :value="m.value"
-              />
-            </el-select>
-            <el-input v-else v-model="model" placeholder="请输入模型名称" clearable />
-          </el-form-item>
-
-          <el-form-item label="Base URL">
-            <el-input v-model="baseUrl" placeholder="API 地址" clearable />
-          </el-form-item>
-
-          <el-form-item>
-            <template #label>
-              上下文窗口
-              <el-tooltip
-                content="用于上下文自动压缩，当对话占用超过 80% 时自动压缩旧消息。不填则不会自动压缩。"
-              >
-                <el-icon class="context-tip-icon"><QuestionFilled /></el-icon>
-              </el-tooltip>
-            </template>
-            <el-select
-              v-model="contextLength"
-              placeholder="选择或输入上下文大小"
-              style="width: calc(100% - 80px)"
-              filterable
-              allow-create
-              default-first-option
-              clearable
-            >
-              <el-option
-                v-for="item in CONTEXT_LENGTH_PRESETS"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value"
-              />
-            </el-select>
-            <span class="context-length-unit" style="margin-left: 8px">tokens</span>
-          </el-form-item>
-
-          <el-button type="primary" :loading="saving" @click="handleSave">保存配置</el-button>
+          <el-button type="primary" :loading="saving" style="margin-top: 16px" @click="handleSave">
+            保存配置
+          </el-button>
         </el-form>
       </el-card>
 

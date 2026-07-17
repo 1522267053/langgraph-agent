@@ -123,6 +123,21 @@ async def startup() -> None:
     # ---- 启动定时任务调度器 ----
     await scheduler_service.start()
 
+    # ---- 加载 AI 供应商适配器缓存，若表为空则首次同步 ----
+    from app.services.ai_provider_service import (
+        _load_adapter_cache,
+        ai_provider_service,
+    )
+
+    async with AsyncSessionLocal() as db:
+        await _load_adapter_cache(db)
+        count = await ai_provider_service.count(db)
+
+    logger.info("[OK] AI provider adapter cache loaded")
+    if count == 0:
+        logger.info("AI 供应商表为空，触发首次同步...")
+        asyncio.create_task(ai_provider_service.sync_from_url())
+
     # ---- 打印自定义启动横幅 ----
     _log_startup_banner()
 

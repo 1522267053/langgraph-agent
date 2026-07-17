@@ -91,11 +91,6 @@ class LlmNodeConfig(BaseNodeConfig):
         description="供应商标识（留空则使用系统全局默认）",
         json_schema_extra={
             "options": [
-                "deepseek",
-                "openai_compatible",
-                "qwen",
-                "zhipu",
-                "minimax",
             ]
         },
     )

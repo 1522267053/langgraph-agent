@@ -6,9 +6,9 @@ export interface ProviderInfo {
   name: string
   label: string
   default_base_url: string
-  supports_image: boolean
-  supports_audio: boolean
-  supports_video: boolean
+  api_url: string
+  adapter_type: string
+  env_vars: string[] | null
 }
 
 export interface GlobalConfigData {

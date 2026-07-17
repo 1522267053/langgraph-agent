@@ -46,6 +46,7 @@ export interface ModelOption {
   label: string
   capabilities?: ModelCapabilities
   context_length?: number
+  max_tokens?: number
 }
 
 /** LLM节点配置 */
@@ -261,94 +262,6 @@ export const conditionOperators = [
   { value: 'starts_with', label: '开头是' },
   { value: 'ends_with', label: '结尾是' }
 ]
-
-/** 默认模型能力（纯文本） */
-const noCapabilities: ModelCapabilities = {
-  image: false,
-  video: false,
-  audio: false,
-  pdf: false,
-  xlsx: false
-}
-
-/** 各供应商对应的模型列表（仅前端概念，包含视觉/音频等能力） */
-export const llmModels: Record<string, ModelOption[]> = {
-  deepseek: [
-    {
-      value: 'deepseek-v4-flash',
-      label: 'DeepSeek-V4-Flash',
-      capabilities: { ...noCapabilities },
-      context_length: 1048576
-    },
-    {
-      value: 'deepseek-v4-pro',
-      label: 'DeepSeek-V4-Pro',
-      capabilities: { ...noCapabilities },
-      context_length: 1048576
-    }
-  ],
-  zhipu: [
-    {
-      value: 'glm-5.1',
-      label: 'GLM-5.1',
-      capabilities: { ...noCapabilities },
-      context_length: 204800
-    },
-    {
-      value: 'glm-5-turbo',
-      label: 'GLM-5-Turbo',
-      capabilities: { ...noCapabilities },
-      context_length: 204800
-    },
-    {
-      value: 'glm-4.7',
-      label: 'GLM-4.7',
-      capabilities: { ...noCapabilities },
-      context_length: 204800
-    }
-  ],
-  qwen: [
-    {
-      value: 'qwen3-vl-plus',
-      label: 'Qwen3-VL-Plus',
-      capabilities: { image: true, video: true, audio: false, pdf: false },
-      context_length: 1048576
-    },
-    {
-      value: 'qwen3-vl-flash',
-      label: 'Qwen3-VL-Flash',
-      capabilities: { image: true, video: true, audio: false, pdf: false },
-      context_length: 1048576
-    },
-    {
-      value: 'qwen3.6-plus',
-      label: 'Qwen3.6-Plus',
-      capabilities: { ...noCapabilities },
-      context_length: 1048576
-    },
-    {
-      value: 'qwen3.6-flash',
-      label: 'Qwen3.6-Flash',
-      capabilities: { ...noCapabilities },
-      context_length: 131072
-    }
-  ],
-  openai_compatible: [],
-  minimax: [
-    {
-      value: 'minimax-m2.7',
-      label: 'MiniMax-M2.7',
-      capabilities: { ...noCapabilities },
-      context_length: 204800
-    },
-    {
-      value: 'minimax-m2.7-highspeed',
-      label: 'MiniMax-M2.7-highspeed',
-      capabilities: { ...noCapabilities },
-      context_length: 204800
-    }
-  ]
-}
 
 /** 上下文窗口预设选项（供 openai_compatible 等自定义模型使用） */
 export const CONTEXT_LENGTH_PRESETS = [

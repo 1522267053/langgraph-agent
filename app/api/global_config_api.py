@@ -88,12 +88,23 @@ class GlobalConfigApi:
             response_model=ApiResponse,
             summary="获取供应商列表",
         )
-        async def list_providers():
-            """获取所有已注册的 AI 供应商（复用 AIProviderRegistry）"""
-            from app.agent_flow.ai_provider.base import AIProviderRegistry
+        async def list_providers(db: AsyncSession = Depends(get_db)):
+            """获取所有已注册的 AI 供应商（从数据库读取）"""
+            from app.services.ai_provider_service import ai_provider_service, _get_virtual_provider_dicts
 
-            providers = AIProviderRegistry.list_provider_info()
-            return ApiResponse.success(data=providers)
+            providers = await ai_provider_service.list_providers(db)
+            data = _get_virtual_provider_dicts() + [
+                {
+                    "name": p.provider_id,
+                    "label": p.name,
+                    "default_base_url": p.api_url or "",
+                    "api_url": p.api_url or "",
+                    "adapter_type": p.adapter_type,
+                    "env_vars": p.env_vars,
+                }
+                for p in providers
+            ]
+            return ApiResponse.success(data=data)
 
         @self.router.get(
             "/",

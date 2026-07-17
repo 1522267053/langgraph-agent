@@ -321,7 +321,7 @@ class IntentRouterHandler(BaseNodeHandler):
                 model=cfg.model,
                 base_url=cfg.base_url or "",
                 max_tokens=cfg.max_tokens,
-                provider_name=cfg.provider or "deepseek",
+                provider_name=cfg.provider or "",
                 temperature=cfg.temperature,
             )
             messages = [

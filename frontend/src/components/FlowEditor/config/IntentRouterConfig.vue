@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import type { IntentItem, IntentRouterConfig } from './types'
-import { llmModels } from './types'
-import { aiProviderApi, type ProviderInfo } from '@/api/ai_provider'
 import { useConfigBase } from '@/composables/useConfigBase'
 import VariableSelector from '../components/VariableSelector.vue'
+import AiProviderConfig from '@/components/common/AiProviderConfig.vue'
 
 const props = defineProps<{
   config: IntentRouterConfig
@@ -16,23 +15,13 @@ const emit = defineEmits<{
   (e: 'update:config', value: IntentRouterConfig): void
 }>()
 
-const isLoadingConfig = ref(false)
-
 const { localConfig, updateConfig } = useConfigBase(
   () => ({
     ...props.config,
     intents: props.config?.intents ?? [],
     input_variable: props.config?.input_variable ?? ''
   }),
-  emit,
-  {
-    onBeforeUpdate: () => {
-      isLoadingConfig.value = true
-      nextTick(() => {
-        isLoadingConfig.value = false
-      })
-    }
-  }
+  emit
 )
 
 // ---- 校验：意图 key 必须是 slug，不能重复，不能是保留字 ----
@@ -74,40 +63,6 @@ function onRegexInput(intentIdx: number, pIdx: number, value: string) {
   else delete regexErrorMap.value[`${intentIdx}-${pIdx}`]
   updateConfig()
 }
-
-// ---- 动态供应商列表 ----
-const providerList = ref<ProviderInfo[]>([])
-onMounted(async () => {
-  try {
-    const res = await aiProviderApi.list()
-    providerList.value = res.data.data || []
-  } catch {
-    // 静默失败
-  }
-})
-
-function getProviderBaseUrl(name: string): string {
-  return providerList.value.find(item => item.name === name)?.default_base_url || ''
-}
-
-const currentModels = computed(() => llmModels[localConfig.value.provider || ''] || [])
-
-// ---- provider 联动：切换供应商时清空 model 并自动填 base_url（仿 LlmConfig） ----
-watch(
-  () => localConfig.value.provider,
-  newP => {
-    if (!newP) return
-    if (!isLoadingConfig.value) {
-      localConfig.value.model = ''
-    }
-    const defaultBaseUrl = getProviderBaseUrl(newP)
-    if (defaultBaseUrl && !localConfig.value.base_url) {
-      localConfig.value.base_url = defaultBaseUrl
-    }
-    updateConfig()
-  },
-  { flush: 'sync' }
-)
 
 // ---- 意图列表操作 ----
 function addIntent() {
@@ -302,62 +257,18 @@ const downstreamRefExample = '{{nodes.节点key.intent}}'
       </div>
     </div>
 
-    <!-- 4. LLM 配置（仿 LlmConfig） -->
     <div v-if="localConfig.enable_llm_layer" class="config-section">
       <div class="section-title">LLM 配置</div>
-      <el-form label-width="80px" size="small">
-        <el-form-item label="供应商">
-          <el-select
-            v-model="localConfig.provider"
-            placeholder="留空使用全局默认"
-            clearable
-            style="width: 100%"
-            @change="updateConfig"
-          >
-            <el-option
-              v-for="p in providerList"
-              :key="p.name"
-              :label="p.label || p.name"
-              :value="p.name"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="模型">
-          <el-select
-            v-model="localConfig.model"
-            placeholder="留空使用全局默认"
-            clearable
-            filterable
-            allow-create
-            default-first-option
-            style="width: 100%"
-            @change="updateConfig"
-          >
-            <el-option
-              v-for="m in currentModels"
-              :key="m.value"
-              :label="m.label"
-              :value="m.value"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="API Key">
-          <el-input
-            v-model="localConfig.api_key"
-            type="password"
-            placeholder="留空使用全局默认"
-            show-password
-            @blur="updateConfig"
-          />
-        </el-form-item>
-        <el-form-item label="Base URL">
-          <el-input
-            v-model="localConfig.base_url"
-            placeholder="留空使用全局默认"
-            @blur="updateConfig"
-          />
-        </el-form-item>
-      </el-form>
+      <AiProviderConfig
+        v-model:provider="localConfig.provider"
+        v-model:model="localConfig.model"
+        v-model:api-key="localConfig.api_key"
+        v-model:base-url="localConfig.base_url"
+        provider-clearable
+        model-clearable
+        api-key-placeholder="留空使用全局默认"
+        @change="updateConfig"
+      />
     </div>
 
     <!-- 5. 高级配置 -->

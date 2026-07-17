@@ -75,6 +75,14 @@ class SchedulerService:
             replace_existing=True,
             max_instances=1,
         )
+        self._scheduler.add_job(
+            self._sync_ai_models,
+            CronTrigger(day_of_week="6", hour=3, minute=0),
+            id="sync_ai_models",
+            name="同步AI模型与供应商数据",
+            replace_existing=True,
+            max_instances=1,
+        )
         self._scheduler.start()
         logger.info(f"调度器已启动，文档处理任务间隔: {settings.doc_process_interval}s")
 
@@ -474,6 +482,15 @@ class SchedulerService:
 
         except Exception as e:
             logger.error(f"定时任务执行异常: {e}", exc_info=True)
+
+    async def _sync_ai_models(self) -> None:
+        from app.services.ai_provider_service import ai_provider_service
+
+        try:
+            logger.info("开始定时同步 AI 模型与供应商数据")
+            await ai_provider_service.sync_from_url()
+        except Exception as e:
+            logger.error(f"同步 AI 模型与供应商数据失败: {e}", exc_info=True)
 
 
 scheduler_service = SchedulerService()

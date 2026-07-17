@@ -223,7 +223,7 @@ class BuiltinAgentService:
         updated = False
 
         if not config.get("provider"):
-            config["provider"] = global_llm.get("provider", "deepseek")
+            config["provider"] = global_llm.get("provider", "")
             updated = True
         if not config.get("model"):
             config["model"] = global_llm.get("model", "")
@@ -321,18 +321,18 @@ class BuiltinAgentService:
 
     async def _create(self, db: AsyncSession, skills: list[dict]) -> Flow:
         """创建内置 Agent（Start → LLM → End + 全部工具节点）"""
-        from app.agent_flow.ai_provider.base import AIProviderRegistry
+        from app.services.ai_provider_service import ai_provider_service
 
         global_llm = await global_config_service.get_default_llm_config(db)
 
-        provider_name = global_llm.get("provider", "deepseek")
+        provider_name = global_llm.get("provider", "")
         model = global_llm.get("model", "")
         api_key = global_llm.get("api_key", "")
         base_url = global_llm.get("base_url", "")
 
         if not base_url:
-            provider_cls = AIProviderRegistry.get(provider_name)
-            base_url = provider_cls.default_base_url if provider_cls else ""
+            provider = await ai_provider_service.get_by_provider_id(db, provider_name)
+            base_url = provider.api_url if provider and provider.api_url else ""
 
         flow_data = FlowCreate(
             name="AI 助手",

@@ -249,7 +249,7 @@ class MemoryNodeHandler(BaseNodeHandler):
                 "不要输出任何其他内容，不要用 markdown 代码块包裹。"
             )
 
-            provider_name = handler._llm_config.get("provider", "deepseek")
+            provider_name = handler._llm_config.get("provider", "")
             from app.agent_flow.ai_provider import create_provider
 
             provider = create_provider(

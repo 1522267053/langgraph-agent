@@ -44,7 +44,6 @@ class AIProviderRegistry:
     """AI 提供商注册表，通过装饰器自动注册"""
 
     _providers: Dict[str, Type[BaseAIProvider]] = {}
-    _info_cache: Optional[List[dict]] = None
 
     @classmethod
     def register(cls, name: str, *, aliases: Optional[List[str]] = None):
@@ -73,29 +72,3 @@ class AIProviderRegistry:
     def list_providers(cls) -> Dict[str, Type[BaseAIProvider]]:
         """返回所有已注册的提供商"""
         return dict(cls._providers)
-
-    @classmethod
-    def list_provider_info(cls) -> List[dict]:
-        """返回所有已注册提供商的元数据（去重别名，结果缓存）"""
-        if cls._info_cache is not None:
-            return cls._info_cache
-
-        seen: set[str] = set()
-        result: List[dict] = []
-        for provider_cls in cls._providers.values():
-            if provider_cls.__name__ in seen:
-                continue
-            seen.add(provider_cls.__name__)
-            info = {
-                "name": getattr(provider_cls, "name", ""),
-                "label": getattr(provider_cls, "label", ""),
-                "default_base_url": getattr(provider_cls, "default_base_url", ""),
-            }
-            result.append(info)
-        cls._info_cache = result
-        return result
-
-    @classmethod
-    def invalidate_info_cache(cls):
-        """清除 provider info 缓存，通常在注册新 provider 后调用"""
-        cls._info_cache = None

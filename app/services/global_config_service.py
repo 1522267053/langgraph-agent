@@ -170,13 +170,12 @@ class GlobalConfigService:
         """首次初始化配置"""
         base_url = request.base_url
         if not base_url:
-            from app.agent_flow.ai_provider.base import AIProviderRegistry
+            from app.services.ai_provider_service import ai_provider_service
 
-            provider_cls = AIProviderRegistry.get(request.provider)
-            if provider_cls:
-                base_url = provider_cls.default_base_url
-            else:
-                base_url = ""
+            provider = await ai_provider_service.get_by_provider_id(
+                db, request.provider
+            )
+            base_url = provider.api_url if provider and provider.api_url else ""
 
         configs = {
             "default_provider": request.provider,
@@ -221,13 +220,13 @@ class GlobalConfigService:
         updates = {}
         if request.provider is not None:
             updates["default_provider"] = request.provider
-            from app.agent_flow.ai_provider.base import AIProviderRegistry
+            from app.services.ai_provider_service import ai_provider_service
 
-            provider_cls = AIProviderRegistry.get(request.provider)
-            if provider_cls:
-                updates["default_base_url"] = (
-                    request.base_url or provider_cls.default_base_url
-                )
+            provider = await ai_provider_service.get_by_provider_id(
+                db, request.provider
+            )
+            if provider and provider.api_url:
+                updates["default_base_url"] = request.base_url or provider.api_url
         if request.api_key is not None:
             updates["default_api_key"] = request.api_key
         if request.model is not None:
@@ -411,7 +410,7 @@ class GlobalConfigService:
         ctx_str = self._ai_config.get("context_length") or ""
         ctx_length = int(ctx_str) if ctx_str.isdigit() else 0
         return {
-            "provider": self._ai_config.get("default_provider") or "deepseek",
+            "provider": self._ai_config.get("default_provider") or "",
             "model": self._ai_config.get("default_model") or "",
             "api_key": self._ai_config.get("default_api_key") or "",
             "base_url": self._ai_config.get("default_base_url") or "",

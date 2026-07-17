@@ -1,16 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { QuestionFilled } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ref, watch } from 'vue'
 import type { LlmConfig } from './types'
-import { llmModels, variableFormatHint, CONTEXT_LENGTH_PRESETS } from './types'
-import { fieldTypeOptions, parseContextLength } from './types'
-import { aiProviderApi, type ProviderInfo } from '@/api/ai_provider'
+import { variableFormatHint, fieldTypeOptions } from './types'
 import { flowApi, type ConnectedToolInfo } from '@/api/flow'
 import { useFlowStore } from '@/stores/flowStore'
 import { useConfigBase } from '@/composables/useConfigBase'
 import { useInputVariables } from '@/composables/useInputVariables'
 import VariableSelector from '../components/VariableSelector.vue'
+import AiProviderConfig from '@/components/common/AiProviderConfig.vue'
 
 const props = defineProps<{
   config: LlmConfig
@@ -22,16 +19,7 @@ const emit = defineEmits<{
   (e: 'update:config', value: LlmConfig): void
 }>()
 
-const isLoadingConfig = ref(false)
-
-const { localConfig, updateConfig } = useConfigBase(() => props.config, emit, {
-  onBeforeUpdate: () => {
-    isLoadingConfig.value = true
-    nextTick(() => {
-      isLoadingConfig.value = false
-    })
-  }
-})
+const { localConfig, updateConfig } = useConfigBase(() => props.config, emit)
 
 if (!localConfig.value.capabilities) {
   localConfig.value.capabilities = {
@@ -88,35 +76,6 @@ const { addInputVariable, removeInputVariable, handleSourceTypeChange } = useInp
   localConfig,
   updateConfig
 )
-
-// ---- 动态供应商列表 ----
-
-const providerList = ref<ProviderInfo[]>([])
-
-onMounted(async () => {
-  try {
-    const res = await aiProviderApi.list()
-    providerList.value = res.data.data || []
-  } catch {
-    // 加载失败时使用空列表
-  }
-})
-
-function getProviderBaseUrl(name: string): string {
-  const p = providerList.value.find(item => item.name === name)
-  return p?.default_base_url || ''
-}
-
-const currentModels = computed(() => {
-  return llmModels[localConfig.value.provider] || []
-})
-
-const selectedModelOption = computed(() => {
-  return currentModels.value.find(m => m.value === localConfig.value.model)
-})
-
-// ---- 必需工具检查 ----
-// 使用独立 ref 控制，避免从配置反推导致开关/模式切换时状态弹回
 const enableRequiredTools = ref(
   (localConfig.value.required_tools?.length ?? 0) > 0 || !!localConfig.value.tool_check_script
 )
@@ -172,67 +131,6 @@ watch(
   { immediate: true }
 )
 
-watch(
-  () => localConfig.value.provider,
-  () => {
-    if (!isLoadingConfig.value) {
-      localConfig.value.model = ''
-      localConfig.value.capabilities = {
-        image: false,
-        video: false,
-        audio: false,
-        pdf: false,
-        xlsx: false
-      }
-      localConfig.value.context_length = undefined
-      const defaultBaseUrl = getProviderBaseUrl(localConfig.value.provider)
-      if (defaultBaseUrl) {
-        localConfig.value.base_url = defaultBaseUrl
-      }
-    }
-  },
-  { flush: 'sync' }
-)
-
-watch(
-  () => localConfig.value.model,
-  () => {
-    if (!isLoadingConfig.value) {
-      if (selectedModelOption.value?.capabilities) {
-        localConfig.value.capabilities = { ...selectedModelOption.value.capabilities }
-      }
-      if (selectedModelOption.value?.context_length) {
-        localConfig.value.context_length = selectedModelOption.value.context_length
-      } else if (!isLoadingConfig.value) {
-        localConfig.value.context_length = undefined
-      }
-    }
-  },
-  { flush: 'sync' }
-)
-
-function handleCapabilityChange(): void {
-  updateConfig()
-}
-
-function onContextLengthChange(val: string | number | undefined): void {
-  if (val !== undefined && val !== null && val !== '') {
-    const parsed = parseContextLength(val)
-    if (parsed === undefined) {
-      ElMessage.error('上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）')
-      nextTick(() => {
-        localConfig.value.context_length = undefined
-        updateConfig()
-      })
-      return
-    }
-    localConfig.value.context_length = parsed as any
-  } else {
-    localConfig.value.context_length = undefined
-  }
-  updateConfig()
-}
-
 const extraBodyText = ref('')
 
 watch(
@@ -286,7 +184,7 @@ function handleExtraBodyBlur(): void {
                 v-model="variable.type"
                 placeholder="选择类型"
                 style="width: 100%"
-                @change="onContextLengthChange"
+                @change="updateConfig"
               >
                 <el-option
                   v-for="item in fieldTypeOptions"
@@ -315,103 +213,20 @@ function handleExtraBodyBlur(): void {
 
     <div class="config-section">
       <div class="section-title">大模型配置</div>
-      <el-form label-width="90px" size="small">
-        <el-form-item label="供应商">
-          <el-select
-            v-model="localConfig.provider"
-            placeholder="选择供应商"
-            style="width: 100%"
-            @change="updateConfig"
-          >
-            <el-option
-              v-for="item in providerList"
-              :key="item.name"
-              :label="item.label"
-              :value="item.name"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="模型">
-          <el-select
-            v-model="localConfig.model"
-            placeholder="选择或输入模型名称"
-            style="width: 100%"
-            :disabled="!localConfig.provider"
-            filterable
-            allow-create
-            default-first-option
-            @change="updateConfig"
-          >
-            <el-option
-              v-for="item in currentModels"
-              :key="item.value"
-              :label="item.label"
-              :value="item.value"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="支持内容">
-          <el-checkbox v-model="localConfig.capabilities.image" @change="handleCapabilityChange">
-            图片
-          </el-checkbox>
-          <el-checkbox v-model="localConfig.capabilities.video" @change="handleCapabilityChange">
-            视频
-          </el-checkbox>
-          <el-checkbox v-model="localConfig.capabilities.audio" @change="handleCapabilityChange">
-            音频
-          </el-checkbox>
-          <el-checkbox v-model="localConfig.capabilities.pdf" @change="handleCapabilityChange">
-            PDF
-          </el-checkbox>
-          <el-checkbox v-model="localConfig.capabilities.xlsx" @change="handleCapabilityChange">
-            Excel
-          </el-checkbox>
-        </el-form-item>
-        <el-form-item label="API Key">
-          <el-input
-            v-model="localConfig.api_key"
-            type="password"
-            placeholder="留空使用全局默认 API Key"
-            show-password
-            @blur="updateConfig"
-          />
-        </el-form-item>
-        <el-form-item label="Base URL">
-          <el-input
-            v-model="localConfig.base_url"
-            placeholder="可选，自定义接口地址"
-            @blur="updateConfig"
-          />
-        </el-form-item>
-        <el-form-item>
-          <template #label>
-            上下文窗口
-            <el-tooltip
-              content="用于上下文自动压缩，当对话占用超过 80% 时自动压缩旧消息。不填则不会自动压缩。"
-            >
-              <el-icon class="context-tip-icon"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </template>
-          <el-select
-            v-model="localConfig.context_length"
-            placeholder="选择或输入上下文大小"
-            style="width: calc(100% - 80px)"
-            filterable
-            allow-create
-            default-first-option
-            clearable
-            @change="onContextLengthChange"
-          >
-            <el-option
-              v-for="item in CONTEXT_LENGTH_PRESETS"
-              :key="item.value"
-              :label="item.label"
-              :value="item.value"
-            />
-          </el-select>
-          <span class="context-length-unit" style="margin-left: 8px">tokens</span>
-        </el-form-item>
-      </el-form>
+      <AiProviderConfig
+        v-model:provider="localConfig.provider"
+        v-model:model="localConfig.model"
+        v-model:api-key="localConfig.api_key"
+        v-model:base-url="localConfig.base_url"
+        v-model:context-length="localConfig.context_length"
+        v-model:capabilities="localConfig.capabilities"
+        v-model:max-tokens="localConfig.max_tokens"
+        show-capabilities
+        show-context-length
+        :reset-on-provider-change="false"
+        api-key-placeholder="留空使用全局默认 API Key"
+        @change="updateConfig"
+      />
     </div>
     <div class="config-section">
       <div class="section-title">输出变量</div>

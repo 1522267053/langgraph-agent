@@ -1085,7 +1085,7 @@ class AgentExecutorService(BaseExecutorService):
         # 调用 LLM 总结
 
         try:
-            provider_name = llm_config.get("provider", "deepseek")
+            provider_name = llm_config.get("provider", "")
             from app.agent_flow.ai_provider import create_provider
 
             provider = create_provider(
@@ -1199,7 +1199,7 @@ class AgentExecutorService(BaseExecutorService):
             if node.node_type == NodeType.LLM.value and node.base_config:
                 config = node.base_config if isinstance(node.base_config, dict) else {}
                 return {
-                    "provider": config.get("provider", "deepseek"),
+                    "provider": config.get("provider", ""),
                     "model": config.get("model", ""),
                     "api_key": config.get("api_key", ""),
                     "base_url": config.get("base_url", ""),
