@@ -3,7 +3,7 @@
 将 WebSocket 客户端注册的工具定义转换为 LangChain StructuredTool。
 工具执行时通过 WebSocket 发送 tool_invoke 请求，等待客户端返回结果。
 
-工具名加 ``remote__`` 前缀避免与流程图内工具冲突。
+工具名直接使用客户端注册的原始名称。
 """
 
 import asyncio
@@ -71,7 +71,6 @@ def create_remote_tool(tool_def: dict, conn: Any) -> StructuredTool:
     if not raw_name:
         raise ValueError("工具定义缺少 name 字段")
 
-    prefixed_name = f"remote__{raw_name}"
     description = tool_def.get("description", f"远程工具: {raw_name}")
     timeout = getattr(conn, "tool_timeout", 120)
     args_schema = _json_schema_to_pydantic(raw_name, tool_def.get("parameters", {}))
@@ -117,7 +116,7 @@ def create_remote_tool(tool_def: dict, conn: Any) -> StructuredTool:
             )
 
     return StructuredTool(
-        name=prefixed_name,
+        name=raw_name,
         description=description,
         func=None,
         coroutine=remote_coro,

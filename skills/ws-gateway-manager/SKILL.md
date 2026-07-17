@@ -24,7 +24,7 @@ description: |
 5. **并发限制**：同一连接同时只允许一个 execute 执行
 6. **CRUD 需登录态**：管理接口（`/api/gateway/page/create/update/delete`）需要 session cookie
 7. **输入合并**：`input_data = {**gateway.input_config, **客户端参数}`（排除 `action` 和 `session_id`），客户端参数覆盖默认模板
-8. **工具名前缀**：远程工具自动加 `remote__` 前缀避免与流程内工具冲突，超时 120 秒
+8. **工具名**：远程工具直接使用客户端注册的原始名称，超时 120 秒
 
 ## 管理接口（HTTP）
 
@@ -140,7 +140,7 @@ Agent 调用工具时，服务端发送：
 {"action": "tool_result", "call_id": "abc-123", "result": "[{\"id\": 1, \"name\": \"张三\"}]"}
 ```
 
-工具超时默认 120 秒。工具名自动加 `remote__` 前缀避免冲突。
+工具超时默认 120 秒。工具名直接使用客户端注册的原始名称。
 
 ## Python 客户端示例
 
