@@ -27,11 +27,11 @@ class AgentSession(DbBaseModel):
     status: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, default=1, comment="状态：1=活跃，0=已归档"
     )
-    webhook_id: Mapped[Optional[int]] = mapped_column(
+    gateway_id: Mapped[Optional[int]] = mapped_column(
         Integer,
         nullable=True,
         default=None,
-        comment="创建该会话的 Webhook ID（用户聊天创建则为空）",
+        comment="创建该会话的 网关 ID（用户聊天创建则为空）",
     )
 
     def __repr__(self) -> str:

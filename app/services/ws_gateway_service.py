@@ -1,9 +1,9 @@
 """
-Webhook 配置服务
+WebSocket 网关服务
 
-提供 Webhook 的 CRUD、WS 流式执行和会话管理功能。
+提供 网关的 CRUD、WS 流式执行和会话管理功能。
 触发执行通过 WebSocket 实时流式返回事件（node_content/tool_call/flow_done 等）。
-每次触发创建 WebhookCallRecord 用于记录调用历史。
+每次触发创建 WsGatewayCallRecord 用于记录调用历史。
 """
 
 import logging
@@ -13,29 +13,29 @@ from typing import Optional
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.webhook import WebhookConfig
-from app.models.webhook_call_record import WebhookCallRecord
+from app.models.ws_gateway import WsGatewayConfig
+from app.models.ws_gateway_call_record import WsGatewayCallRecord
 from app.models.flow import FlowType
 from app.models.flow_execution import ExecutionStatus
-from app.schemas.webhook_schema import (
-    WebhookConfigCreate,
-    WebhookConfigUpdate,
-    WebhookConfigCondition,
+from app.schemas.ws_gateway_schema import (
+    WsGatewayConfigCreate,
+    WsGatewayConfigUpdate,
+    WsGatewayConfigCondition,
 )
 from app.services.base_service import BaseService
 
 logger = logging.getLogger(__name__)
 
 
-class WebhookService(
-    BaseService[WebhookConfig, WebhookConfigCreate, WebhookConfigUpdate]
+class WsGatewayService(
+    BaseService[WsGatewayConfig, WsGatewayConfigCreate, WsGatewayConfigUpdate]
 ):
-    """Webhook 配置服务"""
+    """WebSocket 网关服务"""
 
     def __init__(self):
-        super().__init__(WebhookConfig)
+        super().__init__(WsGatewayConfig)
 
-    def _apply_filters(self, query, count_query, condition: WebhookConfigCondition):
+    def _apply_filters(self, query, count_query, condition: WsGatewayConfigCondition):
         """应用查询过滤条件"""
         query, count_query = super()._apply_filters(query, count_query, condition)
         if condition:
@@ -44,24 +44,24 @@ class WebhookService(
                     query, count_query, "name", condition.name
                 )
             if hasattr(condition, "flow_id") and condition.flow_id:
-                query = query.where(WebhookConfig.flow_id == condition.flow_id)
+                query = query.where(WsGatewayConfig.flow_id == condition.flow_id)
                 count_query = count_query.where(
-                    WebhookConfig.flow_id == condition.flow_id
+                    WsGatewayConfig.flow_id == condition.flow_id
                 )
             if hasattr(condition, "is_enabled") and condition.is_enabled is not None:
-                query = query.where(WebhookConfig.is_enabled == condition.is_enabled)
+                query = query.where(WsGatewayConfig.is_enabled == condition.is_enabled)
                 count_query = count_query.where(
-                    WebhookConfig.is_enabled == condition.is_enabled
+                    WsGatewayConfig.is_enabled == condition.is_enabled
                 )
         return query, count_query
 
     async def create(
-        self, db: AsyncSession, obj_in: WebhookConfigCreate
-    ) -> WebhookConfig:
-        """创建 Webhook（自动生成 token）"""
+        self, db: AsyncSession, obj_in: WsGatewayConfigCreate
+    ) -> WsGatewayConfig:
+        """创建网关（自动生成 token）"""
         import uuid
 
-        model = obj_in.to_model(WebhookConfig)
+        model = obj_in.to_model(WsGatewayConfig)
         model.token = uuid.uuid4().hex
         model.call_count = 0
         db.add(model)
@@ -71,27 +71,27 @@ class WebhookService(
 
     async def get_by_token(
         self, db: AsyncSession, token: str
-    ) -> Optional[WebhookConfig]:
-        """通过 token 查找 Webhook 配置"""
-        stmt = select(WebhookConfig).where(
-            WebhookConfig.token == token,
-            WebhookConfig.is_delete == 0,
+    ) -> Optional[WsGatewayConfig]:
+        """通过 token 查找 网关配置"""
+        stmt = select(WsGatewayConfig).where(
+            WsGatewayConfig.token == token,
+            WsGatewayConfig.is_delete == 0,
         )
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
 
-    # ---- Webhook 调用记录管理 ----
+    # ---- 网关调用记录管理 ----
 
     async def create_call_record(
-        self, db: AsyncSession, webhook: WebhookConfig, input_data: dict
-    ) -> WebhookCallRecord:
+        self, db: AsyncSession, gateway: WsGatewayConfig, input_data: dict
+    ) -> WsGatewayCallRecord:
         """创建调用记录（触发时写入，status=执行中），同时更新调用计数"""
-        webhook.call_count = (webhook.call_count or 0) + 1
-        webhook.last_call_time = datetime.now()
+        gateway.call_count = (gateway.call_count or 0) + 1
+        gateway.last_call_time = datetime.now()
 
-        record = WebhookCallRecord(
-            webhook_id=webhook.id,
-            flow_id=webhook.flow_id,
+        record = WsGatewayCallRecord(
+            gateway_id=gateway.id,
+            flow_id=gateway.flow_id,
             input_data=input_data,
             status=ExecutionStatus.RUNNING.value,
             callback_status="skipped",
@@ -106,7 +106,7 @@ class WebhookService(
         self, db: AsyncSession, record_id: int, ref_type: str, ref_id: int
     ) -> None:
         """回填调用记录的引用信息（会话/执行创建后调用）"""
-        record = await db.get(WebhookCallRecord, record_id)
+        record = await db.get(WsGatewayCallRecord, record_id)
         if record:
             record.ref_type = ref_type
             record.ref_id = ref_id
@@ -123,7 +123,7 @@ class WebhookService(
         from app.config.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
-            record = await db.get(WebhookCallRecord, record_id)
+            record = await db.get(WsGatewayCallRecord, record_id)
             if record:
                 record.status = self._to_execution_status(status)
                 if output_data is not None:
@@ -143,29 +143,29 @@ class WebhookService(
         }
         return mapping.get(status_str, ExecutionStatus.FAILED.value)
 
-    # ---- Webhook 调用记录查询（供免认证 API 使用） ----
+    # ---- 网关调用记录查询（供免认证 API 使用） ----
 
     async def get_call_records_by_token(
         self, db: AsyncSession, token: str, page: int = 1, page_size: int = 20
-    ) -> tuple[list[WebhookCallRecord], int]:
+    ) -> tuple[list[WsGatewayCallRecord], int]:
         """通过 token 查询调用记录列表（分页）"""
-        webhook = await self.get_by_token(db, token)
-        if not webhook:
+        gateway = await self.get_by_token(db, token)
+        if not gateway:
             return [], 0
 
         stmt = (
-            select(WebhookCallRecord)
+            select(WsGatewayCallRecord)
             .where(
-                WebhookCallRecord.webhook_id == webhook.id,
-                WebhookCallRecord.is_delete == 0,
+                WsGatewayCallRecord.gateway_id == gateway.id,
+                WsGatewayCallRecord.is_delete == 0,
             )
-            .order_by(desc(WebhookCallRecord.started_at))
+            .order_by(desc(WsGatewayCallRecord.started_at))
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
-        count_stmt = select(func.count(WebhookCallRecord.id)).where(
-            WebhookCallRecord.webhook_id == webhook.id,
-            WebhookCallRecord.is_delete == 0,
+        count_stmt = select(func.count(WsGatewayCallRecord.id)).where(
+            WsGatewayCallRecord.gateway_id == gateway.id,
+            WsGatewayCallRecord.is_delete == 0,
         )
         result = await db.execute(stmt)
         records = list(result.scalars().all())
@@ -175,15 +175,15 @@ class WebhookService(
 
     async def get_call_record_by_token(
         self, db: AsyncSession, token: str, call_id: int
-    ) -> Optional[WebhookCallRecord]:
+    ) -> Optional[WsGatewayCallRecord]:
         """通过 token + call_id 获取单条调用记录"""
-        webhook = await self.get_by_token(db, token)
-        if not webhook:
+        gateway = await self.get_by_token(db, token)
+        if not gateway:
             return None
-        stmt = select(WebhookCallRecord).where(
-            WebhookCallRecord.id == call_id,
-            WebhookCallRecord.webhook_id == webhook.id,
-            WebhookCallRecord.is_delete == 0,
+        stmt = select(WsGatewayCallRecord).where(
+            WsGatewayCallRecord.id == call_id,
+            WsGatewayCallRecord.gateway_id == gateway.id,
+            WsGatewayCallRecord.is_delete == 0,
         )
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
@@ -191,7 +191,7 @@ class WebhookService(
     async def get_call_record_messages(
         self,
         db: AsyncSession,
-        record: WebhookCallRecord,
+        record: WsGatewayCallRecord,
         before_id: Optional[int] = None,
         limit: int = 20,
     ) -> tuple[list, int]:
@@ -271,23 +271,23 @@ class WebhookService(
         total = count_result.scalar() or 0
         return messages, total
 
-    # ---- Webhook 会话/消息管理（供免认证 API 使用，仅 Agent 类型流程） ----
+    # ---- 网关会话/消息管理（供免认证 API 使用，仅 Agent 类型流程） ----
 
     async def get_sessions_by_token(
         self, db: AsyncSession, token: str, page: int = 1, page_size: int = 20
     ) -> tuple[list, int]:
-        """通过 token 查询该 Webhook 创建的会话列表（分页）
+        """通过 token 查询该网关创建的会话列表（分页）
 
-        仅返回由该 Webhook 触发创建的会话（webhook_id 匹配），用户聊天会话不在此列。
+        仅返回由该网关触发创建的会话（gateway_id 匹配），用户聊天会话不在此列。
         """
         from app.models.agent_session import AgentSession
 
-        webhook = await self.get_by_token(db, token)
-        if not webhook:
+        gateway = await self.get_by_token(db, token)
+        if not gateway:
             return [], 0
 
         conditions = [
-            AgentSession.webhook_id == webhook.id,
+            AgentSession.gateway_id == gateway.id,
             AgentSession.is_delete == 0,
         ]
         count_stmt = select(func.count()).select_from(AgentSession).where(*conditions)
@@ -308,22 +308,22 @@ class WebhookService(
 
     async def get_session_by_token(
         self, db: AsyncSession, token: str, session_id: int
-    ) -> tuple[Optional[WebhookConfig], Optional[object]]:
-        """通过 token + session_id 获取会话，并校验会话由该 Webhook 创建
+    ) -> tuple[Optional[WsGatewayConfig], Optional[object]]:
+        """通过 token + session_id 获取会话，并校验会话由该网关创建
 
         Returns:
-            (webhook, session)：webhook 不存在返回 (None, None)；
-            会话不存在或非该 Webhook 创建返回 (webhook, None)。
+            (gateway, session)：gateway 不存在返回 (None, None)；
+            会话不存在或非该网关创建返回 (gateway, None)。
         """
         from app.services.agent_executor_service import agent_executor_service
 
-        webhook = await self.get_by_token(db, token)
-        if not webhook:
+        gateway = await self.get_by_token(db, token)
+        if not gateway:
             return None, None
         session = await agent_executor_service._get_session(db, session_id)
-        if not session or session.webhook_id != webhook.id:
-            return webhook, None
-        return webhook, session
+        if not session or session.gateway_id != gateway.id:
+            return gateway, None
+        return gateway, session
 
     async def delete_session_by_token(
         self, db: AsyncSession, token: str, session_id: int
@@ -331,15 +331,15 @@ class WebhookService(
         """通过 token 删除会话（含消息和 checkpoint）
 
         Returns:
-            (success, msg)：(False, "Webhook 不存在") / (False, "会话不存在或不属于该Webhook") / (True, "")
+            (success, msg)：(False, "网关不存在") / (False, "会话不存在或不属于该网关") / (True, "")
         """
         from app.services.agent_executor_service import agent_executor_service
 
-        webhook, session = await self.get_session_by_token(db, token, session_id)
-        if not webhook:
-            return False, "Webhook 不存在"
+        gateway, session = await self.get_session_by_token(db, token, session_id)
+        if not gateway:
+            return False, "网关不存在"
         if not session:
-            return False, "会话不存在或不属于该Webhook"
+            return False, "会话不存在或不属于该网关"
         await agent_executor_service.delete_session(db, session_id)
         return True, ""
 
@@ -374,11 +374,11 @@ class WebhookService(
         """
         from app.services.agent_executor_service import agent_executor_service
 
-        webhook, session = await self.get_session_by_token(db, token, session_id)
-        if not webhook:
-            return False, "Webhook 不存在"
+        gateway, session = await self.get_session_by_token(db, token, session_id)
+        if not gateway:
+            return False, "网关不存在"
         if not session:
-            return False, "会话不存在或不属于该Webhook"
+            return False, "会话不存在或不属于该网关"
         result = await agent_executor_service.delete_messages_from(
             db, session_id, message_id
         )
@@ -390,7 +390,7 @@ class WebhookService(
 
     async def stream_execute(
         self,
-        webhook_id: int,
+        gateway_id: int,
         input_data: dict,
         session_id: Optional[int] = None,
     ):
@@ -399,7 +399,7 @@ class WebhookService(
         流程：
         1. 解析 flow_type（agent / flow）
         2. Agent 类型：校验或新建 session
-        3. 创建 WebhookCallRecord
+        3. 创建 WsGatewayCallRecord
         4. yield call_started
         5. 遍历 chat_stream / execute_stream，转发每个事件
         6. 拦截 flow_start / flow_done / error 更新调用记录
@@ -409,16 +409,16 @@ class WebhookService(
         from app.services.flow_service import flow_service
 
         async with AsyncSessionLocal() as db:
-            webhook = await self.get_by_id(db, webhook_id)
-            if not webhook:
-                yield {"type": "error", "data": {"message": "Webhook 不存在"}}
+            gateway = await self.get_by_id(db, gateway_id)
+            if not gateway:
+                yield {"type": "error", "data": {"message": "网关不存在"}}
                 return
 
             flow = await flow_service.get_by_id(
-                db, webhook.flow_id, raise_not_found=False
+                db, gateway.flow_id, raise_not_found=False
             )
             flow_type = flow.flow_type if flow else None
-            flow_id = webhook.flow_id
+            flow_id = gateway.flow_id
 
             # Agent 类型：校验或新建 session
             resolved_session_id = session_id
@@ -446,12 +446,12 @@ class WebhookService(
                     )
 
                     session = await agent_executor_service.create_session(
-                        db, flow_id, webhook_id=webhook.id
+                        db, flow_id, gateway_id=gateway.id
                     )
-                    session.title = f"[WS] {webhook.name}"
+                    session.title = f"[WS] {gateway.name}"
                     resolved_session_id = session.id
 
-            record = await self.create_call_record(db, webhook, input_data)
+            record = await self.create_call_record(db, gateway, input_data)
             record_id = record.id
 
             if resolved_session_id is not None:
@@ -535,16 +535,16 @@ class WebhookService(
         from app.services.agent_executor_service import agent_executor_service
 
         async with AsyncSessionLocal() as db:
-            webhook = await self.get_by_token(db, token)
-            if not webhook:
-                raise ValueError("Webhook 不存在")
+            gateway = await self.get_by_token(db, token)
+            if not gateway:
+                raise ValueError("网关不存在")
 
             session = await agent_executor_service.create_session(
-                db, webhook.flow_id, webhook_id=webhook.id
+                db, gateway.flow_id, gateway_id=gateway.id
             )
-            session.title = title or f"[WS] {webhook.name}"
+            session.title = title or f"[WS] {gateway.name}"
             await db.commit()
             return session.id, session.title
 
 
-webhook_service = WebhookService()
+ws_gateway_service = WsGatewayService()

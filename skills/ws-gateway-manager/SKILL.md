@@ -1,45 +1,45 @@
 ---
-name: webhook-manager
+name: ws-gateway-manager
 description: |
-  创建、管理 Webhook，通过 WebSocket 触发流程/智能体执行。
+  创建、管理网关，通过 WebSocket 触发流程/智能体执行。
   适用场景：
-  (1) 用户要求创建或管理 Webhook
+  (1) 用户要求创建或管理网关
   (2) 外部系统通过 WebSocket 连接触发流程执行，实时接收流式结果
   (3) 注册远程工具，让 Agent 反向调用客户端函数
   (4) 管理会话（创建/切换/列表/删除）
 
-  触发词：「创建 webhook」「管理 webhook」「websocket 触发」「远程工具」「webhook 会话」「注册工具」
+  触发词：「创建网关」「管理网关」「websocket 触发」「远程工具」「网关会话」「注册工具」
 ---
 
-# Webhook Manager
+# WebSocket 网关管理
 
 服务器：`http://127.0.0.1:8000`
 
 ## 核心规则
 
 1. **WebSocket 触发**：外部客户端通过 `ws://host/ws/trigger/{token}` 连接，以 JSON 指令驱动执行
-2. **token 自动生成**：创建 Webhook 时后端 `uuid.uuid4().hex` 生成 token
+2. **token 自动生成**：创建网关 时后端 `uuid.uuid4().hex` 生成 token
 3. **实时流式返回**：执行结果通过 WebSocket 逐 token 流式推送（node_content/tool_call/flow_done 等），无需轮询
 4. **Agent 专属功能**：远程工具注册、会话管理（创建/切换/列表/删除/消息查询）仅 Agent 类型支持。Flow 类型调用会返回 `"仅 Agent 类型支持"` 错误
 5. **并发限制**：同一连接同时只允许一个 execute 执行
-6. **CRUD 需登录态**：管理接口（`/api/webhook/page/create/update/delete`）需要 session cookie
-7. **输入合并**：`input_data = {**webhook.input_config, **客户端参数}`（排除 `action` 和 `session_id`），客户端参数覆盖默认模板
+6. **CRUD 需登录态**：管理接口（`/api/gateway/page/create/update/delete`）需要 session cookie
+7. **输入合并**：`input_data = {**gateway.input_config, **客户端参数}`（排除 `action` 和 `session_id`），客户端参数覆盖默认模板
 8. **工具名前缀**：远程工具自动加 `remote__` 前缀避免与流程内工具冲突，超时 120 秒
 
 ## 管理接口（HTTP）
 
 | 方法 | 路径 | 认证 | 用途 |
 |------|------|:--:|------|
-| POST | `/api/webhook/page` | ✅ | 分页列表 |
-| POST | `/api/webhook/create` | ✅ | 创建（自动生成 token） |
-| POST | `/api/webhook/update` | ✅ | 更新 |
-| GET | `/api/webhook/delete/{id}` | ✅ | 软删除 |
-| GET | `/api/webhook/get/{id}/url` | ✅ | 获取 WebSocket 地址 |
+| POST | `/api/gateway/page` | ✅ | 分页列表 |
+| POST | `/api/gateway/create` | ✅ | 创建（自动生成 token） |
+| POST | `/api/gateway/update` | ✅ | 更新 |
+| GET | `/api/gateway/delete/{id}` | ✅ | 软删除 |
+| GET | `/api/gateway/get/{id}/url` | ✅ | 获取 WebSocket 地址 |
 
-## 创建 Webhook
+## 创建网关
 
 ```json
-POST /api/webhook/create
+POST /api/gateway/create
 {
   "name": "订单处理",
   "flow_id": 1,
@@ -59,7 +59,7 @@ ws://host/ws/trigger/{token}
 
 连接成功后收到：
 ```json
-{"type": "connected", "data": {"webhook_id": 1, "webhook_name": "订单处理", "flow_id": 1, "flow_type": "agent"}}
+{"type": "connected", "data": {"gateway_id": 1, "gateway_name": "订单处理", "flow_id": 1, "flow_type": "agent"}}
 ```
 
 > **建议**：连接后检查 `data.flow_type`。`"agent"` 才支持远程工具和会话管理，`"flow"` 仅支持 `execute`。非 Agent 类型调用 register_tools 或会话操作会收到 `{"type":"error","data":{"message":"仅 Agent 类型支持..."}}`。
@@ -107,7 +107,7 @@ Flow 类型（无 message，用 input_data）：
 
 ## 远程工具注册
 
-> **仅 Agent 类型支持**：Webhook 必须关联「智能体」流程。关联「流程」类型的 Webhook 注册工具无效，Agent 无法发现和调用。
+> **仅 Agent 类型支持**：网关必须关联「智能体」流程。关联「流程」类型的 Gateway 注册工具无效，Agent 无法发现和调用。
 
 客户端注册函数工具后，Agent 执行中可反向调用：
 

@@ -1,7 +1,7 @@
 """
-Webhook 调用记录模型
+WebSocket 网关调用记录模型
 
-每次 Webhook 触发时创建一条记录，统一关联 Agent 会话或 Flow 执行记录。
+每次网关触发时创建一条记录，统一关联 Agent 会话或 Flow 执行记录。
 外部系统可通过免认证查询接口按 token 回查调用历史和消息。
 """
 
@@ -14,13 +14,13 @@ from app.models.base_model import DbBaseModel
 from app.models.flow_execution import ExecutionStatus
 
 
-class WebhookCallRecord(DbBaseModel):
-    """Webhook 调用记录"""
+class WsGatewayCallRecord(DbBaseModel):
+    """WebSocket 网关调用记录"""
 
-    __tablename__ = "webhook_call_record"
+    __tablename__ = "ws_gateway_call_record"
 
-    webhook_id: Mapped[int] = mapped_column(
-        Integer, nullable=False, comment="关联 webhook_config.id"
+    gateway_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="关联 ws_gateway_config.id"
     )
     flow_id: Mapped[int] = mapped_column(
         Integer, nullable=False, comment="关联 flow.id（冗余）"
