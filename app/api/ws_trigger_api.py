@@ -5,7 +5,7 @@
 
 支持远程工具注册：客户端注册的函数可被 Agent 在执行中反向调用。
 
-认证方式：token 在 URL 路径中（与原 HTTP webhook 的 token 机制一致）。
+认证方式：token 在 URL 路径中（与原 HTTP 网关的 token 机制一致）。
 """
 
 import asyncio
@@ -21,7 +21,7 @@ from app.agent_flow.ws_tool_context import _current_ws_conn
 from app.config.database import AsyncSessionLocal
 from app.models.flow import FlowType
 from app.services.flow_service import flow_service
-from app.services.webhook_service import webhook_service
+from app.services.ws_gateway_service import ws_gateway_service
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +32,10 @@ class WSConnection:
 
     websocket: WebSocket
     token: str
-    webhook_id: int
+    gateway_id: int
     flow_id: int
     flow_type: Optional[str]
-    webhook_name: str
+    gateway_name: str
     input_config: Optional[dict]
     registered_tools: list[dict] = field(default_factory=list)
     pending_calls: dict[str, asyncio.Future] = field(default_factory=dict)
@@ -48,7 +48,7 @@ class WSConnection:
 async def trigger_ws(websocket: WebSocket):
     """WebSocket 触发端点主函数
 
-    1. token 鉴权 → 校验 webhook_config
+    1. token 鉴权 → 校验 gateway_config
     2. accept → 发送 connected 事件
     3. 后台 receiver 循环分发客户端指令
     """
@@ -56,25 +56,25 @@ async def trigger_ws(websocket: WebSocket):
 
     # ---- token 鉴权 ----
     async with AsyncSessionLocal() as db:
-        webhook = await webhook_service.get_by_token(db, token)
-        if not webhook:
+        gateway = await ws_gateway_service.get_by_token(db, token)
+        if not gateway:
             await websocket.close(code=4404)
             return
-        if not webhook.is_enabled:
+        if not gateway.is_enabled:
             await websocket.close(code=4403)
             return
 
-        flow = await flow_service.get_by_id(db, webhook.flow_id, raise_not_found=False)
+        flow = await flow_service.get_by_id(db, gateway.flow_id, raise_not_found=False)
         flow_type = flow.flow_type if flow else None
 
         conn = WSConnection(
             websocket=websocket,
             token=token,
-            webhook_id=webhook.id,
-            flow_id=webhook.flow_id,
+            gateway_id=gateway.id,
+            flow_id=gateway.flow_id,
             flow_type=flow_type,
-            webhook_name=webhook.name,
-            input_config=webhook.input_config,
+            gateway_name=gateway.name,
+            input_config=gateway.input_config,
         )
 
     # ---- 接受连接 ----
@@ -83,14 +83,14 @@ async def trigger_ws(websocket: WebSocket):
         {
             "type": "connected",
             "data": {
-                "webhook_id": conn.webhook_id,
-                "webhook_name": conn.webhook_name,
+                "gateway_id": conn.gateway_id,
+                "gateway_name": conn.gateway_name,
                 "flow_id": conn.flow_id,
                 "flow_type": conn.flow_type,
             },
         }
     )
-    logger.info(f"WS trigger 连接: webhook={conn.webhook_name}({conn.webhook_id})")
+    logger.info(f"WS trigger 连接: gateway={conn.gateway_name}({conn.gateway_id})")
 
     # ---- 消息循环 ----
     try:
@@ -106,7 +106,7 @@ async def trigger_ws(websocket: WebSocket):
         conn.pending_calls.clear()
         for task in conn._execute_tasks:
             task.cancel()
-        logger.info(f"WS trigger 断开: webhook_id={conn.webhook_id}")
+        logger.info(f"WS trigger 断开: gateway_id={conn.gateway_id}")
 
 
 async def _message_receiver(conn: WSConnection):
@@ -188,9 +188,7 @@ async def _handle_register_tools(conn: WSConnection, data: dict):
         await _send_error(conn, "tools 必须是数组")
         return
     if conn.flow_type != FlowType.AGENT.value:
-        await _send_error(
-            conn, "远程工具仅 Agent 类型支持，当前 Webhook 关联的不是智能体"
-        )
+        await _send_error(conn, "远程工具仅 Agent 类型支持，当前网关关联的不是智能体")
         return
     conn.registered_tools = tools
     names = [t.get("name", "") for t in tools if isinstance(t, dict)]
@@ -218,8 +216,8 @@ async def _handle_execute(conn: WSConnection, data: dict):
             if k not in ("action", "session_id"):
                 input_data[k] = v
 
-        async for event in webhook_service.stream_execute(
-            conn.webhook_id, input_data, session_id=session_id
+        async for event in ws_gateway_service.stream_execute(
+            conn.gateway_id, input_data, session_id=session_id
         ):
             await conn.websocket.send_json(event)
             if event.get("type") == "call_started":
@@ -245,7 +243,7 @@ async def _handle_create_session(conn: WSConnection, data: dict):
         await _send_error(conn, "仅 Agent 类型支持创建会话")
         return
     title = data.get("title")
-    session_id, session_title = await webhook_service.create_session_for_ws(
+    session_id, session_title = await ws_gateway_service.create_session_for_ws(
         conn.token, title
     )
     conn.current_session_id = session_id
@@ -267,11 +265,11 @@ async def _handle_switch_session(conn: WSConnection, data: dict):
         await _send_error(conn, "缺少 session_id")
         return
     async with AsyncSessionLocal() as db:
-        webhook, session = await webhook_service.get_session_by_token(
+        gateway, session = await ws_gateway_service.get_session_by_token(
             db, conn.token, session_id
         )
     if not session:
-        await _send_error(conn, f"会话 {session_id} 不存在或不属于该 Webhook")
+        await _send_error(conn, f"会话 {session_id} 不存在或不属于该网关")
         return
     conn.current_session_id = session_id
     await conn.websocket.send_json(
@@ -287,7 +285,7 @@ async def _handle_list_sessions(conn: WSConnection, data: dict):
     page = data.get("page", 1)
     page_size = data.get("page_size", 20)
     async with AsyncSessionLocal() as db:
-        sessions, total = await webhook_service.get_sessions_by_token(
+        sessions, total = await ws_gateway_service.get_sessions_by_token(
             db, conn.token, page, page_size
         )
     items = [
@@ -313,7 +311,7 @@ async def _handle_delete_session(conn: WSConnection, data: dict):
         await _send_error(conn, "缺少 session_id")
         return
     async with AsyncSessionLocal() as db:
-        success, msg = await webhook_service.delete_session_by_token(
+        success, msg = await ws_gateway_service.delete_session_by_token(
             db, conn.token, session_id
         )
     if not success:
@@ -338,7 +336,7 @@ async def _handle_get_messages(conn: WSConnection, data: dict):
     before_id = data.get("before_id")
     limit = data.get("limit", 20)
     async with AsyncSessionLocal() as db:
-        messages, total = await webhook_service.get_session_messages_by_token(
+        messages, total = await ws_gateway_service.get_session_messages_by_token(
             db, conn.token, session_id, before_id, limit
         )
     items = [_serialize_message(m) for m in messages]
@@ -358,7 +356,7 @@ async def _handle_delete_message(conn: WSConnection, data: dict):
         await _send_error(conn, "缺少 session_id 或 message_id")
         return
     async with AsyncSessionLocal() as db:
-        success, msg = await webhook_service.delete_session_message_by_token(
+        success, msg = await ws_gateway_service.delete_session_message_by_token(
             db, conn.token, session_id, message_id
         )
     if not success:

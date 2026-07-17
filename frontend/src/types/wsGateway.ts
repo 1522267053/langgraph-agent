@@ -1,4 +1,4 @@
-export interface WebhookConfig {
+export interface WsGatewayConfig {
   id?: number
   flow_id: number
   name: string
@@ -12,7 +12,7 @@ export interface WebhookConfig {
   create_time?: string
 }
 
-export interface WebhookCreate {
+export interface WsGatewayCreate {
   flow_id?: number
   name: string
   description?: string
@@ -20,7 +20,7 @@ export interface WebhookCreate {
   is_enabled: number
 }
 
-export interface WebhookUpdate {
+export interface WsGatewayUpdate {
   id: number
   flow_id?: number
   name?: string

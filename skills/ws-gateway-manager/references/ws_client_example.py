@@ -1,5 +1,5 @@
 """
-Webhook WebSocket 客户端示例
+Gateway WebSocket 客户端示例
 
 依赖：pip install websockets
 用法：python ws_client_example.py [示例编号] [session_id]
@@ -14,11 +14,11 @@ from datetime import datetime
 import websockets
 
 SERVER_HOST = os.environ.get("WS_HOST", "127.0.0.1:8000")
-WEBHOOK_TOKEN = os.environ.get("WS_TOKEN", "YOUR_WEBHOOK_TOKEN_HERE")
+WS_TOKEN = os.environ.get("WS_TOKEN", "e25fdb4eeeac4d0b96f2f9dbef3c55e0")
 
 
 def _url():
-    return f"ws://{SERVER_HOST}/ws/trigger/{WEBHOOK_TOKEN}"
+    return f"ws://{SERVER_HOST}/ws/trigger/{WS_TOKEN}"
 
 
 # ---- 公共工具 ----
@@ -62,7 +62,7 @@ async def _connect():
 
 def _check_agent(conn_data):
     if conn_data.get("flow_type") != "agent":
-        print(f"[错误] 需要「智能体」类型 Webhook，当前为 {conn_data.get('flow_type')}")
+        print(f"[错误] 需要「智能体」类型 Gateway，当前为 {conn_data.get('flow_type')}")
         return False
     return True
 
@@ -77,7 +77,7 @@ async def example_simple():
     print("\n=== 示例 1：最简执行 ===")
     async with websockets.connect(_url()) as ws:
         conn = await _recv(ws)
-        print(f"[已连接] {conn['data']['webhook_name']}")
+        print(f"[已连接] {conn['data']['gateway_name']}")
         await _send(ws, action="execute", message="你好，介绍一下你自己")
         await _drain(ws)
         print()
@@ -91,7 +91,7 @@ async def example_simple():
 async def example_remote_tools():
     """注册本地函数，Agent 执行中反向调用
 
-    注意：Webhook 必须关联「智能体」。
+    注意：Gateway 必须关联「智能体」。
     """
     print("\n=== 示例 2：远程工具 ===")
 
@@ -145,7 +145,7 @@ async def example_remote_tools():
 async def example_sessions():
     """创建会话 → 多轮对话 → 切换 → 列表
 
-    注意：Webhook 必须关联「智能体」。
+    注意：Gateway 必须关联「智能体」。
     """
     print("\n=== 示例 3：会话管理 ===")
     async with websockets.connect(_url()) as ws:
@@ -193,7 +193,7 @@ async def example_sessions():
 # ============================================================
 
 
-class WebhookWSClient:
+class WsGatewayWSClient:
     """封装客户端：后台自动处理 tool_invoke，execute 返回 Future"""
 
     def __init__(self, url):
@@ -254,7 +254,7 @@ class WebhookWSClient:
 async def example_client_class():
     """封装客户端类 + 自动工具回调"""
     print("\n=== 示例 4：封装客户端 ===")
-    client = WebhookWSClient(_url())
+    client = WsGatewayWSClient(_url())
     client.tool("get_env", "获取客户端环境变量",
                 {"type": "object",
                  "properties": {"name": {"type": "string", "description": "变量名"}},
@@ -265,7 +265,7 @@ async def example_client_class():
     )
     await client.connect()
     if client.flow_type != "agent":
-        print("[错误] 示例需要「智能体」类型 Webhook")
+        print("[错误] 示例需要「智能体」类型 Gateway")
         await client.close()
         return
     print("[已连接，工具已注册]")
@@ -324,8 +324,8 @@ EXAMPLES = {
 
 
 async def main():
-    if WEBHOOK_TOKEN == "YOUR_WEBHOOK_TOKEN_HERE":
-        print("请设置环境变量 WS_TOKEN，或修改脚本中的 WEBHOOK_TOKEN")
+    if WS_TOKEN == "YOUR_WS_TOKEN_HERE":
+        print("请设置环境变量 WS_TOKEN，或修改脚本中的 WS_TOKEN")
         sys.exit(1)
 
     choice = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] in EXAMPLES else None

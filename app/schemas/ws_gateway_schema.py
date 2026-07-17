@@ -1,5 +1,5 @@
 """
-Webhook 配置 Schema
+WebSocket 网关配置 Schema
 """
 
 from typing import Optional
@@ -8,11 +8,11 @@ from pydantic import Field
 from app.schemas.base_schema import BaseView, ChinaDateTime
 
 
-class WebhookConfigBase(BaseView):
-    """Webhook 配置基础视图"""
+class WsGatewayConfigBase(BaseView):
+    """WebSocket 网关配置基础视图"""
 
     flow_id: Optional[int] = Field(None, description="关联流程ID")
-    name: Optional[str] = Field(None, description="Webhook 名称")
+    name: Optional[str] = Field(None, description="网关名称")
     token: Optional[str] = Field(None, description="唯一令牌")
     description: Optional[str] = Field(None, description="描述")
     input_config: Optional[dict] = Field(None, description="默认输入参数模板")
@@ -22,30 +22,30 @@ class WebhookConfigBase(BaseView):
     last_call_time: Optional[ChinaDateTime] = Field(None, description="最后调用时间")
 
 
-class WebhookConfigCreate(BaseView):
-    """创建 Webhook"""
+class WsGatewayConfigCreate(BaseView):
+    """创建网关"""
 
     flow_id: int = Field(..., description="关联流程ID")
-    name: str = Field(..., description="Webhook 名称")
+    name: str = Field(..., description="网关名称")
     description: Optional[str] = Field(None, description="描述")
     input_config: Optional[dict] = Field(None, description="默认输入参数模板")
     callback_url: Optional[str] = Field(None, description="回调 URL")
     is_enabled: int = Field(1, description="是否启用")
 
 
-class WebhookConfigUpdate(BaseView):
-    """更新 Webhook"""
+class WsGatewayConfigUpdate(BaseView):
+    """更新网关"""
 
     id: int = Field(..., description="ID")
     flow_id: Optional[int] = Field(None, description="关联流程ID")
-    name: Optional[str] = Field(None, description="Webhook 名称")
+    name: Optional[str] = Field(None, description="网关名称")
     description: Optional[str] = Field(None, description="描述")
     input_config: Optional[dict] = Field(None, description="默认输入参数模板")
     callback_url: Optional[str] = Field(None, description="回调 URL")
     is_enabled: Optional[int] = Field(None, description="是否启用")
 
 
-class WebhookConfigCondition(BaseView):
+class WsGatewayConfigCondition(BaseView):
     """查询条件"""
 
     name: Optional[str] = Field(None, description="名称关键词")
@@ -53,13 +53,13 @@ class WebhookConfigCondition(BaseView):
     is_enabled: Optional[int] = Field(None, description="是否启用")
 
 
-# ---- Webhook 调用记录 Schema ----
+# ---- 网关调用记录 Schema ----
 
 
-class WebhookCallRecordBase(BaseView):
-    """Webhook 调用记录基础视图"""
+class WsGatewayCallRecordBase(BaseView):
+    """网关调用记录基础视图"""
 
-    webhook_id: Optional[int] = Field(None, description="关联 webhook_config.id")
+    gateway_id: Optional[int] = Field(None, description="关联 ws_gateway_config.id")
     flow_id: Optional[int] = Field(None, description="关联 flow.id")
     ref_type: Optional[str] = Field(None, description="引用类型：session/execution")
     ref_id: Optional[int] = Field(None, description="引用ID")
@@ -72,33 +72,33 @@ class WebhookCallRecordBase(BaseView):
     finished_at: Optional[ChinaDateTime] = Field(None, description="完成时间")
 
 
-class WebhookCallRecordResponse(WebhookCallRecordBase):
+class WsGatewayCallRecordResponse(WsGatewayCallRecordBase):
     """调用记录响应（含消息摘要）"""
 
     message_count: Optional[int] = Field(None, description="消息数量")
 
 
-class WebhookCallRecordListResponse(BaseView):
+class WsGatewayCallRecordListResponse(BaseView):
     """调用记录列表响应"""
 
     total: int = Field(0, description="总数")
-    items: list[WebhookCallRecordResponse] = Field(
+    items: list[WsGatewayCallRecordResponse] = Field(
         default_factory=list, description="列表"
     )
 
 
-class WebhookCallRecordPageRequest(BaseView):
+class WsGatewayCallRecordPageRequest(BaseView):
     """调用记录分页请求"""
 
     page: int = Field(1, description="页码")
     page_size: int = Field(20, description="每页条数")
 
 
-# ---- Webhook 会话查询 Schema（仅 Agent 类型流程） ----
+# ---- 网关会话查询 Schema（仅 Agent 类型流程） ----
 
 
-class WebhookSessionResponse(BaseView):
-    """Webhook 查询会话响应"""
+class WsGatewaySessionResponse(BaseView):
+    """网关查询会话响应"""
 
     id: Optional[int] = Field(None, description="会话ID")
     flow_id: Optional[int] = Field(None, description="关联的 Agent Flow ID")
@@ -109,24 +109,24 @@ class WebhookSessionResponse(BaseView):
     )
 
 
-class WebhookSessionListResponse(BaseView):
+class WsGatewaySessionListResponse(BaseView):
     """会话列表响应"""
 
     total: int = Field(0, description="总数")
-    items: list[WebhookSessionResponse] = Field(
+    items: list[WsGatewaySessionResponse] = Field(
         default_factory=list, description="会话列表"
     )
 
 
-class WebhookSessionPageRequest(BaseView):
+class WsGatewaySessionPageRequest(BaseView):
     """会话分页请求"""
 
     page: int = Field(1, description="页码")
     page_size: int = Field(20, description="每页条数")
 
 
-class WebhookMessageResponse(BaseView):
-    """Webhook 查询消息响应"""
+class WsGatewayMessageResponse(BaseView):
+    """网关查询消息响应"""
 
     id: Optional[int] = Field(None, description="消息ID")
     role: Optional[str] = Field(None, description="角色")
@@ -141,16 +141,16 @@ class WebhookMessageResponse(BaseView):
     )
 
 
-class WebhookMessageListResponse(BaseView):
+class WsGatewayMessageListResponse(BaseView):
     """消息列表响应"""
 
     total: int = Field(0, description="总数")
-    items: list[WebhookMessageResponse] = Field(
+    items: list[WsGatewayMessageResponse] = Field(
         default_factory=list, description="列表"
     )
 
 
-class WebhookMessagePageRequest(BaseView):
+class WsGatewayMessagePageRequest(BaseView):
     """消息分页请求"""
 
     before_id: Optional[int] = Field(None, description="游标ID（返回此ID之前的消息）")

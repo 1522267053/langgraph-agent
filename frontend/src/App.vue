@@ -322,7 +322,7 @@ const menuItems = [
   { path: '/statistics', title: 'Token 统计', icon: TrendCharts },
   { path: '/scheduled-task', title: '定时任务', icon: Timer },
   { path: '/agenda', title: '日程管理', icon: Calendar },
-  { path: '/webhook', title: 'Webhook', icon: Connection },
+  { path: '/ws-gateway', title: 'WS 网关', icon: Connection },
   { path: '/files', title: '文件管理', icon: Folder },
   { path: '/marketplace', title: '资源市场', icon: Shop },
   { path: '/settings', title: '系统设置', icon: Setting }

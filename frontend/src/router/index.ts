@@ -117,10 +117,10 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '日程管理' }
   },
   {
-    path: '/webhook',
-    name: 'WebhookList',
-    component: () => import('@/views/WebhookList.vue'),
-    meta: { title: 'Webhook 管理' }
+    path: '/ws-gateway',
+    name: 'WsGatewayList',
+    component: () => import('@/views/WsGatewayList.vue'),
+    meta: { title: 'WebSocket 网关' }
   },
   {
     path: '/settings',

@@ -1,8 +1,8 @@
 """
-Webhook 配置模型
+WebSocket 网关配置模型
 
-允许外部系统通过 HTTP POST 触发流程执行。
-每个 Webhook 关联一个流程，通过唯一 token 进行 URL 认证。
+允许外部系统通过 WebSocket 连接触发流程执行。
+每个网关关联一个流程，通过唯一 token 进行 URL 认证。
 """
 
 from datetime import datetime
@@ -13,23 +13,21 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base_model import DbBaseModel
 
 
-class WebhookConfig(DbBaseModel):
-    """Webhook 配置"""
+class WsGatewayConfig(DbBaseModel):
+    """WebSocket 网关配置"""
 
-    __tablename__ = "webhook_config"
+    __tablename__ = "ws_gateway_config"
 
     flow_id: Mapped[int] = mapped_column(Integer, nullable=False, comment="关联流程ID")
 
-    name: Mapped[str] = mapped_column(
-        String(255), nullable=False, comment="Webhook 名称"
-    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False, comment="网关名称")
 
     token: Mapped[str] = mapped_column(
         String(64), nullable=False, unique=True, comment="唯一令牌（URL 认证）"
     )
 
     description: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True, comment="Webhook 描述"
+        Text, nullable=True, comment="网关描述"
     )
 
     input_config: Mapped[Optional[dict]] = mapped_column(

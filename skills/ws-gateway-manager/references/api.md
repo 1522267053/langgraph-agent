@@ -1,11 +1,11 @@
-# WebSocket Webhook API 参考
+# WebSocket WebSocket 网关 API 参考
 
 ## 管理接口（HTTP，需登录态）
 
-### 创建 Webhook
+### 创建网关
 
 ```
-POST /api/webhook/create
+POST /api/gateway/create
 ```
 
 ```json
@@ -23,7 +23,7 @@ POST /api/webhook/create
 ### 获取 WebSocket 地址
 
 ```
-GET /api/webhook/get/{id}/url
+GET /api/gateway/get/{id}/url
 ```
 
 ```json
@@ -63,7 +63,7 @@ Flow 类型（直接传参数，作为 input_data）：
 {"action": "execute", "city": "北京", "date": "2026-07-15"}
 ```
 
-**输入合并**：`input_data = {**webhook.input_config, **指令参数}`（排除 `action` 和 `session_id`）。
+**输入合并**：`input_data = {**gateway.input_config, **指令参数}`（排除 `action` 和 `session_id`）。
 
 ### register_tools — 注册远程工具
 
@@ -152,7 +152,7 @@ Flow 类型（直接传参数，作为 input_data）：
 {"type": "session_switched", "data": {"session_id": 5}}
 ```
 
-校验会话是否属于该 Webhook（`webhook_id` 匹配）。
+校验会话是否属于该网关（`gateway_id` 匹配）。
 
 ### list_sessions — 查询会话列表
 
@@ -210,7 +210,7 @@ Flow 类型（直接传参数，作为 input_data）：
 
 | type | 说明 |
 |------|------|
-| `connected` | 连接确认，含 webhook_id/flow_id/flow_type |
+| `connected` | 连接确认，含 gateway_id/flow_id/flow_type |
 | `call_started` | 执行开始，含 call_id/session_id |
 | `tools_registered` | 工具注册确认 |
 | `tools_unregistered` | 工具注销确认 |
@@ -262,8 +262,8 @@ Flow 类型（直接传参数，作为 input_data）：
 
 | 关闭码 | 说明 |
 |--------|------|
-| 4404 | token 无效（Webhook 不存在） |
-| 4403 | Webhook 已禁用 |
+| 4404 | token 无效（网关不存在） |
+| 4403 | Gateway 已禁用 |
 
 ### 执行阶段错误
 

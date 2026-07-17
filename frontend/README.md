@@ -68,7 +68,7 @@ npm run format                # Prettier 格式化
 | `/files` | FileList | 全局文件管理 |
 | `/scheduled-task` | ScheduledTaskList | 定时任务管理 |
 | `/agenda` | AgendaList | 日程管理 |
-| `/webhook` | WebhookList | Webhook 管理 |
+| `/ws-gateway` | WsGatewayList | WebSocket 网关管理 |
 | `/statistics` | TokenStatistics | Token 统计 |
 | `/marketplace` | Marketplace | 资源市场 |
 | `/setup` | SetupWizard | 初始化配置向导 |

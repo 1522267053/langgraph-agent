@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { Plus, Refresh, Edit, Delete, View, CopyDocument } from '@element-plus/icons-vue'
-import { webhookApi } from '@/api/webhook'
+import { wsGatewayApi } from '@/api/wsGateway'
 import { flowApi } from '@/api/flow'
 import ActionColumn from '@/components/common/ActionColumn.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
-import type { WebhookConfig, WebhookCreate } from '@/types/webhook'
+import type { WsGatewayConfig, WsGatewayCreate } from '@/types/wsGateway'
 import type { Flow, FlowIOField } from '@/types/flow'
 import type { PaginatedResponse } from '@/types/common'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -13,7 +13,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const { isMobile } = useIsMobile()
 
 const loading = ref(false)
-const tableData = ref<WebhookConfig[]>([])
+const tableData = ref<WsGatewayConfig[]>([])
 const total = ref(0)
 
 const queryParams = reactive({
@@ -28,9 +28,9 @@ const queryParams = reactive({
 async function loadData() {
   loading.value = true
   try {
-    const res = await webhookApi.page(queryParams)
+    const res = await wsGatewayApi.page(queryParams)
     if (res.data.code === 1) {
-      const data = res.data.data as PaginatedResponse<WebhookConfig>
+      const data = res.data.data as PaginatedResponse<WsGatewayConfig>
       tableData.value = data.items
       total.value = data.total
     }
@@ -101,7 +101,7 @@ const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formLoading = ref(false)
 
-const formData = reactive<WebhookCreate & { id?: number }>({
+const formData = reactive<WsGatewayCreate & { id?: number }>({
   flow_id: undefined,
   name: '',
   description: '',
@@ -168,7 +168,7 @@ function openCreate() {
   dialogVisible.value = true
 }
 
-function openEdit(row: WebhookConfig) {
+function openEdit(row: WsGatewayConfig) {
   resetForm()
   isEdit.value = true
   formData.id = row.id
@@ -204,7 +204,7 @@ async function handleSubmit() {
   formLoading.value = true
   try {
     if (isEdit.value && formData.id) {
-      await webhookApi.update({
+      await wsGatewayApi.update({
         id: formData.id,
         flow_id: formData.flow_id,
         name: formData.name,
@@ -214,7 +214,7 @@ async function handleSubmit() {
       })
       ElMessage.success('更新成功')
     } else {
-      await webhookApi.create({
+      await wsGatewayApi.create({
         flow_id: formData.flow_id,
         name: formData.name,
         description: formData.description || undefined,
@@ -231,12 +231,12 @@ async function handleSubmit() {
 }
 
 // ---- 删除 ----
-async function handleDelete(row: WebhookConfig) {
+async function handleDelete(row: WsGatewayConfig) {
   try {
-    await ElMessageBox.confirm(`确定删除 Webhook「${row.name}」吗？`, '提示', {
+    await ElMessageBox.confirm(`确定删除网关「${row.name}」吗？`, '提示', {
       type: 'warning'
     })
-    await webhookApi.delete(row.id!)
+    await wsGatewayApi.delete(row.id!)
     ElMessage.success('删除成功')
     await loadData()
   } catch {
@@ -246,14 +246,14 @@ async function handleDelete(row: WebhookConfig) {
 
 // ---- 查看详情 ----
 const detailDialogVisible = ref(false)
-const detailWebhook = ref<WebhookConfig | null>(null)
+const detailGateway = ref<WsGatewayConfig | null>(null)
 
-function showDetail(row: WebhookConfig) {
-  detailWebhook.value = row
+function showDetail(row: WsGatewayConfig) {
+  detailGateway.value = row
   detailDialogVisible.value = true
 }
 
-function getWsUrl(row: WebhookConfig): string {
+function getWsUrl(row: WsGatewayConfig): string {
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
   const host = location.host
   return `${protocol}://${host}/ws/trigger/${row.token}`
@@ -282,7 +282,7 @@ function getRowActions() {
   ]
 }
 
-function onRowAction(row: WebhookConfig, key: string) {
+function onRowAction(row: WsGatewayConfig, key: string) {
   switch (key) {
     case 'detail':
       showDetail(row)
@@ -303,11 +303,11 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="webhook-list-page page">
+  <div class="ws-gateway-list-page page">
     <div class="page-header">
-      <h1 class="page-title">Webhook 管理</h1>
+      <h1 class="page-title">WebSocket 网关管理</h1>
       <div class="header-actions">
-        <el-button type="primary" :icon="Plus" @click="openCreate">新建 Webhook</el-button>
+        <el-button type="primary" :icon="Plus" @click="openCreate">新建网关</el-button>
         <el-button :icon="Refresh" @click="loadData">刷新</el-button>
       </div>
     </div>
@@ -404,12 +404,12 @@ onMounted(() => {
     <!-- 新增/编辑弹窗 -->
     <el-dialog
       v-model="dialogVisible"
-      :title="isEdit ? '编辑 Webhook' : '新建 Webhook'"
+      :title="isEdit ? '编辑网关' : '新建网关'"
       width="600px"
     >
       <el-form label-position="top">
         <el-form-item label="名称" required>
-          <el-input v-model="formData.name" placeholder="Webhook 名称" />
+          <el-input v-model="formData.name" placeholder="网关名称" />
         </el-form-item>
         <el-form-item label="关联流程" required>
           <el-select v-model="formData.flow_id" placeholder="选择流程" style="width: 100%">
@@ -444,32 +444,32 @@ onMounted(() => {
     </el-dialog>
 
     <!-- 查看详情弹窗 -->
-    <el-dialog v-model="detailDialogVisible" title="Webhook 详情" width="700px">
-      <template v-if="detailWebhook">
+    <el-dialog v-model="detailDialogVisible" title="网关详情" width="700px">
+      <template v-if="detailGateway">
         <el-descriptions :column="1" border>
           <el-descriptions-item label="名称">
-            {{ detailWebhook.name }}
+            {{ detailGateway.name }}
           </el-descriptions-item>
           <el-descriptions-item label="关联流程">
-            {{ flowName(detailWebhook.flow_id) }}
+            {{ flowName(detailGateway.flow_id) }}
           </el-descriptions-item>
           <el-descriptions-item label="流程类型">
             <el-tag
               size="small"
-              :type="flowType(detailWebhook.flow_id) === '智能体' ? 'success' : 'primary'"
+              :type="flowType(detailGateway.flow_id) === '智能体' ? 'success' : 'primary'"
             >
-              {{ flowType(detailWebhook.flow_id) }}
+              {{ flowType(detailGateway.flow_id) }}
             </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="状态">
-            <el-tag v-if="detailWebhook.is_enabled === 1" size="small" type="success">启用</el-tag>
+            <el-tag v-if="detailGateway.is_enabled === 1" size="small" type="success">启用</el-tag>
             <el-tag v-else size="small" type="danger">禁用</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="WebSocket 地址">
             <div class="url-display">
-              <el-input :model-value="getWsUrl(detailWebhook)" readonly class="url-input">
+              <el-input :model-value="getWsUrl(detailGateway)" readonly class="url-input">
                 <template #append>
-                  <el-button :icon="CopyDocument" @click="copyUrl(getWsUrl(detailWebhook))">
+                  <el-button :icon="CopyDocument" @click="copyUrl(getWsUrl(detailGateway))">
                     复制
                   </el-button>
                 </template>
@@ -477,22 +477,22 @@ onMounted(() => {
             </div>
           </el-descriptions-item>
           <el-descriptions-item label="描述">
-            {{ detailWebhook.description || '-' }}
+            {{ detailGateway.description || '-' }}
           </el-descriptions-item>
           <el-descriptions-item label="默认输入参数">
-            <pre v-if="detailWebhook.input_config" class="json-preview">{{
-              JSON.stringify(detailWebhook.input_config, null, 2)
+            <pre v-if="detailGateway.input_config" class="json-preview">{{
+              JSON.stringify(detailGateway.input_config, null, 2)
             }}</pre>
             <span v-else>-</span>
           </el-descriptions-item>
           <el-descriptions-item label="调用次数">
-            {{ detailWebhook.call_count || 0 }}
+            {{ detailGateway.call_count || 0 }}
           </el-descriptions-item>
           <el-descriptions-item label="最后调用">
-            {{ detailWebhook.last_call_time || '-' }}
+            {{ detailGateway.last_call_time || '-' }}
           </el-descriptions-item>
           <el-descriptions-item label="创建时间">
-            {{ detailWebhook.create_time || '-' }}
+            {{ detailGateway.create_time || '-' }}
           </el-descriptions-item>
         </el-descriptions>
 
