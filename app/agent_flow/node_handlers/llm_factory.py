@@ -20,7 +20,7 @@ def create_llm(
     model: str,
     base_url: str = "",
     max_tokens: int = 8192,
-    provider_name: str = "deepseek",
+    provider_name: str = "",
     temperature: float = 0.7,
     extra_body: Optional[dict] = None,
     reasoning_effort: Optional[str] = None,
@@ -77,7 +77,7 @@ def prepare_llm(
     base_url = node_config.get("base_url")
     max_tokens = node_config.get("max_tokens", 8192)
     temperature = node_config.get("temperature", 0.7)
-    provider_name = node_config.get("provider", "deepseek")
+    provider_name = node_config.get("provider", "")
     extra_body = node_config.get("extra_body")
     reasoning_effort = node_config.get("reasoning_effort")
 

@@ -43,7 +43,7 @@ def inject_llm_defaults(base_config: dict, global_cfg: dict) -> dict:
     needs_inject = not bc.get("model") or not bc.get("api_key")
     if needs_inject and global_cfg.get("model") and global_cfg.get("api_key"):
         if not bc.get("provider"):
-            bc["provider"] = global_cfg.get("provider", "deepseek")
+            bc["provider"] = global_cfg.get("provider", "")
         if not bc.get("model"):
             bc["model"] = global_cfg.get("model", "")
         if not bc.get("api_key"):
