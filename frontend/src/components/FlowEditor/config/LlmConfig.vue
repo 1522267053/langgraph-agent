@@ -76,18 +76,6 @@ const { addInputVariable, removeInputVariable, handleSourceTypeChange } = useInp
   localConfig,
   updateConfig
 )
-const enableRequiredTools = ref(
-  (localConfig.value.required_tools?.length ?? 0) > 0 || !!localConfig.value.tool_check_script
-)
-
-watch(enableRequiredTools, val => {
-  if (!val) {
-    localConfig.value.required_tools = []
-    localConfig.value.tool_check_script = ''
-    updateConfig()
-  }
-})
-
 const requiredToolsMode = ref(localConfig.value.tool_check_script ? 'script' : 'simple')
 
 watch(requiredToolsMode, val => {
@@ -367,72 +355,67 @@ function handleExtraBodyBlur(): void {
 
     <div class="config-section">
       <div class="section-title">必需工具检查</div>
+      <el-text size="small" type="info" style="margin-bottom: 12px; display: block">
+        设置工具后自动启用，LLM 未调用必需工具时自动提醒重试
+      </el-text>
       <el-form label-width="120px" size="small">
-        <el-form-item label="启用检查">
-          <el-switch v-model="enableRequiredTools" />
-          <el-text size="small" type="info" style="margin-left: 8px">
-            LLM 未调用必需工具时自动提醒重试
-          </el-text>
+        <el-form-item label="检查模式">
+          <el-radio-group v-model="requiredToolsMode">
+            <el-radio value="simple">工具名匹配</el-radio>
+            <el-radio value="script">自定义脚本</el-radio>
+          </el-radio-group>
         </el-form-item>
-        <template v-if="enableRequiredTools">
-          <el-form-item label="检查模式">
-            <el-radio-group v-model="requiredToolsMode">
-              <el-radio value="simple">工具名匹配</el-radio>
-              <el-radio value="script">自定义脚本</el-radio>
-            </el-radio-group>
-          </el-form-item>
-          <el-form-item v-if="requiredToolsMode === 'simple'" label="必需工具名">
-            <el-select
-              v-model="localConfig.required_tools"
-              multiple
-              filterable
-              allow-create
-              default-first-option
-              placeholder="输入或选择工具名"
-              style="width: 100%"
-              @change="updateConfig"
+        <el-form-item v-if="requiredToolsMode === 'simple'" label="必需工具名">
+          <el-select
+            v-model="localConfig.required_tools"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            placeholder="输入或选择工具名"
+            style="width: 100%"
+            @change="updateConfig"
+          >
+            <el-option-group
+              v-for="group in connectedToolGroups"
+              :key="group.node_key"
+              :label="group.node_label"
             >
-              <el-option-group
-                v-for="group in connectedToolGroups"
-                :key="group.node_key"
-                :label="group.node_label"
-              >
-                <el-option
-                  v-for="tool in group.tools"
-                  :key="tool.name"
-                  :label="tool.name"
-                  :value="tool.name"
-                />
-              </el-option-group>
-            </el-select>
-          </el-form-item>
-          <el-form-item v-else label="检查脚本">
-            <el-input
-              v-model="localConfig.tool_check_script"
-              type="textarea"
-              :rows="5"
-              placeholder="def main(called_tools, last_result): return {'need_retry': bool, 'hint': str}"
-              @blur="updateConfig"
-            />
-          </el-form-item>
-          <el-form-item label="最大重试次数">
-            <el-input-number
-              v-model="localConfig.required_tools_max_retries"
-              :min="1"
-              :max="10"
-              @change="updateConfig"
-            />
-          </el-form-item>
-          <el-form-item v-if="requiredToolsMode === 'simple'" label="提醒模板">
-            <el-input
-              v-model="localConfig.required_tools_hint"
-              type="textarea"
-              :rows="2"
-              placeholder="留空使用默认模板，{{tools}} 会被替换为缺失的工具名"
-              @blur="updateConfig"
-            />
-          </el-form-item>
-        </template>
+              <el-option
+                v-for="tool in group.tools"
+                :key="tool.name"
+                :label="tool.name"
+                :value="tool.name"
+              />
+            </el-option-group>
+          </el-select>
+        </el-form-item>
+        <el-form-item v-else label="检查脚本">
+          <el-input
+            v-model="localConfig.tool_check_script"
+            type="textarea"
+            :rows="5"
+            placeholder="def main(called_tools, last_result): return {'need_retry': bool, 'hint': str}"
+            @blur="updateConfig"
+          />
+        </el-form-item>
+        <el-form-item label="最大重试次数">
+          <el-input-number
+            v-model="localConfig.required_tools_max_retries"
+            :min="1"
+            :max="10"
+            @change="updateConfig"
+          />
+        </el-form-item>
+        <el-form-item v-if="requiredToolsMode === 'simple'" label="提醒模板">
+          <el-input
+            v-model="localConfig.required_tools_hint"
+            type="textarea"
+            :rows="2"
+            placeholder="留空使用默认模板，{{tools}} 会被替换为缺失的工具名"
+            @blur="updateConfig"
+          />
+        </el-form-item>
       </el-form>
       <div class="config-hint">
         <el-text size="small" type="info">
