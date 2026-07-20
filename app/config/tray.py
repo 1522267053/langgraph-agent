@@ -248,14 +248,13 @@ def _load_icon_image():
 
 
 def run_with_tray(app) -> None:
-    """启动 uvicorn（守护线程）+ 系统托盘（主线程）"""
+    """启动 uvicorn（守护线程）+ 系统托盘（主线程）
+
+    托盘图标立即显示，服务就绪检测在后台守护线程中异步执行。
+    """
     import pystray
 
     _start_uvicorn(app)
-
-    if not _wait_for_server(timeout=30):
-        logger.warning("服务在 30 秒内未就绪，仍创建托盘图标")
-    stop_loading_server()
 
     image = _load_icon_image()
 
@@ -269,11 +268,25 @@ def run_with_tray(app) -> None:
         pystray.MenuItem("退出", _on_quit),
     )
 
+    ready_title = f"智能体平台 v{__version__}"
     icon = pystray.Icon(
         "langgraph_agent",
         image,
-        f"智能体平台 v{__version__}",
+        f"智能体平台 v{__version__}（启动中...）",
         menu,
     )
+
+    def _watch_server_ready() -> None:
+        """守护线程：等待服务就绪后关闭加载页并通知用户"""
+        if not _wait_for_server(timeout=30):
+            logger.warning("服务在 30 秒内未就绪，仍创建托盘图标")
+        stop_loading_server()
+        icon.title = ready_title
+        icon.notify("服务已就绪", "智能体平台")
+
+    threading.Thread(
+        target=_watch_server_ready, daemon=True, name="server-ready-watcher"
+    ).start()
+
     icon.run()
     _finalize_exit()
