@@ -920,6 +920,9 @@ export default {
   padding: 5px 24px;
   max-height: 250px;
   overflow: hidden;
+  max-width: 896px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 @media (max-width: 768px) {
