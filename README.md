@@ -350,6 +350,52 @@ npm run lint                            # ESLint 检查（自动修复）
 npm run format                          # Prettier 格式化
 ```
 
+## Git 提交规范
+
+项目遵循 [Conventional Commits](https://www.conventionalcommits.org/)，所有提交（含 AI 生成）必须按以下格式：
+
+```
+<type>(<scope>): <subject>
+```
+
+### type（必填）
+
+| type | 用途 |
+|------|------|
+| `feat` | 新功能 |
+| `fix` | Bug 修复（行为与预期不符） |
+| `refactor` | 重构（不改外部行为） |
+| `docs` | 文档变更 |
+| `style` | 代码格式化（ruff/prettier），不改逻辑 |
+| `chore` | 构建/依赖/配置等杂项 |
+| `perf` | 性能优化 |
+| `revert` | 回滚 |
+
+### subject 要求
+
+- **冒号后必须有一个空格**：`feat: xxx` ✅ / `feat:xxx` ❌
+- **具体描述改了什么**，禁止"修改代码""修改样式""更新逻辑"等无信息量措辞
+- 中文为主，以动词开头（新增/修复/重构/移除/优化），不以句号结尾，不加 emoji
+- 不超过 50 字符
+
+### scope（可选）
+
+模块范围，如 `feat(llm):`、`fix(python):`、`docs(skill):`，无明确范围时省略。
+
+### 正反示例
+
+✅ `feat: 定时任务支持单次执行模式（schedule_type=once，到点执行后自动禁用）`
+✅ `fix(llm): 必需工具未调用时自动提醒重试`
+✅ `refactor: 将 webhook 全线重命名为 ws-gateway`
+✅ `style: ruff 格式化 app/agent_flow 目录`
+
+❌ `fix:修改代码` — 无信息量
+❌ `fix:代码格式化` — 格式化应用 `style:`
+❌ `feat:xxx` — 冒号后无空格
+❌ `修复登录bug` — 缺少 type 前缀
+
+> 一个提交只做一件事；混合改动（功能+格式化+重构）请拆成多个提交。详见 [AGENTS.md](AGENTS.md#git-提交规范强制)。
+
 ## 相关文档
 
 - [AGENTS.md](AGENTS.md) — AI 代理开发指南（代码规范、架构约定、注意事项）
