@@ -12,13 +12,18 @@ if IS_WIN_PACKAGED:
     _devnull = open(os.devnull, "w")
     sys.stdout = _devnull
     sys.stderr = _devnull
-    # 立即打开加载页（在重型 import 之前，争取 1 秒内弹出浏览器）
+    # 单实例检测：已有实例运行则打开其浏览器并退出新进程
     from app.config.tray import handle_duplicate_instance
 
-    # 单实例检测：已有实例运行则打开其浏览器并退出新进程
     if handle_duplicate_instance():
         sys.exit(0)
 
+    # 立即创建托盘图标（在加载页和重型 import 之前）
+    from app.config.tray import create_tray_icon
+
+    create_tray_icon()
+
+    # 打开浏览器加载页（在重型 import 之前，争取 1 秒内弹出）
     from app.config.tray import open_loading_page
 
     open_loading_page()

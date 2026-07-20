@@ -1,7 +1,7 @@
 """
 系统托盘管理（仅 Windows 打包环境启用）
 
-主线程运行 pystray 图标循环，守护线程运行 uvicorn 服务器。
+通过 run_detached() 在后台线程运行 pystray 图标循环，主线程通过 Event 阻塞等待退出。
 通过菜单可打开浏览器、打开日志目录、重启服务、退出。
 """
 
@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 _server = None
 _server_thread = None
 _loading_server = None
+_tray_icon = None
+_shutdown_event = threading.Event()
 
 _LOADING_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -229,11 +231,13 @@ def _on_restart(icon, item) -> None:
         return
     _signal_stop()
     icon.stop()
+    _shutdown_event.set()
 
 
 def _on_quit(icon, item) -> None:
     _signal_stop()
     icon.stop()
+    _shutdown_event.set()
 
 
 def _load_icon_image():
@@ -247,20 +251,11 @@ def _load_icon_image():
     return Image.new("RGB", (64, 64), color=(64, 158, 255))
 
 
-def run_with_tray(app) -> None:
-    """启动 uvicorn（守护线程）+ 系统托盘（主线程）
-
-    托盘图标立即显示，服务就绪检测在后台守护线程中异步执行。
-    """
+def _build_tray_menu():
+    """构建托盘右键菜单"""
     import pystray
 
-    _start_uvicorn(app)
-
-    image = _load_icon_image()
-
-    from app.config.version import __version__
-
-    menu = pystray.Menu(
+    return pystray.Menu(
         pystray.MenuItem("打开浏览器", _on_open_browser, default=True),
         pystray.MenuItem("打开日志目录", _on_open_logs),
         pystray.MenuItem("重启服务", _on_restart),
@@ -268,25 +263,55 @@ def run_with_tray(app) -> None:
         pystray.MenuItem("退出", _on_quit),
     )
 
-    ready_title = f"智能体平台 v{__version__}"
-    icon = pystray.Icon(
+
+def create_tray_icon() -> None:
+    """创建托盘图标并立即显示（非阻塞，run_detached 后台线程运行消息循环）。
+
+    在 main.py 最早期调用，确保用户在加载页之前就能看到托盘。
+    """
+    global _tray_icon
+    import pystray
+
+    image = _load_icon_image()
+
+    from app.config.version import __version__
+
+    _tray_icon = pystray.Icon(
         "langgraph_agent",
         image,
         f"智能体平台 v{__version__}（启动中...）",
-        menu,
+        _build_tray_menu(),
     )
+    _tray_icon.run_detached()
+
+
+def run_with_tray(app) -> None:
+    """启动 uvicorn（守护线程），主线程阻塞等待退出信号。
+
+    若 create_tray_icon() 已提前创建托盘图标则复用，否则在此创建。
+    """
+    global _tray_icon
+
+    _start_uvicorn(app)
+
+    if _tray_icon is None:
+        create_tray_icon()
+
+    icon = _tray_icon
 
     def _watch_server_ready() -> None:
         """守护线程：等待服务就绪后关闭加载页并通知用户"""
         if not _wait_for_server(timeout=30):
             logger.warning("服务在 30 秒内未就绪，仍创建托盘图标")
         stop_loading_server()
-        icon.title = ready_title
+        from app.config.version import __version__
+
+        icon.title = f"智能体平台 v{__version__}"
         icon.notify("服务已就绪", "智能体平台")
 
     threading.Thread(
         target=_watch_server_ready, daemon=True, name="server-ready-watcher"
     ).start()
 
-    icon.run()
+    _shutdown_event.wait()
     _finalize_exit()
