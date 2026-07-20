@@ -72,12 +72,8 @@ def _build_ask_tool_schema(agent_name: str, input_schema: dict | None, node_key:
 
             if field_type == "file_list":
                 file_list_fields.add(name)
-                desc = (
-                    f"{description}（逗号分隔的文件ID，例如 '1,2,3'）"
-                    if description
-                    else "逗号分隔的文件ID，例如 '1,2,3'"
-                )
-                py_type = str
+                desc = f"{description}（文件ID列表）" if description else "文件ID列表"
+                py_type = list[int]
             else:
                 py_type = _TYPE_MAP.get(field_type, str)
                 desc = description
@@ -185,18 +181,6 @@ class SubAgentNodeHandler(BaseNodeHandler):
             extra_params: dict = {
                 k: v for k, v in kwargs.items() if k != "task" and v is not None
             }
-
-            # 将 file_list 字段从逗号分隔字符串转为 int 列表
-            for fname in _file_list_fields:
-                if fname in extra_params and isinstance(extra_params[fname], str):
-                    try:
-                        extra_params[fname] = [
-                            int(x.strip())
-                            for x in extra_params[fname].split(",")
-                            if x.strip()
-                        ]
-                    except ValueError:
-                        pass
 
             session_id = 0
             try:

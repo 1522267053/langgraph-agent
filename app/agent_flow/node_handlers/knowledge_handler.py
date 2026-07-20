@@ -89,20 +89,16 @@ class VectorSearchInput(BaseModel):
 
 
 class SaveInsightInput(BaseModel):
-    """保存知识沉淀工具输入参数"""
-
     question: str = Field(..., description="触发问题/查询（用于后续语义检索）")
     answer: str = Field(..., description="AI生成的知识沉淀内容")
-    keywords: Optional[str] = Field(None, description="关键词（逗号分隔，辅助检索）")
-    source_segment_ids: Optional[str] = Field(
-        None, description="关联的段落ID列表（逗号分隔，用于溯源）"
+    keywords: Optional[list[str]] = Field(None, description="关键词列表（辅助检索）")
+    source_segment_ids: Optional[list[int]] = Field(
+        None, description="关联的段落ID列表（用于溯源）"
     )
 
 
 class DeleteInsightInput(BaseModel):
-    """删除知识沉淀工具输入参数"""
-
-    ids: str = Field(..., description="要删除的沉淀ID列表（逗号分隔）")
+    ids: list[int] = Field(..., description="要删除的沉淀ID列表")
 
 
 class KnowledgeNodeConfig(BaseNodeConfig):
@@ -429,51 +425,33 @@ class KnowledgeNodeHandler(BaseNodeHandler):
         async def save_insight(
             question: str,
             answer: str,
-            keywords: Optional[str] = None,
-            source_segment_ids: Optional[str] = None,
+            keywords: Optional[list[str]] = None,
+            source_segment_ids: Optional[list[int]] = None,
         ) -> str:
-            """将有价值的知识总结保存到知识库沉淀层，供后续对话复用"""
-            seg_ids = None
-            if source_segment_ids:
-                try:
-                    seg_ids = [
-                        int(sid.strip())
-                        for sid in source_segment_ids.split(",")
-                        if sid.strip()
-                    ]
-                except ValueError:
-                    return f"关联段落ID格式错误: {source_segment_ids}"
-
             async with AsyncSessionLocal() as db:
                 insight = await knowledge_insight_service.save_insight(
                     db,
                     knowledge_base_id=kb_id,
                     question=question,
                     answer=answer,
-                    keywords=keywords,
-                    source_segment_ids=seg_ids,
+                    keywords=",".join(keywords) if keywords else None,
+                    source_segment_ids=source_segment_ids,
                 )
 
                 seg_info = ""
-                if seg_ids:
-                    seg_info = f"，关联段落: {source_segment_ids}"
+                if source_segment_ids:
+                    seg_info = (
+                        f"，关联段落: {','.join(str(s) for s in source_segment_ids)}"
+                    )
 
                 return f"知识沉淀已保存，沉淀ID: {insight.id}{seg_info}"
 
-        async def delete_insight(ids: str) -> str:
-            """删除知识沉淀，ids为逗号分隔的沉淀ID列表"""
-            try:
-                id_list = [int(i.strip()) for i in ids.split(",") if i.strip()]
-            except ValueError:
-                return f"沉淀ID格式错误: {ids}"
-
-            if not id_list:
+        async def delete_insight(ids: list[int]) -> str:
+            if not ids:
                 return "未提供有效的沉淀ID"
 
             async with AsyncSessionLocal() as db:
-                result = await knowledge_insight_service.delete_batch_by_ids(
-                    db, id_list
-                )
+                result = await knowledge_insight_service.delete_batch_by_ids(db, ids)
                 return (
                     f"删除完成: 请求{result['total']}条，实际删除{result['deleted']}条"
                 )
