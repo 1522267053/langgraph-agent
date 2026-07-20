@@ -25,6 +25,76 @@ npm run format                          # Prettier 格式化
 - `npm run build` 只运行 `vite build`，不含类型检查
 - mypy 未安装，AGENTS.md 旧版中的 `poetry run mypy app/` 命令不可用
 
+## Git 提交规范（强制）
+
+**所有提交必须遵守 Conventional Commits。AI 生成 commit message 时，必须严格按下列规则，不得自由发挥。**
+
+### 格式
+
+```
+<type>(<scope>): <subject>
+                                    # 空行
+<body>                              # 可选
+```
+
+### type（必填，小写）
+
+| type | 用途 | 示例 |
+|------|------|------|
+| `feat` | 新功能 | 新增节点 / 新增接口 |
+| `fix` | **Bug 修复**（行为与预期不符） | 修复分页未过滤软删除 |
+| `refactor` | 重构（不改外部行为） | 提取公共方法、改名 |
+| `docs` | 文档变更 | 更新 README / AGENTS.md |
+| `style` | **代码格式化**（ruff/prettier/拼写） | 格式化、改缩进 |
+| `chore` | 构建/依赖/配置等杂项 | 升级依赖、改 .env.example |
+| `perf` | 性能优化 | 减少 N+1 查询 |
+| `test` | 测试相关 | （本项目暂无测试框架） |
+| `revert` | 回滚 | revert 某次提交 |
+
+### scope（可选，小写）
+
+模块或范围，紧贴 type 写在括号内，如 `feat(llm):`、`fix(python):`、`docs(skill):`、`chore(db):`、`refactor(webhook):`。无明确范围时省略括号。
+
+### subject 规则（最重要）
+
+1. **冒号后必须有一个空格**：`feat: xxx` ✅ / `feat:xxx` ❌
+2. **必须具体描述"改了什么"**，禁止"修改代码""修改样式""更新逻辑""修改 xxx"等无信息量措辞。读者不看 diff 也应能明白改动主旨。
+3. **以动词开头**：新增 / 修复 / 重构 / 移除 / 优化 / 调整 / 统一 / 提取 / 升级。
+4. **中文为主**（与历史风格一致），专有名词/标识符/参数名保留英文（如 `schedule_type=once`、`is_delete`）。
+5. **不以句号结尾**，**不加 emoji**，首字母不大写（中文不适用）。
+6. 控制在 50 个字符以内；超长时拆为更小提交或写入 body。
+
+### body（可选）
+
+用于解释**为什么**（动机/背景/破坏性影响），不要复述 subject 已说明的"做了什么"。每行不超过 72 字符。破坏性变更以 `BREAKING CHANGE:` 开头。
+
+### 正反示例（取自本项目历史）
+
+✅ **好**（具体、有信息量）：
+- `feat: 定时任务支持单次执行模式（schedule_type=once，到点执行后自动禁用）`
+- `fix(llm): 必需工具未调用时自动提醒重试`
+- `fix(python): __save_file__ 保存后将 preview_url/mime_type 提升到顶层`
+- `refactor: 将 webhook 全线重命名为 ws-gateway（WebSocket 网关）`
+- `docs(skill): Seedance 技能新增 [附件文件] 路径解析规则`
+- `style: ruff 格式化 app/agent_flow 目录`
+
+❌ **坏**（必须避免）：
+- `fix:修改代码` — 无信息量，看不出改了什么
+- `fix:修改样式` / `fix:修改build.spec打包规则` — 描述模糊
+- `fix:代码格式化` / `fix:格式化代码` — **格式化应用 `style:`**，且冒号后无空格
+- `fix:xxx` — 冒号后无空格
+- `统一消息 role 为 LangChain 标准` — **缺少 type 前缀**
+- `feat: 修复登录bug` — 修复用 `fix:`，不是 `feat:`
+
+### 提交前自检清单
+
+- [ ] 有合法的 type 前缀（feat/fix/refactor/docs/style/chore/perf/revert）
+- [ ] 冒号后有且仅有一个空格（`feat: xxx`）
+- [ ] subject 具体，没有"修改代码/更新逻辑"这类词
+- [ ] 修复 Bug 用 `fix:`，新增功能用 `feat:`，格式化用 `style:`
+- [ ] 无 emoji、无末尾句号
+- [ ] 一个提交只做一件事；混合改动（功能+格式化+重构）拆成多个提交
+
 ## 自动注册机制（核心架构）
 
 **这是整个项目最重要的约定**：新增模块放入对应目录即可自动加载，无需手动 import。
