@@ -367,21 +367,15 @@ class MemoryNodeHandler(BaseNodeHandler):
             }
 
         async def save_memory(
-            memories: str,
-        ) -> str:
+            memories: list[MemoryItem],
+        ) -> dict:
             agent_id = handler._get_agent_id()
             if not agent_id:
                 return {"error": "无法获取Agent ID"}
 
             now_ts = time.time()
 
-            try:
-                items = json.loads(memories)
-            except json.JSONDecodeError:
-                return {"error": "memories 参数必须是合法的 JSON 数组"}
-
-            if not isinstance(items, list):
-                items = [items]
+            items = memories
 
             if not items:
                 return {"error": "memories 不能为空"}
@@ -392,8 +386,8 @@ class MemoryNodeHandler(BaseNodeHandler):
                 protected_ids: list[int] = []
                 skipped = []
                 for idx, item in enumerate(items):
-                    title = item.get("title", "").strip()
-                    content = item.get("content", "").strip()
+                    title = (item.title or "").strip()
+                    content = (item.content or "").strip()
                     if not title and not content:
                         skipped.append(
                             {"index": idx, "reason": "title 和 content 均为空"}
@@ -410,11 +404,11 @@ class MemoryNodeHandler(BaseNodeHandler):
                     if not content:
                         skipped.append({"index": idx, "reason": "缺少 content（必填）"})
                         continue
-                    category = item.get("category", default_category)
+                    category = item.category or default_category
                     if category not in MemoryNodeConfig.VALID_CATEGORIES:
                         category = default_category
-                    importance = item.get("importance", default_importance)
-                    tier = item.get("tier") or memory_service.infer_tier(importance)
+                    importance = item.importance or default_importance
+                    tier = item.tier or memory_service.infer_tier(importance)
                     if tier == "hot":
                         has_hot = True
                     memory = await memory_service.save_memory(
@@ -425,7 +419,7 @@ class MemoryNodeHandler(BaseNodeHandler):
                         memory_type=tier,
                         category=category,
                         importance=importance,
-                        keywords=item.get("keywords"),
+                        keywords=item.keywords,
                         hot_decay_days=hot_decay_days,
                         warm_decay_days=warm_decay_days,
                         skip_decay=True,
@@ -501,23 +495,18 @@ class MemoryNodeHandler(BaseNodeHandler):
 
         async def search_memory(
             query: str,
-            tier: Optional[str] = None,
-            categories: Optional[str] = None,
+            tier: Optional[list[str]] = None,
+            categories: Optional[list[str]] = None,
             max_results: int = max_results,
             min_score: float = 0.0,
-        ) -> str:
+        ) -> dict:
             agent_id = handler._get_agent_id()
             if not agent_id:
                 return {"error": "无法获取Agent ID"}
 
-            cat_list = (
-                [c.strip() for c in categories.split(",")] if categories else None
-            )
+            cat_list = categories
 
-            effective_tier = tier if tier else "warm,cold"
-            tier_list = [t.strip() for t in effective_tier.split(",") if t.strip()]
-            if not tier_list:
-                tier_list = ["warm", "cold"]
+            tier_list = tier if tier else ["warm", "cold"]
 
             async with AsyncSessionLocal() as db:
                 all_results: list = []
@@ -579,20 +568,21 @@ class MemoryNodeHandler(BaseNodeHandler):
                 results = [_format_memory(m) for m in memories]
                 return {"results": results, "total": len(results)}
 
-        async def delete_memory(memory_ids: str) -> dict:
+        async def delete_memory(memory_ids: list[int]) -> dict:
             agent_id = handler._get_agent_id()
             if not agent_id:
                 return {"error": "无法获取Agent ID"}
 
-            ids = [int(i.strip()) for i in memory_ids.split(",") if i.strip()]
-            if not ids:
+            if not memory_ids:
                 return {"error": "未提供有效的记忆ID"}
 
             async with AsyncSessionLocal() as db:
-                valid_memories = await memory_service.get_by_ids(db, agent_id, ids)
+                valid_memories = await memory_service.get_by_ids(
+                    db, agent_id, memory_ids
+                )
                 valid_ids = {m.id for m in valid_memories}
                 deleted_ids = []
-                for mid in ids:
+                for mid in memory_ids:
                     if mid in valid_ids:
                         await memory_service.delete(db, mid)
                         deleted_ids.append(mid)
@@ -603,17 +593,16 @@ class MemoryNodeHandler(BaseNodeHandler):
                     "deleted_ids": deleted_ids,
                 }
 
-        async def get_memory(memory_ids: str) -> dict:
+        async def get_memory(memory_ids: list[int]) -> dict:
             agent_id = handler._get_agent_id()
             if not agent_id:
                 return {"error": "无法获取Agent ID"}
 
-            ids = [int(i.strip()) for i in memory_ids.split(",") if i.strip()]
-            if not ids:
+            if not memory_ids:
                 return {"error": "未提供有效的记忆ID"}
 
             async with AsyncSessionLocal() as db:
-                memories = await memory_service.get_by_ids(db, agent_id, ids)
+                memories = await memory_service.get_by_ids(db, agent_id, memory_ids)
                 items = [_format_memory(m) for m in memories]
                 return {"results": items, "total": len(items)}
 
@@ -673,19 +662,29 @@ class MemoryNodeHandler(BaseNodeHandler):
 # ---- 工具输入 Schema ----
 
 
+class MemoryItem(BaseModel):
+    model_config = {"extra": "ignore"}
+    title: str = Field(..., description="记忆标题（必填）")
+    content: str = Field(..., description="记忆内容（必填）")
+    category: Optional[str] = Field(None, description="分类")
+    importance: int = Field(3, description="重要程度1-5")
+    tier: Optional[str] = Field(None, description="hot/warm/cold")
+    keywords: Optional[str] = Field(None, description="关键词")
+
+
 class MemorySaveInput(BaseModel):
-    memories: str = Field(
+    memories: list[MemoryItem] = Field(
         ...,
-        description='JSON数组，每条: {"title":"必填","content":"必填","category":"可选","importance":3,"tier":"可选"}',
+        description="记忆数组",
     )
 
 
 class MemorySearchInput(BaseModel):
     query: str = Field(..., description="搜索关键词或自然语言")
-    tier: Optional[str] = Field(
-        None, description="hot/warm/cold，不传默认warm,cold，可逗号分隔多个"
+    tier: Optional[list[str]] = Field(
+        None, description="hot/warm/cold，不传默认warm,cold，可传多个"
     )
-    categories: Optional[str] = Field(None, description="分类过滤，逗号分隔")
+    categories: Optional[list[str]] = Field(None, description="分类过滤，可传多个")
     max_results: int = Field(5, ge=1, le=20, description="最大返回数")
     min_score: float = Field(0.0, ge=0.0, le=1.0, description="最低相关度")
 
@@ -697,8 +696,8 @@ class MemoryListInput(BaseModel):
 
 
 class MemoryDeleteInput(BaseModel):
-    memory_ids: str = Field(..., description="ID列表，逗号分隔")
+    memory_ids: list[int] = Field(..., description="要删除的记忆ID列表")
 
 
 class MemoryGetInput(BaseModel):
-    memory_ids: str = Field(..., description="ID列表，逗号分隔")
+    memory_ids: list[int] = Field(..., description="要获取的记忆ID列表")

@@ -9,7 +9,6 @@
 2. todoread - 读取当前任务计划列表
 """
 
-import json
 from typing import Optional, TYPE_CHECKING
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool, BaseTool
@@ -100,32 +99,26 @@ class TodoNodeHandler(BaseNodeHandler):
     async def get_tool(self, node: FlowNode) -> list[BaseTool]:
         handler = self
 
-        async def write_todos(todos: str) -> dict:
+        async def write_todos(todos: list[TodoItem]) -> dict:
             """写入/更新任务计划列表"""
             ref_type, ref_id = handler._resolve_context()
             if not ref_type or not ref_id:
                 return {"error": "无法获取上下文信息"}
 
-            try:
-                items = json.loads(todos)
-            except json.JSONDecodeError:
-                return {"error": "todos 参数必须是合法的 JSON 数组"}
-
-            if not isinstance(items, list):
-                items = [items]
+            items = todos
 
             valid_statuses = {"pending", "in_progress", "completed", "cancelled"}
             valid_priorities = {"high", "medium", "low"}
 
             validated = []
             for item in items:
-                content = (item.get("content") or "").strip()
+                content = (item.content or "").strip()
                 if not content:
                     continue
-                status = item.get("status", "pending")
+                status = item.status
                 if status not in valid_statuses:
                     status = "pending"
-                priority = item.get("priority", "medium")
+                priority = item.priority
                 if priority not in valid_priorities:
                     priority = "medium"
                 validated.append(
@@ -175,7 +168,7 @@ class TodoNodeHandler(BaseNodeHandler):
         self._write_todos_func = write_todos
         self._last_todos = []
 
-        async def write_todos_with_event(todos: str) -> dict:
+        async def write_todos_with_event(todos: list[TodoItem]) -> dict:
             """写入任务列表并通过 SSE 推送更新事件"""
             result_str = await write_todos(todos)
             if self._writer and self._last_todos:
@@ -244,13 +237,19 @@ class TodoNodeHandler(BaseNodeHandler):
         ]
 
 
+class TodoItem(BaseModel):
+    model_config = {"extra": "ignore"}
+    content: str = Field(..., description="任务描述")
+    status: str = Field(
+        "pending", description="pending/in_progress/completed/cancelled"
+    )
+    priority: str = Field("medium", description="high/medium/low")
+
+
 class TodoWriteInput(BaseModel):
-    todos: str = Field(
+    todos: list[TodoItem] = Field(
         ...,
-        description=(
-            "JSON 数组，每次调用替换整个列表。"
-            '每条: {"content":"任务描述(必填)","status":"pending/in_progress/completed/cancelled","priority":"high/medium/low"}'
-        ),
+        description="任务列表，每次调用替换整个列表",
     )
 
 

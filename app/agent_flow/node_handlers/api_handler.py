@@ -61,6 +61,13 @@ class ApiNodeConfig(BaseNodeConfig):
     use_preset_for_tool: bool = False
 
 
+class UploadFieldItem(BaseModel):
+    model_config = {"extra": "ignore"}
+    field: str = Field("file", description="multipart字段名")
+    file_ids: Optional[list[int]] = Field(None, description="文件ID列表")
+    file_paths: Optional[list[str]] = Field(None, description="文件绝对路径列表")
+
+
 class ApiCallInput(BaseModel):
     """API调用工具输入参数"""
 
@@ -68,15 +75,13 @@ class ApiCallInput(BaseModel):
     method: str = Field(
         default="GET", description="HTTP方法：GET、POST、PUT、DELETE、PATCH"
     )
-    headers: str = Field(default="", description="请求头，JSON格式字符串")
-    body: str = Field(default="", description="请求体，JSON格式字符串")
-    upload_fields: str = Field(
-        default="",
-        description=(
-            '上传文件配置，JSON数组。每项: {"field":"multipart字段名","file_ids":[文件ID列表],"file_paths":[文件绝对路径列表]}。'
-            "file_ids 和 file_paths 至少填一个，可同时填写。"
-            '示例: [{"field":"resume","file_ids":[42]},{"field":"photo","file_paths":["/tmp/img.png"]}]'
-        ),
+    headers: dict[str, str] = Field(default_factory=dict, description="请求头")
+    body: str | dict[str, Any] = Field(
+        default="", description="请求体，JSON对象或字符串"
+    )
+    upload_fields: list[UploadFieldItem] = Field(
+        default_factory=list,
+        description="上传文件配置，每项: field, file_ids, file_paths",
     )
     download_file: bool = Field(
         default=False, description="是否将响应作为文件下载保存到文件管理"
@@ -257,50 +262,24 @@ class ApiNodeHandler(BaseNodeHandler):
         return result
 
     async def _resolve_upload_fields(
-        self, upload_fields: str
+        self, upload_fields: list[UploadFieldItem]
     ) -> list[tuple[str, str, bytes, str]]:
-        """
-        解析 upload_fields JSON 配置，返回 [(field_name, 文件名, 字节, mime_type)]
-
-        Args:
-            upload_fields: JSON数组，每项含 field + file_id/file_path
-
-        Returns:
-            (字段名, 文件名, 文件内容, mime_type) 列表
-        """
-        try:
-            items = json.loads(upload_fields)
-        except json.JSONDecodeError:
-            logger.warning("upload_fields JSON 解析失败: %s", upload_fields)
-            return []
-
-        if not isinstance(items, list):
-            return []
-
         result: list[tuple[str, str, bytes, str]] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            field_name = (item.get("field") or "file").strip()
-            file_ids = item.get("file_ids")
-            file_paths = item.get("file_paths")
-
-            if file_ids and isinstance(file_ids, list):
+        for item in upload_fields:
+            field_name = (item.field or "file").strip()
+            if item.file_ids:
                 try:
-                    ids = [int(x) for x in file_ids if isinstance(x, (int, float, str))]
-                    loaded = await self._load_files(ids)
+                    loaded = await self._load_files(item.file_ids)
                     for fname, content, mime in loaded:
                         result.append((field_name, fname, content, mime))
                 except (ValueError, TypeError):
-                    logger.warning("file_ids 格式错误: %s", file_ids)
-
-            if file_paths and isinstance(file_paths, list):
-                path_str = ",".join(str(p) for p in file_paths if p)
+                    logger.warning("file_ids 格式错误: %s", item.file_ids)
+            if item.file_paths:
+                path_str = ",".join(str(p) for p in item.file_paths if p)
                 if path_str:
                     loaded = self._load_files_by_paths(path_str)
                     for fname, content, mime in loaded:
                         result.append((field_name, fname, content, mime))
-
         return result
 
     @staticmethod
@@ -584,11 +563,15 @@ class ApiNodeHandler(BaseNodeHandler):
         async def call_api(
             api_url: str,
             method: str = "GET",
-            headers: str = "",
-            body: str = "",
-            upload_fields: str = "",
+            headers: dict[str, str] = None,
+            body: str | dict[str, Any] = "",
+            upload_fields: list[UploadFieldItem] = None,
             download_file: bool = False,
         ) -> dict:
+            if headers is None:
+                headers = {}
+            if upload_fields is None:
+                upload_fields = []
             return await handler._call_api_json(
                 api_url,
                 method,
@@ -662,12 +645,24 @@ class ApiNodeHandler(BaseNodeHandler):
 
             rendered_url = _simple_render(cfg.api_url or "")
             rendered_headers = _simple_render(cfg.headers or "")
+            parsed_headers = {}
+            if rendered_headers.strip():
+                try:
+                    parsed_headers = json.loads(rendered_headers)
+                except json.JSONDecodeError:
+                    pass
             rendered_body = _simple_render(cfg.body or "")
+            parsed_body: str | dict = rendered_body
+            if rendered_body.strip().startswith("{"):
+                try:
+                    parsed_body = json.loads(rendered_body)
+                except json.JSONDecodeError:
+                    pass
             return await handler._call_api_json(
                 rendered_url,
                 cfg.method or "GET",
-                rendered_headers,
-                rendered_body,
+                parsed_headers,
+                parsed_body,
             )
 
         return StructuredTool(
@@ -682,29 +677,18 @@ class ApiNodeHandler(BaseNodeHandler):
         self,
         url: str,
         method: str,
-        headers: str,
-        body: str,
-        upload_fields: str = "",
+        headers: dict[str, str],
+        body: str | dict[str, Any],
+        upload_fields: list[UploadFieldItem] = None,
         download_file: bool = False,
     ) -> dict:
-        request_headers = {}
-        if headers:
-            try:
-                request_headers = json.loads(headers)
-            except json.JSONDecodeError:
-                pass
+        request_headers = dict(headers) if headers else {}
 
         request_body = None
         if method in ["POST", "PUT", "PATCH"] and body:
             request_body = body
-            if body.strip().startswith("{"):
-                try:
-                    request_body = json.loads(body)
-                except json.JSONDecodeError:
-                    pass
 
-        # ---- 解析 upload_fields ----
-        files: list[tuple[str, str, bytes, str]] = []
+        files = []
         if upload_fields:
             files = await self._resolve_upload_fields(upload_fields)
 

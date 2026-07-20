@@ -7,7 +7,6 @@ Python代码执行节点处理器
 import asyncio
 import inspect
 import io
-import json
 import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
@@ -446,9 +445,9 @@ class PythonNodeHandler(BaseNodeHandler):
             code: str = Field(
                 ..., description=f"Python代码，必须定义 main 函数，参数: {params_desc}"
             )
-            input_data: str = Field(
-                default="{}",
-                description=f"main 函数参数值，JSON格式。参数列表:\n{param_list}",
+            input_data: dict[str, Any] = Field(
+                default_factory=dict,
+                description=f"main 函数参数值。参数列表:\n{param_list}",
             )
 
         description = f"""在沙箱环境中执行Python代码进行数据处理或计算。
@@ -468,11 +467,8 @@ class PythonNodeHandler(BaseNodeHandler):
           {"__save_file__": True, "content_base64": "<base64编码的字节>", "mime_type": "image/png", "filename": "xxx.png"}
         可用于生成图片/音频/视频后保存展示。base64 不会出现在对话里，只返回预览链接。"""
 
-        async def execute_python(code: str, input_data: str = "{}") -> dict:
-            try:
-                input_vars = json.loads(input_data) if input_data else {}
-            except json.JSONDecodeError:
-                input_vars = {}
+        async def execute_python(code: str, input_data: dict[str, Any] = None) -> dict:
+            input_vars = input_data if input_data else {}
 
             try:
                 result = await handler._execute_python(code, input_vars, timeout)
