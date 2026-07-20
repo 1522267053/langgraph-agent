@@ -117,6 +117,9 @@ function openEditor(): void {
   box-shadow:
     0 2px 15px -3px rgba(0, 0, 0, 0.07),
     0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  max-width: 896px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .preview-header {
