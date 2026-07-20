@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CopyDocument, RefreshLeft, SetUp, View } from '@element-plus/icons-vue'
+import { CopyDocument, RefreshLeft, SetUp } from '@element-plus/icons-vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import TodoList from '@/components/common/TodoList.vue'
+import ToolResultViewer from '@/components/common/ToolResultViewer.vue'
 import type { Segment } from '@/types/segment'
 import { formatToolArgs, formatToolArgsExpanded, hasStringifiedJson } from '@/utils/format'
 
@@ -52,77 +53,6 @@ function toggleArgsFormat(idx: number): void {
 
 function isArgsExpanded(idx: number): boolean {
   return expandedArgsSegments.value.has(idx)
-}
-
-function parseMediaResult(
-  result: unknown
-): { preview_url: string; file_name: string; mime_type: string } | null {
-  try {
-    const str = typeof result === 'string' ? result : JSON.stringify(result)
-    const parsed = JSON.parse(str)
-    if (parsed.success && parsed.preview_url) {
-      return {
-        preview_url: parsed.preview_url,
-        file_name: parsed.file_name || '',
-        mime_type: parsed.mime_type || ''
-      }
-    }
-  } catch {
-    return null
-  }
-  return null
-}
-
-function isMediaTool(result: unknown): boolean {
-  return parseMediaResult(result) !== null
-}
-
-function mediaPreviewInfo(segment: Segment) {
-  return getMediaPreviewInfo(segment)
-}
-
-function isMediaSegment(segment: Segment): boolean {
-  return (
-    segment.type === 'tool' &&
-    !!segment.tool &&
-    segment.tool.status === 'success' &&
-    isMediaTool(segment.tool.result)
-  )
-}
-
-function openMediaPreview(segment: Segment): void {
-  const media = parseMediaResult(segment.tool?.result)
-  if (!media) return
-  window.open(media.preview_url, '_blank')
-}
-
-function getMediaPreviewInfo(
-  segment: Segment
-): { preview_url: string; isVideo: boolean; isImage: boolean } | null {
-  const media = parseMediaResult(segment.tool?.result)
-  if (!media) return null
-  return {
-    preview_url: media.preview_url,
-    isVideo: (media.mime_type || '').startsWith('video/'),
-    isImage: (media.mime_type || '').startsWith('image/')
-  }
-}
-
-function formatToolResult(result: unknown): string {
-  if (result === undefined || result === null) return ''
-  try {
-    if (typeof result === 'string') {
-      try {
-        const parsed = JSON.parse(result)
-        return JSON.stringify(parsed, null, 2)
-      } catch {
-        return result
-      }
-    }
-    return JSON.stringify(result, null, 2)
-  } catch {
-    return String(result)
-  }
 }
 
 async function handleCopy(text: string): Promise<void> {
@@ -202,30 +132,14 @@ async function handleCopy(text: string): Promise<void> {
             {{ isArgsExpanded(idx) ? '显示原始' : '显示格式化' }}
           </el-button>
         </div>
-        <pre
-          v-if="segment.tool.status !== 'error' && segment.tool.result !== undefined"
-          class="tool-content tool-content-result"
-          >{{ formatToolResult(segment.tool.result) }}</pre
+        <ToolResultViewer
+          v-if="segment.tool.result !== undefined"
+          :tool-name="segment.tool.name"
+          :result="segment.tool.result"
+        />
+        <pre v-else-if="segment.tool.status === 'error'" class="tool-content tool-content-error"
+          >执行失败</pre
         >
-        <pre v-if="segment.tool.status === 'error'" class="tool-content tool-content-error">{{
-          segment.tool.result !== undefined ? formatToolResult(segment.tool.result) : '执行失败'
-        }}</pre>
-        <div v-show="isMediaSegment(segment)" class="tool-media-preview">
-          <div v-show="mediaPreviewInfo(segment)?.isVideo" class="media-inline-preview">
-            <video
-              :src="mediaPreviewInfo(segment)?.preview_url || ''"
-              controls
-              preload="none"
-              class="media-video"
-            />
-          </div>
-          <div v-show="mediaPreviewInfo(segment)?.isImage" class="media-inline-preview">
-            <img :src="mediaPreviewInfo(segment)?.preview_url || ''" class="media-image" />
-          </div>
-          <el-button :icon="View" size="small" @click="openMediaPreview(segment)">
-            查看预览
-          </el-button>
-        </div>
       </template>
       <div v-else-if="segment.tool.status === 'running'" class="tool-content tool-loading-text">
         执行中...
@@ -457,11 +371,6 @@ async function handleCopy(text: string): Promise<void> {
   color: #409eff;
 }
 
-.tool-content-result {
-  border-top: 1px solid #e2e8f0;
-  background: rgba(236, 253, 245, 0.4);
-}
-
 .tool-content-error {
   border-top: 1px solid #fecaca;
   background: rgba(254, 242, 242, 0.6);
@@ -561,24 +470,4 @@ async function handleCopy(text: string): Promise<void> {
   color: #1e293b;
 }
 
-.tool-media-preview {
-  padding: 8px 12px;
-}
-
-.media-inline-preview {
-  margin-bottom: 8px;
-}
-
-.media-video {
-  max-width: 100%;
-  max-height: 360px;
-  border-radius: 6px;
-}
-
-.media-image {
-  max-width: 100%;
-  max-height: 360px;
-  border-radius: 6px;
-  cursor: pointer;
-}
 </style>

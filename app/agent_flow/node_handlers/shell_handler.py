@@ -415,7 +415,7 @@ def _apply_shell_output_truncation(result: dict, task) -> None:
 
 
 def _diff_preview(
-    old_string: str, new_string: str, max_lines: int = 6, max_line_width: int = 240
+    old_string: str, new_string: str, max_lines: int = 200, max_line_width: int = 240
 ) -> str:
     """生成 text_editor 的 diff 预览，返回 -/+ 格式的紧凑摘要"""
     old_lines = old_string.splitlines()
