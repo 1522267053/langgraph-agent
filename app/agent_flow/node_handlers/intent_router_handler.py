@@ -16,13 +16,11 @@ import logging
 import re
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
 from pydantic import BaseModel, Field
 
-from app.agent_flow.ai_provider import create_provider
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.agent_flow.node_handlers.base_handler import (
@@ -30,6 +28,7 @@ from app.agent_flow.node_handlers.base_handler import (
     BaseNodeConfig,
     NodeVariable,
 )
+from app.agent_flow.node_handlers.llm_factory import create_llm
 from app.config.database import AsyncSessionLocal
 from app.models.flow_node import FlowNode
 
@@ -94,7 +93,15 @@ class IntentRouterConfig(BaseNodeConfig):
         default=None, description="Base URL（留空走全局默认）"
     )
     temperature: float = Field(default=0.1, description="温度（低温度更稳定）")
-    max_tokens: int = Field(default=200, description="最大 token 数")
+    max_tokens: int = Field(default=256, description="最大 token 数")
+    extra_body: Optional[dict] = Field(
+        default=None, description="附加请求参数（JSON 对象，会合并到请求体中）"
+    )
+    reasoning_effort: Optional[str] = Field(
+        default=None,
+        description="推理深度（low/medium/high），部分模型支持",
+        json_schema_extra={"options": ["low", "medium", "high"]},
+    )
     system_prompt: str = Field(
         default="", description="追加到默认 prompt 后的自定义提示"
     )
@@ -316,13 +323,16 @@ class IntentRouterHandler(BaseNodeHandler):
 
         # ---- 调用 LLM ----
         try:
-            llm = self._create_llm(
+            llm = create_llm(
                 api_key=cfg.api_key,
                 model=cfg.model,
                 base_url=cfg.base_url or "",
                 max_tokens=cfg.max_tokens,
                 provider_name=cfg.provider or "",
                 temperature=cfg.temperature,
+                extra_body=cfg.extra_body,
+                reasoning_effort=cfg.reasoning_effort,
+                streaming=False,
             )
             messages = [
                 SystemMessage(content=system_prompt),
@@ -380,24 +390,6 @@ class IntentRouterHandler(BaseNodeHandler):
                 line += f"\n  示例：{examples_str}"
             lines.append(line)
         return "\n".join(lines)
-
-    @staticmethod
-    def _create_llm(
-        api_key: str,
-        model: str,
-        base_url: str,
-        max_tokens: int,
-        provider_name: str,
-        temperature: float,
-    ) -> BaseChatModel:
-        """通过 AI 提供商创建 LLM 实例（非流式，分类场景不需要）"""
-        provider = create_provider(provider_name, api_key, base_url)
-        return provider.create_chat_model(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            streaming=False,
-        )
 
     @staticmethod
     def _try_parse_intent_json(raw: str) -> Optional[dict]:
