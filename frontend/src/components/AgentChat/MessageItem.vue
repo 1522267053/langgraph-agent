@@ -175,12 +175,12 @@ export default {
 
 .message-avatar {
   flex-shrink: 0;
-  margin-right: 14px;
+  margin-right: 5px;
 }
 
 .message.human .message-avatar {
   margin-right: 0;
-  margin-left: 14px;
+  margin-left: 5px;
 }
 
 .avatar {

@@ -346,7 +346,7 @@ async function handleCopy(text: string): Promise<void> {
   color: #64748b;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 300px;
+  max-height: 150px;
   overflow-y: auto;
 }
 
