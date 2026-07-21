@@ -84,7 +84,7 @@ class TodoNodeHandler(BaseNodeHandler):
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
         """返回任务计划使用提示，追加到 LLM system_prompt"""
         return (
-            "\n\n## 任务计划系统\n"
+            "\n\n## 任务计划系统(专给大模型使用，不能给用户使用，不需要记录用户的待办)\n"
             "拥有任务规划与进度跟踪能力。使用规则：\n"
             "- 复杂任务（3步以上）时，使用 todowrite 创建任务列表来组织和跟踪进度\n"
             "- 收到新指令后立即捕获，更新任务列表\n"
