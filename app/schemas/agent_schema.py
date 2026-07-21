@@ -2,9 +2,10 @@
 Agent相关的Pydantic Schema
 """
 
-from typing import Optional, List
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Optional, List, Any
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from app.schemas.base_schema import ChinaDateTime
+from app.schemas.flow_schema import FlowIOSchema
 
 
 class AgentSessionBase(BaseModel):
@@ -121,9 +122,21 @@ class AgentFlowResponse(BaseModel):
     flow_type: str = Field(..., description="类型")
     status: int = Field(..., description="状态")
     is_builtin: Optional[int] = Field(0, description="是否内置")
-    input_schema: Optional[dict] = Field(None, description="输入参数定义")
+    input_schema: Optional[FlowIOSchema] = Field(None, description="输入参数定义")
     created_at: Optional[ChinaDateTime] = Field(None, description="创建时间")
     updated_at: Optional[ChinaDateTime] = Field(None, description="更新时间")
+
+    @field_validator("input_schema", mode="before")
+    @classmethod
+    def validate_input_schema(cls, v: Any) -> Any:
+        """规整 input_schema，确保缺 multiple 等字段时填充默认值"""
+        if v is None:
+            return None
+        if isinstance(v, FlowIOSchema):
+            return v
+        if isinstance(v, dict):
+            return FlowIOSchema(**v)
+        return v
 
 
 class AgentCompressResponse(BaseModel):
