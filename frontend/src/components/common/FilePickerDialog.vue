@@ -17,7 +17,7 @@ const props = withDefaults(
   }>(),
   {
     selectedIds: () => [],
-    multiple: true,
+    multiple: false,
     maxSelect: 0,
     accept: '',
     maxSize: 0

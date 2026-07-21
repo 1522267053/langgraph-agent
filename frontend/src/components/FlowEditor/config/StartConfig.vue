@@ -46,8 +46,21 @@ function addInputField(): void {
     name: '',
     type: 'string',
     description: '',
-    required: false
+    placeholder: '',
+    required: false,
+    accept: '',
+    multiple: false,
+    max_size: undefined
   })
+  updateConfig()
+}
+
+function handleTypeChange(field: FlowIOField): void {
+  if (field.type === 'file_list') {
+    if (field.multiple === undefined) field.multiple = false
+    if (field.accept === undefined) field.accept = ''
+    if (field.max_size === undefined) field.max_size = undefined
+  }
   updateConfig()
 }
 
@@ -119,7 +132,7 @@ function applyAcceptPreset(field: FlowIOField, preset: string): void {
                 v-model="field.type"
                 placeholder="选择类型"
                 style="width: 100%"
-                @change="updateConfig"
+                @change="() => handleTypeChange(field)"
               >
                 <el-option
                   v-for="item in startFieldTypeOptions"
