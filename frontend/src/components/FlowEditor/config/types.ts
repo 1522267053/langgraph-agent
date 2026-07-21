@@ -106,6 +106,8 @@ export interface IntentRouterConfig {
   base_url?: string
   temperature: number
   max_tokens: number
+  extra_body?: Record<string, unknown>
+  reasoning_effort?: string
   system_prompt: string
   confidence_threshold: number
   input_variable: string

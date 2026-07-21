@@ -118,30 +118,6 @@ watch(
   },
   { immediate: true }
 )
-
-const extraBodyText = ref('')
-
-watch(
-  () => localConfig.value.extra_body,
-  eb => {
-    extraBodyText.value = eb && Object.keys(eb).length > 0 ? JSON.stringify(eb, null, 2) : ''
-  },
-  { immediate: true }
-)
-
-function handleExtraBodyBlur(): void {
-  const text = extraBodyText.value.trim()
-  if (!text) {
-    localConfig.value.extra_body = {}
-  } else {
-    try {
-      localConfig.value.extra_body = JSON.parse(text)
-    } catch {
-      return
-    }
-  }
-  updateConfig()
-}
 </script>
 
 <template>
@@ -209,8 +185,15 @@ function handleExtraBodyBlur(): void {
         v-model:context-length="localConfig.context_length"
         v-model:capabilities="localConfig.capabilities"
         v-model:max-tokens="localConfig.max_tokens"
+        v-model:temperature="localConfig.temperature"
+        v-model:reasoning-effort="localConfig.reasoning_effort"
+        v-model:extra-body="localConfig.extra_body"
         show-capabilities
         show-context-length
+        show-max-tokens
+        show-temperature
+        show-reasoning-effort
+        show-extra-body
         :reset-on-provider-change="false"
         api-key-placeholder="留空使用全局默认 API Key"
         @change="updateConfig"
@@ -263,31 +246,11 @@ function handleExtraBodyBlur(): void {
     <div class="config-section">
       <div class="section-title">高级配置</div>
       <el-form label-width="120px" size="small">
-        <el-form-item label="温度(temperature)">
-          <el-input-number
-            v-model="localConfig.temperature"
-            :min="0"
-            :max="2"
-            :step="0.1"
-            :precision="1"
-            controls-position="right"
-            @change="updateConfig"
-          />
-        </el-form-item>
         <el-form-item label="工具调用最大次数">
           <el-input-number
             v-model="localConfig.max_tool_iterations"
             :min="1"
             :max="100"
-            @change="updateConfig"
-          />
-        </el-form-item>
-        <el-form-item label="最大输出Token">
-          <el-input-number
-            v-model="localConfig.max_tokens"
-            :min="256"
-            :max="128000"
-            :step="1024"
             @change="updateConfig"
           />
         </el-form-item>
@@ -316,31 +279,6 @@ function handleExtraBodyBlur(): void {
             </el-text>
           </el-form-item>
         </template>
-        <el-form-item label="推理深度">
-          <el-select
-            v-model="localConfig.reasoning_effort"
-            placeholder="不设置（使用模型默认）"
-            style="width: 100%"
-            clearable
-            filterable
-            allow-create
-            default-first-option
-            @change="updateConfig"
-          >
-            <el-option label="low" value="low" />
-            <el-option label="medium" value="medium" />
-            <el-option label="high" value="high" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="附加参数">
-          <el-input
-            v-model="extraBodyText"
-            type="textarea"
-            :rows="2"
-            placeholder='JSON 格式，如: {"enable_search": true}'
-            @blur="handleExtraBodyBlur"
-          />
-        </el-form-item>
       </el-form>
       <div class="config-hint">
         <el-text size="small" type="info">

@@ -24,6 +24,7 @@ def create_llm(
     temperature: float = 0.7,
     extra_body: Optional[dict] = None,
     reasoning_effort: Optional[str] = None,
+    streaming: bool = True,
 ) -> BaseChatModel:
     """通过 AI 提供商创建 LLM 实例
 
@@ -36,6 +37,7 @@ def create_llm(
         temperature: 温度参数（0-2）
         extra_body: 附加请求参数
         reasoning_effort: 推理深度（low/medium/high）
+        streaming: 是否启用流式输出（分类等一次性场景传 False）
 
     Returns:
         BaseChatModel 实例
@@ -45,7 +47,7 @@ def create_llm(
         "model": model,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "streaming": True,
+        "streaming": streaming,
         "verbose": True,
     }
     if extra_body:

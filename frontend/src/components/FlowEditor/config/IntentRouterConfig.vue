@@ -264,6 +264,14 @@ const downstreamRefExample = '{{nodes.节点key.intent}}'
         v-model:model="localConfig.model"
         v-model:api-key="localConfig.api_key"
         v-model:base-url="localConfig.base_url"
+        v-model:temperature="localConfig.temperature"
+        v-model:max-tokens="localConfig.max_tokens"
+        v-model:reasoning-effort="localConfig.reasoning_effort"
+        v-model:extra-body="localConfig.extra_body"
+        show-temperature
+        show-max-tokens
+        show-reasoning-effort
+        show-extra-body
         provider-clearable
         model-clearable
         api-key-placeholder="留空使用全局默认"
@@ -286,27 +294,6 @@ const downstreamRefExample = '{{nodes.节点key.intent}}'
             @change="updateConfig"
           />
           <el-text size="small" type="info" class="hint">低于阈值走 default</el-text>
-        </el-form-item>
-        <el-form-item v-if="localConfig.enable_llm_layer" label="温度 (temperature)">
-          <el-input-number
-            v-model="localConfig.temperature"
-            :min="0"
-            :max="2"
-            :step="0.1"
-            :precision="1"
-            controls-position="right"
-            @change="updateConfig"
-          />
-        </el-form-item>
-        <el-form-item v-if="localConfig.enable_llm_layer" label="最大输出 Token">
-          <el-input-number
-            v-model="localConfig.max_tokens"
-            :min="64"
-            :max="8192"
-            :step="64"
-            controls-position="right"
-            @change="updateConfig"
-          />
         </el-form-item>
         <el-form-item v-if="localConfig.enable_llm_layer" label="System Prompt 追加">
           <el-input

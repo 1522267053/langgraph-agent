@@ -4,16 +4,16 @@ import { QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { aiProviderApi, type ProviderInfo, type ModelInfo } from '@/api/ai_provider'
 import type { ModelCapabilities } from '@/components/FlowEditor/config/types'
-import {
-  CONTEXT_LENGTH_PRESETS,
-  parseContextLength
-} from '@/components/FlowEditor/config/types'
+import { CONTEXT_LENGTH_PRESETS, parseContextLength } from '@/components/FlowEditor/config/types'
 
 const props = withDefaults(
   defineProps<{
     showCapabilities?: boolean
     showContextLength?: boolean
     showMaxTokens?: boolean
+    showTemperature?: boolean
+    showReasoningEffort?: boolean
+    showExtraBody?: boolean
     resetOnProviderChange?: boolean
     disabled?: boolean
     apiKeyPlaceholder?: string
@@ -26,6 +26,9 @@ const props = withDefaults(
     showCapabilities: false,
     showContextLength: false,
     showMaxTokens: false,
+    showTemperature: false,
+    showReasoningEffort: false,
+    showExtraBody: false,
     resetOnProviderChange: true,
     disabled: false,
     apiKeyPlaceholder: '请输入 API Key',
@@ -47,6 +50,9 @@ const baseUrl = defineModel<string>('baseUrl', { default: '' })
 const contextLength = defineModel<number | undefined>('contextLength')
 const capabilities = defineModel<ModelCapabilities>('capabilities')
 const maxTokens = defineModel<number | undefined>('maxTokens')
+const temperature = defineModel<number | undefined>('temperature')
+const reasoningEffort = defineModel<string | undefined>('reasoningEffort')
+const extraBody = defineModel<Record<string, unknown> | undefined>('extraBody')
 
 const _init = ref(true)
 const providerList = ref<ProviderInfo[]>([])
@@ -60,10 +66,10 @@ const modelList = ref<
   }[]
 >([])
 
-const selectedModelOption = computed(() => modelList.value.find((m) => m.value === model.value))
+const selectedModelOption = computed(() => modelList.value.find(m => m.value === model.value))
 
 function getProviderBaseUrl(name: string): string {
-  return providerList.value.find((p) => p.name === name)?.default_base_url || ''
+  return providerList.value.find(p => p.name === name)?.default_base_url || ''
 }
 
 function hasAnyCapability(): boolean {
@@ -184,6 +190,30 @@ onMounted(async () => {
 function onFieldChange() {
   emit('change')
 }
+
+const extraBodyText = ref('')
+
+watch(
+  () => extraBody.value,
+  eb => {
+    extraBodyText.value = eb && Object.keys(eb).length > 0 ? JSON.stringify(eb, null, 2) : ''
+  },
+  { immediate: true }
+)
+
+function handleExtraBodyBlur() {
+  const text = extraBodyText.value.trim()
+  if (!text) {
+    extraBody.value = {}
+  } else {
+    try {
+      extraBody.value = JSON.parse(text)
+    } catch {
+      return
+    }
+  }
+  emit('change')
+}
 </script>
 
 <template>
@@ -227,11 +257,11 @@ function onFieldChange() {
       </el-select>
     </el-form-item>
     <el-form-item v-if="showCapabilities" label="支持内容">
-      <el-checkbox v-model="capabilities.image" @change="onFieldChange"> 图片 </el-checkbox>
-      <el-checkbox v-model="capabilities.video" @change="onFieldChange"> 视频 </el-checkbox>
-      <el-checkbox v-model="capabilities.audio" @change="onFieldChange"> 音频 </el-checkbox>
-      <el-checkbox v-model="capabilities.pdf" @change="onFieldChange"> PDF </el-checkbox>
-      <el-checkbox v-model="capabilities.xlsx" @change="onFieldChange"> Excel </el-checkbox>
+      <el-checkbox v-model="capabilities.image" @change="onFieldChange">图片</el-checkbox>
+      <el-checkbox v-model="capabilities.video" @change="onFieldChange">视频</el-checkbox>
+      <el-checkbox v-model="capabilities.audio" @change="onFieldChange">音频</el-checkbox>
+      <el-checkbox v-model="capabilities.pdf" @change="onFieldChange">PDF</el-checkbox>
+      <el-checkbox v-model="capabilities.xlsx" @change="onFieldChange">Excel</el-checkbox>
     </el-form-item>
     <el-form-item label="API Key">
       <el-input
@@ -283,10 +313,51 @@ function onFieldChange() {
     <el-form-item v-if="showMaxTokens" label="Max Tokens">
       <el-input-number
         v-model="maxTokens"
-        :min="1"
+        :min="256"
+        :max="128000"
+        :step="1024"
         placeholder="最大输出 token 数"
         :disabled="disabled"
         @change="onFieldChange"
+      />
+    </el-form-item>
+    <el-form-item v-if="showTemperature" label="温度">
+      <el-input-number
+        v-model="temperature"
+        :min="0"
+        :max="2"
+        :step="0.1"
+        :precision="1"
+        controls-position="right"
+        :disabled="disabled"
+        @change="onFieldChange"
+      />
+    </el-form-item>
+    <el-form-item v-if="showReasoningEffort" label="推理深度">
+      <el-select
+        v-model="reasoningEffort"
+        placeholder="不设置（使用模型默认）"
+        style="width: 100%"
+        clearable
+        filterable
+        allow-create
+        default-first-option
+        :disabled="disabled"
+        @change="onFieldChange"
+      >
+        <el-option label="low" value="low" />
+        <el-option label="medium" value="medium" />
+        <el-option label="high" value="high" />
+      </el-select>
+    </el-form-item>
+    <el-form-item v-if="showExtraBody" label="附加参数">
+      <el-input
+        v-model="extraBodyText"
+        type="textarea"
+        :rows="2"
+        placeholder='JSON 格式，如: {"enable_search": true}'
+        :disabled="disabled"
+        @blur="handleExtraBodyBlur"
       />
     </el-form-item>
   </el-form>
@@ -380,10 +451,51 @@ function onFieldChange() {
     <el-form-item v-if="showMaxTokens" label="Max Tokens">
       <el-input-number
         v-model="maxTokens"
-        :min="1"
+        :min="256"
+        :max="128000"
+        :step="1024"
         placeholder="最大输出 token 数"
         :disabled="disabled"
         @change="onFieldChange"
+      />
+    </el-form-item>
+    <el-form-item v-if="showTemperature" label="温度">
+      <el-input-number
+        v-model="temperature"
+        :min="0"
+        :max="2"
+        :step="0.1"
+        :precision="1"
+        controls-position="right"
+        :disabled="disabled"
+        @change="onFieldChange"
+      />
+    </el-form-item>
+    <el-form-item v-if="showReasoningEffort" label="推理深度">
+      <el-select
+        v-model="reasoningEffort"
+        placeholder="不设置（使用模型默认）"
+        style="width: 100%"
+        clearable
+        filterable
+        allow-create
+        default-first-option
+        :disabled="disabled"
+        @change="onFieldChange"
+      >
+        <el-option label="low" value="low" />
+        <el-option label="medium" value="medium" />
+        <el-option label="high" value="high" />
+      </el-select>
+    </el-form-item>
+    <el-form-item v-if="showExtraBody" label="附加参数">
+      <el-input
+        v-model="extraBodyText"
+        type="textarea"
+        :rows="2"
+        placeholder='JSON 格式，如: {"enable_search": true}'
+        :disabled="disabled"
+        @blur="handleExtraBodyBlur"
       />
     </el-form-item>
   </template>
