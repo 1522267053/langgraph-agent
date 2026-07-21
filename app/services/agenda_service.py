@@ -106,21 +106,23 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
     async def get_tab_counts(self, db: AsyncSession) -> dict[str, int]:
         """统计 Tab 角标数量（仅未完成日程：待办 + 进行中）
 
-        - upcoming：今天及未来（含未设置时间）的未完成日程
-        - incomplete：已过期（start_time 早于今天）的未完成日程
+        - upcoming：当前时刻及未来（含未设置时间）的未完成日程
+        - incomplete：已过期（start_time 早于当前时刻）的未完成日程
+
+        分界线精确到秒（按当前时刻判断），避免"今天上午已过但被算作未过期"。
         """
-        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        now = datetime.now()
         not_done = [AgendaStatus.PENDING.value, AgendaStatus.IN_PROGRESS.value]
 
-        # 今日和未来：start_time >= 今天 或 未设置时间
+        # 当前及未来：start_time >= 当前时刻 或 未设置时间
         upcoming_stmt = select(func.count(Agenda.id)).where(
             Agenda.status.in_(not_done),
-            or_(Agenda.start_time >= today_start, Agenda.start_time.is_(None)),
+            or_(Agenda.start_time >= now, Agenda.start_time.is_(None)),
         )
-        # 未完成：start_time < 今天（已过期）
+        # 未完成：start_time < 当前时刻（已过期）
         incomplete_stmt = select(func.count(Agenda.id)).where(
             Agenda.status.in_(not_done),
-            Agenda.start_time < today_start,
+            Agenda.start_time < now,
         )
         upcoming = (await db.execute(upcoming_stmt)).scalar() or 0
         incomplete = (await db.execute(incomplete_stmt)).scalar() or 0

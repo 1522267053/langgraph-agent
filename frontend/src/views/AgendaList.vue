@@ -71,9 +71,10 @@ function getNextRange(): { start: string; end: string } | null {
   } else {
     const daysFromToday = Math.round((today.getTime() - cursor.getTime()) / MS_PER_DAY)
     if (daysFromToday >= MAX_DAYS) return null
-    const end = new Date(cursor.getTime() - MS_PER_DAY)
+    // end 包含 cursor 当天，使第一窗口能查到"今日已过期"的日程（按分钟判断需要包含今天）
+    const end = new Date(cursor.getTime())
     const start = new Date(end.getTime() - (STEP_DAYS - 1) * MS_PER_DAY)
-    cursorDate.value = fmtDate(start)
+    cursorDate.value = fmtDate(new Date(start.getTime() - MS_PER_DAY))
     return { start: fmtDate(start), end: fmtDate(end) }
   }
 }
@@ -362,8 +363,21 @@ const filteredGroups = computed(() => {
   if (listTab.value === 'upcoming') {
     return groups.filter(g => g.key !== 'earlier')
   } else if (listTab.value === 'incomplete') {
+    // 未完成：今日已过期（按当前时刻精确判断）+ earlier 分组
+    const now = new Date()
+    const todayGroup = groups.find(g => g.key === 'today')
+    const overdueTodayItems = (todayGroup?.items || []).filter(item => {
+      if (!item.start_time) return false
+      const start = new Date(item.start_time.replace(' ', 'T'))
+      return start < now
+    })
+    const result: { key: string; label: string; items: Agenda[] }[] = []
+    if (overdueTodayItems.length > 0) {
+      result.push({ key: 'overdue_today', label: '今日已过期', items: overdueTodayItems })
+    }
     const earlier = groups.find(g => g.key === 'earlier')
-    return earlier ? [earlier] : []
+    if (earlier) result.push(earlier)
+    return result
   } else {
     const earlier = groups.find(g => g.key === 'earlier')
     return earlier ? [earlier] : []
