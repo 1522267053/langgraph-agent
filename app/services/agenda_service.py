@@ -107,22 +107,27 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         """统计 Tab 角标数量（仅未完成日程：待办 + 进行中）
 
         - upcoming：当前时刻及未来（含未设置时间）的未完成日程
-        - incomplete：已过期（start_time 早于当前时刻）的未完成日程
+        - incomplete：已过期（有效结束时刻早于当前时刻）的未完成日程
 
-        分界线精确到秒（按当前时刻判断），避免"今天上午已过但被算作未过期"。
+        分界线精确到秒（按当前时刻判断）。
+        有效结束时刻 = end_time ?? start_time（无 end_time 时回退到 start_time），
+        使"会议进行中（start 已过、end 未过）"不会被误判为未完成。
         """
         now = datetime.now()
         not_done = [AgendaStatus.PENDING.value, AgendaStatus.IN_PROGRESS.value]
+        # 有效结束时刻：end_time 优先，无则用 start_time
+        effective_end = func.coalesce(Agenda.end_time, Agenda.start_time)
 
-        # 当前及未来：start_time >= 当前时刻 或 未设置时间
+        # 当前及未来：effective_end >= 当前时刻 或 start_time 完全未设
         upcoming_stmt = select(func.count(Agenda.id)).where(
             Agenda.status.in_(not_done),
-            or_(Agenda.start_time >= now, Agenda.start_time.is_(None)),
+            or_(effective_end >= now, Agenda.start_time.is_(None)),
         )
-        # 未完成：start_time < 当前时刻（已过期）
+        # 未完成：effective_end < 当前时刻（已结束）且 start_time 已设
         incomplete_stmt = select(func.count(Agenda.id)).where(
             Agenda.status.in_(not_done),
-            Agenda.start_time < now,
+            effective_end < now,
+            Agenda.start_time.isnot(None),
         )
         upcoming = (await db.execute(upcoming_stmt)).scalar() or 0
         incomplete = (await db.execute(incomplete_stmt)).scalar() or 0

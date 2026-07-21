@@ -364,23 +364,46 @@ const filteredGroups = computed(() => {
     return groups.filter(g => g.key !== 'earlier')
   } else if (listTab.value === 'incomplete') {
     // 未完成：今日已过期（按当前时刻精确判断）+ earlier 分组
+    // 有效结束时刻 = end_time ?? start_time（无 end_time 回退 start_time），
+    // 使"会议进行中（start 已过、end 未过）"不被误判为已过期
     const now = new Date()
-    const todayGroup = groups.find(g => g.key === 'today')
-    const overdueTodayItems = (todayGroup?.items || []).filter(item => {
-      if (!item.start_time) return false
-      const start = new Date(item.start_time.replace(' ', 'T'))
-      return start < now
-    })
+    const isOverdue = (item: Agenda): boolean => {
+      const refStr = item.end_time || item.start_time
+      if (!refStr) return false
+      return new Date(refStr.replace(' ', 'T')) < now
+    }
     const result: { key: string; label: string; items: Agenda[] }[] = []
+    const todayGroup = groups.find(g => g.key === 'today')
+    const overdueTodayItems = (todayGroup?.items || []).filter(isOverdue)
     if (overdueTodayItems.length > 0) {
       result.push({ key: 'overdue_today', label: '今日已过期', items: overdueTodayItems })
     }
     const earlier = groups.find(g => g.key === 'earlier')
-    if (earlier) result.push(earlier)
+    const earlierOverdueItems = (earlier?.items || []).filter(isOverdue)
+    if (earlierOverdueItems.length > 0) {
+      result.push({ key: 'earlier', label: '更早', items: earlierOverdueItems })
+    }
     return result
   } else {
+    // history：查看以前，同样按有效结束时刻判断（包含所有状态）
+    const now = new Date()
+    const isEnded = (item: Agenda): boolean => {
+      const refStr = item.end_time || item.start_time
+      if (!refStr) return false
+      return new Date(refStr.replace(' ', 'T')) < now
+    }
+    const result: { key: string; label: string; items: Agenda[] }[] = []
+    const todayGroup = groups.find(g => g.key === 'today')
+    const endedTodayItems = (todayGroup?.items || []).filter(isEnded)
+    if (endedTodayItems.length > 0) {
+      result.push({ key: 'ended_today', label: '今日已结束', items: endedTodayItems })
+    }
     const earlier = groups.find(g => g.key === 'earlier')
-    return earlier ? [earlier] : []
+    const earlierEndedItems = (earlier?.items || []).filter(isEnded)
+    if (earlierEndedItems.length > 0) {
+      result.push({ key: 'earlier', label: '更早', items: earlierEndedItems })
+    }
+    return result
   }
 })
 
