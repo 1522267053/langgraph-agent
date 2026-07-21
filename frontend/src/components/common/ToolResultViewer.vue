@@ -378,7 +378,7 @@ watch(
 }
 
 .tool-diff-viewer {
-  max-height: 400px;
+  max-height: 300px;
   overflow-y: auto;
   font-family: 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
@@ -439,7 +439,7 @@ watch(
   color: #64748b;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 300px;
+  max-height: 150px;
   overflow-y: auto;
 }
 
