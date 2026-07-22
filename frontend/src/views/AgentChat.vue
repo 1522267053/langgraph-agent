@@ -25,7 +25,7 @@ const toolOutputStore = useToolOutputStore()
 
 const messagesContainer = ref<HTMLElement | null>(null)
 
-const { autoScroll, isAtBottom, scrollToBottom, handleScroll } = useAutoScroll(messagesContainer, [
+const { autoScroll, isAtBottom, scrollToBottom, handleScroll, userScrolledUp } = useAutoScroll(messagesContainer, [
   () => store.chatMessages.length,
   () => store.textContent,
   () => store.thinkingContent,
@@ -278,6 +278,11 @@ function initLoadMoreObserver() {
         firstCallback = false
         return
       }
+      // 非用户手动上滑且内容超出视口时跳过，避免布局变化导致误触发加载更多
+      const canScroll =
+        messagesContainer.value &&
+        messagesContainer.value.scrollHeight > messagesContainer.value.clientHeight
+      if (!userScrolledUp.value && canScroll) return
       if (
         entries[0].isIntersecting &&
         !isLoadingMore.value &&
