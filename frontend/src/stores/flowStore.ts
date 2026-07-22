@@ -320,7 +320,8 @@ export const useFlowStore = defineStore('flow', () => {
         name: flowInfo.value.name!,
         description: flowInfo.value.description,
         input_schema: flowInfo.value.input_schema,
-        output_schema: flowInfo.value.output_schema
+        output_schema: flowInfo.value.output_schema,
+        suggested_prompts: flowInfo.value.suggested_prompts
       })
 
       const existingNodes: FlowNode[] = flowInfo.value.nodes || []
