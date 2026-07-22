@@ -73,6 +73,9 @@ class Flow(DbBaseModel):
         default=0,
         comment="是否内置：0=否，1=是",
     )
+    suggested_prompts: Mapped[Optional[list]] = mapped_column(
+        JSON, nullable=True, comment="建议提示词列表"
+    )
 
     nodes: ClassVar[List["FlowNode"]]
     edges: ClassVar[List["FlowEdge"]]

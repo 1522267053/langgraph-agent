@@ -2,7 +2,7 @@
 import { computed, provide, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flowStore'
-import { DArrowLeft, DArrowRight, CircleClose } from '@element-plus/icons-vue'
+import { DArrowLeft, DArrowRight, CircleClose, Delete, Plus } from '@element-plus/icons-vue'
 import { knowledgeBaseApi } from '@/api/knowledge'
 import { useNodeSchema } from '@/composables/useNodeSchema'
 import type { KnowledgeBase } from '@/types/knowledge'
@@ -125,7 +125,8 @@ provide('knowledgeBases', knowledgeBases)
 
 const flowConfig = ref({
   name: '',
-  description: ''
+  description: '',
+  suggested_prompts: [] as string[]
 })
 
 watch(
@@ -134,7 +135,8 @@ watch(
     if (info) {
       flowConfig.value = {
         name: info.name || '',
-        description: info.description || ''
+        description: info.description || '',
+        suggested_prompts: info.suggested_prompts || []
       }
     }
   },
@@ -262,7 +264,17 @@ function updateFlowConfig(): void {
   if (store.flowInfo) {
     store.flowInfo.name = flowConfig.value.name
     store.flowInfo.description = flowConfig.value.description
+    store.flowInfo.suggested_prompts = flowConfig.value.suggested_prompts.filter(p => p.trim())
   }
+}
+
+function addPrompt(): void {
+  flowConfig.value.suggested_prompts.push('')
+}
+
+function removePrompt(index: number): void {
+  flowConfig.value.suggested_prompts.splice(index, 1)
+  updateFlowConfig()
 }
 
 async function saveFlowConfig(): Promise<void> {
@@ -430,6 +442,31 @@ async function handleToggleCard(val: boolean | string): Promise<void> {
                 placeholder="描述这个流程或智能体的用途"
                 @blur="updateFlowConfig"
               />
+            </el-form-item>
+            <el-form-item label="建议提问">
+              <div class="prompts-editor">
+                <div
+                  v-for="(p, i) in flowConfig.suggested_prompts"
+                  :key="i"
+                  class="prompt-row"
+                >
+                  <el-input
+                    v-model="flowConfig.suggested_prompts[i]"
+                    placeholder="输入建议提问内容，发送后即保存"
+                    size="small"
+                    @blur="updateFlowConfig"
+                    @keydown.enter="updateFlowConfig"
+                  />
+                  <el-button
+                    :icon="Delete"
+                    circle
+                    size="small"
+                    style="flex-shrink: 0; margin-left: 4px"
+                    @click="removePrompt(i)"
+                  />
+                </div>
+                <el-button :icon="Plus" size="small" @click="addPrompt">添加</el-button>
+              </div>
             </el-form-item>
           </el-form>
         </div>
@@ -623,6 +660,19 @@ async function handleToggleCard(val: boolean | string): Promise<void> {
   justify-content: center;
   cursor: pointer;
   color: #64748b;
+}
+
+.prompts-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.prompt-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
 }
 
 @media (max-width: 768px) {

@@ -122,6 +122,8 @@ export interface Flow extends BaseEntity {
   input_schema?: FlowIOSchema
   /** 输出Schema */
   output_schema?: FlowIOSchema
+  /** 建议提示词列表 */
+  suggested_prompts?: string[]
 }
 
 /** 流程详情（包含节点和边） */
@@ -186,6 +188,8 @@ export interface FlowCreate {
   input_schema?: FlowIOSchema
   /** 输出Schema */
   output_schema?: FlowIOSchema
+  /** 建议提示词列表 */
+  suggested_prompts?: string[]
 }
 
 /** 更新流程参数 */

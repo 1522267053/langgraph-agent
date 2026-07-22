@@ -59,6 +59,9 @@ class FlowBase(BaseView):
     input_schema: Optional[FlowIOSchema] = Field(None, description="输入参数定义")
     output_schema: Optional[FlowIOSchema] = Field(None, description="输出参数定义")
     is_builtin: Optional[int] = Field(None, description="是否内置：0=否，1=是")
+    suggested_prompts: Optional[list[str]] = Field(
+        None, description="建议提示词列表"
+    )
 
     @field_validator("input_schema", "output_schema", mode="before")
     @classmethod

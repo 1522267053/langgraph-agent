@@ -20,6 +20,8 @@ export interface AgentFlow {
   status: number
   /** 输入参数定义 */
   input_schema?: FlowIOSchema
+  /** 建议提示词列表 */
+  suggested_prompts?: string[]
   /** 创建时间 */
   created_at?: string
   /** 更新时间 */
