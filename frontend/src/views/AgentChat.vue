@@ -270,8 +270,14 @@ watch(
 function initLoadMoreObserver() {
   if (!messagesContainer.value || !loadMoreSentinel.value) return
   loadMoreObserver?.disconnect()
+  let firstCallback = true
   loadMoreObserver = new IntersectionObserver(
     entries => {
+      // observe() 后的首个回调是元素当前状态，非用户滚动，跳过避免误触发
+      if (firstCallback) {
+        firstCallback = false
+        return
+      }
       if (
         entries[0].isIntersecting &&
         !isLoadingMore.value &&
