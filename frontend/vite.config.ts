@@ -22,17 +22,17 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'https://agent.wuguobang.site',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         timeout: 0,
         proxyTimeout: 0,
       },
       '/uploads': {
-        target: 'https://agent.wuguobang.site',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'wss://agent.wuguobang.site',
+        target: 'ws://127.0.0.1:8000',
         ws: true,
         changeOrigin: true,
       },
