@@ -40,7 +40,10 @@ export function useAutoScroll(
     if (autoScroll.value && !userScrolledUp.value) {
       nextTick(() => {
         if (userScrolledUp.value) return
-        requestAnimationFrame(() => scrollToBottom())
+        // 双重 rAF 确保浏览器完成新内容布局后读取正确的 scrollHeight
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => scrollToBottom())
+        })
       })
     }
   }
