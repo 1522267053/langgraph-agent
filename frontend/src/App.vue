@@ -166,17 +166,17 @@ async function handleLogout(): Promise<void> {
 watch(
   () => route.path,
   path => {
-    if (/^\/chat/.test(path)) {
+    if (store.agents.length === 0) {
       store
         .loadAgents()
-        .then(() => {
-          const builtin = store.agents.find((a: { is_builtin?: number }) => a.is_builtin === 1)
-          builtinAgentId.value = builtin?.id ?? null
-          defaultAgentId.value = loadDefaultAgentId()
-        })
         .catch(() => {})
     }
-    loadCurrentUser()
+    if (/^\/chat/.test(path)) {
+      const builtin = store.agents.find((a: { is_builtin?: number }) => a.is_builtin === 1)
+      builtinAgentId.value = builtin?.id ?? null
+      defaultAgentId.value = loadDefaultAgentId()
+    }
+    if (!currentUser.value) loadCurrentUser()
     if (!updateChecked) {
       updateChecked = true
       checkAppUpdate()
@@ -470,7 +470,7 @@ function openDownloadUrl(): void {
                 />
               </div>
 
-              <div v-loading="store.sessionsLoading" class="session-list">
+              <div v-loading="store.sessionsLoading" element-loading-background="rgba(0,0,0,0.3)" class="session-list">
                 <!-- 搜索结果 -->
                 <template v-if="isSearchMode">
                   <div v-if="searching" class="search-loading">
@@ -644,7 +644,7 @@ function openDownloadUrl(): void {
                   />
                 </div>
 
-                <div v-loading="store.sessionsLoading" class="drawer-session-list">
+                <div v-loading="store.sessionsLoading" element-loading-background="rgba(0,0,0,0.3)" class="drawer-session-list">
                   <div
                     v-for="session in store.sessions"
                     :key="session.id"
