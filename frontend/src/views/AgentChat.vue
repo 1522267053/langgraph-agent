@@ -217,6 +217,17 @@ watch(
   }
 )
 
+// hasMoreMessages 从 false→true 时（如 onFlowDone 后 sentinel 重建），重新初始化观察器
+watch(
+  () => store.hasMoreMessages,
+  async hasMore => {
+    if (hasMore) {
+      await nextTick()
+      initLoadMoreObserver()
+    }
+  }
+)
+
 watch(
   () => store.currentSession?.id,
   newId => {
