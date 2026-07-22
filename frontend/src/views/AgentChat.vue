@@ -139,14 +139,19 @@ watch(
 
     agentId.value = targetId
     store.cancelStream()
-    await store.loadAgent(targetId)
-    store.lastUsedAgentId = targetId
-    await store.loadSessions(targetId)
-    if (store.sessions.length > 0) {
-      await store.selectSession(targetId, store.sessions[0])
-    } else {
-      store.chatMessages = []
-      store.currentSession = null
+    store.sessionsLoading = true
+    try {
+      await store.loadAgent(targetId)
+      store.lastUsedAgentId = targetId
+      await store.loadSessions(targetId)
+      if (store.sessions.length > 0) {
+        await store.selectSession(targetId, store.sessions[0])
+      } else {
+        store.chatMessages = []
+        store.currentSession = null
+      }
+    } finally {
+      if (store.sessionsLoading) store.sessionsLoading = false
     }
   }
 )
@@ -201,6 +206,7 @@ onMounted(async () => {
         }
       }
     }
+    store.sessionsLoading = true
     await store.loadAgent(agentId.value)
     store.lastUsedAgentId = agentId.value
     await store.loadSessions(agentId.value)
@@ -220,6 +226,7 @@ onMounted(async () => {
   } catch {
     // error handled by interceptor
   } finally {
+    if (store.sessionsLoading) store.sessionsLoading = false
     await nextTick()
     initLoadMoreObserver()
   }
