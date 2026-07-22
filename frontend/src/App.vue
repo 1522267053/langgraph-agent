@@ -309,7 +309,7 @@ const selectedAgentId = computed({
   get: () => chatAgentId.value,
   set: (val: number | null) => {
     if (!val) return
-    // 有默认 agent 时所有选择都走 /chat/{id}，否则内置走 /chat
+    store.sessionsLoading = true
     if (val === builtinAgentId.value && !defaultAgentId.value) {
       router.push('/chat')
     } else {
@@ -322,15 +322,15 @@ function toggleDefaultAgent(agentId: number) {
   if (defaultAgentId.value === agentId) {
     localStorage.removeItem(DEFAULT_AGENT_KEY)
     defaultAgentId.value = null
-    // 取消默认后若当前在 /chat（无 id），跳回内置 agent
     if (!route.params.id) {
+      store.sessionsLoading = true
       router.push('/chat')
     }
   } else {
     localStorage.setItem(DEFAULT_AGENT_KEY, String(agentId))
     defaultAgentId.value = agentId
-    // 设为默认后自动跳转到该 agent
     if (!route.params.id || parseInt(route.params.id as string) !== agentId) {
+      store.sessionsLoading = true
       router.push(`/chat/${agentId}`)
     }
   }
@@ -360,6 +360,7 @@ const activeIndex = computed(() => {
 function navigateTo(path: string) {
   sidebarVisible.value = false
   if (route.path !== path) {
+    if (/^\/chat/.test(path)) store.sessionsLoading = true
     router.push(path)
   }
 }
