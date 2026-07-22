@@ -28,7 +28,11 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { useAgentStore } from '@/stores'
 import { authApi } from '@/api/auth'
 import { configApi, type UpdateCheckResult } from '@/api/config'
-import { connectWebSocket } from '@/composables/useWebSocket'
+import {
+  connectWebSocket,
+  setWatchingAgentId,
+  setWatchingSessionId
+} from '@/composables/useWebSocket'
 import { agentApi } from '@/api/agent'
 import { agendaApi } from '@/api/agenda'
 import {
@@ -217,6 +221,23 @@ const chatAgentId = computed(() => {
   if (defaultAgentId.value) return defaultAgentId.value
   return builtinAgentId.value
 })
+
+// 在 Agent 会话页面时跟踪当前 Agent 和会话，用于抑制完成通知
+watch(
+  [isChatPage, chatAgentId],
+  ([onChat, agentId]) => {
+    setWatchingAgentId(onChat ? (agentId as number | null) : null)
+  },
+  { immediate: true }
+)
+
+watch(
+  () => store.currentSession?.id,
+  sessionId => {
+    setWatchingSessionId(sessionId ?? null)
+  },
+  { immediate: true }
+)
 
 const sidebarVisible = ref(false)
 const searchKeyword = ref('')
