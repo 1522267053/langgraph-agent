@@ -470,7 +470,7 @@ function openDownloadUrl(): void {
                 />
               </div>
 
-              <div class="session-list">
+              <div v-loading="store.sessionsLoading" class="session-list">
                 <!-- 搜索结果 -->
                 <template v-if="isSearchMode">
                   <div v-if="searching" class="search-loading">
@@ -644,7 +644,7 @@ function openDownloadUrl(): void {
                   />
                 </div>
 
-                <div class="drawer-session-list">
+                <div v-loading="store.sessionsLoading" class="drawer-session-list">
                   <div
                     v-for="session in store.sessions"
                     :key="session.id"
