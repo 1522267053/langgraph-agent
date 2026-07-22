@@ -53,6 +53,10 @@ const MAX_RECONNECT_DELAY = 30000
 
 /** 当前正在通过 SSE 观看的 execution_id（用于跳过重复通知） */
 let watchingExecutionId: number | null = null
+/** 当前正在查看的 Agent ID（在 /chat 页面上，用于跳过该 Agent 的完成通知） */
+let watchingAgentId: number | null = null
+/** 当前正在查看的会话 ID（进一步精确到 session 级别抑制通知） */
+let watchingSessionId: number | null = null
 let deniedNotified = false
 
 /** 工具输出回调（store 注册） */
@@ -70,6 +74,14 @@ export function setWatchingExecution(id: number | null) {
   watchingExecutionId = id
 }
 
+export function setWatchingAgentId(id: number | null) {
+  watchingAgentId = id
+}
+
+export function setWatchingSessionId(id: number | null) {
+  watchingSessionId = id
+}
+
 function buildWsUrl(): string {
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
   return `${protocol}://${location.host}/ws/notifications`
@@ -78,11 +90,23 @@ function buildWsUrl(): string {
 function handleNotification(msg: WSMessage) {
   if (msg.type === 'execution_done') {
     const data = msg.data as ExecutionDoneData
-    const { flow_name, status, source, execution_id, last_user_message } = data
+    const { flow_name, status, source, execution_id, flow_id, last_user_message } = data
 
-    // 跳过用户正在通过 SSE 观看的执行（避免重复弹窗）
+    // 跳过用户正在查看的执行：SSE 观看的 execution_id 或当前正在浏览的 Agent 页面
     const isWatching =
       execution_id !== null && watchingExecutionId !== null && execution_id === watchingExecutionId
+
+    // 正在该 Agent 的会话页面上，且是当前正在浏览的 session（flow_id + execution_id 均匹配），跳过通知
+    const isWatchingAgent =
+      source === 'agent' &&
+      flow_id !== null &&
+      watchingAgentId !== null &&
+      flow_id === watchingAgentId &&
+      execution_id !== null &&
+      watchingSessionId !== null &&
+      execution_id === watchingSessionId
+
+    const shouldSkip = isWatching || isWatchingAgent
 
     const typeLabel = source === 'agent' ? '对话' : '流程'
 
@@ -100,7 +124,7 @@ function handleNotification(msg: WSMessage) {
       const msgPreview = last_user_message
         ? `「${flow_name}：${truncate(last_user_message)}」执行完成`
         : `「${flow_name}」执行完成`
-      if (!isWatching) {
+      if (!shouldSkip) {
         ElNotification({
           type: 'success',
           title: `${typeLabel}完成`,
@@ -108,15 +132,15 @@ function handleNotification(msg: WSMessage) {
           duration: 5000,
           position: 'top-right'
         })
-      }
-      if (msg.browser_notify !== false) {
-        notify(`${typeLabel}完成`, { body: msgPreview, icon: '/logo.ico' })
+        if (msg.browser_notify !== false) {
+          notify(`${typeLabel}完成`, { body: msgPreview, icon: '/logo.ico' })
+        }
       }
     } else if (status === 'failed') {
       const msgPreview = last_user_message
         ? `「${flow_name}：${truncate(last_user_message)}」执行失败`
         : `「${flow_name}」执行失败`
-      if (!isWatching) {
+      if (!shouldSkip) {
         ElNotification({
           type: 'error',
           title: `${typeLabel}失败`,
@@ -124,9 +148,9 @@ function handleNotification(msg: WSMessage) {
           duration: 0,
           position: 'top-right'
         })
-      }
-      if (msg.browser_notify !== false) {
-        notify(`${typeLabel}失败`, { body: msgPreview, icon: '/logo.ico' })
+        if (msg.browser_notify !== false) {
+          notify(`${typeLabel}失败`, { body: msgPreview, icon: '/logo.ico' })
+        }
       }
     }
   } else if (msg.type === 'agenda_reminder') {
