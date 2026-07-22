@@ -21,6 +21,8 @@ export const useAgentStore = defineStore('agent', () => {
   // ========== 基础数据 ==========
   const agents = ref<AgentFlow[]>([])
   const currentAgent = ref<AgentFlow | null>(null)
+  // 上次使用的 Agent ID（内存态，刷新页面后重置，resetState 不清除以支持标签页切换记忆）
+  const lastUsedAgentId = ref<number | null>(null)
   const sessions = ref<AgentSession[]>([])
   const currentSession = ref<AgentSession | null>(null)
   const messages = ref<AgentMessage[]>([])
@@ -275,7 +277,7 @@ export const useAgentStore = defineStore('agent', () => {
     let currentAssistant: StreamingMessage | null = null
 
     for (const msg of dbMessages) {
-    const role = msg.role
+      const role = msg.role
 
       if (role === 'human') {
         if (currentAssistant) {
@@ -943,6 +945,7 @@ export const useAgentStore = defineStore('agent', () => {
     // 方法
     loadAgents,
     loadAgent,
+    lastUsedAgentId,
     loadSessions,
     createSession,
     deleteSession,

@@ -210,7 +210,10 @@ const chatAgentId = computed(() => {
   if (route.params.id) {
     return parseInt(route.params.id as string)
   }
-  // 优先级：localStorage 默认 > 内置 Agent
+  // 优先级：上次使用(需验证仍存在) > localStorage 默认 > 内置 Agent
+  if (store.lastUsedAgentId && store.agents.some(a => a.id === store.lastUsedAgentId)) {
+    return store.lastUsedAgentId
+  }
   if (defaultAgentId.value) return defaultAgentId.value
   return builtinAgentId.value
 })

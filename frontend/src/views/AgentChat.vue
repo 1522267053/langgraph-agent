@@ -107,14 +107,27 @@ watch(
 
     let targetId = id
     if (!targetId) {
-      // 优先级：localStorage 默认 > 内置 Agent
-      const storedDefault = localStorage.getItem('default_agent_id')
-      if (storedDefault) {
-        targetId = parseInt(storedDefault)
-      } else {
+      // 优先级：上次使用(需验证仍存在) > localStorage 默认 > 内置 Agent
+      let resolved = false
+      if (store.lastUsedAgentId) {
         if (store.agents.length === 0) await store.loadAgents()
-        const builtin = store.agents.find((a: { is_builtin?: number }) => a.is_builtin === 1)
-        targetId = builtin?.id ?? null
+        const exists = store.agents.some(a => a.id === store.lastUsedAgentId)
+        if (exists) {
+          targetId = store.lastUsedAgentId
+          resolved = true
+        } else {
+          store.lastUsedAgentId = null
+        }
+      }
+      if (!resolved) {
+        const storedDefault = localStorage.getItem('default_agent_id')
+        if (storedDefault) {
+          targetId = parseInt(storedDefault)
+        } else {
+          if (store.agents.length === 0) await store.loadAgents()
+          const builtin = store.agents.find((a: { is_builtin?: number }) => a.is_builtin === 1)
+          targetId = builtin?.id ?? null
+        }
       }
       if (!targetId) {
         agentId.value = null
@@ -127,6 +140,7 @@ watch(
     agentId.value = targetId
     store.cancelStream()
     await store.loadAgent(targetId)
+    store.lastUsedAgentId = targetId
     await store.loadSessions(targetId)
     if (store.sessions.length > 0) {
       await store.selectSession(targetId, store.sessions[0])
@@ -158,22 +172,37 @@ onMounted(async () => {
     if (id) {
       agentId.value = parseInt(id)
     } else {
-      // 优先级：localStorage 默认 > 内置 Agent
-      const storedDefault = localStorage.getItem('default_agent_id')
-      if (storedDefault) {
-        agentId.value = parseInt(storedDefault)
-      } else {
-        const res = await agentApi.list()
-        const agents = res.data.data?.list || []
-        const builtin = agents.find((a: { is_builtin?: number }) => a.is_builtin === 1)
-        if (!builtin) {
-          ElMessage.error('内置 Agent 不存在')
-          return
+      // 优先级：上次使用(需验证仍存在) > localStorage 默认 > 内置 Agent
+      let resolved = false
+      if (store.lastUsedAgentId) {
+        if (store.agents.length === 0) await store.loadAgents()
+        const exists = store.agents.some(a => a.id === store.lastUsedAgentId)
+        if (exists) {
+          agentId.value = store.lastUsedAgentId
+          resolved = true
+        } else {
+          // 上次使用的 Agent 已被删除，清除记忆
+          store.lastUsedAgentId = null
         }
-        agentId.value = builtin.id
+      }
+      if (!resolved) {
+        const storedDefault = localStorage.getItem('default_agent_id')
+        if (storedDefault) {
+          agentId.value = parseInt(storedDefault)
+        } else {
+          const res = await agentApi.list()
+          const agents = res.data.data?.list || []
+          const builtin = agents.find((a: { is_builtin?: number }) => a.is_builtin === 1)
+          if (!builtin) {
+            ElMessage.error('内置 Agent 不存在')
+            return
+          }
+          agentId.value = builtin.id
+        }
       }
     }
     await store.loadAgent(agentId.value)
+    store.lastUsedAgentId = agentId.value
     await store.loadSessions(agentId.value)
     if (sessionId) {
       const target = store.sessions.find(s => s.id === parseInt(sessionId))
