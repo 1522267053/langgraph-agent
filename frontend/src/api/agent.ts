@@ -196,6 +196,13 @@ export const agentApi = {
    */
   saveStatus(agentId: number, sessionId: number) {
     return get<{ saving: boolean }>(`/agent/${agentId}/sessions/${sessionId}/saving`)
+  },
+
+  /**
+   * 恢复内置 Agent 出厂设置
+   */
+  resetBuiltin() {
+    return post<{ id: number }>('/agent/reset-builtin')
   }
 }
 

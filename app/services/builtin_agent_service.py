@@ -114,6 +114,20 @@ def _dir_signature(path: Path) -> str:
     return hasher.hexdigest()
 
 
+BUILTIN_AGENT_SUGGESTED_PROMPTS = [
+    "帮我创建一个智能体",
+    "创建一个定时任务",
+    "生成一段视频",
+    "创建一个 WebSocket 网关",
+    "帮我创建一个新技能",
+    "写一段 Python 代码并运行",
+    "查看桌面有什么文件",
+    "帮我下载网络上的文件",
+    "帮我增加日程",
+    "半个小时后提醒我",
+    "记住我的偏好设置",
+]
+
 BUILTIN_AGENT_SYSTEM_PROMPT = """你是 AI Agent OS 的内置助手，是用户与系统交互的主要入口。
 
 ## 核心能力
@@ -182,19 +196,7 @@ class BuiltinAgentService:
                 builtin_flow.input_schema = DEFAULT_AGENT_INPUT_SCHEMA
                 changed = True
             if not builtin_flow.suggested_prompts:
-                builtin_flow.suggested_prompts = [
-                    "帮我创建一个智能体",
-                    "创建一个定时任务",
-                    "生成一段视频",
-                    "创建一个 WebSocket 网关",
-                    "帮我创建一个新技能",
-                    "写一段 Python 代码并运行",
-                    "查看桌面有什么文件",
-                    "帮我下载网络上的文件",
-                    "帮我增加日程",
-                    "半个小时后提醒我",
-                    "记住我的偏好设置",
-                ]
+                builtin_flow.suggested_prompts = BUILTIN_AGENT_SUGGESTED_PROMPTS.copy()
                 changed = True
             if changed:
                 await db.commit()
@@ -339,43 +341,71 @@ class BuiltinAgentService:
 
     async def _create(self, db: AsyncSession, skills: list[dict]) -> Flow:
         """创建内置 Agent（Start → LLM → End + 全部工具节点）"""
-        from app.services.ai_provider_service import ai_provider_service
 
         global_llm = await global_config_service.get_default_llm_config(db)
-
-        provider_name = global_llm.get("provider", "")
-        model = global_llm.get("model", "")
-        api_key = global_llm.get("api_key", "")
-        base_url = global_llm.get("base_url", "")
-
-        if not base_url:
-            provider = await ai_provider_service.get_by_provider_id(db, provider_name)
-            base_url = provider.api_url if provider and provider.api_url else ""
 
         flow_data = FlowCreate(
             name="AI 助手",
             description="系统内置 AI 助手，可以帮助你创建智能体和工作流",
             flow_type=FlowType.AGENT.value,
             input_schema=DEFAULT_AGENT_INPUT_SCHEMA,
-            suggested_prompts=[
-                "帮我创建一个智能体",
-                "创建一个定时任务",
-                "生成一段视频",
-                "创建一个 WebSocket 网关",
-                "帮我创建一个新技能",
-                "写一段 Python 代码并运行",
-                "查看桌面有什么文件",
-                "帮我下载网络上的文件",
-                "帮我增加日程",
-                "半个小时后提醒我",
-                "记住我的偏好设置",
-            ],
+            suggested_prompts=BUILTIN_AGENT_SUGGESTED_PROMPTS,
         )
         flow = await flow_service.create(db, flow_data)
 
         flow.is_builtin = 1
         await db.commit()
         await db.refresh(flow)
+
+        await self._build_nodes_and_edges(db, flow, skills, global_llm)
+        return await flow_service.get_with_nodes_and_edges(db, flow.id)
+
+    async def reset(self, db: AsyncSession) -> int:
+        """恢复内置 Agent 出厂设置：删除节点和边，用模板重新构建"""
+        query = select(Flow).where(
+            Flow.is_builtin == 1,
+            Flow.is_delete == 0,
+            Flow.flow_type == FlowType.AGENT.value,
+        )
+        result = await db.execute(query)
+        flow = result.scalar_one_or_none()
+        if not flow:
+            raise ValueError("内置 Agent 不存在")
+
+        # 重置 flow 元数据
+        flow.name = "AI 助手"
+        flow.description = "系统内置 AI 助手，可以帮助你创建智能体和工作流"
+        flow.input_schema = DEFAULT_AGENT_INPUT_SCHEMA
+        flow.suggested_prompts = BUILTIN_AGENT_SUGGESTED_PROMPTS.copy()
+        await db.commit()
+
+        # 获取现有节点并按 key 批量删除（级联删除边）
+        existing_nodes = await flow_service.get_flow_nodes(db, flow.id)
+        node_keys = [n.node_key for n in existing_nodes]
+        if node_keys:
+            await flow_service.batch_delete_nodes_by_keys(db, flow.id, node_keys)
+
+        # 重新构建节点和边
+
+        global_llm = await global_config_service.get_default_llm_config(db)
+        skills = await self._ensure_skill(db)
+        await self._build_nodes_and_edges(db, flow, skills, global_llm)
+        logger.info("内置 Agent 已恢复出厂设置: id=%d", flow.id)
+        return flow.id
+
+    async def _build_nodes_and_edges(
+        self, db: AsyncSession, flow: Flow, skills: list[dict], global_llm: dict
+    ) -> None:
+        """构建内置 Agent 的节点和边（Start → LLM → End + 全部工具节点）"""
+        provider_name = global_llm.get("provider", "")
+        model = global_llm.get("model", "")
+        api_key = global_llm.get("api_key", "")
+        base_url = global_llm.get("base_url", "")
+        from app.services.ai_provider_service import ai_provider_service
+
+        if not base_url:
+            provider = await ai_provider_service.get_by_provider_id(db, provider_name)
+            base_url = provider.api_url if provider and provider.api_url else ""
 
         # ---- 主链路节点 ----
         nodes_data = [
