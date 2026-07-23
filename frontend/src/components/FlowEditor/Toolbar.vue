@@ -17,7 +17,10 @@ const emit = defineEmits<{
   (e: 'execute'): void
   (e: 'showHistory'): void
   (e: 'showSnapshot'): void
+  (e: 'resetBuiltin'): void
 }>()
+
+const isBuiltin = computed(() => store.flowInfo?.is_builtin === 1)
 
 const statusLabel = computed(() => {
   const status = store.flowInfo?.status
@@ -119,6 +122,9 @@ function handleMobileCommand(command: string) {
           <button class="tab-btn" @click="handleShowSnapshot">版本快照</button>
           <button class="tab-btn" @click="handleOpenFiles">
             {{ props.isAgent ? '智能体文件资源' : '流程文件资源' }}
+          </button>
+          <button v-if="isBuiltin" class="tab-btn reset-btn" @click="emit('resetBuiltin')">
+            恢复出厂设置
           </button>
         </div>
         <div class="toolbar-actions">
@@ -300,6 +306,15 @@ function handleMobileCommand(command: string) {
 
 .tab-btn:hover {
   color: #2563eb;
+}
+
+.reset-btn {
+  color: #ef4444;
+}
+
+.reset-btn:hover {
+  color: #dc2626;
+  background: #fef2f2;
 }
 
 .toolbar-actions {

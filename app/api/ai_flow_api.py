@@ -219,7 +219,7 @@ class AiFlowApi:
         """按 node_key 批量配置节点（node_name、base_config、position）。base_config 为整体替换。"""
         try:
             nodes_data = [n.model_dump() for n in data.nodes]
-            existing_nodes = await flow_service._get_flow_nodes(db, flow_id)
+            existing_nodes = await flow_service.get_flow_nodes(db, flow_id)
             key_to_type = {n.node_key: n.node_type for n in existing_nodes}
             global_cfg = await global_config_service.get_default_llm_config(db)
             for nd in nodes_data:
@@ -245,7 +245,7 @@ class AiFlowApi:
     ):
         """批量创建边。自动校验节点存在性、handle 配对、工具边目标、工具节点限制、条件分支完整性。"""
         try:
-            existing_nodes = await flow_service._get_flow_nodes(db, flow_id)
+            existing_nodes = await flow_service.get_flow_nodes(db, flow_id)
             existing_keys = {n.node_key for n in existing_nodes}
 
             for e in data.edges:

@@ -118,6 +118,8 @@ export interface Flow extends BaseEntity {
   status?: FlowStatus
   /** 是否保存为卡片 */
   saved_as_card?: number
+  /** 是否内置 */
+  is_builtin?: number
   /** 输入Schema */
   input_schema?: FlowIOSchema
   /** 输出Schema */

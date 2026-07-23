@@ -1314,8 +1314,8 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             )
             await self.update(db, update_data)
 
-        existing_nodes = await self._get_flow_nodes(db, flow_id)
-        existing_edges = await self._get_flow_edges(db, flow_id)
+        existing_nodes = await self.get_flow_nodes(db, flow_id)
+        existing_edges = await self.get_flow_edges(db, flow_id)
 
         existing_node_map: dict[str, FlowNode] = {n.node_key: n for n in existing_nodes}
         existing_edge_map: dict[str, FlowEdge] = {}
@@ -1463,7 +1463,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             ts = int(time.time() * 1000)
             node_key = f"{node_type}_{ts}"
 
-        existing_nodes = await self._get_flow_nodes(db, flow_id)
+        existing_nodes = await self.get_flow_nodes(db, flow_id)
         existing_keys = {n.node_key for n in existing_nodes}
         if node_key in existing_keys:
             base_key = node_key
@@ -1507,7 +1507,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         Raises:
             ValueError: 节点不存在或不在该流程中
         """
-        existing_nodes = await self._get_flow_nodes(db, flow_id)
+        existing_nodes = await self.get_flow_nodes(db, flow_id)
         target = None
         for n in existing_nodes:
             if n.node_key == node_key:
@@ -1535,7 +1535,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         Raises:
             ValueError: 节点不存在或不在该流程中
         """
-        existing_nodes = await self._get_flow_nodes(db, flow_id)
+        existing_nodes = await self.get_flow_nodes(db, flow_id)
         target = None
         for n in existing_nodes:
             if n.node_key == node_key:
@@ -1544,7 +1544,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         if target is None:
             raise ValueError(f"节点「{node_key}」不存在")
 
-        related_edges = await self._get_flow_edges(db, flow_id)
+        related_edges = await self.get_flow_edges(db, flow_id)
         for edge in related_edges:
             if edge.source_node_key == node_key or edge.target_node_key == node_key:
                 await self.delete_edge(db, edge.id)
@@ -1582,7 +1582,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         Raises:
             ValueError: 源/目标节点不存在或自连接
         """
-        existing_nodes = await self._get_flow_nodes(db, flow_id)
+        existing_nodes = await self.get_flow_nodes(db, flow_id)
         existing_keys = {n.node_key for n in existing_nodes}
 
         if source_node_key not in existing_keys:
@@ -1647,7 +1647,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         )
         return await self.create_edge(db, edge_data)
 
-    async def _get_flow_nodes(self, db: AsyncSession, flow_id: int) -> list[FlowNode]:
+    async def get_flow_nodes(self, db: AsyncSession, flow_id: int) -> list[FlowNode]:
         """获取流程的所有未删除节点"""
         query = select(FlowNode).where(
             FlowNode.flow_id == flow_id, FlowNode.is_delete == 0
@@ -1655,7 +1655,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         result = await db.execute(query)
         return list(result.scalars().all())
 
-    async def _get_flow_edges(self, db: AsyncSession, flow_id: int) -> list[FlowEdge]:
+    async def get_flow_edges(self, db: AsyncSession, flow_id: int) -> list[FlowEdge]:
         """获取流程的所有未删除边"""
         query = select(FlowEdge).where(
             FlowEdge.flow_id == flow_id, FlowEdge.is_delete == 0
@@ -1711,7 +1711,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         )
         from app.services.global_config_service import global_config_service
 
-        existing_nodes = await self._get_flow_nodes(db, flow_id)
+        existing_nodes = await self.get_flow_nodes(db, flow_id)
         existing_keys = {n.node_key for n in existing_nodes}
 
         flow = await self.get_by_id(db, flow_id)
@@ -1785,7 +1785,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         Raises:
             ValueError: 节点不存在
         """
-        existing_nodes = await self._get_flow_nodes(db, flow_id)
+        existing_nodes = await self.get_flow_nodes(db, flow_id)
         key_to_node = {n.node_key: n for n in existing_nodes}
 
         for item in nodes_data:
@@ -1820,7 +1820,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         Raises:
             ValueError: 节点不存在
         """
-        existing_nodes = await self._get_flow_nodes(db, flow_id)
+        existing_nodes = await self.get_flow_nodes(db, flow_id)
         key_to_node = {n.node_key: n for n in existing_nodes}
 
         for key in node_keys:
@@ -1828,7 +1828,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
                 raise ValueError(f"节点「{key}」不存在")
 
         keys_set = set(node_keys)
-        existing_edges = await self._get_flow_edges(db, flow_id)
+        existing_edges = await self.get_flow_edges(db, flow_id)
         edges_to_delete = [
             e
             for e in existing_edges
@@ -1861,7 +1861,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         Raises:
             ValueError: 边不存在
         """
-        existing_edges = await self._get_flow_edges(db, flow_id)
+        existing_edges = await self.get_flow_edges(db, flow_id)
 
         deleted_count = 0
         for edge_data in edges_data:

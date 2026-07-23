@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config.database import get_db
 from app.models.flow import FlowType
 from app.services.agent_executor_service import agent_executor_service
+from app.services.builtin_agent_service import builtin_agent_service
 from app.services.flow_service import flow_service
 from app.services.interrupt_service import interrupt_service
 from app.services.tool_approval_service import tool_approval_service
@@ -409,6 +410,19 @@ class AgentApi:
             if result.get("success"):
                 return ApiResponse.success(data=result, msg="任务已取消")
             return ApiResponse.error(msg=result.get("error", "取消失败"))
+
+        @self.router.post(
+            "/reset-builtin",
+            response_model=ApiResponse,
+            summary="恢复内置 Agent 出厂设置",
+        )
+        async def reset_builtin_agent(db: AsyncSession = Depends(get_db)):
+            """删除内置 Agent 全部节点和边，按最新模板重新构建"""
+            try:
+                flow_id = await builtin_agent_service.reset(db)
+                return ApiResponse.success(data={"id": flow_id}, msg="已恢复出厂设置")
+            except ValueError as e:
+                return ApiResponse.error(msg=str(e))
 
 
 agent_api = AgentApi()

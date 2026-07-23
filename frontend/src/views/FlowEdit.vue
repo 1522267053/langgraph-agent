@@ -3,9 +3,10 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flowStore'
 import { executionApi } from '@/api/execution'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Setting } from '@element-plus/icons-vue'
 import type { FlowExecution } from '@/types/execution'
+import { agentApi } from '@/api/agent'
 import { useFlowExecution } from '@/composables/useFlowExecution'
 import { useIsMobile } from '@/composables/useIsMobile'
 import FlowCanvas from '@/components/FlowEditor/FlowCanvas.vue'
@@ -327,6 +328,29 @@ async function handleSnapshotRestored() {
     await store.loadFlow(flowId.value)
   }
 }
+
+async function handleResetBuiltin() {
+  try {
+    await ElMessageBox.confirm(
+      '恢复出厂设置将删除当前 Agent 的全部节点和边，按最新模板重新构建。此操作不可撤销，确定继续？',
+      '恢复出厂设置',
+      { type: 'warning', confirmButtonText: '确定恢复', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    const res = await agentApi.resetBuiltin()
+    if (res.data.code === 1) {
+      ElMessage.success('已恢复出厂设置')
+      if (flowId.value) {
+        await store.loadFlow(flowId.value)
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
 </script>
 
 <template>
@@ -337,6 +361,7 @@ async function handleSnapshotRestored() {
       @execute="handleExecute"
       @show-history="handleShowHistory"
       @show-snapshot="handleShowSnapshot"
+      @reset-builtin="handleResetBuiltin"
     />
 
     <div class="editor-container">
