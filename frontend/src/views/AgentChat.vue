@@ -73,6 +73,7 @@ const isWelcomeMode = computed(
 function handleSuggestedPrompt(prompt: string) {
   inputMessage.value = prompt
   handleChatSend({}, [], prompt)
+  inputMessage.value = ''
 }
 
 const STORAGE_KEY = 'agent-chat-display'
