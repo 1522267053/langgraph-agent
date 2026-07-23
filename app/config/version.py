@@ -2,7 +2,7 @@
 应用版本常量
 """
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 
 def parse_version(version_str: str) -> tuple[int, int, int]:
