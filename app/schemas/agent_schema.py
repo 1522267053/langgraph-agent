@@ -123,6 +123,7 @@ class AgentFlowResponse(BaseModel):
     status: int = Field(..., description="状态")
     is_builtin: Optional[int] = Field(0, description="是否内置")
     input_schema: Optional[FlowIOSchema] = Field(None, description="输入参数定义")
+    suggested_prompts: Optional[List[str]] = Field(None, description="建议提示词列表")
     created_at: Optional[ChinaDateTime] = Field(None, description="创建时间")
     updated_at: Optional[ChinaDateTime] = Field(None, description="更新时间")
 
