@@ -137,7 +137,7 @@ POST /api/execution/human-input-stream/{execution_id}
 ## 创建流程（完整步骤）
 
 ```
-1. POST /api/ai/flow/create          # 创建（可同时设 input_schema）
+1. POST /api/ai/flow/create          # 创建（可同时设 input_schema、suggested_prompts）
 2. POST /api/ai/flow/{id}/nodes/batch    # 批量创建节点（含 LLM 和工具节点）
 3. POST /api/ai/flow/{id}/edges/batch    # 批量创建边（工具边连到 LLM）
 4. GET  /api/ai/flow/{id}/node/{llm_key}/connected-tools  # 查已连接的工具名（可选，配 required_tools 用）
@@ -156,11 +156,14 @@ POST /api/ai/flow/create
     "fields": [
       {"name": "message", "type": "string", "description": "用户消息", "required": true}
     ]
-  }
+  },
+  "suggested_prompts": ["帮我分析数据", "写一个报告"]
 }
 ```
 
 `input_schema` 类型可选：`string / number / boolean / object / array / file_list`
+
+`suggested_prompts` 为字符串数组，仅 Agent（`flow_type=agent`）有效。用户进入对话页且无消息时，会以全屏欢迎页展示这些提示词，点击即可自动发送。应根据 Agent 的实际能力提供 3~8 条具体、可操作的提示，避免空泛措辞。可通过 `POST /api/flow/update` 更新此字段。
 
 ### 创建节点示例
 
