@@ -176,11 +176,29 @@ class BuiltinAgentService:
 
         if builtin_flow:
             logger.info("内置 Agent 已存在: id=%d", builtin_flow.id)
-            # 补偿：旧版本创建的内置 Agent 可能没有 input_schema
+            # 补偿：旧版本创建的内置 Agent 可能没有 input_schema / suggested_prompts
+            changed = False
             if not builtin_flow.input_schema:
                 builtin_flow.input_schema = DEFAULT_AGENT_INPUT_SCHEMA
+                changed = True
+            if not builtin_flow.suggested_prompts:
+                builtin_flow.suggested_prompts = [
+                    "帮我创建一个智能体",
+                    "创建一个定时任务",
+                    "生成一段视频",
+                    "创建一个 WebSocket 网关",
+                    "帮我创建一个新技能",
+                    "写一段 Python 代码并运行",
+                    "查看桌面有什么文件",
+                    "帮我下载网络上的文件",
+                    "帮我增加日程",
+                    "半个小时后提醒我",
+                    "记住我的偏好设置",
+                ]
+                changed = True
+            if changed:
                 await db.commit()
-                logger.info("已为内置 Agent 补充 input_schema: id=%d", builtin_flow.id)
+                logger.info("已为内置 Agent 补充缺失字段: id=%d", builtin_flow.id)
             return builtin_flow.id
 
         skills = await self._ensure_skill(db)
@@ -339,6 +357,19 @@ class BuiltinAgentService:
             description="系统内置 AI 助手，可以帮助你创建智能体和工作流",
             flow_type=FlowType.AGENT.value,
             input_schema=DEFAULT_AGENT_INPUT_SCHEMA,
+            suggested_prompts=[
+                "帮我创建一个智能体",
+                "创建一个定时任务",
+                "生成一段视频",
+                "创建一个 WebSocket 网关",
+                "帮我创建一个新技能",
+                "写一段 Python 代码并运行",
+                "查看桌面有什么文件",
+                "帮我下载网络上的文件",
+                "帮我增加日程",
+                "半个小时后提醒我",
+                "记住我的偏好设置",
+            ],
         )
         flow = await flow_service.create(db, flow_data)
 

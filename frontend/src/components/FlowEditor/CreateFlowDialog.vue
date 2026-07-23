@@ -2,7 +2,9 @@
 import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { Plus, Delete } from '@element-plus/icons-vue'
 import { flowTemplateApi } from '@/api/flowTemplate'
+import { flowApi } from '@/api/flow'
 import type { FlowTemplate } from '@/types/flowTemplate'
 
 const props = defineProps<{
@@ -18,6 +20,7 @@ const emit = defineEmits<{
 const router = useRouter()
 const flowName = ref('')
 const flowDescription = ref('')
+const suggestedPrompts = ref<string[]>([])
 const templates = ref<FlowTemplate[]>([])
 const selectedTemplateId = ref('')
 const loadingTemplates = ref(false)
@@ -30,6 +33,7 @@ watch(
     } else {
       flowName.value = ''
       flowDescription.value = ''
+      suggestedPrompts.value = []
     }
   }
 )
@@ -88,7 +92,15 @@ async function handleCreate(): Promise<void> {
       description: flowDescription.value || undefined
     })
     if (res.data.code === 1) {
-      emit('created', res.data.data.id!)
+      const flowId = res.data.data.id!
+      // Agent 模式下补充建议提问
+      if (props.isAgentMode) {
+        const prompts = suggestedPrompts.value.filter(p => p.trim())
+        if (prompts.length) {
+          await flowApi.update({ id: flowId, name: flowName.value, suggested_prompts: prompts })
+        }
+      }
+      emit('created', flowId)
       emit('update:visible', false)
       ElMessage.success('创建成功')
     }
@@ -99,6 +111,14 @@ async function handleCreate(): Promise<void> {
 
 function handleCancel(): void {
   router.push('/flow')
+}
+
+function addPrompt(): void {
+  suggestedPrompts.value.push('')
+}
+
+function removePrompt(index: number): void {
+  suggestedPrompts.value.splice(index, 1)
 }
 </script>
 
@@ -146,6 +166,29 @@ function handleCancel(): void {
           :rows="2"
           :placeholder="isAgentMode ? '描述这个Agent的功能和用途' : '描述这个流程的功能和用途'"
         />
+      </el-form-item>
+      <el-form-item v-if="isAgentMode" label="建议提问">
+        <div class="prompts-editor">
+          <div
+            v-for="(p, i) in suggestedPrompts"
+            :key="i"
+            class="prompt-row"
+          >
+            <el-input
+              v-model="suggestedPrompts[i]"
+              placeholder="输入建议提问内容"
+              size="small"
+            />
+            <el-button
+              :icon="Delete"
+              circle
+              size="small"
+              style="flex-shrink: 0; margin-left: 4px"
+              @click="removePrompt(i)"
+            />
+          </div>
+          <el-button :icon="Plus" size="small" @click="addPrompt">添加</el-button>
+        </div>
       </el-form-item>
     </el-form>
     <template #footer>
@@ -234,5 +277,18 @@ function handleCancel(): void {
 .form-section {
   border-top: 1px solid #e4e7ed;
   padding-top: 16px;
+}
+
+.prompts-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.prompt-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
 }
 </style>
