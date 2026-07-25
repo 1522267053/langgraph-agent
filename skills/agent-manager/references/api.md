@@ -166,6 +166,15 @@ RestrictedPython 沙箱，支持 `requests`/`json`/`time`/`hashlib`/`openpyxl` �
 
 输出：`{stdout, stderr, return_code, success, command}`
 
+工具模式：连到 LLM 的 tools 边时提供 9 个工具
+- `shell_executor` 执行命令（危险命令黑名单保护，超时自动转后台任务）
+- `shell_task_status` / `shell_task_input` / `shell_task_cancel` 后台任务查询/输入/取消
+- `file_read` 读取文件（带行号，offset/limit 分页）
+- `text_editor` 精准字符串替换（old_string→new_string，支持 replace_all）
+- `file_write` 写入或新建文件（原子写入）
+- `file_search` 按内容搜索（正则匹配，ripgrep 优先）
+- `list_files` 按文件名 glob 匹配（如 `**/*.py`，用于查找文件或了解目录结构）
+
 ### knowledge
 
 | 字段 | 类型 | 默认 | 说明 |
