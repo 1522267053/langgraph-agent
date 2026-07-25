@@ -346,7 +346,7 @@ class BuiltinAgentService:
 
         flow_data = FlowCreate(
             name="AI 助手",
-            description="系统内置 AI 助手，可以帮助你创建智能体和工作流",
+            description="系统内置 AI 助手，支持通用对话、创建智能体与工作流、调用各类技能",
             flow_type=FlowType.AGENT.value,
             input_schema=DEFAULT_AGENT_INPUT_SCHEMA,
             suggested_prompts=BUILTIN_AGENT_SUGGESTED_PROMPTS,
@@ -374,7 +374,7 @@ class BuiltinAgentService:
 
         # 重置 flow 元数据
         flow.name = "AI 助手"
-        flow.description = "系统内置 AI 助手，可以帮助你创建智能体和工作流"
+        flow.description = "系统内置 AI 助手，支持通用对话、创建智能体与工作流、调用各类技能"
         flow.input_schema = DEFAULT_AGENT_INPUT_SCHEMA
         flow.suggested_prompts = BUILTIN_AGENT_SUGGESTED_PROMPTS.copy()
         await db.commit()
