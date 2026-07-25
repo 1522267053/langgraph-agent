@@ -270,6 +270,7 @@ POST /api/ai/flow/{id}/edges/batch
 
 ### Shell (`shell`)
 - `command` + `timeout`。输出：`stdout`/`stderr`/`exit_code`
+- **工具模式**：`shell_executor`（执行命令）+ `file_read`/`text_editor`/`file_write`（文件读写改）+ `file_search`（按内容搜索）+ `list_files`（按文件名 glob 匹配）+ 后台任务管理工具
 
 ### Knowledge (`knowledge`)
 - `knowledge_base_id` + `knowledge_base_name` + `top_k`。输出：`result`
