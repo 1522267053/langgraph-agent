@@ -8,6 +8,7 @@ LLM 工具执行模块
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -65,6 +66,20 @@ _HINT_PRIORITY: dict[str, int] = {
     "agenda": 1,
     "memory": 2,
 }
+
+# doom loop 检测：相同工具+相同参数重复调用次数上限，超过则跳过执行
+_DOOM_LOOP_THRESHOLD = 3
+
+
+def _tool_call_fingerprint(tool_call: dict) -> str:
+    """生成工具调用指纹（工具名 + 参数哈希），用于 doom loop 重复检测"""
+    name = tool_call.get("name", "")
+    args = tool_call.get("args", "")
+    if isinstance(args, dict):
+        args_key = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+    else:
+        args_key = str(args)
+    return f"{name}:{hashlib.md5(args_key.encode('utf-8')).hexdigest()}"
 
 
 async def setup_tool_handlers(
@@ -207,6 +222,8 @@ async def handle_tool_calls(
     emit_tool_start_fn: Optional[Callable] = None,
     emit_tool_end_fn: Optional[Callable] = None,
     emit_flow_preview_fn: Optional[Callable] = None,
+    tool_fp_count: Optional[dict[str, int]] = None,
+    doom_loop_threshold: int = _DOOM_LOOP_THRESHOLD,
 ) -> tuple[bool, int]:
     """统一处理所有工具调用（人工协助 + 审批确认 + 并行执行 + 截断）
 
@@ -228,6 +245,8 @@ async def handle_tool_calls(
         emit_tool_start_fn: 工具开始事件发送回调
         emit_tool_end_fn: 工具结束事件发送回调
         emit_flow_preview_fn: 流程预览事件发送回调（async，工具执行后检测到流程变更时调用）
+        tool_fp_count: doom loop 检测的指纹计数字典（由调用方持有，跨轮累积）
+        doom_loop_threshold: 相同工具+参数重复调用次数上限，超过则跳过
 
     Returns:
         (是否应继续循环, 工具调用总次数)
@@ -376,6 +395,32 @@ async def handle_tool_calls(
             tool_calls = tool_calls[:over_idx]
             if not tool_calls:
                 return False, tool_call_count
+
+    # ---- doom loop 检测：相同工具+相同参数重复调用超过阈值则跳过 ----
+    if tool_fp_count is not None and doom_loop_threshold > 0:
+        safe_calls: list[dict] = []
+        for tc in tool_calls:
+            fp = _tool_call_fingerprint(tc)
+            tool_fp_count[fp] = tool_fp_count.get(fp, 0) + 1
+            if tool_fp_count[fp] > doom_loop_threshold:
+                tc_name = tc.get("name", "")
+                tc_id = tc.get("id", "")
+                skip_msg = (
+                    f"检测到重复执行（{tc_name} 相同参数已第 {tool_fp_count[fp]} 次调用），"
+                    "已自动跳过。请回顾上一次执行结果，避免重复操作，更换思路或确认任务是否已完成。"
+                )
+                msg_buf.append(
+                    ToolMessage(content=skip_msg, tool_call_id=tc_id, name=tc_name)
+                )
+                if emit_tool_end_fn:
+                    emit_tool_end_fn(
+                        writer, node.node_key, tc_name, skip_msg, status="error"
+                    )
+            else:
+                safe_calls.append(tc)
+        tool_calls = safe_calls
+        if not tool_calls:
+            return True, tool_call_count
 
     # ---- 并行执行工具调用 ----
     tool_call_count += len(tool_calls)

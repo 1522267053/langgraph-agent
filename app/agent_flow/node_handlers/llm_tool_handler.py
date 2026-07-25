@@ -62,6 +62,7 @@ from app.agent_flow.node_handlers.llm_message_builder import (
 )
 from app.agent_flow.node_handlers.llm_stream import stream_llm_response
 from app.agent_flow.node_handlers.llm_tool_executor import (
+    _DOOM_LOOP_THRESHOLD,
     _PLAN_DISABLED_TOOLS,
     handle_tool_calls,
     setup_tool_handlers,
@@ -541,6 +542,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
         tool_call_count = 0
         called_tools: set[str] = set()
         retry_count = 0
+        tool_fp_count: dict[str, int] = {}
 
         while True:
             messages = msg_buf.messages
@@ -706,6 +708,8 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 emit_tool_start_fn=self._emit_tool_start,
                 emit_tool_end_fn=self._emit_tool_end,
                 emit_flow_preview_fn=self._emit_flow_preview,
+                tool_fp_count=tool_fp_count,
+                doom_loop_threshold=_DOOM_LOOP_THRESHOLD,
             )
             if not should_continue:
                 break
