@@ -197,6 +197,7 @@ MAX_CONTENT_SIZE = 50 * 1024 * 1024
 MAX_FILE_READ_LINES = 100
 MAX_SEARCH_RESULTS = 50
 MAX_SEARCH_FILE_SIZE = 5 * 1024 * 1024
+MAX_LIST_RESULTS = 100
 
 SKIP_DIR_NAMES = {
     ".git",
@@ -379,6 +380,22 @@ class FileSearchInput(BaseModel):
     literal_text: bool = Field(
         False,
         description="是否将 pattern 作为纯文本搜索（自动转义正则特殊字符），默认 False",
+    )
+
+
+class ListFilesInput(BaseModel):
+    """文件名匹配工具输入参数（glob 语义）"""
+
+    pattern: str = Field(
+        "**/*",
+        description="glob 文件名匹配模式，如 **/*.py、src/**/*.ts、*.json",
+    )
+    path: Optional[str] = Field(
+        None, description="搜索目录路径，不传则使用当前工作目录"
+    )
+    include_dirs: bool = Field(
+        False,
+        description="是否包含目录，默认仅列出文件",
     )
 
 
@@ -1592,6 +1609,78 @@ class ShellNodeHandler(BaseNodeHandler):
             args_schema=FileSearchInput,
         )
 
+        # ---- list_files（文件名 glob 匹配） ----
+
+        async def list_files(
+            pattern: str = "**/*",
+            path: Optional[str] = None,
+            include_dirs: bool = False,
+        ) -> str:
+            search_root = (
+                Path(path).resolve()
+                if path
+                else (self._resolve_working_dir() or BASE_DIR)
+            )
+
+            is_valid, error_msg = _validate_file_path(str(search_root))
+            if not is_valid:
+                return f"路径校验失败: {error_msg}"
+            if not search_root.exists():
+                return f"路径不存在: {search_root}"
+            if not search_root.is_dir():
+                return f"路径不是目录: {search_root}"
+
+            matched: list[Path] = []
+            try:
+                for p in search_root.glob(pattern):
+                    if any(part in SKIP_DIR_NAMES for part in p.parts):
+                        continue
+                    if _is_hidden_path(p):
+                        continue
+                    if not include_dirs and p.is_dir():
+                        continue
+                    matched.append(p)
+            except Exception as e:
+                return f"匹配失败: {e}"
+
+            if not matched:
+                return f"No files matched pattern: {pattern}"
+
+            total = len(matched)
+            truncated = total > MAX_LIST_RESULTS
+            if truncated:
+                matched = matched[:MAX_LIST_RESULTS]
+
+            def _rel(p: Path) -> str:
+                try:
+                    return str(p.relative_to(search_root))
+                except ValueError:
+                    return str(p)
+
+            matched.sort(key=_rel)
+
+            lines: list[str] = [f"Found {total} files\n"]
+            lines.extend(_rel(p) for p in matched)
+            if truncated:
+                lines.append(
+                    f"\n(Results truncated after {MAX_LIST_RESULTS} files. "
+                    "Use a more specific pattern.)"
+                )
+            return "\n".join(lines)
+
+        list_files_tool = StructuredTool(
+            name="list_files",
+            description=(
+                "按文件名 glob 模式递归匹配文件（而非内容搜索）。"
+                "适用于查找特定类型文件（如 **/*.py）、了解目录结构、定位配置文件等。"
+                "返回相对路径列表，自动跳过 .git/node_modules 等目录。"
+                "按文件内容搜索请改用 file_search。"
+            ),
+            func=None,
+            coroutine=list_files,
+            args_schema=ListFilesInput,
+        )
+
         return [
             shell_tool,
             shell_task_status_tool,
@@ -1601,6 +1690,7 @@ class ShellNodeHandler(BaseNodeHandler):
             text_editor_tool,
             file_write_tool,
             file_search_tool,
+            list_files_tool,
         ]
 
     @classmethod
@@ -1614,6 +1704,7 @@ class ShellNodeHandler(BaseNodeHandler):
             {"name": "text_editor", "description": "编辑文件内容"},
             {"name": "file_write", "description": "写入文件"},
             {"name": "file_search", "description": "搜索文件"},
+            {"name": "list_files", "description": "按文件名查找文件"},
         ]
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
@@ -1629,6 +1720,7 @@ class ShellNodeHandler(BaseNodeHandler):
             "- 如果命令输出被截断（返回 _truncated 标记），完整内容已自动保存到临时文件，需要时用 file_read 读取\n"
             "- file_read 单次最多读取 100 行，大文件用 offset 参数分段读取\n"
             "- file_search 递归搜索文件内容（正则匹配），跨文件快速定位目标位置\n"
+            "- list_files 按文件名 glob 匹配（如 **/*.py），用于查找文件或了解目录结构\n"
             "- 禁止用 cat 读取大文件，始终使用 file_read\n"
             f"\n临时文件输出目录: `{temp_dir}`（会被定时清理，勿存放重要数据）"
         ]
