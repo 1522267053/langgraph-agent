@@ -593,6 +593,9 @@ class AgentExecutorService(BaseExecutorService):
             # 初始化上下文
             input_data: dict = {}
 
+            # 计划模式标志（前端通过 params 传入，独立于 input_schema）
+            plan_mode = bool((params or {}).pop("__plan_mode__", False))
+
             # 统一通过 input_schema 解析所有参数（包括 message）
             pending_files = []
             if flow.input_schema:
@@ -613,6 +616,8 @@ class AgentExecutorService(BaseExecutorService):
                 input_data=input_data,
             )
             context.start()
+            if plan_mode:
+                context.state.set_variable("plan_mode", True)
 
             # 清除可能残留的中断状态，发送流程开始事件
             interrupt_service.clear_agent_interrupted(session_id)

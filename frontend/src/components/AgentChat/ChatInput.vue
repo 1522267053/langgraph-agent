@@ -3,7 +3,14 @@ import type { FlowIOField } from '@/types/flow'
 import type { FileInfo } from '@/api/file'
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Loading, Promotion, Document, FolderOpened, QuestionFilled } from '@element-plus/icons-vue'
+import {
+  Loading,
+  Promotion,
+  Document,
+  FolderOpened,
+  QuestionFilled,
+  List
+} from '@element-plus/icons-vue'
 import FilePickerDialog from '@/components/common/FilePickerDialog.vue'
 
 const props = defineProps<{
@@ -13,6 +20,7 @@ const props = defineProps<{
   isWaitingHuman: boolean
   totalTokens?: number
   latestPromptTokens?: number
+  planMode?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -23,6 +31,7 @@ const emit = defineEmits<{
     message: string
   ): void
   (e: 'stop'): void
+  (e: 'toggle-plan-mode'): void
 }>()
 
 const inputMessage = defineModel<string>('inputMessage', { default: '' })
@@ -303,6 +312,15 @@ function handleStop() {
                 </div>
               </div>
             </el-popover>
+            <el-tooltip content="计划模式：只读探索与规划，禁用写操作工具" placement="top">
+              <button
+                class="toolbar-icon-btn"
+                :class="{ 'plan-active': planMode }"
+                @click="emit('toggle-plan-mode')"
+              >
+                <el-icon :size="18"><List /></el-icon>
+              </button>
+            </el-tooltip>
           </div>
           <div class="toolbar-right">
             <div v-if="totalTokens" class="token-count">
@@ -560,6 +578,15 @@ export default {
 
 .toolbar-icon-btn.active:hover {
   background: #eff6ff;
+}
+
+.toolbar-icon-btn.plan-active {
+  color: #ea580c;
+  background: #fff;
+}
+
+.toolbar-icon-btn.plan-active:hover {
+  background: #fff7ed;
 }
 
 .param-dot {

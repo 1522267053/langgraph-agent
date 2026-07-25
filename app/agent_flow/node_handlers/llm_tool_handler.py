@@ -62,6 +62,7 @@ from app.agent_flow.node_handlers.llm_message_builder import (
 )
 from app.agent_flow.node_handlers.llm_stream import stream_llm_response
 from app.agent_flow.node_handlers.llm_tool_executor import (
+    _PLAN_DISABLED_TOOLS,
     handle_tool_calls,
     setup_tool_handlers,
 )
@@ -73,6 +74,19 @@ logger = logging.getLogger(__name__)
 
 # 自动压缩阈值比例：已用 token 超过 context_length 的此比例时触发压缩
 COMPRESS_THRESHOLD_RATIO = 0.83
+
+# 计划模式系统提示词：引导 LLM 只读探索并用 todo 工具产出结构化计划
+_PLAN_MODE_PROMPT = """
+
+# 当前运行模式：计划模式（Plan Mode）
+
+你现在处于「计划模式」，必须严格遵守：
+1. **只读探索**：你可以读取文件、搜索代码、检索知识库来理解问题，但**严禁执行任何写操作或修改性命令**（写文件、编辑文件、执行 shell/python 脚本等工具已被禁用）。
+2. **产出计划**：分析完成后，必须产出一份清晰的、可执行的实施计划。若可用 `todowrite` 工具，请用它把计划拆解为有序的任务清单；若没有该工具，则用 Markdown 列表输出计划。
+3. **不动手实施**：本阶段只规划和讨论方案，不要尝试直接修改代码或运行修改性命令。
+4. **主动澄清**：如果需求有歧义、边界不清或存在多种方案，先向用户提问确认，再给出计划。
+5. 计划应包含：要改动的文件/模块、每个步骤的具体动作、潜在风险与注意事项。
+"""
 
 
 class LlmNodeConfig(BaseNodeConfig):
@@ -331,6 +345,15 @@ class LlmToolNodeHandler(BaseNodeHandler):
             emit_fn=self._emit,
         )
 
+        # 计划模式：禁用写操作工具，并同步剔除 required_tools 中的被禁工具
+        is_plan_mode = bool(state.get_variable("plan_mode"))
+        plan_required_tools = cfg.required_tools
+        if is_plan_mode:
+            tools = [t for t in tools if t.name not in _PLAN_DISABLED_TOOLS]
+            plan_required_tools = [
+                r for r in cfg.required_tools if r not in _PLAN_DISABLED_TOOLS
+            ]
+
         # 解析输入变量，提取 system_prompt 和 user_prompt
         input_data = self.__class__.get_input_content(
             node, state, self._resolver, node.base_config or {}
@@ -351,6 +374,10 @@ class LlmToolNodeHandler(BaseNodeHandler):
         # 追加工具节点的 system_prompt 提示
         for hint in prompt_hints:
             system_prompt = (system_prompt or "") + hint
+
+        # 计划模式：追加只读探索与规划引导提示
+        if is_plan_mode:
+            system_prompt = (system_prompt or "") + _PLAN_MODE_PROMPT
 
         # 发送 node_start 事件
         self._emit(
@@ -427,7 +454,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 writer,
                 max_tool_iterations,
                 context_length=cfg_context_length,
-                required_tools=cfg.required_tools,
+                required_tools=plan_required_tools,
                 tool_check_script=cfg.tool_check_script,
                 required_tools_max_retries=cfg.required_tools_max_retries,
                 required_tools_hint=cfg.required_tools_hint,
