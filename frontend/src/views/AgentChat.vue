@@ -478,8 +478,10 @@ function handleRejectTools() {
             :is-waiting-human="false"
             :total-tokens="store.totalSessionTokens"
             :latest-prompt-tokens="store.latestPromptTokens"
+            :plan-mode="store.planMode"
             @send="handleChatSend"
             @stop="handleStop"
+            @toggle-plan-mode="store.togglePlanMode"
           />
         </div>
       </div>
@@ -490,6 +492,9 @@ function handleRejectTools() {
         <div class="header-center">
           <div class="status-dot"></div>
           <h1>{{ store.currentAgent?.name || 'AI 助手' }}</h1>
+          <el-tag v-if="store.planMode" size="small" type="warning" effect="light" round>
+            计划模式
+          </el-tag>
         </div>
         <div class="header-right">
           <DisplayToggle
@@ -646,8 +651,10 @@ function handleRejectTools() {
           :is-waiting-human="store.isWaitingHuman || store.isWaitingToolApproval"
           :total-tokens="store.totalSessionTokens"
           :latest-prompt-tokens="store.latestPromptTokens"
+          :plan-mode="store.planMode"
           @send="handleChatSend"
           @stop="handleStop"
+          @toggle-plan-mode="store.togglePlanMode"
         />
       </div>
 

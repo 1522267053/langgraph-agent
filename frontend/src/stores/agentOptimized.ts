@@ -97,6 +97,13 @@ export const useAgentStore = defineStore('agent', () => {
   const isStopping = ref(false)
   let savePollTimer: ReturnType<typeof setTimeout> | null = null
 
+  // ========== 计划模式（只读探索，不执行修改），localStorage 持久化 ==========
+  const planMode = ref(localStorage.getItem('agent_plan_mode') === '1')
+  function togglePlanMode(): void {
+    planMode.value = !planMode.value
+    localStorage.setItem('agent_plan_mode', planMode.value ? '1' : '0')
+  }
+
   // ========== 流程预览（AI 创建/修改流程时推送，独立于消息分段） ==========
   const flowPreview = ref<{
     flow_id: number
@@ -613,7 +620,7 @@ export const useAgentStore = defineStore('agent', () => {
     streamAbort = agentApi.chat(
       currentAgent.value.id,
       currentSession.value.id,
-      { content, params },
+      { content, params: { ...params, __plan_mode__: planMode.value } },
       createStreamHandlers()
     )
   }
@@ -939,6 +946,7 @@ export const useAgentStore = defineStore('agent', () => {
     isCompressing,
     isStopping,
     flowPreview,
+    planMode,
     // 消息分页
     hasMoreMessages,
     loadingMoreMessages,
@@ -953,6 +961,7 @@ export const useAgentStore = defineStore('agent', () => {
     loadMoreMessages,
     sendMessage,
     resumeWithInput,
+    togglePlanMode,
     approveToolCalls,
     rejectToolCalls,
     cancelStream,
