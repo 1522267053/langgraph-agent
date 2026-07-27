@@ -341,7 +341,7 @@ function handleStop() {
               @click="handleStop"
             >
               <el-icon :size="16" class="is-loading"><Loading /></el-icon>
-              <span>{{ isStopping ? '正在停止中...' : '停止' }}</span>
+              <span>{{ isStopping ? '停止中…' : '停止' }}</span>
             </button>
             <button
               v-else
@@ -610,6 +610,7 @@ export default {
   display: flex;
   align-items: baseline;
   margin-right: 4px;
+  white-space: nowrap;
 }
 
 .token-label {
@@ -685,5 +686,16 @@ export default {
 
 .stop-btn:hover {
   background: #dc2626;
+}
+
+@media (max-width: 768px) {
+  .token-count {
+    display: none;
+  }
+
+  .send-btn,
+  .stop-btn {
+    padding: 8px 14px;
+  }
 }
 </style>
