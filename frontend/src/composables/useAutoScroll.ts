@@ -1,7 +1,9 @@
-import { ref, watch, nextTick, type Ref, type WatchSource } from 'vue'
+import { ref, watch, type Ref, type WatchSource } from 'vue'
 
 interface UseAutoScrollOptions {
   threshold?: number
+  /** 自动滚动节流间隔（ms），leading + trailing 模式 */
+  throttleMs?: number
 }
 
 /**
@@ -17,11 +19,13 @@ export function useAutoScroll(
   watchSources: WatchSource[],
   options: UseAutoScrollOptions = {}
 ) {
-  const { threshold = 50 } = options
+  const { threshold = 50, throttleMs = 200 } = options
   const autoScroll = ref(true)
   const isAtBottom = ref(true)
   const userScrolledUp = ref(false)
   let _programmaticScroll = false
+  let _lastScrollAt = 0
+  let _trailingTimer: ReturnType<typeof setTimeout> | null = null
 
   function scrollToBottom(): void {
     if (!containerRef.value) return
@@ -35,17 +39,27 @@ export function useAutoScroll(
     })
   }
 
-  /** 内容变化时条件性滚动（autoScroll && !userScrolledUp） */
+  /** 内容变化时条件性滚动（autoScroll && !userScrolledUp），按 throttleMs 节流（leading + trailing） */
   function maybeScrollToBottom(): void {
-    if (autoScroll.value && !userScrolledUp.value) {
-      nextTick(() => {
-        if (userScrolledUp.value) return
-        // 双重 rAF 确保浏览器完成新内容布局后读取正确的 scrollHeight
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => scrollToBottom())
-        })
+    if (!autoScroll.value || userScrolledUp.value) return
+    const now = Date.now()
+    // leading：距上次滚动超过阈值则立即触发
+    if (now - _lastScrollAt >= throttleMs) {
+      _lastScrollAt = now
+      requestAnimationFrame(() => {
+        if (!userScrolledUp.value) scrollToBottom()
       })
+      return
     }
+    // trailing：冷却期内安排一次兜底，确保最新内容最终被滚动到底部
+    if (_trailingTimer) return
+    _trailingTimer = setTimeout(() => {
+      _trailingTimer = null
+      _lastScrollAt = Date.now()
+      requestAnimationFrame(() => {
+        if (autoScroll.value && !userScrolledUp.value) scrollToBottom()
+      })
+    }, throttleMs - (Date.now() - _lastScrollAt))
   }
 
   /** 绑定到容器 @scroll 事件 */

@@ -224,7 +224,7 @@ export function useStreamingMessage() {
     msg.prompt_tokens = (msg.prompt_tokens || 0) + prompt_tokens
     msg.completion_tokens = (msg.completion_tokens || 0) + completion_tokens
     msg.total_tokens = (msg.total_tokens || 0) + total_tokens
-    latestPromptTokens.value = prompt_tokens
+    latestPromptTokens.value = msg.prompt_tokens
   }
 
   /**
