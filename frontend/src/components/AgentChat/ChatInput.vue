@@ -625,6 +625,9 @@ export default {
   font-weight: 600;
   color: #334155;
   font-family: 'Courier New', monospace;
+  font-variant-numeric: tabular-nums;
+  min-width: 3ch;
+  text-align: right;
 }
 
 .token-sep {
