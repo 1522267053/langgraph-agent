@@ -98,7 +98,7 @@ function isLastMessage(idx: number): boolean {
               <span class="dot"></span>
               <span class="dot"></span>
             </div>
-            <div v-if="msg.total_tokens" class="token-info">
+            <div v-if="msg.total_tokens && !(isStreaming && isLastMessage(idx))" class="token-info">
               <span>
                 输入:
                 <span class="token-value">{{ formatTokenCount(msg.prompt_tokens) }}</span>
@@ -279,11 +279,13 @@ export default {
 
 .token-value {
   color: #475569;
+  font-variant-numeric: tabular-nums;
 }
 
 .token-total {
   color: #2563eb;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .typing {
