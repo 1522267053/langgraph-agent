@@ -417,6 +417,8 @@ class PythonNodeHandler(BaseNodeHandler):
         timeout = cfg.timeout
 
         if cfg.use_preset_for_tool:
+            if not (cfg.code or "").strip():
+                raise ValueError("开启「使用预设代码」但未配置代码")
             return self._build_preset_tool(node, cfg, handler, timeout)
 
         input_variables = cfg.input_variables

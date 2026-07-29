@@ -633,6 +633,9 @@ class ApiNodeHandler(BaseNodeHandler):
         async def call_preset_api(**kwargs) -> dict:
             context = {k: v for k, v in kwargs.items() if k != "_dummy"}
 
+            if not (cfg.api_url or "").strip():
+                return {"error": "API地址未配置", "success": False}
+
             def _simple_render(template: str) -> str:
                 if not template:
                     return template
