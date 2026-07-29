@@ -8,6 +8,7 @@ import { useConfigBase } from '@/composables/useConfigBase'
 import { useInputVariables } from '@/composables/useInputVariables'
 import VariableSelector from '../components/VariableSelector.vue'
 import AiProviderConfig from '@/components/common/AiProviderConfig.vue'
+import CodeEditor from '@/components/CodeEditor.vue'
 
 const props = defineProps<{
   config: LlmConfig
@@ -329,10 +330,8 @@ watch(
           </el-select>
         </el-form-item>
         <el-form-item v-else label="检查脚本">
-          <el-input
+          <CodeEditor
             v-model="localConfig.tool_check_script"
-            type="textarea"
-            :rows="5"
             placeholder="def main(called_tools, last_result): return {'need_retry': bool, 'hint': str}"
             @blur="updateConfig"
           />
