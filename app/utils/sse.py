@@ -82,6 +82,7 @@ async def create_sse_response(
             )
             if task_store is not None and task_key is not None:
                 task_store[task_key] = task
+                task.add_done_callback(lambda t: task_store.pop(task_key, None))
             try:
                 while True:
                     event = await queue.get()
@@ -95,9 +96,6 @@ async def create_sse_response(
                     }
             except asyncio.CancelledError:
                 pass
-            finally:
-                if task_store is not None and task_key is not None:
-                    task_store.pop(task_key, None)
 
         else:
             try:
