@@ -4,6 +4,7 @@ import { fieldTypeOptions } from './types'
 import { useConfigBase } from '@/composables/useConfigBase'
 import { useInputVariables } from '@/composables/useInputVariables'
 import VariableSelector from '../components/VariableSelector.vue'
+import CodeEditor from '@/components/CodeEditor.vue'
 
 const props = defineProps<{
   config: PythonConfig
@@ -91,10 +92,8 @@ function updateVariableSource(index: number, source: string): void {
       <div class="section-title">Python代码配置</div>
       <el-form label-width="50px" size="small">
         <el-form-item label="代码">
-          <el-input
+          <CodeEditor
             v-model="localConfig.code"
-            type="textarea"
-            :rows="10"
             placeholder="# 定义 main 函数，输入变量作为参数&#10;def main(query, data):&#10;    result = query + data&#10;    print(f'处理中...')&#10;    return result"
             @blur="updateConfig"
           />
