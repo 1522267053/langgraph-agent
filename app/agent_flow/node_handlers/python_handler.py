@@ -425,8 +425,8 @@ class PythonNodeHandler(BaseNodeHandler):
 
         param_desc_list = []
         for v in input_variables:
-            name = v.get("name", "")
-            var_type = v.get("type", "string")
+            name = v.name
+            var_type = v.type or "string"
             if name:
                 param_desc_list.append(f"{name}: {var_type}")
 
@@ -434,9 +434,9 @@ class PythonNodeHandler(BaseNodeHandler):
             params_desc = ", ".join(param_desc_list)
             param_list = "\n".join(
                 [
-                    f"  - {v.get('name')}: {v.get('type', 'string')}"
+                    f"  - {v.name}: {v.type or 'string'}"
                     for v in input_variables
-                    if v.get("name")
+                    if v.name
                 ]
             )
         else:
@@ -502,10 +502,10 @@ class PythonNodeHandler(BaseNodeHandler):
         # ---- 动态构建 args_schema ----
         fields: dict[str, tuple[type, Any]] = {}
         for var in input_variables:
-            name = var.get("name", "")
+            name = var.name
             if not name:
                 continue
-            var_type = var.get("type", "string")
+            var_type = var.type or "string"
             if var_type == "number":
                 py_type = float
                 default = Field(default=0.0, description=name)
@@ -553,6 +553,11 @@ class PythonNodeHandler(BaseNodeHandler):
         cfg = node.base_config or {}
         if cfg.get("use_preset_for_tool"):
             tool_name = f"python_{node_key}"
+            desc = (
+                cfg.get("description")
+                or f"执行 {node.node_name or node_key} Python代码"
+            )
         else:
             tool_name = f"python_executor_{node_key}"
-        return [{"name": tool_name, "description": "在沙箱环境中执行Python代码"}]
+            desc = "在沙箱环境中执行Python代码"
+        return [{"name": tool_name, "description": desc}]
