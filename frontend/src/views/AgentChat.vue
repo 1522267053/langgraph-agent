@@ -958,9 +958,7 @@ export default {
   background: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  max-width: 640px;
   width: 100%;
-  margin: 0 auto;
   padding-top: 8px;
 }
 
