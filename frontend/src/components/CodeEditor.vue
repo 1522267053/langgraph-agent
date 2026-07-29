@@ -100,6 +100,7 @@ function onFullscreenBlur() {
 
 <style scoped>
 .code-editor-wrapper {
+  width: 100%;
   border: 1px solid #dcdfe6;
   border-radius: 4px;
   overflow: hidden;
