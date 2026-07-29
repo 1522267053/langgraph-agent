@@ -83,10 +83,12 @@ async def trigger_ws(websocket: WebSocket):
 
     # ---- 接受连接 ----
     await websocket.accept()
-    # 单连接约束：同一智能体仅允许一个活跃 WS 连接（已被占用则拒绝）
-    if not register_ws_conn(conn.flow_id, conn):
-        await websocket.close(code=4409)
-        return
+    # 仅智能体类型占用全局连接槽（供前端 SSE 注入远程工具，且单连接）；
+    # 流程类型不注册工具，允许多个网关各自连接
+    if conn.flow_type == FlowType.AGENT.value:
+        if not register_ws_conn(conn.flow_id, conn):
+            await websocket.close(code=4409)
+            return
     await websocket.send_json(
         {
             "type": "connected",

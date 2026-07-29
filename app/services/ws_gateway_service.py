@@ -72,6 +72,17 @@ class WsGatewayService(
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def _is_agent_flow(self, db: AsyncSession, flow_id: int) -> bool:
+        """判断目标流程是否为智能体类型
+
+        仅智能体校验唯一绑定（需注入远程工具）；流程类型允许多个网关。
+        """
+        from app.models.flow import Flow
+
+        result = await db.execute(select(Flow.flow_type).where(Flow.id == flow_id))
+        flow_type = result.scalar_one_or_none()
+        return flow_type == FlowType.AGENT.value
+
     async def create(
         self, db: AsyncSession, obj_in: WsGatewayConfigCreate
     ) -> WsGatewayConfig:
@@ -82,11 +93,13 @@ class WsGatewayService(
         import uuid
 
         model = obj_in.to_model(WsGatewayConfig)
-        bound = await self.get_bound_by_flow(db, model.flow_id)
-        if bound:
-            raise ValueError(
-                f"该智能体已被绑定到网关「{bound.name}」，一个智能体仅支持绑定一个网关"
-            )
+        # 仅智能体校验唯一绑定（流程允许多个网关）
+        if await self._is_agent_flow(db, model.flow_id):
+            bound = await self.get_bound_by_flow(db, model.flow_id)
+            if bound:
+                raise ValueError(
+                    f"该智能体已被绑定到网关「{bound.name}」，一个智能体仅支持绑定一个网关"
+                )
         model.token = uuid.uuid4().hex
         model.call_count = 0
         db.add(model)
@@ -115,7 +128,9 @@ class WsGatewayService(
             if final_flow_id is None:
                 existing = await self.get_by_id(db, obj_id)
                 final_flow_id = existing.flow_id if existing else None
-            if final_flow_id is not None:
+            if final_flow_id is not None and await self._is_agent_flow(
+                db, final_flow_id
+            ):
                 bound = await self.get_bound_by_flow(
                     db, final_flow_id, exclude_id=obj_id
                 )
