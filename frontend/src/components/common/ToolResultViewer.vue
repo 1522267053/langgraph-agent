@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import { CopyDocument, View } from '@element-plus/icons-vue'
+import { CopyDocument, Download, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { detectFileLanguage } from '@/utils/format'
 
@@ -55,9 +55,8 @@ const isTextEditor = computed(() => {
 
 const isSaveFile = computed(() => {
   return (
-    props.toolName === '__save_file__' &&
-    parsedResult.value?.success &&
-    parsedResult.value?.preview_url
+    !!parsedResult.value?.success &&
+    !!(parsedResult.value?.preview_url || parsedResult.value?.download_url)
   )
 })
 
@@ -114,9 +113,10 @@ const diffLines = computed<DiffLine[]>(() => {
 
 const mediaInfo = computed(() => {
   const r = parsedResult.value
-  if (!r?.preview_url) return null
+  if (!r?.preview_url && !r?.download_url) return null
   return {
-    preview_url: r.preview_url as string,
+    preview_url: (r.preview_url || '') as string,
+    download_url: (r.download_url || '') as string,
     file_name: (r.file_name || '') as string,
     mime_type: (r.mime_type || '') as string,
     isVideo: ((r.mime_type || '') as string).startsWith('video/'),
@@ -247,25 +247,6 @@ watch(
     <div v-if="parsedResult?.message" class="tool-edit-message">{{ parsedResult.message }}</div>
   </div>
 
-  <div v-else-if="isSaveFile && mediaInfo" class="tool-media-result">
-    <div class="media-inline-preview">
-      <video
-        v-if="mediaInfo.isVideo"
-        :src="mediaInfo.preview_url"
-        controls
-        preload="none"
-        class="media-video"
-      />
-      <img
-        v-if="mediaInfo.isImage"
-        :src="mediaInfo.preview_url"
-        class="media-image"
-        @click="openMediaPreview"
-      />
-    </div>
-    <el-button :icon="View" size="small" @click="openMediaPreview"> 查看预览 </el-button>
-  </div>
-
   <div v-else class="tool-fallback-result">
     <pre class="tool-fallback-pre">{{ fallbackText }}</pre>
     <el-button
@@ -276,6 +257,43 @@ watch(
       @click="handleFallbackCopy"
       >复制</el-button
     >
+    <!-- 文件结果：在返回数据下方追加预览/下载 -->
+    <div v-if="isSaveFile && mediaInfo" class="tool-media-result">
+      <div class="media-inline-preview">
+        <video
+          v-if="mediaInfo.isVideo"
+          :src="mediaInfo.preview_url || mediaInfo.download_url"
+          controls
+          preload="none"
+          class="media-video"
+        />
+        <img
+          v-if="mediaInfo.isImage"
+          :src="mediaInfo.preview_url || mediaInfo.download_url"
+          class="media-image"
+          @click="openMediaPreview"
+        />
+      </div>
+      <div class="media-actions">
+        <el-button
+          v-if="mediaInfo.isVideo || mediaInfo.isImage"
+          :icon="View"
+          size="small"
+          @click="openMediaPreview"
+          >查看预览</el-button
+        >
+        <!-- 下载按钮：用 download_url（已登录带 cookie，FileResponse 返回原名） -->
+        <el-button
+          v-if="mediaInfo.download_url"
+          :icon="Download"
+          size="small"
+          tag="a"
+          :href="mediaInfo.download_url"
+          :download="mediaInfo.file_name"
+          >{{mediaInfo.file_name}}下载</el-button
+        >
+      </div>
+    </div>
   </div>
 </template>
 
@@ -456,7 +474,7 @@ watch(
 }
 
 .tool-media-result {
-  padding: 8px 12px;
+  padding: 12px 16px;
 }
 
 .media-inline-preview {
@@ -474,5 +492,11 @@ watch(
   max-height: 360px;
   border-radius: 6px;
   cursor: pointer;
+}
+
+.media-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 </style>
