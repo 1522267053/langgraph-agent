@@ -250,7 +250,13 @@ function onDrop(event: DragEvent) {
 }
 
 function handleKeyDown(event: KeyboardEvent) {
-  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+  const target = event.target as HTMLElement
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target.isContentEditable ||
+    target.closest('.cm-content')
+  ) {
     return
   }
 
