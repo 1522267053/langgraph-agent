@@ -97,6 +97,9 @@ export const useAgentStore = defineStore('agent', () => {
   const isStopping = ref(false)
   let savePollTimer: ReturnType<typeof setTimeout> | null = null
 
+  // ========== 后台运行检测（刷新后检测会话是否仍在跑） ==========
+  let runningPollTimer: ReturnType<typeof setTimeout> | null = null
+
   // ========== 计划模式（只读探索，不执行修改），localStorage 持久化 ==========
   const planMode = ref(localStorage.getItem('agent_plan_mode') === '1')
   function togglePlanMode(): void {
@@ -231,6 +234,18 @@ export const useAgentStore = defineStore('agent', () => {
       }
     } catch {
       // 状态检查失败不影响正常使用
+    }
+
+    // 检测会话是否正在后台执行（刷新/重选场景），点亮停止按钮
+    try {
+      const runRes = await agentApi.runningStatus(agentId, session.id)
+      if (runRes.data.code === 1 && runRes.data.data?.running) {
+        // 复用 isStreaming 点亮停止按钮（不会创建空气泡，气泡仅在真实 SSE 内容到达时创建）
+        isStreaming.value = true
+        startRunningPolling(agentId, session.id)
+      }
+    } catch {
+      // 检测失败不影响正常使用
     }
   }
 
@@ -731,6 +746,7 @@ export const useAgentStore = defineStore('agent', () => {
     pendingApprovalNeeded.value = []
     stopApprovalCountdown()
     stopSavePolling()
+    stopRunningPolling()
     if (waitForSave && currentAgent.value && currentSession.value) {
       startSavePolling(currentAgent.value.id, currentSession.value.id)
     }
@@ -802,6 +818,49 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   /**
+   * 停止后台运行检测轮询
+   */
+  function stopRunningPolling() {
+    if (runningPollTimer) {
+      clearTimeout(runningPollTimer)
+      runningPollTimer = null
+    }
+  }
+
+  /**
+   * 轮询检测会话是否仍在后台执行
+   *
+   * 刷新后若检测到会话在跑，点亮停止按钮（复用 isStreaming）。
+   * agent 自然结束时（running=false）自动复位按钮并拉回最终回复；
+   * 不设超时上限（agent 可长时间运行）。
+   */
+  function startRunningPolling(agentId: number, sessionId: number) {
+    stopRunningPolling()
+    const poll = async () => {
+      // 切换会话或无当前 Agent 时停止
+      if (!currentAgent.value || currentSession.value?.id !== sessionId) {
+        stopRunningPolling()
+        isStreaming.value = false
+        return
+      }
+      try {
+        const res = await agentApi.runningStatus(agentId, sessionId)
+        if (res.data.code === 1 && res.data.data?.running) {
+          runningPollTimer = setTimeout(poll, 1000)
+        } else {
+          stopRunningPolling()
+          isStreaming.value = false
+          refreshMessages(agentId, sessionId)
+        }
+      } catch {
+        stopRunningPolling()
+        isStreaming.value = false
+      }
+    }
+    poll()
+  }
+
+  /**
    * 中断执行（通知后端停止并断开SSE）
    */
   async function interruptExecution() {
@@ -856,6 +915,7 @@ export const useAgentStore = defineStore('agent', () => {
     sessionTotal.value = 0
     cancelStream()
     stopCompressPolling()
+    stopRunningPolling()
   }
 
   /**
@@ -971,6 +1031,7 @@ export const useAgentStore = defineStore('agent', () => {
     compressSession,
     startCompressPolling,
     stopCompressPolling,
-    stopSavePolling
+    stopSavePolling,
+    stopRunningPolling
   }
 })

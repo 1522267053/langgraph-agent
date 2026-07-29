@@ -844,6 +844,8 @@ class AgentExecutorService(BaseExecutorService):
             return
 
         try:
+            # 占用运行锁，供刷新后前端 /running 检测（与 chat_stream 对称）
+            self._running_sessions.add(session_id)
             # 获取会话
             session = await self._get_session(db, session_id)
             if not session:
@@ -989,6 +991,7 @@ class AgentExecutorService(BaseExecutorService):
                 interrupt_service.clear_agent_interrupted(session_id)
 
         finally:
+            self._running_sessions.discard(session_id)
             self._pending_save_sessions.discard(session_id)
             from app.services.tool_approval_service import tool_approval_service
 
@@ -1012,6 +1015,10 @@ class AgentExecutorService(BaseExecutorService):
     def is_pending_save(self, session_id: int) -> bool:
         """检查指定会话是否正在等待中断后的消息保存完成"""
         return session_id in self._pending_save_sessions
+
+    def is_running(self, session_id: int) -> bool:
+        """检查指定会话是否正在执行（用于刷新后前端检测并显示停止按钮）"""
+        return session_id in self._running_sessions
 
     async def _run_compress_background(self, session_id: int) -> None:
         """后台压缩任务，独立于 HTTP 请求生命周期，前端通过轮询 /compressing 检测完成"""

@@ -248,6 +248,7 @@ onUnmounted(() => {
   store.resetState()
   store.stopCompressPolling()
   store.stopSavePolling()
+  store.stopRunningPolling()
   toolOutputStore.stopPolling()
   toolOutputStore.unregisterWsHandler()
   loadMoreObserver?.disconnect()
