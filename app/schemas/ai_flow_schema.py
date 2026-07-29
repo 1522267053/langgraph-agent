@@ -122,7 +122,7 @@ class AiFlowNodeConfigItem(BaseModel):
     node_key: str = Field(..., description="节点唯一标识")
     node_name: Optional[str] = Field(None, description="节点显示名称")
     base_config: Optional[dict] = Field(
-        None, description="节点配置（整体替换，非合并）"
+        None, description="节点配置（字段级合并到已有配置，未传的键保留原值）"
     )
     position_x: Optional[float] = Field(None, description="X坐标")
     position_y: Optional[float] = Field(None, description="Y坐标")
