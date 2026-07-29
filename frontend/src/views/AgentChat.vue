@@ -26,7 +26,7 @@ const toolOutputStore = useToolOutputStore()
 
 const messagesContainer = ref<HTMLElement | null>(null)
 
-const { autoScroll, isAtBottom, scrollToBottom, handleScroll, userScrolledUp, onUserScrollIntent } = useAutoScroll(messagesContainer, [
+const { autoScroll, isAtBottom, scrollToBottom, handleScroll, userScrolledUp, onUserScrollIntent, resetAutoScrollState } = useAutoScroll(messagesContainer, [
   () => store.chatMessages.length,
   () => store.textContent,
   () => store.thinkingContent,
@@ -258,7 +258,9 @@ watch(
   () => store.messagesLoading,
   async (loading, wasLoading) => {
     if (wasLoading && !loading) {
+      resetAutoScrollState()
       await nextTick()
+      scrollToBottom()
       initLoadMoreObserver()
     }
   }

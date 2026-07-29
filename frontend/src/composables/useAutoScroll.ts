@@ -63,6 +63,18 @@ export function useAutoScroll(
     }, throttleMs - (Date.now() - _lastScrollAt))
   }
 
+  /** 重置全部滚动状态（切换 session 等场景调用，恢复自动滚动到底部） */
+  function resetAutoScrollState(): void {
+    userScrolledUp.value = false
+    isAtBottom.value = true
+    _lastUserScrollAt = 0
+    _lastScrollAt = 0
+    if (_trailingTimer) {
+      clearTimeout(_trailingTimer)
+      _trailingTimer = null
+    }
+  }
+
   /** 绑定到容器 @wheel / @touchmove 事件，标记用户主动滚动意图 */
   function onUserScrollIntent(): void {
     _lastUserScrollAt = Date.now()
@@ -101,6 +113,7 @@ export function useAutoScroll(
     scrollToBottom,
     maybeScrollToBottom,
     handleScroll,
-    onUserScrollIntent
+    onUserScrollIntent,
+    resetAutoScrollState
   }
 }
