@@ -369,6 +369,42 @@ POST /api/ai/flow/{id}/edges/batch
 | #4 | card 执行报 `'str' object has no attribute 'get'` | 子 end 的 `output_variables` 存为字符串 |
 | #5 | intent_router 分支边被 Pydantic 拦截 | `validate_handle` 已改为动态校验 |
 
+## Agent 运行时自我更新约束
+
+Agent 在对话执行过程中**能否修改自身流程图**，受以下机制约束。
+
+### 核心机制：每轮重建，运行时冻结
+
+- LangGraph 图在**每次对话开始**时从 DB 的 `flow_node` / `flow_edge` 表一次性编译（`graph_builder.build()`），运行中不可变
+- 即使运行时改了 DB，也**不影响当前这一轮**的执行，改动在**下一轮对话**重建图时自动生效
+- 因此"自我更新"本质是：Agent 调接口写入 DB → 告知用户下条消息生效 → 下一轮自动带上新结构
+
+### 默认无自更新能力
+
+**没有任何节点工具直接暴露 `flow_node` / `flow_edge` 的写操作**。LLM 工具集只覆盖 shell/python/HTTP/知识检索/记忆/todo/子Agent/MCP 等运行时能力，不包含流程自编辑。
+
+### 可选实现：通过 API 节点间接自更新
+
+给 Agent 配一个 `use_preset_for_tool=false` 的 **API 节点**，LLM 即可调用本机 `/api/ai/flow/*` 系列接口修改自身流程：
+
+- **本机回环免认证**：`auth_middleware` 对 `127.0.0.1` / `::1` 请求直接放行（注释明确为"AI 工具调用本平台 API"设计），无需 session cookie
+- **改动永久持久化**：直接写入 `flow_node` / `flow_edge` 表，该 Agent 以后所有会话都带上新结构
+- **下一轮生效**：本轮已编译的图无法注入新工具，需等下次对话重建
+
+### 约束清单
+
+| 约束 | 说明 |
+|------|------|
+| **生效时机** | 下一轮对话生效。本轮调 `attach` 后告知用户"已添加，下条消息生效" |
+| **白名单** | 新增节点类型必须在 `AGENT_ALLOWED_NODE_TYPES` 内（start/end/llm/condition/intent_router + 工具节点）。违反会被 `batch_add_nodes` 拒绝 |
+| **唯一性** | `start` / `end` / `llm` 各只能有 1 个（`AGENT_UNIQUE_NODE_TYPES`）。`knowledge` 等工具节点不受此限，可加多个 |
+| **Shell 节点** | 禁止写项目 `data/` 目录（数据库/向量库所在），无法直接改 DB 文件 |
+| **Python 节点** | RestrictedPython 沙箱，白名单不含 `app.services`，无法 import 操作 DB |
+| **Sub Agent** | 子 Agent 是独立流程，**不能**触达父 Agent 内存中的已编译图 |
+| **循环嵌套** | loop 内禁止嵌套 loop（含通过 card 间接），前后端均校验 |
+
+> ⚠️ `flow_id` 需通过 system_prompt 注入或让 LLM 调 `/api/ai/flow/list` 按名称匹配（后者有重名歧义）。建议在 LLM 的 system_prompt 中写明当前流程 ID。
+
 ## 详细 API 参考
 
 完整接口参数见 [references/api.md](references/api.md)。
