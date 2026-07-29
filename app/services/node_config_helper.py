@@ -30,7 +30,10 @@ def fill_node_defaults(node_type: str, overrides: dict | None = None) -> dict:
 
 def inject_llm_defaults(base_config: dict, global_cfg: dict) -> dict:
     """
-    为 LLM 节点配置注入全局默认值（仅回填空字段）。
+    为 LLM 节点配置注入全局默认值。
+
+    触发条件：model 或 api_key 任一为空时，用全局值覆盖全部 5 个字段
+    （provider/model/api_key/base_url/context_length），不再仅填空。
 
     Args:
         base_config: 节点当前配置
@@ -42,14 +45,9 @@ def inject_llm_defaults(base_config: dict, global_cfg: dict) -> dict:
     bc = dict(base_config)
     needs_inject = not bc.get("model") or not bc.get("api_key")
     if needs_inject and global_cfg.get("model") and global_cfg.get("api_key"):
-        if not bc.get("provider"):
-            bc["provider"] = global_cfg.get("provider", "")
-        if not bc.get("model"):
-            bc["model"] = global_cfg.get("model", "")
-        if not bc.get("api_key"):
-            bc["api_key"] = global_cfg.get("api_key", "")
-        if not bc.get("base_url") and global_cfg.get("base_url"):
-            bc["base_url"] = global_cfg["base_url"]
-        if not bc.get("context_length") and global_cfg.get("context_length"):
-            bc["context_length"] = global_cfg["context_length"]
+        bc["api_key"] = global_cfg.get("api_key", "")
+        bc["base_url"] = global_cfg["base_url"]
+        bc["context_length"] = global_cfg["context_length"]
+        bc["model"] = global_cfg.get("model", "")
+        bc["provider"] = global_cfg.get("provider", "")
     return bc
