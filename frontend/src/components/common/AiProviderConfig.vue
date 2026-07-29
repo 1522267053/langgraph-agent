@@ -84,7 +84,7 @@ function applyModelAutoFill() {
   if (capabilities.value && opt.capabilities && !hasAnyCapability()) {
     capabilities.value = { ...opt.capabilities }
   }
-  if (opt.context_length && !contextLength.value) {
+  if (opt.context_length) {
     contextLength.value = opt.context_length
   }
   if (opt.max_tokens && maxTokens.value !== undefined && !maxTokens.value) {
