@@ -333,7 +333,15 @@ function handleExtraBodyBlur() {
         @change="onFieldChange"
       />
     </el-form-item>
-    <el-form-item v-if="showReasoningEffort" label="推理深度">
+    <el-form-item v-if="showReasoningEffort">
+      <template #label>
+        推理深度
+        <el-tooltip
+          content='openai兼容的模型支持设置推理深度。若是anthropic兼容的模型，则可以在下方附加参数添加 {"thinking": {"type": "enabled", "budget_tokens": 2048}}'
+        >
+          <el-icon class="context-tip-icon"><QuestionFilled /></el-icon>
+        </el-tooltip>
+      </template>
       <el-select
         v-model="reasoningEffort"
         placeholder="不设置（使用模型默认）"
