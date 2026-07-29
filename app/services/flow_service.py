@@ -1772,7 +1772,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
     ) -> int:
         """按 node_key 批量更新节点配置（node_name、base_config、position）。
 
-        base_config 为整体替换，非合并。
+        base_config 为字段级合并到已有配置。
 
         Args:
             db: 数据库异步会话

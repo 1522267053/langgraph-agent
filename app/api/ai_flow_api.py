@@ -216,15 +216,20 @@ class AiFlowApi:
         data: AiFlowNodesConfigReq,
         db: AsyncSession = Depends(get_db),
     ):
-        """按 node_key 批量配置节点（node_name、base_config、position）。base_config 为整体替换。"""
+        """按 node_key 批量配置节点（node_name、base_config、position）。base_config 为字段级合并到已有配置。"""
         try:
             nodes_data = [n.model_dump() for n in data.nodes]
             existing_nodes = await flow_service.get_flow_nodes(db, flow_id)
             key_to_type = {n.node_key: n.node_type for n in existing_nodes}
+            key_to_config = {n.node_key: (n.base_config or {}) for n in existing_nodes}
             global_cfg = await global_config_service.get_default_llm_config(db)
             for nd in nodes_data:
-                node_type = key_to_type.get(nd.get("node_key", ""))
-                bc = fill_node_defaults(node_type, nd.get("base_config"))
+                node_key = nd.get("node_key", "")
+                node_type = key_to_type.get(node_key)
+                partial = nd.get("base_config")
+                bc = fill_node_defaults(node_type, key_to_config.get(node_key) or {})
+                if isinstance(partial, dict):
+                    bc.update(partial)
                 if node_type in ("llm", "intent_router"):
                     bc = inject_llm_defaults(bc, global_cfg)
                 nd["base_config"] = bc
