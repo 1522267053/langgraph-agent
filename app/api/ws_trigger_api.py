@@ -17,7 +17,11 @@ from typing import Any, Optional
 from fastapi import WebSocket, WebSocketDisconnect
 from starlette.routing import WebSocketRoute
 
-from app.agent_flow.ws_tool_context import _current_ws_conn
+from app.agent_flow.ws_tool_context import (
+    _current_ws_conn,
+    register_ws_conn,
+    unregister_ws_conn,
+)
 from app.config.database import AsyncSessionLocal
 from app.models.flow import FlowType
 from app.services.flow_service import flow_service
@@ -79,6 +83,10 @@ async def trigger_ws(websocket: WebSocket):
 
     # ---- 接受连接 ----
     await websocket.accept()
+    # 单连接约束：同一智能体仅允许一个活跃 WS 连接（已被占用则拒绝）
+    if not register_ws_conn(conn.flow_id, conn):
+        await websocket.close(code=4409)
+        return
     await websocket.send_json(
         {
             "type": "connected",
@@ -100,6 +108,7 @@ async def trigger_ws(websocket: WebSocket):
     except Exception as e:
         logger.warning(f"WS trigger 异常: {e}")
     finally:
+        unregister_ws_conn(conn.flow_id, conn)
         for future in conn.pending_calls.values():
             if not future.done():
                 future.cancel()

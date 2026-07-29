@@ -185,9 +185,13 @@ async def setup_tool_handlers(
     prompt_hints.sort(key=lambda x: (x[0], x[1]))
 
     # 注入 WS 远程工具（如有客户端注册）
-    from app.agent_flow.ws_tool_context import _current_ws_conn
+    # contextvar（WS execute 路径）优先；前端 SSE 路径 fallback 全局注册表
+    from app.agent_flow.ws_tool_context import (
+        _current_ws_conn,
+        get_active_ws_conn,
+    )
 
-    ws_conn = _current_ws_conn.get()
+    ws_conn = _current_ws_conn.get() or get_active_ws_conn(getattr(flow, "id", None))
     if ws_conn and ws_conn.registered_tools:
         from app.agent_flow.remote_tool_builder import create_remote_tool
 
