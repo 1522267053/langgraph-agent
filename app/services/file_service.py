@@ -125,6 +125,57 @@ class FileService(BaseService[File, FileBase, FileUpdate]):
         await db.refresh(file_obj)
         return file_obj
 
+    async def save_bytes_to_fs(
+        self,
+        db: AsyncSession,
+        content: bytes,
+        original_name: str,
+        mime_type: str,
+        source_type: str = "",
+        ext: Optional[str] = None,
+    ) -> File:
+        """将字节数据保存到文件管理系统（写磁盘 + 建 File 记录）
+
+        供 API 下载、Agent 生成文件导入文件管理等场景复用。
+
+        Args:
+            content: 文件字节内容
+            original_name: 原始文件名（保留到 File.original_name）
+            mime_type: MIME 类型
+            source_type: 来源类型，同时作为存储子目录名
+            ext: 扩展名，留空则从 original_name 推断
+
+        Returns:
+            保存后的 File 对象（含 preview_url）
+        """
+        if not ext:
+            if "." in original_name:
+                ext = original_name.rsplit(".", 1)[-1].lower()[:10] or "bin"
+            else:
+                ext = "bin"
+        unique_name = f"{uuid.uuid4().hex}.{ext}"
+        today = date.today().isoformat()
+        sub_dir = source_type or "upload"
+        relative_path = f"{self.settings.upload_dir}/{sub_dir}/{today}/{unique_name}"
+        absolute_path = settings.get_absolute_path(relative_path)
+        absolute_path.parent.mkdir(parents=True, exist_ok=True)
+
+        await asyncio.to_thread(_write_bytes, absolute_path, content)
+
+        file_obj = File(
+            source_type=source_type or "",
+            original_name=original_name,
+            file_path=relative_path,
+            file_type=ext,
+            file_size=len(content),
+            mime_type=mime_type,
+            preview_url=f"/{relative_path}",
+        )
+        db.add(file_obj)
+        await db.commit()
+        await db.refresh(file_obj)
+        return file_obj
+
     async def list_files(
         self, db: AsyncSession, source_type: Optional[str] = None
     ) -> List[File]:

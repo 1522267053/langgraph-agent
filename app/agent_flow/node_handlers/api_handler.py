@@ -8,11 +8,9 @@ API节点处理器
 - 响应文件下载保存到文件管理
 """
 
-import asyncio
 import json
 import logging
-import uuid
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any, Optional, TYPE_CHECKING
 
 import httpx
@@ -336,34 +334,20 @@ class ApiNodeHandler(BaseNodeHandler):
             文件信息字典，失败返回 None
         """
         from app.config.database import AsyncSessionLocal
-        from app.config.settings import settings
-        from app.models.file import File
+        from app.services.file_service import file_service
 
         ext = self._guess_ext_from_content_type(content_type, suggested_name)
-        unique_name = f"{uuid.uuid4().hex}.{ext}"
-        today = date.today().isoformat()
-        relative_path = f"{settings.upload_dir}/api_download/{today}/{unique_name}"
-        absolute_path = settings.get_absolute_path(relative_path)
-        absolute_path.parent.mkdir(parents=True, exist_ok=True)
-
+        original_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
         try:
-            await asyncio.to_thread(_write_bytes, absolute_path, content)
-
-            original_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
-
             async with AsyncSessionLocal() as db:
-                file_obj = File(
+                file_obj = await file_service.save_bytes_to_fs(
+                    db,
+                    content,
+                    original_name,
+                    content_type or "application/octet-stream",
                     source_type="api_download",
-                    original_name=original_name,
-                    file_path=relative_path,
-                    file_type=ext,
-                    file_size=len(content),
-                    mime_type=content_type,
+                    ext=ext,
                 )
-                db.add(file_obj)
-                await db.commit()
-                await db.refresh(file_obj)
-
             return {
                 "success": True,
                 "preview_url": f"/{file_obj.file_path}",

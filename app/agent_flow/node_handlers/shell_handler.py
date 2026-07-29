@@ -399,6 +399,15 @@ class ListFilesInput(BaseModel):
     )
 
 
+class UploadToFileManagerInput(BaseModel):
+    """上传文件到文件管理系统工具输入参数"""
+
+    file_path: str = Field(
+        ...,
+        description="要导入文件管理的文件路径，相对当前工作目录（也可用绝对路径）",
+    )
+
+
 def _decode_output(data: bytes) -> str:
     """三重解码：UTF-8 → GBK → 逐行混合解码（处理管道输出中 UTF-8/GBK 混合的情况）"""
     try:
@@ -1681,6 +1690,76 @@ class ShellNodeHandler(BaseNodeHandler):
             args_schema=ListFilesInput,
         )
 
+        # ---- upload_to_file_manager：将工作目录下生成的文件导入文件管理，返回下载链接 ----
+        async def upload_to_file_manager(file_path: str) -> dict:
+            import mimetypes
+
+            from app.config.database import AsyncSessionLocal
+            from app.config.settings import settings
+            from app.services.file_service import file_service
+
+            raw_path = (file_path or "").strip()
+            if not raw_path:
+                return {"success": False, "error": "file_path 不能为空"}
+            candidate = Path(raw_path)
+            work_dir = self._resolve_working_dir()
+            if not candidate.is_absolute() and work_dir is not None:
+                candidate = Path(work_dir) / raw_path
+            if not candidate.exists() or not candidate.is_file():
+                return {"success": False, "error": f"文件不存在: {file_path}"}
+            try:
+                content = await asyncio.to_thread(candidate.read_bytes)
+            except Exception as e:
+                return {"success": False, "error": f"读取文件失败: {e}"}
+
+            max_bytes = settings.max_upload_size * 1024 * 1024
+            if len(content) > max_bytes:
+                return {
+                    "success": False,
+                    "error": (
+                        f"文件大小 {len(content) / 1024 / 1024:.1f}MB 超过限制"
+                        f"（最大 {settings.max_upload_size}MB）"
+                    ),
+                }
+
+            mime_type = (
+                mimetypes.guess_type(str(candidate))[0] or "application/octet-stream"
+            )
+            try:
+                async with AsyncSessionLocal() as db:
+                    file_obj = await file_service.save_bytes_to_fs(
+                        db,
+                        content,
+                        candidate.name,
+                        mime_type,
+                        source_type="agent_upload",
+                    )
+            except Exception as e:
+                return {"success": False, "error": f"保存到文件管理失败: {e}"}
+
+            return {
+                "success": True,
+                "file_id": file_obj.id,
+                "file_name": file_obj.original_name,
+                "file_size": file_obj.file_size,
+                "mime_type": file_obj.mime_type,
+                "preview_url": f"/{file_obj.file_path}",
+                "download_url": f"/api/file/download/{file_obj.id}",
+            }
+
+        upload_to_file_manager_tool = StructuredTool(
+            name="upload_to_file_manager",
+            description=(
+                "将当前工作目录下已生成的文件导入文件管理系统，返回 download_url 供用户下载。"
+                "当你用 shell/file_write 等方式生成了需要交给用户的文件（报表、图片、视频、文档等），"
+                "调用此工具获取下载链接，并在回复中把 download_url 提供给用户。"
+                "file_path 支持相对工作目录或绝对路径。"
+            ),
+            func=None,
+            coroutine=upload_to_file_manager,
+            args_schema=UploadToFileManagerInput,
+        )
+
         return [
             shell_tool,
             shell_task_status_tool,
@@ -1691,6 +1770,7 @@ class ShellNodeHandler(BaseNodeHandler):
             file_write_tool,
             file_search_tool,
             list_files_tool,
+            upload_to_file_manager_tool,
         ]
 
     @classmethod
@@ -1705,6 +1785,10 @@ class ShellNodeHandler(BaseNodeHandler):
             {"name": "file_write", "description": "写入文件"},
             {"name": "file_search", "description": "搜索文件"},
             {"name": "list_files", "description": "按文件名查找文件"},
+            {
+                "name": "upload_to_file_manager",
+                "description": "将生成的文件导入文件管理并返回下载链接",
+            },
         ]
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
