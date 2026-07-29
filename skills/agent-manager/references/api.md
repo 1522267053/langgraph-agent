@@ -14,7 +14,7 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 | GET | `/api/ai/flow/node-types` | 所有节点类型 |
 | GET | `/api/ai/flow/node-types/{type}/config-schema` | 节点配置字段 |
 | POST | `/api/ai/flow/{id}/nodes/batch` | 批量创建节点（node_key 省略则自动生成） |
-| POST | `/api/ai/flow/{id}/nodes/batch/config` | 批量更新配置（base_config 整体替换） |
+| POST | `/api/ai/flow/{id}/nodes/batch/config` | 批量更新配置（base_config 字段级合并） |
 | POST | `/api/ai/flow/{id}/nodes/batch/delete` | 批量删除节点（级联删边） |
 | POST | `/api/ai/flow/{id}/edges/batch` | 批量创建边 |
 | POST | `/api/ai/flow/{id}/edges/batch/delete` | 批量删除边 |

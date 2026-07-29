@@ -17,7 +17,7 @@ description: |
 ## 核心规则（必须遵守）
 
 1. **创建/更新节点前，必须先查询 config-schema**：`GET /api/ai/flow/node-types/{type}/config-schema`
-2. **`base_config` 整体替换**：更新时必须传入完整配置，省略字段会被清空（更新前先 `GET /api/ai/flow/{id}/detail` 获取当前值）
+2. **`base_config` 字段级合并**：只传入要修改的字段即可，未传的字段保留原值（建议更新前 `GET /api/ai/flow/{id}/detail` 了解当前配置）
 3. **`output_variables` 必须是 JSON 对象数组** `[{"name","source","type"}]`，不能是字符串，否则执行时报错
 4. **Python 节点输出双层包装**：返回值被包在 `{stdout, stderr, result, success}` 中，引用路径为 `nodes.<key>.result.<field>` 而非 `nodes.<key>.<field>`
 5. **创建完毕后必须测试**：`POST /api/execution/stream/{id}` 验证流程能正常执行，确认输出符合预期后再告知用户完成
