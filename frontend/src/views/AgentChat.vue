@@ -26,7 +26,7 @@ const toolOutputStore = useToolOutputStore()
 
 const messagesContainer = ref<HTMLElement | null>(null)
 
-const { autoScroll, isAtBottom, scrollToBottom, handleScroll, userScrolledUp } = useAutoScroll(messagesContainer, [
+const { autoScroll, isAtBottom, scrollToBottom, handleScroll, userScrolledUp, onUserScrollIntent } = useAutoScroll(messagesContainer, [
   () => store.chatMessages.length,
   () => store.textContent,
   () => store.thinkingContent,
@@ -528,6 +528,8 @@ function handleRejectTools() {
         element-loading-text="加载中..."
         class="messages-container"
         @scroll="handleScroll"
+        @wheel="onUserScrollIntent"
+        @touchmove="onUserScrollIntent"
       >
         <div v-show="!store.messagesLoading">
           <div v-if="store.hasMoreMessages" ref="loadMoreSentinel" class="load-more-sentinel">

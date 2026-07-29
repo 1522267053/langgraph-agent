@@ -26,6 +26,7 @@ export function useAutoScroll(
   let _programmaticScroll = false
   let _lastScrollAt = 0
   let _trailingTimer: ReturnType<typeof setTimeout> | null = null
+  let _lastUserScrollAt = 0
 
   function scrollToBottom(): void {
     if (!containerRef.value) return
@@ -62,13 +63,25 @@ export function useAutoScroll(
     }, throttleMs - (Date.now() - _lastScrollAt))
   }
 
+  /** 绑定到容器 @wheel / @touchmove 事件，标记用户主动滚动意图 */
+  function onUserScrollIntent(): void {
+    _lastUserScrollAt = Date.now()
+  }
+
   /** 绑定到容器 @scroll 事件 */
   function handleScroll(): void {
     if (!containerRef.value || _programmaticScroll) return
     const { scrollTop, scrollHeight, clientHeight } = containerRef.value
     const atBottom = scrollHeight - scrollTop - clientHeight <= threshold
     isAtBottom.value = atBottom
-    userScrolledUp.value = !atBottom
+    if (!atBottom) {
+      // 不在底部 → 用户已上滑（或 DOM 重排推离底部）
+      userScrolledUp.value = true
+    } else if (Date.now() - _lastUserScrollAt < 500) {
+      // 用户主动滚回底部 → 恢复自动滚动
+      userScrolledUp.value = false
+    }
+    // else: DOM 重排导致位置在底部附近，非用户意图 → 不恢复自动滚动
   }
 
   // 用户开启 autoScroll 时重置上滚状态
@@ -87,6 +100,7 @@ export function useAutoScroll(
     userScrolledUp,
     scrollToBottom,
     maybeScrollToBottom,
-    handleScroll
+    handleScroll,
+    onUserScrollIntent
   }
 }
