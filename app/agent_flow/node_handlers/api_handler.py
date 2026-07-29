@@ -605,10 +605,10 @@ class ApiNodeHandler(BaseNodeHandler):
         # ---- 动态构建 args_schema ----
         fields: dict[str, tuple[type, Any]] = {}
         for var in input_variables:
-            name = var.get("name", "")
+            name = var.name
             if not name:
                 continue
-            var_type = var.get("type", "string")
+            var_type = var.type or "string"
             if var_type == "number":
                 py_type = float
                 default = Field(default=0.0, description=name)
@@ -807,6 +807,8 @@ class ApiNodeHandler(BaseNodeHandler):
         cfg = node.base_config or {}
         if cfg.get("use_preset_for_tool"):
             tool_name = f"api_{node_key}"
+            desc = cfg.get("description") or f"调用 {node.node_name or node_key} API"
         else:
             tool_name = f"api_call_tool_{node_key}"
-        return [{"name": tool_name, "description": "API调用"}]
+            desc = "API调用"
+        return [{"name": tool_name, "description": desc}]
