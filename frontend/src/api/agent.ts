@@ -199,6 +199,15 @@ export const agentApi = {
   },
 
   /**
+   * 查询会话是否正在后台执行（页面刷新后检测，据此显示停止按钮）
+   * @param agentId Agent ID
+   * @param sessionId 会话ID
+   */
+  runningStatus(agentId: number, sessionId: number) {
+    return get<{ running: boolean }>(`/agent/${agentId}/sessions/${sessionId}/running`)
+  },
+
+  /**
    * 恢复内置 Agent 出厂设置
    */
   resetBuiltin() {

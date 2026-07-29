@@ -325,6 +325,16 @@ class AgentApi:
             return ApiResponse.success(data={"saving": saving})
 
         @self.router.get(
+            "/{id}/sessions/{session_id}/running",
+            response_model=ApiResponse,
+            summary="查询会话是否正在执行",
+        )
+        async def check_running(id: int, session_id: int):
+            """页面刷新后检测会话是否仍在后台执行，前端据此显示停止按钮"""
+            running = agent_executor_service.is_running(session_id)
+            return ApiResponse.success(data={"running": running})
+
+        @self.router.get(
             "/{id}/sessions/{session_id}/compressing",
             response_model=ApiResponse,
             summary="查询会话是否正在压缩上下文",
