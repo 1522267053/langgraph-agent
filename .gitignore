@@ -56,3 +56,4 @@ uploads/
 data/
 *.pyi
 _static_imports.py
+workspace/*
