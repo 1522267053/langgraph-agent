@@ -55,19 +55,76 @@ class WsGatewayService(
                 )
         return query, count_query
 
+    async def get_bound_by_flow(
+        self, db: AsyncSession, flow_id: int, exclude_id: Optional[int] = None
+    ) -> Optional[WsGatewayConfig]:
+        """查询该流程已绑定的网关（用于唯一性校验）
+
+        一个智能体仅允许绑定一个网关。create 时 exclude_id 留空，
+        update 时传入自身 id 排除。
+        """
+        stmt = select(WsGatewayConfig).where(
+            WsGatewayConfig.flow_id == flow_id,
+            WsGatewayConfig.is_delete == 0,
+        )
+        if exclude_id:
+            stmt = stmt.where(WsGatewayConfig.id != exclude_id)
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def create(
         self, db: AsyncSession, obj_in: WsGatewayConfigCreate
     ) -> WsGatewayConfig:
-        """创建网关（自动生成 token）"""
+        """创建网关（自动生成 token）
+
+        校验目标智能体是否已被其他网关绑定，重复绑定抛 ValueError。
+        """
         import uuid
 
         model = obj_in.to_model(WsGatewayConfig)
+        bound = await self.get_bound_by_flow(db, model.flow_id)
+        if bound:
+            raise ValueError(
+                f"该智能体已被绑定到网关「{bound.name}」，一个智能体仅支持绑定一个网关"
+            )
         model.token = uuid.uuid4().hex
         model.call_count = 0
         db.add(model)
         await db.commit()
         await db.refresh(model)
         return model
+
+    async def update(
+        self, db: AsyncSession, obj_in: WsGatewayConfigUpdate
+    ) -> WsGatewayConfig:
+        """更新网关
+
+        若改动涉及 flow_id（或未改动也复校验最终归属），校验目标智能体
+        是否已被其他网关绑定，重复绑定抛 ValueError。
+        """
+        if isinstance(obj_in, WsGatewayConfig):
+            obj_id = obj_in.id
+            new_flow_id = getattr(obj_in, "flow_id", None)
+        else:
+            data = obj_in.model_dump(exclude_unset=True)
+            obj_id = data.get("id")
+            new_flow_id = data.get("flow_id")
+
+        if obj_id:
+            final_flow_id = new_flow_id
+            if final_flow_id is None:
+                existing = await self.get_by_id(db, obj_id)
+                final_flow_id = existing.flow_id if existing else None
+            if final_flow_id is not None:
+                bound = await self.get_bound_by_flow(
+                    db, final_flow_id, exclude_id=obj_id
+                )
+                if bound:
+                    raise ValueError(
+                        f"该智能体已被绑定到网关「{bound.name}」，一个智能体仅支持绑定一个网关"
+                    )
+
+        return await super().update(db, obj_in)
 
     async def get_by_token(
         self, db: AsyncSession, token: str
