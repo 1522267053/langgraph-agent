@@ -444,13 +444,14 @@ const filteredGroups = computed(() => {
 
 // ---- 批量选择 ----
 const flatItems = computed(() => filteredGroups.value.flatMap(g => g.items))
-const selectableIds = computed(() =>
-  flatItems.value.filter(i => i.status !== 2 && i.id != null).map(i => i.id!)
-)
+const selectableIds = computed(() => flatItems.value.filter(i => i.id != null).map(i => i.id!))
 const allSelected = computed(
   () => selectableIds.value.length > 0 && selectableIds.value.every(id => selectedIds.value.has(id))
 )
 const someSelected = computed(() => selectableIds.value.some(id => selectedIds.value.has(id)))
+const hasUncompletedSelected = computed(() =>
+  flatItems.value.some(i => i.id != null && i.status !== 2 && selectedIds.value.has(i.id))
+)
 
 function toggleItem(item: Agenda) {
   if (item.id == null) return
@@ -926,9 +927,21 @@ onBeforeUnmount(() => {
           </el-checkbox>
           <template v-if="selectedIds.size > 0">
             <span class="batch-count">已选 {{ selectedIds.size }} 项</span>
-            <el-button size="small" type="success" :icon="Check" @click="handleBatchComplete">
-              批量完成
-            </el-button>
+            <el-tooltip
+              :disabled="hasUncompletedSelected"
+              content="所选日程均已完成，无需重复操作"
+              placement="top"
+            >
+              <el-button
+                size="small"
+                type="success"
+                :icon="Check"
+                :disabled="!hasUncompletedSelected"
+                @click="handleBatchComplete"
+              >
+                批量完成
+              </el-button>
+            </el-tooltip>
             <el-button size="small" type="danger" :icon="Delete" @click="handleBatchDelete">
               批量删除
             </el-button>
@@ -952,7 +965,6 @@ onBeforeUnmount(() => {
               <div class="card-left">
                 <el-checkbox
                   class="card-check"
-                  :disabled="item.status === 2"
                   :model-value="selectedIds.has(item.id!)"
                   @change="toggleItem(item)"
                 />
