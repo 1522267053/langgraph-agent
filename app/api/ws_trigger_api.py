@@ -97,6 +97,10 @@ async def trigger_ws(websocket: WebSocket):
                 "gateway_name": conn.gateway_name,
                 "flow_id": conn.flow_id,
                 "flow_type": conn.flow_type,
+                "upload_url": f"/api/ws-gateway/upload?token={conn.token}",
+                "download_url_template": (
+                    f"/api/ws-gateway/download/{{file_id}}?token={conn.token}"
+                ),
             },
         }
     )

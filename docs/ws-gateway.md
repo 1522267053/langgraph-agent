@@ -344,7 +344,7 @@ stream_execute(gateway_id, input_data, session_id)
 
 | 文件 | 说明 |
 |------|------|
-| `skills/ws-gateway-manager/references/ws_client_example.py` | 5 个完整 Python 客户端示例（最简执行/远程工具/会话管理/封装客户端类/跨连接恢复） |
+| `skills/ws-gateway-manager/references/ws_client_example.py` | 7 个完整 Python 客户端示例（最简执行/远程工具/会话管理/封装客户端类/跨连接恢复/文件传输/文件工具） |
 
 ---
 
@@ -413,3 +413,136 @@ await ws.send(json.dumps({
     "session_id": session_id
 }))
 ```
+
+---
+
+## 十一、文件传输（双向）
+
+WS 触发通道是**纯 JSON 文本**协议，二进制文件不通过 WS 帧传输。文件传输复用 HTTP 端点 + 全局 `file_id` 体系，与 WS 通道解耦：
+
+- **上行**（客户端 → 服务端）：HTTP 上传 → 拿 `file_id` → 在 `execute` 消息的 `files` 字段引用
+- **下行**（服务端 → 客户端）：Agent 产物自动产生 `file_id`（Shell/Python/API 节点）→ 客户端从 `flow_done.output_data` 提取 → HTTP 下载
+
+### 端点定义
+
+两个端点均**不走 cookie 认证**，改用 WS 网关的 `token` 鉴权（与触发通道同凭证）。
+
+| 端点 | 方法 | 鉴权 | 说明 |
+|------|------|------|------|
+| `/api/ws-gateway/upload?token=xxx` | POST（multipart） | token | 上传文件，返回 `file_id` + `download_url` |
+| `/api/ws-gateway/download/{file_id}?token=xxx` | GET | token | 下载文件流（`FileResponse`） |
+
+### 归属校验（严格模式）
+
+上传时把 `file.flow_id` 绑定到网关关联的 `flow_id`；下载时校验 `file.flow_id == gateway.flow_id`。
+
+- **同一网关**：可自由上传/下载自己产生的所有文件
+- **跨网关**：即使知道 `file_id` 也无法下载（返回"文件不存在或无权访问"）
+- **token 无效/网关禁用**：上传下载均拒绝，错误信息不区分"无效"与"禁用"（防枚举）
+
+### 上行流程：客户端发文件给 Agent
+
+```python
+import httpx
+
+# 1. HTTP 上传，拿 file_id
+async with httpx.AsyncClient() as client:
+    with open("screenshot.png", "rb") as f:
+        resp = await client.post(
+            "http://host:8000/api/ws-gateway/upload",
+            params={"token": WS_TOKEN},
+            files={"file": ("screenshot.png", f, "image/png")},
+        )
+file_id = resp.json()["data"]["file_id"]
+
+# 2. WS 执行时把 file_id 塞进 files 字段（支持多模态注入）
+await ws.send(json.dumps({
+    "action": "execute",
+    "message": "看这张截图，描述一下",
+    "files": [{"id": file_id, "mime_type": "image/png"}]
+}))
+```
+
+> `files` 字段会被 `agent_conversation_service` 解析，图片转 base64 注入 `image_url` 多模态块，文档类文件注入 `file_id=N` 文本引用。
+
+### 下行流程：下载 Agent 产物
+
+```python
+# 1. 从 flow_done.output_data 提取产物 file_id（Shell/Python/API 节点输出）
+final = await _drain(ws)  # flow_done 事件
+produced_id = final["data"]["output_data"]["file_id"]  # 字段名取决于节点配置
+
+# 2. HTTP 下载
+async with httpx.AsyncClient() as client:
+    resp = await client.get(
+        f"http://host:8000/api/ws-gateway/download/{produced_id}",
+        params={"token": WS_TOKEN},
+    )
+    with open("result.xlsx", "wb") as f:
+        f.write(resp.content)
+```
+
+### 容量与安全
+
+- **大小限制**：复用全局 `max_upload_size`（`.env` 配置），超限返回错误
+- **token 暴露**：token 在 URL query 中，与 WS 触发通道同等风险，建议仅在内部网络或 HTTPS 下使用
+- **文件清理**：复用全局文件管理，不会因网关删除而自动清理（与现有 file 体系一致）
+
+### 远程工具调用场景（工具层文件传输）
+
+除 `execute` 消息外，文件传输也适用于**远程工具调用**场景：WS 客户端只注册工具，前端 AgentChat.vue 聊天时 Agent 调用工具，工具执行中通过 HTTP 端点双向传输文件。
+
+**与 execute 场景的区别**：
+
+| 维度 | execute 场景 | 远程工具场景 |
+|------|-------------|-------------|
+| 触发方 | WS 客户端发 `execute` | 前端用户在 AgentChat.vue 聊天 |
+| 文件引用 | execute 消息的 `files` 字段 | `tool_invoke` 的 `args` 参数 |
+| 产物返回 | `flow_done.output_data`（仅文本） | `tool_result` 的 `result`（含 file_id） |
+| 归属校验 | `file.flow_id == gateway.flow_id` | 同（天然成立） |
+
+**connected 事件携带文件端点模板**：
+
+连接成功后，`connected` 事件返回文件传输 URL，WS 客户端无需自行拼接：
+
+```jsonc
+{
+    "type": "connected",
+    "data": {
+        "gateway_id": 1,
+        "flow_id": 100,
+        "flow_type": "agent",
+        "upload_url": "/api/ws-gateway/upload?token=xxx",
+        "download_url_template": "/api/ws-gateway/download/{file_id}?token=xxx"
+    }
+}
+```
+
+**下行（Agent → WS 客户端）**：Agent 调用远程工具时，在 `args` 里传 `file_id`，WS 客户端收到 `tool_invoke` 后将 `download_url_template` 中的 `{file_id}` 替换为实际值，发起 HTTP GET 下载。
+
+```jsonc
+// Agent 发给 WS 客户端的 tool_invoke
+{
+    "type": "tool_invoke",
+    "data": {
+        "call_id": "abc123",
+        "name": "process_document",
+        "args": {"file_id": 42}
+    }
+}
+```
+
+**上行（WS 客户端 → Agent）**：WS 客户端用 `upload_url` 发起 HTTP POST 上传文件，拿到 `file_id` 后在 `tool_result` 的 `result` 里返回 JSON：
+
+```jsonc
+// WS 客户端回传的 tool_result
+{
+    "action": "tool_result",
+    "call_id": "abc123",
+    "result": "{\"success\": true, \"file_id\": 88}"
+}
+```
+
+Agent 收到后，`file_id=88` 进入 `ToolMessage.content`，后续可被 LLM 或其他节点使用。
+
+> 完整双向示例见 `ws_client_example.py` 示例 7「文件工具」。

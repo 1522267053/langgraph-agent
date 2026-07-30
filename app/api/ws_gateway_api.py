@@ -7,11 +7,14 @@ WebSocket 网关 API 路由
 
 import logging
 
-from fastapi import Depends
+from fastapi import Depends, File, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
 from app.schemas.base_schema import ApiResponse
+from app.services.file_service import file_service
+from app.services.flow_service import flow_service
 from app.services.ws_gateway_service import ws_gateway_service
 from app.schemas.ws_gateway_schema import (
     WsGatewayConfigBase,
@@ -67,6 +70,76 @@ class WsGatewayApi(
             url = f"/ws/trigger/{gateway.token}"
             return ApiResponse.success(
                 data={"url": url, "token": gateway.token}, msg="查询成功"
+            )
+
+        @self.router.post("/upload", summary="WS 网关文件上传（token 鉴权）")
+        async def ws_upload(
+            token: str,
+            file: UploadFile = File(..., description="文件"),
+            db: AsyncSession = Depends(get_db),
+        ):
+            """外部客户端通过 gateway token 上传文件，返回 file_id 供 execute 使用
+
+            文件归属绑定到网关关联的 flow，下载时严格校验同 flow 归属。
+            """
+            gateway = await ws_gateway_service.get_by_token(db, token)
+            if not gateway or not gateway.is_enabled:
+                return ApiResponse.error(msg="token 无效或网关已禁用")
+
+            flow = await flow_service.get_by_id(
+                db, gateway.flow_id, raise_not_found=False
+            )
+            source_type = flow.flow_type if flow else "flow"
+
+            try:
+                file_obj = await file_service.upload_file(db, file, source_type)
+            except ValueError as e:
+                return ApiResponse.error(msg=str(e))
+
+            # 绑定归属，严格模式下只允许同网关下载
+            file_obj.flow_id = gateway.flow_id
+            await db.commit()
+
+            return ApiResponse.success(
+                data={
+                    "file_id": file_obj.id,
+                    "download_url": (
+                        f"/api/ws-gateway/download/{file_obj.id}?token={token}"
+                    ),
+                    "mime_type": file_obj.mime_type,
+                    "file_size": file_obj.file_size,
+                },
+                msg="上传成功",
+            )
+
+        @self.router.get("/download/{file_id}", summary="WS 网关文件下载（token 鉴权）")
+        async def ws_download(
+            file_id: int,
+            token: str,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """通过 gateway token 下载文件，严格校验文件归属该网关关联的 flow"""
+            gateway = await ws_gateway_service.get_by_token(db, token)
+            if not gateway or not gateway.is_enabled:
+                return ApiResponse.error(msg="token 无效或网关已禁用")
+
+            file_obj = await file_service.get_by_id(db, file_id, raise_not_found=False)
+            if not file_obj or file_obj.flow_id != gateway.flow_id:
+                return ApiResponse.error(msg="文件不存在或无权访问")
+
+            try:
+                (
+                    file_path,
+                    original_name,
+                    mime_type,
+                ) = await file_service.get_download_path(db, file_id)
+            except FileNotFoundError:
+                return ApiResponse.error(msg="文件不存在")
+
+            return FileResponse(
+                path=file_path,
+                filename=original_name,
+                media_type=mime_type,
             )
 
 
