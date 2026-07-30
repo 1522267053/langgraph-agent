@@ -537,16 +537,22 @@ async function handleSubmit() {
   }
   form.remind_at = formatDatetime(remindDate.value)
 
+  const payload = { ...form } as Record<string, unknown>
+  // datetime 字段未填写时为空字符串，转为 null 避免后端校验失败
+  for (const key of ['start_time', 'end_time', 'remind_at']) {
+    if (payload[key] === '') payload[key] = null
+  }
+
   try {
     if (isEdit.value && editId.value) {
-      const res = await agendaApi.update({ id: editId.value, ...form })
+      const res = await agendaApi.update({ id: editId.value, ...(payload as Partial<Agenda>) })
       if (res.data.code === 1) {
         ElMessage.success('更新成功')
         dialogVisible.value = false
         refreshAfterChange()
       }
     } else {
-      const res = await agendaApi.create({ ...form })
+      const res = await agendaApi.create(payload as Partial<Agenda>)
       if (res.data.code === 1) {
         ElMessage.success('创建成功')
         dialogVisible.value = false
