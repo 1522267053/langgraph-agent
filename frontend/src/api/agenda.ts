@@ -52,6 +52,12 @@ export const agendaApi = {
   complete(id: number) {
     return post<Agenda>(`/agenda/complete/${id}`)
   },
+  batchDelete(ids: number[]) {
+    return post<ApiResponse>('/agenda/delete-batch', ids)
+  },
+  batchComplete(ids: number[]) {
+    return post<ApiResponse>('/agenda/complete-batch', ids)
+  },
   postpone(id: number) {
     return post<Agenda>(`/agenda/postpone/${id}`)
   },

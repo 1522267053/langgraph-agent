@@ -141,6 +141,34 @@ class AgendaApi(
                 data=AgendaBase.model_to_view(agenda), msg="已完成"
             )
 
+        @self.router.post("/complete-batch", response_model=ApiResponse)
+        async def complete_batch(ids: list[int], db: AsyncSession = Depends(get_db)):
+            """批量完成日程"""
+            if not ids:
+                return ApiResponse.error(msg="未选择日程")
+            from app.services.scheduler_service import scheduler_service
+
+            count = 0
+            for aid in ids:
+                agenda: Optional[Agenda] = await agenda_service.get_by_id(db, aid)
+                if agenda is None:
+                    continue
+                agenda.status = AgendaStatus.COMPLETED.value
+                agenda.completed_at = datetime.now()
+                scheduler_service.remove_agenda_reminder(aid)
+                # 重复日程：原子锁获取后生成下一实例
+                if agenda.recurrence != AgendaRecurrence.NONE.value:
+                    locked = await agenda_service.mark_recurrence_generated(db, aid)
+                    if locked:
+                        next_agenda = await agenda_service.create_next_recurrence(
+                            db, agenda
+                        )
+                        if next_agenda:
+                            scheduler_service.sync_agenda_reminder(next_agenda)
+                count += 1
+            await db.commit()
+            return ApiResponse.success(msg=f"已完成 {count} 项日程")
+
         @self.router.post("/postpone/{agenda_id}", response_model=ApiResponse)
         async def postpone_agenda(agenda_id: int, db: AsyncSession = Depends(get_db)):
             """延后提醒 15 分钟"""
