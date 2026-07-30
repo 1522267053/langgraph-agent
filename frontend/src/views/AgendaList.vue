@@ -361,7 +361,38 @@ const groupedAgendas = computed(() => {
 const filteredGroups = computed(() => {
   const groups = groupedAgendas.value
   if (listTab.value === 'upcoming') {
-    return groups.filter(g => g.key !== 'earlier')
+    // 今日和未来：显示所有"未结束"的日程；进行中的（start 已过、end 未到）单独置顶
+    const now = new Date()
+    const todayStr = getToday()
+    const isNotEnded = (item: Agenda): boolean => {
+      const refStr = item.end_time || item.start_time
+      if (!refStr) return true
+      return new Date(refStr.replace(' ', 'T')) >= now
+    }
+    const isOngoing = (item: Agenda): boolean => {
+      if (!item.start_time) return false
+      if (getDateOnly(item.start_time) >= todayStr) return false
+      return isNotEnded(item)
+    }
+
+    const ongoing: Agenda[] = []
+    const visible: { key: string; label: string; items: Agenda[] }[] = []
+    for (const g of groups) {
+      const live: Agenda[] = []
+      for (const item of g.items) {
+        if (!isNotEnded(item)) continue
+        if (isOngoing(item)) ongoing.push(item)
+        else live.push(item)
+      }
+      if (live.length > 0) visible.push({ ...g, items: live })
+    }
+    const result: { key: string; label: string; items: Agenda[] }[] = []
+    if (ongoing.length > 0) {
+      ongoing.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
+      result.push({ key: 'ongoing', label: '进行中', items: ongoing })
+    }
+    result.push(...visible)
+    return result
   } else if (listTab.value === 'incomplete') {
     // 未完成：今日已过期（按当前时刻精确判断）+ earlier 分组
     // 有效结束时刻 = end_time ?? start_time（无 end_time 回退 start_time），
