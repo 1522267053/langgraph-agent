@@ -90,12 +90,22 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         end_date: str,
         status: Optional[list[int]] = None,
     ) -> list[Agenda]:
-        """按日期范围查询日程（日历模式用，不分页）"""
+        """按日期范围查询日程（日历模式用，不分页）
+
+        命中条件：日程区间 [start_time, effective_end] 与查询窗口相交，其中
+        effective_end = end_time ?? start_time；未设 start_time 的日程也纳入
+        （归到 upcoming 的"未设时间"分组，与 tab-counts 角标语义保持一致）。
+        """
         end_dt = f"{end_date} 23:59:59"
+        effective_end = func.coalesce(Agenda.end_time, Agenda.start_time)
         stmt = (
             select(Agenda)
-            .where(Agenda.start_time >= start_date)
-            .where(Agenda.start_time <= end_dt)
+            .where(
+                or_(
+                    Agenda.start_time.is_(None),
+                    and_(Agenda.start_time <= end_dt, effective_end >= start_date),
+                )
+            )
             .order_by(Agenda.start_time)
         )
         if status:
