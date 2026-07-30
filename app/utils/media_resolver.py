@@ -73,6 +73,32 @@ CAPABILITY_TO_EXT_MAP = {
     "xlsx": XLSX_EXTENSIONS,
 }
 
+_EXT_TO_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".flac": "audio/flac",
+    ".aac": "audio/aac",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".pdf": "application/pdf",
+}
+
+
+def guess_mime_by_ext(name_or_path: str) -> str:
+    """按文件名/路径扩展名推断 MIME 类型，未知扩展名返回空字符串。"""
+    if not name_or_path:
+        return ""
+    ext = Path(name_or_path).suffix.lower()
+    return _EXT_TO_MIME.get(ext, "")
+
 
 def _classify_mime(mime_type: str) -> str | None:
     for capability, mimes in CAPABILITY_TO_MIME_MAP.items():
@@ -112,24 +138,7 @@ def _read_file_as_base64(file_path: str) -> tuple[str, str] | None:
         data = path.read_bytes()
         b64 = base64.b64encode(data).decode("utf-8")
         ext = path.suffix.lower()
-        mime_map = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".gif": "image/gif",
-            ".webp": "image/webp",
-            ".bmp": "image/bmp",
-            ".svg": "image/svg+xml",
-            ".mp3": "audio/mpeg",
-            ".wav": "audio/wav",
-            ".ogg": "audio/ogg",
-            ".flac": "audio/flac",
-            ".aac": "audio/aac",
-            ".mp4": "video/mp4",
-            ".webm": "video/webm",
-            ".pdf": "application/pdf",
-        }
-        mime_type = mime_map.get(ext, "application/octet-stream")
+        mime_type = _EXT_TO_MIME.get(ext, "application/octet-stream")
         return b64, mime_type
     except Exception as e:
         logger.warning("Failed to read file %s: %s", file_path, e)
@@ -291,8 +300,10 @@ def _append_file_entry(
 ) -> None:
     """将文件信息追加到索引列表，包含绝对路径"""
     original_name = file_info.get("original_name") or file_info.get("name") or "unknown"
-    mime_type = file_info.get("mime_type") or file_info.get("type") or ""
     file_path = file_info.get("file_path") or ""
+    mime_type = file_info.get("mime_type") or file_info.get("type") or ""
+    if not mime_type:
+        mime_type = guess_mime_by_ext(file_path or original_name)
     abs_path = str(settings.get_absolute_path(file_path).resolve()) if file_path else ""
     if file_id is not None:
         entries.append(
