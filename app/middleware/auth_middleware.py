@@ -80,8 +80,8 @@ _INIT_ONLY_EXEMPT_PATHS = {
     "/api/config/init",
 }
 
-# 需要认证的静态资源路径（API 文档等）
-PROTECTED_STATIC_PATHS = {"/docs", "/redoc", "/openapi.json"}
+# 需要认证的静态资源路径（API 文档、用户上传文件等）
+PROTECTED_STATIC_PATHS = {"/docs", "/redoc", "/openapi.json", "/uploads"}
 
 # 内存缓存密码哈希，避免每次请求都查 DB
 _cached_password_hash: str | None = None
