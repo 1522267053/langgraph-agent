@@ -106,7 +106,7 @@ def _truncate_json_list(
     策略：
     1. 逐项格式化：dict 项走 _truncate_dict（递归截断大字段值），非 dict 项原样保留
     2. 序列化后未超限 → 直接返回
-    3. 超限 → 保存原始完整列表到临时文件，按字节预算保留前 N 项
+    3. 超限 → 保存原始完整列表到临时文件，按字节预算保留前 N 项，末尾追加文件路径提示
 
     注：_truncate_dict 对每个 dict 项仅调用一次（避免重复处理）。
     """
@@ -127,7 +127,9 @@ def _truncate_json_list(
         return serialized
 
     # ---- 超限：保存原始完整列表到文件，按字节预算保留前 N 项 ----
-    _save_to_temp_file(json.dumps(lst, ensure_ascii=False, default=str), prefix=prefix)
+    saved_to = _save_to_temp_file(
+        json.dumps(lst, ensure_ascii=False, default=str), prefix=prefix
+    )
 
     kept: list = []
     byte_budget = max_bytes // 2
@@ -144,7 +146,10 @@ def _truncate_json_list(
         kept.append(item)
         current_bytes += item_bytes
 
-    return json.dumps(kept, ensure_ascii=False, default=str)
+    return (
+        json.dumps(kept, ensure_ascii=False, default=str)
+        + f"\n[输出已截断，完整列表已保存到: {saved_to}]"
+    )
 
 
 def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> dict:
@@ -153,7 +158,7 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
     策略：
     - bool/int/float/None: 完整保留
     - str: 超限则保存文件，字段值替换为预览，追加 _{key}_truncated
-    - list: 超限则保留前 N 项，追加 _{key}_truncated / _{key}_total
+    - list: 超限则保留前 N 项，追加 _{key}_truncated / _{key}_total / _{key}_hint
     - dict: 递归应用同样规则
     - 最终序列化后仍超限: 只保留基本类型字段 + 完整 JSON 保存到文件
     """
@@ -177,7 +182,7 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
         elif isinstance(value, list):
             serialized = json.dumps(value, ensure_ascii=False, default=str)
             if _exceeds_limit(serialized, max_lines, max_bytes):
-                kept_items = _truncate_list(
+                kept_items, saved_to = _truncate_list(
                     value,
                     max_lines=max_lines,
                     max_bytes=max_bytes,
@@ -186,6 +191,7 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
                 result[key] = kept_items
                 result[f"_{key}_truncated"] = True
                 result[f"_{key}_total"] = len(value)
+                result[f"_{key}_hint"] = f"完整列表已保存到: {saved_to}"
             else:
                 result[key] = value
         elif isinstance(value, dict):
@@ -216,14 +222,18 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
     return result
 
 
-def _truncate_list(lst: list, *, max_lines: int, max_bytes: int, prefix: str) -> list:
+def _truncate_list(
+    lst: list, *, max_lines: int, max_bytes: int, prefix: str
+) -> tuple[list, str]:
     """截断列表：保留前 N 项（按字节累加控制），完整列表保存到文件
 
     Returns:
-        截断后的列表
+        (截断后的列表, 完整内容保存的文件路径)
     """
     # 完整列表保存到文件
-    _save_to_temp_file(json.dumps(lst, ensure_ascii=False, default=str), prefix=prefix)
+    saved_to = _save_to_temp_file(
+        json.dumps(lst, ensure_ascii=False, default=str), prefix=prefix
+    )
 
     # 逐项累加字节，控制在 max_bytes // 2 以内
     kept: list = []
@@ -249,7 +259,7 @@ def _truncate_list(lst: list, *, max_lines: int, max_bytes: int, prefix: str) ->
             kept.append(item)
         current_bytes += item_bytes
 
-    return kept
+    return kept, saved_to
 
 
 def _truncate_text(
