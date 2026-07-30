@@ -1,11 +1,11 @@
-# WebSocket WebSocket 网关 API 参考
+# WebSocket 网关 API 参考
 
 ## 管理接口（HTTP，需登录态）
 
 ### 创建网关
 
 ```
-POST /api/gateway/create
+POST /api/ws-gateway/create
 ```
 
 ```json
@@ -23,12 +23,96 @@ POST /api/gateway/create
 ### 获取 WebSocket 地址
 
 ```
-GET /api/gateway/get/{id}/url
+GET /api/ws-gateway/get/{id}/url
 ```
 
 ```json
 {"code": 1, "data": {"url": "/ws/trigger/abc123...", "token": "abc123..."}}
 ```
+
+---
+
+## 文件传输接口（HTTP，token 鉴权）
+
+外部客户端通过网关 token 上传/下载文件，**无需登录态**（端点已加入认证豁免白名单，由 token 自鉴权）。上传的文件归属绑定到网关关联的 flow，下载时严格校验同 flow 归属。
+
+### upload — 上传文件
+
+```
+POST /api/ws-gateway/upload?token={token}
+Content-Type: multipart/form-data
+```
+
+表单字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `file` | File | 上传的文件（必填） |
+
+鉴权：query 参数 `token` 为网关 token。token 无效或网关已禁用返回 `token 无效或网关已禁用`。
+
+响应：
+
+```json
+{
+  "code": 1,
+  "data": {
+    "file_id": 42,
+    "download_url": "/api/ws-gateway/download/42?token=abc123...",
+    "mime_type": "image/png",
+    "file_size": 10240
+  },
+  "msg": "上传成功"
+}
+```
+
+**规则**：
+- 单文件大小限制由 `MAX_UPLOAD_SIZE` 控制（默认 100MB），超限返回 `文件大小 X.XMB 超过限制（最大 100MB）`
+- 文件 `source_type` 取网关关联 flow 的 `flow_type`（无则 `flow`），`flow_id` 绑定为网关的 `flow_id`
+- 返回的 `file_id` 可塞进 `execute` 指令的 `files` 字段供 Agent 使用
+
+### 在 execute 中引用上传的文件
+
+```json
+{
+  "action": "execute",
+  "message": "看这张图，描述一下内容",
+  "files": [{"id": 42, "mime_type": "image/png"}]
+}
+```
+
+`files[].id` 即 upload 返回的 `file_id`，Agent 据此读取文件内容（多模态模型可直接识别图片）。
+
+### download — 下载文件
+
+```
+GET /api/ws-gateway/download/{file_id}?token={token}
+```
+
+鉴权：query 参数 `token` 为网关 token。
+
+**严格归属校验**：文件的 `flow_id` 必须等于该网关关联的 `flow_id`，否则返回 `文件不存在或无权访问`。
+
+成功返回文件二进制流（`FileResponse`，含原文件名与 MIME 类型）。文件记录不存在或磁盘文件丢失返回 `文件不存在`。
+
+### connected 事件携带的文件端点模板
+
+连接建立后服务端推送的 `connected` 事件中带两个字段，客户端可直接取用，无需自行拼接：
+
+```json
+{
+  "type": "connected",
+  "data": {
+    "gateway_id": 1,
+    "flow_id": 1,
+    "flow_type": "agent",
+    "upload_url": "/api/ws-gateway/upload?token=abc123...",
+    "download_url_template": "/api/ws-gateway/download/{file_id}?token=abc123..."
+  }
+}
+```
+
+`download_url_template` 中的 `{file_id}` 占位符用实际文件 ID 替换。
 
 ---
 
@@ -210,7 +294,7 @@ Flow 类型（直接传参数，作为 input_data）：
 
 | type | 说明 |
 |------|------|
-| `connected` | 连接确认，含 gateway_id/flow_id/flow_type |
+| `connected` | 连接确认，含 gateway_id/flow_id/flow_type/upload_url/download_url_template |
 | `call_started` | 执行开始，含 call_id/session_id |
 | `tools_registered` | 工具注册确认 |
 | `tools_unregistered` | 工具注销确认 |

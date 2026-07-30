@@ -22,24 +22,25 @@ description: |
 3. **实时流式返回**：执行结果通过 WebSocket 逐 token 流式推送（node_content/tool_call/flow_done 等），无需轮询
 4. **Agent 专属功能**：远程工具注册、会话管理（创建/切换/列表/删除/消息查询）仅 Agent 类型支持。Flow 类型调用会返回 `"仅 Agent 类型支持"` 错误
 5. **并发限制**：同一连接同时只允许一个 execute 执行
-6. **CRUD 需登录态**：管理接口（`/api/gateway/page/create/update/delete`）需要 session cookie
+6. **CRUD 需登录态**：管理接口（`/api/ws-gateway/page/create/update/delete`）需要 session cookie
 7. **输入合并**：`input_data = {**gateway.input_config, **客户端参数}`（排除 `action` 和 `session_id`），客户端参数覆盖默认模板
 8. **工具名**：远程工具直接使用客户端注册的原始名称，超时 120 秒
+9. **文件传输 token 鉴权**：上传（`POST /api/ws-gateway/upload`）/下载（`GET /api/ws-gateway/download/{file_id}`）由网关 token 自鉴权，**免登录**（已豁免认证白名单）。上传返回 `file_id`，可塞进 `execute` 的 `files` 字段；下载严格校验文件归属该网关关联的 flow
 
 ## 管理接口（HTTP）
 
 | 方法 | 路径 | 认证 | 用途 |
 |------|------|:--:|------|
-| POST | `/api/gateway/page` | ✅ | 分页列表 |
-| POST | `/api/gateway/create` | ✅ | 创建（自动生成 token） |
-| POST | `/api/gateway/update` | ✅ | 更新 |
-| GET | `/api/gateway/delete/{id}` | ✅ | 软删除 |
-| GET | `/api/gateway/get/{id}/url` | ✅ | 获取 WebSocket 地址 |
+| POST | `/api/ws-gateway/page` | ✅ | 分页列表 |
+| POST | `/api/ws-gateway/create` | ✅ | 创建（自动生成 token） |
+| POST | `/api/ws-gateway/update` | ✅ | 更新 |
+| GET | `/api/ws-gateway/delete/{id}` | ✅ | 软删除 |
+| GET | `/api/ws-gateway/get/{id}/url` | ✅ | 获取 WebSocket 地址 |
 
 ## 创建网关
 
 ```json
-POST /api/gateway/create
+POST /api/ws-gateway/create
 {
   "name": "订单处理",
   "flow_id": 1,
@@ -59,10 +60,12 @@ ws://host/ws/trigger/{token}
 
 连接成功后收到：
 ```json
-{"type": "connected", "data": {"gateway_id": 1, "gateway_name": "订单处理", "flow_id": 1, "flow_type": "agent"}}
+{"type": "connected", "data": {"gateway_id": 1, "gateway_name": "订单处理", "flow_id": 1, "flow_type": "agent", "upload_url": "/api/ws-gateway/upload?token=abc123...", "download_url_template": "/api/ws-gateway/download/{file_id}?token=abc123..."}}
 ```
 
 > **建议**：连接后检查 `data.flow_type`。`"agent"` 才支持远程工具和会话管理，`"flow"` 仅支持 `execute`。非 Agent 类型调用 register_tools 或会话操作会收到 `{"type":"error","data":{"message":"仅 Agent 类型支持..."}}`。
+>
+> `data.upload_url` / `download_url_template` 为文件传输端点模板（token 自鉴权，免登录），用法见下文「文件传输」。
 
 ### 客户端指令一览
 
@@ -104,6 +107,36 @@ Flow 类型（无 message，用 input_data）：
 {"type": "node_content", "data": {"content": "！"}}
 {"type": "flow_done", "data": {"status": "success", "output_data": {"content": "你好！"}}}
 ```
+
+## 文件传输（token 鉴权）
+
+外部客户端通过网关 token 上传/下载文件，**免登录**（由 token 自鉴权，已豁免认证白名单）。`connected` 事件已下发 `upload_url` / `download_url_template`，可直接取用。
+
+### 上传 → 带 file_id 执行 → 下载产物
+
+```bash
+# 上传：拿 file_id
+curl -F "file=@test.png" "http://host/api/ws-gateway/upload?token=TOKEN"
+# → {"code":1,"data":{"file_id":42,"download_url":"/api/ws-gateway/download/42?token=TOKEN","mime_type":"image/png","file_size":10240}}
+```
+
+把 `file_id` 塞进 `execute` 的 `files` 字段供 Agent 使用：
+
+```json
+{"action": "execute", "message": "看这张图", "files": [{"id": 42, "mime_type": "image/png"}]}
+```
+
+下载 Agent 产出的文件（`file_id` 从 `flow_done.output_data` 提取）：
+
+```bash
+curl -o out.bin "http://host/api/ws-gateway/download/123?token=TOKEN"
+```
+
+**规则**：
+- 单文件上限 `MAX_UPLOAD_SIZE`（默认 100MB）
+- 上传的文件归属绑定到网关关联的 flow；下载严格校验同 flow 归属，不匹配报 `文件不存在或无权访问`
+
+> 完整字段说明见 [references/api.md](references/api.md) 的「文件传输接口」。
 
 ## 远程工具注册
 
@@ -184,7 +217,7 @@ asyncio.run(main())
 
 ## 客户端示例代码
 
-见 [references/ws_client_example.py](references/ws_client_example.py)，包含 5 个完整示例：
+见 [references/ws_client_example.py](references/ws_client_example.py)，包含 7 个完整示例：
 
 | 编号 | 名称 | 演示内容 |
 |------|------|---------|
@@ -193,6 +226,8 @@ asyncio.run(main())
 | 3 | 会话管理 | 创建多会话、多轮对话、切换、列表 |
 | 4 | 封装客户端类 | 后台 task 自动处理 `tool_invoke`，适合集成到实际项目 |
 | 5 | 指定 session_id 继续 | 用已知 session_id 跨连接恢复上下文（先创建，后恢复） |
+| 6 | 文件传输 | 上传本地图片 → 带 `file_id` 执行 → 下载 Agent 产物（依赖 httpx） |
+| 7 | 文件工具 | 注册文件处理工具，前端聊天触发时双向传输文件（依赖 httpx） |
 
 运行方式：
 
@@ -209,4 +244,9 @@ WS_TOKEN=你的token python references/ws_client_example.py 2     # 远程工具
 WS_TOKEN=你的token python references/ws_client_example.py 5
 # 示例 5：用返回的 session_id 恢复
 WS_TOKEN=你的token python references/ws_client_example.py 5 123
+
+# 示例 6/7 需额外安装 httpx，并准备本地文件
+pip install httpx
+WS_TOKEN=你的token python references/ws_client_example.py 6     # 文件传输
+WS_TOKEN=你的token python references/ws_client_example.py 7     # 文件工具（前端触发）
 ```
