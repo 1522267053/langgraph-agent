@@ -16,28 +16,12 @@ from pydantic import (
     model_serializer,
 )
 
+from app.models.flow_node import BASIC_NODE_TYPES, NodeType
 from app.schemas.flow_node_schema import FlowNodeBase
 from app.schemas.flow_edge_schema import FlowEdgeBase
 
 
-VALID_NODE_TYPES = {
-    "start",
-    "end",
-    "condition",
-    "card",
-    "loop",
-    "llm",
-    "mcp",
-    "knowledge",
-    "human",
-    "api",
-    "skill",
-    "python",
-    "shell",
-    "memory",
-    "todo",
-    "intent_router",
-}
+VALID_NODE_TYPES = {nt.value for nt in BASIC_NODE_TYPES} | {NodeType.LLM.value}
 
 
 # ---- 创建流程 ----
