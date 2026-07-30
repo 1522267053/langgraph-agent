@@ -22,6 +22,7 @@ from langchain_core.messages import (
 from app.models.agent_message import AgentMessage
 
 from app.services.file_service import file_service
+from app.utils.media_resolver import guess_mime_by_ext
 from app.utils.message_utils import (
     extract_token_usage,
     extract_thinking,
@@ -272,7 +273,9 @@ class AgentConversationService:
 
         for file_info in files:
             file_id = file_info.get("id")
-            mime_type = file_info.get("mime_type", "")
+            mime_type = file_info.get("mime_type", "") or guess_mime_by_ext(
+                file_info.get("original_name", "")
+            )
 
             if not file_id or not mime_type.startswith("image/"):
                 continue

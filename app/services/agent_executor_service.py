@@ -28,6 +28,7 @@ from app.services.agent_conversation_service import agent_conversation_service
 from app.services.file_service import file_service
 from app.services.interrupt_service import interrupt_service
 from app.config.settings import settings
+from app.utils.media_resolver import guess_mime_by_ext
 from app.utils.message_utils import extract_text_content, extract_token_usage
 
 logger = logging.getLogger(__name__)
@@ -472,12 +473,15 @@ class AgentExecutorService(BaseExecutorService):
                         if file_path and not file_path.startswith("/"):
                             abs_path = settings.get_absolute_path(file_path)
                             item["file_path"] = str(abs_path) if abs_path else file_path
+                        mime_type = item.get("mime_type", "") or guess_mime_by_ext(
+                            item.get("original_name", "") or file_path
+                        )
                         resolved.append(item)
                         pending_files.append(
                             {
                                 "id": fid,
                                 "original_name": item.get("original_name", ""),
-                                "mime_type": item.get("mime_type", ""),
+                                "mime_type": mime_type,
                             }
                         )
                     if resolved:
