@@ -311,6 +311,189 @@ async def example_resume():
 
 
 # ============================================================
+# 示例 6：文件双向传输（上传 → 带 file_id 执行 → 下载产物）
+# ============================================================
+
+
+async def example_file_transfer():
+    """上传本地文件 → 带着执行 → 下载 Agent 产生的文件
+
+    依赖：pip install websockets httpx
+    Gateway 必须关联「智能体」，且模型支持多模态（图片识别）。
+    """
+    import httpx
+
+    print("\n=== 示例 6：文件传输 ===")
+    http_base = f"http://{SERVER_HOST}"
+
+    # ---- 上行：上传本地图片，拿 file_id ----
+    local_img = "test.png"  # 替换为本地图片路径
+    if not os.path.exists(local_img):
+        print(f"[跳过] 请先准备本地文件: {local_img}")
+        return
+
+    async with httpx.AsyncClient() as client:
+        with open(local_img, "rb") as f:
+            resp = await client.post(
+                f"{http_base}/api/ws-gateway/upload",
+                params={"token": WS_TOKEN},
+                files={"file": (os.path.basename(local_img), f)},
+            )
+        up = resp.json()["data"]
+        file_id = up["file_id"]
+        print(f"[上传成功] file_id={file_id}, mime={up['mime_type']}")
+
+    # ---- 执行：把 file_id 塞进 execute 的 files 字段 ----
+    async with websockets.connect(_url()) as ws:
+        await _recv(ws)
+        await _send(
+            ws,
+            action="execute",
+            message="看这张图，描述一下内容",
+            files=[{"id": file_id, "mime_type": up["mime_type"]}],
+        )
+        await _drain(ws)
+        print()
+
+    # ---- 下行：下载 Agent 产物（演示下载流程）----
+    produced_id = input(
+        "\n输入要下载的产物 file_id（从 flow_done.output_data 提取，没有就回车跳过）: "
+    ).strip()
+    if produced_id:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{http_base}/api/ws-gateway/download/{produced_id}",
+                params={"token": WS_TOKEN},
+            )
+            out_path = f"downloaded_{produced_id}.bin"
+            with open(out_path, "wb") as f:
+                f.write(resp.content)
+            print(f"[下载完成] {out_path}（{len(resp.content)} 字节）")
+
+
+# ============================================================
+# 示例 7：文件工具（远程工具调用时双向文件传输）
+# ============================================================
+
+
+async def example_file_tool():
+    """注册文件处理工具，前端聊天调用时双向传输文件
+
+    场景：WS 客户端只注册工具，不触发 execute。
+    用户在前端 AgentChat.vue 聊天时，Agent 调用本工具，
+    工具执行中通过 HTTP 端点下载服务端文件、本地处理、再上传结果。
+
+    依赖：pip install websockets httpx
+    """
+    import httpx
+
+    print("\n=== 示例 7：文件工具 ===")
+    print("[提示] 注册后请到前端 AgentChat.vue 发消息触发，如「帮我处理这个文件」")
+    http_base = f"http://{SERVER_HOST}"
+
+    tool_defs = [
+        {
+            "name": "process_file",
+            "description": "处理服务端文件（下载→转换→上传回系统）。传入 file_id",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_id": {
+                        "type": "integer",
+                        "description": "服务端文件ID",
+                    }
+                },
+                "required": ["file_id"],
+            },
+        }
+    ]
+
+    async with websockets.connect(_url()) as ws:
+        conn = await _recv(ws)
+        if not _check_agent(conn["data"]):
+            return
+
+        # 从 connected 事件取文件端点模板（也可自行拼接）
+        upload_url = http_base + conn["data"].get(
+            "upload_url", f"/api/ws-gateway/upload?token={WS_TOKEN}"
+        )
+        download_tpl = http_base + conn["data"].get(
+            "download_url_template",
+            f"/api/ws-gateway/download/{{file_id}}?token={WS_TOKEN}",
+        )
+
+        # 注册工具
+        await _send(ws, action="register_tools", tools=tool_defs)
+        ack = await _recv(ws)
+        print(f"[已注册] {ack['data']['names']}")
+        print("[监听中] 等待前端调用...（Ctrl+C 退出）\n")
+
+        async for raw in ws:
+            e = json.loads(raw)
+            t = e["type"]
+
+            if t == "tool_invoke":
+                d = e["data"]
+                call_id = d["call_id"]
+                file_id = d["args"]["file_id"]
+                print(f"[工具调用] process_file(file_id={file_id})")
+
+                async with httpx.AsyncClient() as client:
+                    # 下行：下载服务端文件
+                    url = download_tpl.replace("{file_id}", str(file_id))
+                    print(f"  [下载] {url}")
+                    resp = await client.get(url)
+                    if resp.status_code != 200:
+                        await _send(
+                            ws,
+                            action="tool_result",
+                            call_id=call_id,
+                            result=json.dumps(
+                                {"success": False, "error": "下载失败"}
+                            ),
+                        )
+                        continue
+                    original = resp.content
+                    print(f"  [下载完成] {len(original)} 字节")
+
+                    # 本地处理（示例原样返回，实际可做格式转换等）
+                    processed = original
+
+                    # 上行：上传处理结果到服务端
+                    resp = await client.post(
+                        upload_url,
+                        files={"file": ("processed.bin", processed)},
+                    )
+                    new_file_id = resp.json()["data"]["file_id"]
+                    print(f"  [上传完成] 新 file_id={new_file_id}")
+
+                # 回传结果给 Agent
+                await _send(
+                    ws,
+                    action="tool_result",
+                    call_id=call_id,
+                    result=json.dumps(
+                        {
+                            "success": True,
+                            "file_id": new_file_id,
+                            "message": "处理完成",
+                        }
+                    ),
+                )
+                print(f"  [已回传] file_id={new_file_id}\n")
+
+            elif t == "node_content":
+                # 前端聊天时 Agent 的文本回复也会推过来
+                print(e["data"]["content"], end="", flush=True)
+
+            elif t == "flow_done":
+                print("\n[一轮对话完成]")
+
+            elif t == "error":
+                print(f"\n[错误] {e['data']['message']}")
+
+
+# ============================================================
 # 主入口
 # ============================================================
 
@@ -320,6 +503,8 @@ EXAMPLES = {
     "3": ("会话管理", example_sessions),
     "4": ("封装客户端", example_client_class),
     "5": ("指定 session_id 继续", example_resume),
+    "6": ("文件传输", example_file_transfer),
+    "7": ("文件工具", example_file_tool),
 }
 
 
@@ -333,7 +518,7 @@ async def main():
         print("选择示例：")
         for k, (name, _) in EXAMPLES.items():
             print(f"  {k}. {name}")
-        choice = input("输入编号 (1-5): ").strip()
+        choice = input("输入编号 (1-7): ").strip()
 
     if choice in EXAMPLES:
         await EXAMPLES[choice][1]()

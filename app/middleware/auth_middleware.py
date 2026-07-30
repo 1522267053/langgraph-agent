@@ -70,6 +70,9 @@ EXEMPT_PATHS = {
     "/api/config/providers",
     "/api/config/check-update",
     "/api/health",
+    # WS 网关文件传输端点（token 自鉴权，见 ws_gateway_api.py）
+    "/api/ws-gateway/upload",
+    "/api/ws-gateway/download",
 }
 
 # 仅在未初始化时豁免认证的路径（初始化后需登录才能访问）
