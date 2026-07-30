@@ -12,12 +12,12 @@
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import StreamWriter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.handler_registry import NodeHandlerRegistry
@@ -32,6 +32,10 @@ from app.models.agenda import (
 from app.models.flow_node import FlowNode
 from app.services.agenda_service import agenda_service
 from app.utils.user_util import get_current_username
+
+
+_VALID_CATEGORIES = {c.value for c in AgendaCategory}
+_VALID_RECURRENCES = {r.value for r in AgendaRecurrence}
 
 
 @NodeHandlerRegistry.register("agenda")
@@ -64,17 +68,16 @@ class AgendaNodeHandler(BaseNodeHandler):
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
         """返回日程管理工具使用提示，追加到 LLM system_prompt"""
-        from datetime import datetime
-
         now = datetime.now().strftime("%Y年%m月%d日")
         return (
             f"\n\n## 日程管理\n当前时间：{now}\n"
             "拥有日程管理能力（agenda_create/agenda_list/agenda_update/agenda_delete）。使用规则：\n"
             "- 用户提到日程、提醒、安排时间时，主动使用日程工具\n"
             "- 时间格式统一使用 YYYY-MM-DD HH:MM:SS\n"
-            "- 修改日程流程：① agenda_list 查询找到目标日程 → ② 从结果中获取 id → ③ agenda_update(id, ...) 更新\n"
-            "- 删除日程流程：① agenda_list 查询找到目标日程 → ② 从结果中获取 id → ③ agenda_delete(id)\n"
-            "- 日程时间已过时也可查询（用于回顾）"
+            "- 修改日程流程：① agenda_list 查询找到目标日程（含 recurrence/color）→ ② 获取 id ③ agenda_update(id, ...) 更新\n"
+            "- 删除日程流程：① agenda_list 查询找到目标日程 → ② 获取 id → ③ agenda_delete(id)\n"
+            "- 日程时间已过时也可查询（用于回顾）\n"
+            "- 更新字段语义：不传=保持原值；传 null 或空串=清空（title 不支持清空）；传值=设为该值"
         )
 
     async def get_tool(self, node: FlowNode) -> list[BaseTool]:
@@ -84,26 +87,33 @@ class AgendaNodeHandler(BaseNodeHandler):
             end_time: str = "",
             category: str = "other",
             priority: int = 2,
-            location: str = "",
-            remind_at: str = "",
+            location: Optional[str] = None,
+            remind_at: Optional[str] = None,
             recurrence: str = "none",
-            description: str = "",
+            description: Optional[str] = None,
         ) -> dict:
             """创建日程"""
-            username = await get_current_username()
+            if category not in _VALID_CATEGORIES:
+                return {
+                    "success": False,
+                    "message": f"无效分类: {category}（有效值: work/life/study/other）",
+                }
+            if recurrence not in _VALID_RECURRENCES:
+                return {
+                    "success": False,
+                    "message": f"无效重复规则: {recurrence}（有效值: none/daily/weekday/weekly/monthly）",
+                }
+            if not 1 <= priority <= 3:
+                return {
+                    "success": False,
+                    "message": f"无效优先级: {priority}（有效值: 1=低/2=中/3=高）",
+                }
 
-            # 构建创建数据
             data: dict = {
                 "title": title,
-                "category": category
-                if category in [c.value for c in AgendaCategory]
-                else "other",
-                "priority": priority if 1 <= priority <= 3 else 2,
-                "recurrence": recurrence
-                if recurrence in [r.value for r in AgendaRecurrence]
-                else "none",
-                "location": location or None,
-                "description": description or None,
+                "category": category,
+                "priority": priority,
+                "recurrence": recurrence,
             }
             if start_time:
                 data["start_time"] = start_time
@@ -111,20 +121,28 @@ class AgendaNodeHandler(BaseNodeHandler):
                 data["end_time"] = end_time
             if remind_at:
                 data["remind_at"] = remind_at
+            if location is not None:
+                data["location"] = location
+            if description is not None:
+                data["description"] = description
 
             from app.schemas.agenda_schema import AgendaCreate
 
             schema = AgendaCreate(**data)
-            schema.creator_name = username
+            if (
+                schema.start_time
+                and schema.end_time
+                and schema.end_time < schema.start_time
+            ):
+                return {"success": False, "message": "结束时间不能早于开始时间"}
+
+            schema.creator_name = await get_current_username()
+
             async with AsyncSessionLocal() as db:
                 agenda = await agenda_service.create(db, schema)
-                # 同步提醒调度
                 from app.services.scheduler_service import scheduler_service
 
                 scheduler_service.sync_agenda_reminder(agenda)
-                if agenda.remind_at:
-                    await db.commit()
-                    await db.refresh(agenda)
 
             return {
                 "success": True,
@@ -186,71 +204,140 @@ class AgendaNodeHandler(BaseNodeHandler):
                     "remind_at": item.remind_at.strftime("%Y-%m-%d %H:%M")
                     if item.remind_at
                     else None,
+                    "recurrence": item.recurrence,
+                    "color": item.color,
+                    "description": item.description,
                 }
                 for item in items
             ]
             return {"agendas": data, "total": len(data)}
 
-        async def update_agenda(
-            id: int,
-            title: str = "",
-            start_time: str = "",
-            end_time: str = "",
-            status: int = -1,
-            category: str = "",
-            priority: int = -1,
-            location: str = "",
-            remind_at: str = "",
-            description: str = "",
-        ) -> dict:
-            """更新日程"""
-            update_data: dict = {"id": id}
-            if title:
-                update_data["title"] = title
-            if start_time:
-                update_data["start_time"] = start_time
-            if end_time:
-                update_data["end_time"] = end_time
-            if status >= 0:
-                update_data["status"] = status
-                if status == AgendaStatus.COMPLETED.value:
-                    update_data["completed_at"] = datetime.now().strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    )
-            if category:
-                update_data["category"] = category
-            if priority >= 0:
-                update_data["priority"] = priority
-            if location:
-                update_data["location"] = location
-            if remind_at:
-                update_data["remind_at"] = remind_at
-                update_data["is_reminded"] = 0  # 重置提醒标志，允许重新推送
-            if description:
-                update_data["description"] = description
+        async def update_agenda(id: int, **kwargs: Any) -> dict:
+            """更新日程。
 
-            from app.schemas.agenda_schema import AgendaUpdate
+            字段语义（依赖 LangChain 透传 LLM 的原始 args，区分 3 种情况）：
+            - 字段未传：保持原值
+            - 传 null 或空串：清空（title 除外，因数据库 NOT NULL）
+            - 传值：设为该值
+            """
+            username = await get_current_username()
 
-            schema = AgendaUpdate(**update_data)
+            # LLM 重复传 id 时去重
+            kwargs.pop("id", None)
+
+            try:
+                schema = AgendaUpdateInput(id=id, **kwargs)
+            except ValidationError as e:
+                return {"success": False, "message": f"参数错误: {e}"}
+
+            # 仅取 LLM 显式提供的字段（严格区分 不传 / null / 值）
+            set_fields = schema.model_dump(exclude_unset=True)
+            set_fields.pop("id", None)
+
+            # 枚举/范围校验
+            if (
+                "category" in set_fields
+                and set_fields["category"] not in _VALID_CATEGORIES
+            ):
+                return {
+                    "success": False,
+                    "message": f"无效分类: {set_fields['category']}",
+                }
+            if (
+                "recurrence" in set_fields
+                and set_fields["recurrence"] not in _VALID_RECURRENCES
+            ):
+                return {
+                    "success": False,
+                    "message": f"无效重复规则: {set_fields['recurrence']}",
+                }
+            if "priority" in set_fields and not 1 <= set_fields["priority"] <= 3:
+                return {
+                    "success": False,
+                    "message": f"无效优先级: {set_fields['priority']}",
+                }
+
+            # 字符串字段：空串视为 None（清空）
+            for field in ("location", "description", "color"):
+                if field in set_fields and set_fields[field] == "":
+                    set_fields[field] = None
+
+            # title：空串视为不变（数据库 NOT NULL，不支持清空）
+            if "title" in set_fields and not set_fields["title"]:
+                del set_fields["title"]
+
+            # 时间顺序校验
+            if set_fields.get("start_time") and set_fields.get("end_time"):
+                if set_fields["end_time"] < set_fields["start_time"]:
+                    return {"success": False, "message": "结束时间不能早于开始时间"}
+
+            # 状态切换语义
+            new_status = set_fields.get("status")
+            if new_status is not None:
+                if new_status == AgendaStatus.COMPLETED.value:
+                    set_fields["completed_at"] = datetime.now()
+                else:
+                    set_fields["completed_at"] = None
+
+            # 修改 recurrence / start_time / end_time 时重置生成锁，
+            # 避免旧的已生成实例与新规则不一致
+            if (
+                "recurrence" in set_fields
+                or "start_time" in set_fields
+                or "end_time" in set_fields
+            ):
+                set_fields["recurrence_generated"] = 0
+
+            # 修改 remind_at 时重置提醒标志，允许重新推送
+            if "remind_at" in set_fields:
+                set_fields["is_reminded"] = 0
+            # 从已完成改回其他状态：允许重新推送
+            if new_status is not None and new_status != AgendaStatus.COMPLETED.value:
+                set_fields["is_reminded"] = 0
+
             async with AsyncSessionLocal() as db:
-                agenda = await agenda_service.update(db, schema)
-                if agenda:
+                # 权限校验：先查询归属
+                existing = await agenda_service.get_by_id(db, id, raise_not_found=False)
+                if not existing:
+                    return {"success": False, "message": f"日程(id={id})不存在"}
+                if existing.creator_name != username:
+                    return {"success": False, "message": "无权操作此日程"}
+
+                # 切到已完成时移除提醒调度
+                if new_status == AgendaStatus.COMPLETED.value:
                     from app.services.scheduler_service import scheduler_service
 
-                    scheduler_service.sync_agenda_reminder(agenda)
-                    await db.commit()
-                    await db.refresh(agenda)
-                    return {
-                        "success": True,
-                        "id": agenda.id,
-                        "message": f"日程「{agenda.title}」更新成功",
-                    }
-                return {"success": False, "message": f"日程(id={id})不存在"}
+                    scheduler_service.remove_agenda_reminder(id)
+
+                # 直接修改 ORM 对象后交给 service.update 提交
+                for field, value in set_fields.items():
+                    setattr(existing, field, value)
+                agenda = await agenda_service.update(db, existing)
+
+                from app.services.scheduler_service import scheduler_service
+
+                scheduler_service.sync_agenda_reminder(agenda)
+
+                return {
+                    "success": True,
+                    "id": agenda.id,
+                    "message": f"日程「{agenda.title}」更新成功",
+                }
 
         async def delete_agenda(id: int) -> dict:
             """删除日程"""
+            username = await get_current_username()
             async with AsyncSessionLocal() as db:
                 try:
+                    # 权限校验：先查询归属
+                    existing = await agenda_service.get_by_id(
+                        db, id, raise_not_found=False
+                    )
+                    if not existing:
+                        return {"success": False, "message": f"日程(id={id})不存在"}
+                    if existing.creator_name != username:
+                        return {"success": False, "message": "无权操作此日程"}
+
                     from app.services.scheduler_service import scheduler_service
 
                     scheduler_service.remove_agenda_reminder(id)
@@ -278,7 +365,7 @@ class AgendaNodeHandler(BaseNodeHandler):
                     "查询日程列表。支持按状态、分类筛选，支持按关键词搜索标题和描述，"
                     "支持按 start_date/end_date 筛选时间范围（格式 YYYY-MM-DD）。"
                     "status: -1全部/0待办/1进行中/2已完成。"
-                    "limit 控制返回数量（默认20）。"
+                    "limit 控制返回数量（默认20）。返回字段含 recurrence/color/description。"
                 ),
                 func=None,
                 coroutine=list_agendas,
@@ -287,8 +374,13 @@ class AgendaNodeHandler(BaseNodeHandler):
             StructuredTool(
                 name="agenda_update",
                 description=(
-                    "更新日程。id 必填，其他参数可选（只更新提供的字段）。"
-                    "status: 0待办/1进行中/2已完成"
+                    "更新日程。id 必填，其他字段可选。"
+                    "字段语义：不传=保持原值；传 null 或空串=清空；传值=设为该值（title 不可清空）。"
+                    "status: 0=待办/1=进行中/2=已完成。"
+                    "  → 设为已完成自动写入完成时间；从已完成改回其他状态会清空完成时间并重置提醒标志。"
+                    "recurrence: none/daily/weekday/weekly/monthly（修改后会重置重复生成锁）。"
+                    "修改 remind_at 会重置已推送标志，允许重新推送。"
+                    "color/location/description 支持清空（传 null 或空串）。"
                 ),
                 func=None,
                 coroutine=update_agenda,
@@ -320,16 +412,16 @@ class AgendaNodeHandler(BaseNodeHandler):
 
 class AgendaCreateInput(BaseModel):
     title: str = Field(..., description="日程标题")
-    start_time: str = Field("", description="开始时间 YYYY-MM-DD HH:MM:SS")
-    end_time: str = Field("", description="结束时间 YYYY-MM-DD HH:MM:SS")
+    start_time: str = Field("", description="开始时间 YYYY-MM-DD HH:MM:SS（可选）")
+    end_time: str = Field("", description="结束时间 YYYY-MM-DD HH:MM:SS（可选）")
     category: str = Field("other", description="分类：work/life/study/other")
     priority: int = Field(2, description="优先级：1=低/2=中/3=高")
-    location: str = Field("", description="地点")
-    remind_at: str = Field("", description="提醒时间 YYYY-MM-DD HH:MM:SS")
+    location: Optional[str] = Field(None, description="地点")
+    remind_at: Optional[str] = Field(None, description="提醒时间 YYYY-MM-DD HH:MM:SS")
     recurrence: str = Field(
         "none", description="重复：none/daily/weekday/weekly/monthly"
     )
-    description: str = Field("", description="备注")
+    description: Optional[str] = Field(None, description="备注")
 
 
 class AgendaListInput(BaseModel):
@@ -342,16 +434,33 @@ class AgendaListInput(BaseModel):
 
 
 class AgendaUpdateInput(BaseModel):
+    """更新日程参数 Schema。
+
+    字段语义（依赖 LangChain 透传 LLM 原始 args，未传字段不会出现在 kwargs 中）：
+    - 未传：保持原值
+    - 传 null：清空（title 除外，因数据库 NOT NULL）
+    - 传空串：等同 null，清空（仅 location/description/color/remind_at/start_time/end_time）
+    - 传值：设为该值
+    """
+
     id: int = Field(..., description="日程ID")
-    title: str = Field("", description="新标题")
-    start_time: str = Field("", description="新开始时间")
-    end_time: str = Field("", description="新结束时间")
-    status: int = Field(-1, description="新状态：0=待办/1=进行中/2=已完成")
-    category: str = Field("", description="新分类")
-    priority: int = Field(-1, description="新优先级：1=低/2=中/3=高")
-    location: str = Field("", description="新地点")
-    remind_at: str = Field("", description="新提醒时间")
-    description: str = Field("", description="新备注")
+    title: str = Field("", description="新标题（不支持清空，传空串视为不变）")
+    start_time: Optional[str] = Field(
+        None, description="新开始时间 YYYY-MM-DD HH:MM:SS；传 null 或空串=清空"
+    )
+    end_time: Optional[str] = Field(None, description="新结束时间；传 null 或空串=清空")
+    status: Optional[int] = Field(None, description="新状态：0=待办/1=进行中/2=已完成")
+    category: Optional[str] = Field(None, description="新分类：work/life/study/other")
+    priority: Optional[int] = Field(None, description="新优先级：1=低/2=中/3=高")
+    location: Optional[str] = Field(None, description="新地点；传 null 或空串=清空")
+    remind_at: Optional[str] = Field(
+        None, description="新提醒时间；传 null 或空串=清空提醒"
+    )
+    description: Optional[str] = Field(None, description="新备注；传 null 或空串=清空")
+    recurrence: Optional[str] = Field(
+        None, description="新重复规则：none/daily/weekday/weekly/monthly"
+    )
+    color: Optional[str] = Field(None, description="新颜色标签；传 null 或空串=清空")
 
 
 class AgendaDeleteInput(BaseModel):
