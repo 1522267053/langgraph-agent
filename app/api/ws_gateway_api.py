@@ -123,10 +123,6 @@ class WsGatewayApi(
             if not gateway or not gateway.is_enabled:
                 return ApiResponse.error(msg="token 无效或网关已禁用")
 
-            file_obj = await file_service.get_by_id(db, file_id, raise_not_found=False)
-            if not file_obj or file_obj.flow_id != gateway.flow_id:
-                return ApiResponse.error(msg="文件不存在或无权访问")
-
             try:
                 (
                     file_path,
