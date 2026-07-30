@@ -33,6 +33,9 @@ const initialTab = validTabs.includes(route.query.tab as (typeof validTabs)[numb
   : 'upcoming'
 const listTab = ref<'upcoming' | 'incomplete' | 'history'>(initialTab)
 
+// ---- 批量选择 ----
+const selectedIds = ref<Set<number>>(new Set())
+
 // ---- 滚动加载（每次 30 天窗口） ----
 const loadingMore = ref(false)
 const hasMore = ref(true)
@@ -94,6 +97,7 @@ function clientFilter(items: Agenda[]): Agenda[] {
 }
 
 async function loadData() {
+  selectedIds.value = new Set()
   initCursor()
   hasMore.value = true
   loading.value = true
@@ -437,6 +441,64 @@ const filteredGroups = computed(() => {
     return result
   }
 })
+
+// ---- 批量选择 ----
+const flatItems = computed(() => filteredGroups.value.flatMap(g => g.items))
+const selectableIds = computed(() =>
+  flatItems.value.filter(i => i.status !== 2 && i.id != null).map(i => i.id!)
+)
+const allSelected = computed(
+  () => selectableIds.value.length > 0 && selectableIds.value.every(id => selectedIds.value.has(id))
+)
+const someSelected = computed(() => selectableIds.value.some(id => selectedIds.value.has(id)))
+
+function toggleItem(item: Agenda) {
+  if (item.id == null) return
+  const s = new Set(selectedIds.value)
+  if (s.has(item.id)) s.delete(item.id)
+  else s.add(item.id)
+  selectedIds.value = s
+}
+
+function toggleSelectAll(val: boolean) {
+  selectedIds.value = val ? new Set(selectableIds.value) : new Set()
+}
+
+async function handleBatchComplete() {
+  const ids = [...selectedIds.value]
+  if (ids.length === 0) return
+  try {
+    await ElMessageBox.confirm(`确认将选中的 ${ids.length} 项标记为已完成？`, '批量完成', {
+      type: 'info'
+    })
+    const res = await agendaApi.batchComplete(ids)
+    if (res.data.code === 1) {
+      ElMessage.success(res.data.msg || '批量完成成功')
+      selectedIds.value = new Set()
+      refreshAfterChange()
+    }
+  } catch {
+    // 用户取消
+  }
+}
+
+async function handleBatchDelete() {
+  const ids = [...selectedIds.value]
+  if (ids.length === 0) return
+  try {
+    await ElMessageBox.confirm(`确认删除选中的 ${ids.length} 项日程？`, '批量删除', {
+      type: 'warning'
+    })
+    const res = await agendaApi.batchDelete(ids)
+    if (res.data.code === 1) {
+      ElMessage.success('批量删除成功')
+      selectedIds.value = new Set()
+      refreshAfterChange()
+    }
+  } catch {
+    // 用户取消
+  }
+}
 
 function handleSearch() {
   listTab.value = 'upcoming'
@@ -854,6 +916,24 @@ onBeforeUnmount(() => {
             <span>查看以前</span>
           </div>
         </div>
+        <div v-if="flatItems.length > 0" class="batch-bar">
+          <el-checkbox
+            :model-value="allSelected"
+            :indeterminate="someSelected && !allSelected"
+            @change="toggleSelectAll"
+          >
+            全选
+          </el-checkbox>
+          <template v-if="selectedIds.size > 0">
+            <span class="batch-count">已选 {{ selectedIds.size }} 项</span>
+            <el-button size="small" type="success" :icon="Check" @click="handleBatchComplete">
+              批量完成
+            </el-button>
+            <el-button size="small" type="danger" :icon="Delete" @click="handleBatchDelete">
+              批量删除
+            </el-button>
+          </template>
+        </div>
         <template v-if="filteredGroups.length === 0">
           <el-empty description="暂无日程" />
         </template>
@@ -870,6 +950,12 @@ onBeforeUnmount(() => {
               :class="{ 'is-done': item.status === 2 }"
             >
               <div class="card-left">
+                <el-checkbox
+                  class="card-check"
+                  :disabled="item.status === 2"
+                  :model-value="selectedIds.has(item.id!)"
+                  @change="toggleItem(item)"
+                />
                 <span
                   v-if="item.color"
                   class="color-dot"
@@ -1265,6 +1351,24 @@ onBeforeUnmount(() => {
 .group-count {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+  background-color: var(--el-fill-color-lighter);
+}
+
+.batch-count {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.card-check {
+  flex-shrink: 0;
 }
 
 .agenda-card {
