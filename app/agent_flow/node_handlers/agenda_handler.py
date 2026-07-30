@@ -19,6 +19,8 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import StreamWriter
 from pydantic import BaseModel, Field, ValidationError
 
+from app.schemas.base_schema import ChinaDateTime
+
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.agent_flow.node_handlers.base_handler import BaseNodeHandler
@@ -83,14 +85,15 @@ class AgendaNodeHandler(BaseNodeHandler):
     async def get_tool(self, node: FlowNode) -> list[BaseTool]:
         async def create_agenda(
             title: str,
-            start_time: str = "",
-            end_time: str = "",
+            start_time: Optional[ChinaDateTime] = None,
+            end_time: Optional[ChinaDateTime] = None,
             category: str = "other",
             priority: int = 2,
             location: Optional[str] = None,
-            remind_at: Optional[str] = None,
+            remind_at: Optional[ChinaDateTime] = None,
             recurrence: str = "none",
             description: Optional[str] = None,
+            color: Optional[str] = None,
         ) -> dict:
             """创建日程"""
             if category not in _VALID_CATEGORIES:
@@ -125,6 +128,8 @@ class AgendaNodeHandler(BaseNodeHandler):
                 data["location"] = location
             if description is not None:
                 data["description"] = description
+            if color is not None:
+                data["color"] = color
 
             from app.schemas.agenda_schema import AgendaCreate
 
@@ -215,10 +220,10 @@ class AgendaNodeHandler(BaseNodeHandler):
         async def update_agenda(id: int, **kwargs: Any) -> dict:
             """更新日程。
 
-            字段语义（依赖 LangChain 透传 LLM 的原始 args，区分 3 种情况）：
-            - 字段未传：保持原值
-            - 传 null 或空串：清空（title 除外，因数据库 NOT NULL）
-            - 传值：设为该值
+            字段语义（与前端 PATCH 一致，仅修改显式传入的有效字段）：
+            - 字段未传或传 null：保持原值
+            - 传空串：清空（仅字符串字段，title 除外因数据库 NOT NULL）
+            - 传有效值：设为该值
             """
             username = await get_current_username()
 
@@ -230,9 +235,10 @@ class AgendaNodeHandler(BaseNodeHandler):
             except ValidationError as e:
                 return {"success": False, "message": f"参数错误: {e}"}
 
-            # 仅取 LLM 显式提供的字段（严格区分 不传 / null / 值）
+            # 仅取 LLM 显式提供的有效字段（null 视为未传，保持原值）
             set_fields = schema.model_dump(exclude_unset=True)
             set_fields.pop("id", None)
+            set_fields = {k: v for k, v in set_fields.items() if v is not None}
 
             # 枚举/范围校验
             if (
@@ -410,18 +416,35 @@ class AgendaNodeHandler(BaseNodeHandler):
 # ---- 工具参数 Schema ----
 
 
-class AgendaCreateInput(BaseModel):
+class _AgendaFields(BaseModel):
+    """议程工具共用字段基类"""
+
+    start_time: Optional[ChinaDateTime] = Field(
+        None, description="开始时间 YYYY-MM-DD HH:MM:SS"
+    )
+    end_time: Optional[ChinaDateTime] = Field(
+        None, description="结束时间 YYYY-MM-DD HH:MM:SS"
+    )
+    category: Optional[str] = Field(None, description="分类：work/life/study/other")
+    priority: Optional[int] = Field(None, description="优先级：1=低/2=中/3=高")
+    location: Optional[str] = Field(None, description="地点")
+    remind_at: Optional[ChinaDateTime] = Field(
+        None, description="提醒时间 YYYY-MM-DD HH:MM:SS"
+    )
+    recurrence: Optional[str] = Field(
+        None, description="重复规则：none/daily/weekday/weekly/monthly"
+    )
+    description: Optional[str] = Field(None, description="备注")
+    color: Optional[str] = Field(None, description="颜色标签")
+
+
+class AgendaCreateInput(_AgendaFields):
     title: str = Field(..., description="日程标题")
-    start_time: str = Field("", description="开始时间 YYYY-MM-DD HH:MM:SS（可选）")
-    end_time: str = Field("", description="结束时间 YYYY-MM-DD HH:MM:SS（可选）")
     category: str = Field("other", description="分类：work/life/study/other")
     priority: int = Field(2, description="优先级：1=低/2=中/3=高")
-    location: Optional[str] = Field(None, description="地点")
-    remind_at: Optional[str] = Field(None, description="提醒时间 YYYY-MM-DD HH:MM:SS")
     recurrence: str = Field(
         "none", description="重复：none/daily/weekday/weekly/monthly"
     )
-    description: Optional[str] = Field(None, description="备注")
 
 
 class AgendaListInput(BaseModel):
@@ -433,34 +456,18 @@ class AgendaListInput(BaseModel):
     limit: int = Field(20, description="返回数量上限")
 
 
-class AgendaUpdateInput(BaseModel):
+class AgendaUpdateInput(_AgendaFields):
     """更新日程参数 Schema。
 
-    字段语义（依赖 LangChain 透传 LLM 原始 args，未传字段不会出现在 kwargs 中）：
-    - 未传：保持原值
-    - 传 null：清空（title 除外，因数据库 NOT NULL）
-    - 传空串：等同 null，清空（仅 location/description/color/remind_at/start_time/end_time）
-    - 传值：设为该值
+    字段语义（与前端 PATCH 一致，仅修改显式传入的有效字段）：
+    - 未传或传 null：保持原值
+    - 传空串：清空（仅字符串字段，title 除外因数据库 NOT NULL）
+    - 传有效值：设为该值
     """
 
     id: int = Field(..., description="日程ID")
     title: str = Field("", description="新标题（不支持清空，传空串视为不变）")
-    start_time: Optional[str] = Field(
-        None, description="新开始时间 YYYY-MM-DD HH:MM:SS；传 null 或空串=清空"
-    )
-    end_time: Optional[str] = Field(None, description="新结束时间；传 null 或空串=清空")
     status: Optional[int] = Field(None, description="新状态：0=待办/1=进行中/2=已完成")
-    category: Optional[str] = Field(None, description="新分类：work/life/study/other")
-    priority: Optional[int] = Field(None, description="新优先级：1=低/2=中/3=高")
-    location: Optional[str] = Field(None, description="新地点；传 null 或空串=清空")
-    remind_at: Optional[str] = Field(
-        None, description="新提醒时间；传 null 或空串=清空提醒"
-    )
-    description: Optional[str] = Field(None, description="新备注；传 null 或空串=清空")
-    recurrence: Optional[str] = Field(
-        None, description="新重复规则：none/daily/weekday/weekly/monthly"
-    )
-    color: Optional[str] = Field(None, description="新颜色标签；传 null 或空串=清空")
 
 
 class AgendaDeleteInput(BaseModel):
