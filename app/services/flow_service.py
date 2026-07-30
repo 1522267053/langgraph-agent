@@ -1716,6 +1716,15 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
 
         flow = await self.get_by_id(db, flow_id)
         if flow and flow.flow_type == FlowType.AGENT.value:
+            from app.models.flow_node import AGENT_ALLOWED_NODE_TYPES
+
+            for nd in nodes_data:
+                nt = nd.get("node_type")
+                if nt not in AGENT_ALLOWED_NODE_TYPES:
+                    raise ValueError(
+                        f"智能体不支持「{nt}」类型的节点，"
+                        f"仅支持：开始、结束、大模型调用、条件、意图路由和工具节点"
+                    )
             self._check_agent_unique_for_batch(db, flow_id, nodes_data, existing_nodes)
 
         global_cfg = await global_config_service.get_default_llm_config(db)
