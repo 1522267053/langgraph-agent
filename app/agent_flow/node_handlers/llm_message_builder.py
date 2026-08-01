@@ -26,9 +26,27 @@ from app.agent_flow.flow_context import FlowState
 from app.models.flow_node import FlowNode
 from app.services.agent_conversation_service import AgentConversationService
 from app.services.conversation_service import ConversationService
-from app.utils.media_resolver import build_multimodal_content, collect_media_blocks
+from app.utils.media_resolver import (
+    build_multimodal_content,
+    collect_media_blocks,
+    filter_capabilities_by_adapter,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _effective_capabilities(node_config: dict) -> dict:
+    """按适配器已实现的媒体转换能力过滤节点 capabilities
+
+    模型 capabilities 只表示模型支持哪些模态，适配器（langchain 包）是否已
+    实现对应标准块的转换是另一维度。取交集后，适配器不支持的模态会降级为
+    文本占位，避免发送时 langchain 抛 ValueError。
+    """
+    capabilities = node_config.get("capabilities", {}) or {}
+    from app.services.ai_provider_service import get_adapter_type
+
+    adapter = get_adapter_type(node_config.get("provider", ""))
+    return filter_capabilities_by_adapter(capabilities, adapter)
 
 
 async def build_initial_messages(
@@ -312,7 +330,7 @@ def append_user_message(
         return
 
     # 收集多模态内容（图片/文件等）
-    capabilities = node_config.get("capabilities", {})
+    capabilities = _effective_capabilities(node_config)
     media_blocks, file_index = collect_media_blocks(state.input_data, capabilities)
     prompt_text = (
         f"{actual_user_prompt}\n\n{file_index}" if file_index else actual_user_prompt
@@ -367,7 +385,7 @@ async def load_history_from_db(
         return []
 
     max_history_turns = node_config.get("max_history_turns", 10)
-    capabilities = node_config.get("capabilities", {})
+    capabilities = _effective_capabilities(node_config)
     id_param = session_id if session_id else execution_id
 
     # Agent 模式：始终加载全部对话历史

@@ -67,8 +67,9 @@ CAPABILITY_TO_MIME_MAP = {
 
 CAPABILITY_TO_EXT_MAP = {
     "image": IMAGE_EXTENSIONS,
-    "audio": AUDIO_EXTENSIONS,
+    # video 在 audio 之前：.mp4/.webm 同时出现在两种集合，优先按视频处理
     "video": VIDEO_EXTENSIONS,
+    "audio": AUDIO_EXTENSIONS,
     "pdf": PDF_EXTENSIONS,
     "xlsx": XLSX_EXTENSIONS,
 }
@@ -86,8 +87,13 @@ _EXT_TO_MIME = {
     ".ogg": "audio/ogg",
     ".flac": "audio/flac",
     ".aac": "audio/aac",
+    ".m4a": "audio/mp4",
     ".mp4": "video/mp4",
     ".webm": "video/webm",
+    ".avi": "video/x-msvideo",
+    ".mov": "video/quicktime",
+    ".mkv": "video/x-matroska",
+    ".mpeg": "video/mpeg",
     ".pdf": "application/pdf",
 }
 
@@ -149,6 +155,39 @@ def _is_enabled(capabilities: dict, capability: str) -> bool:
     return bool(capabilities.get(capability, False))
 
 
+# 各适配器（langchain 包）已实现媒体块转换的能力集。
+# 实测：langchain-openai 1.4.1 支持 image/audio（file 含 pdf/xlsx），video 抛错；
+# langchain-anthropic 1.5.3 仅支持 image/file，video/audio 抛错。
+# pdf/xlsx 在我们的链路中始终生成文本占位块，不经过媒体块转换层。
+ADAPTER_MEDIA_SUPPORT = {
+    "openai_compatible": {"image", "audio", "pdf", "xlsx"},
+    "anthropic": {"image", "pdf", "xlsx"},
+}
+
+
+def filter_capabilities_by_adapter(capabilities: dict, adapter_type: str) -> dict:
+    """按适配器已实现的媒体转换能力过滤 capabilities
+
+    模型 capabilities 表示"模型是否支持该模态"，适配器是否已实现对应
+    标准块的转换是另一维度。两者取交集：适配器未实现的模态（如 openai
+    兼容下的 video、anthropic 下的 video/audio）降级为文本占位，避免
+    langchain 在发送时抛 ValueError。
+
+    Args:
+        capabilities: 模型能力开关（来自节点配置）
+        adapter_type: 适配器类型（如 "openai_compatible"、"anthropic"）
+
+    Returns:
+        过滤后的能力开关副本，未知适配器回退 openai_compatible 集合
+    """
+    supported = ADAPTER_MEDIA_SUPPORT.get(
+        adapter_type, ADAPTER_MEDIA_SUPPORT["openai_compatible"]
+    )
+    return {
+        key: bool(value) and key in supported for key, value in capabilities.items()
+    }
+
+
 def _resolve_file_info_to_block(file_info: dict, capabilities: dict) -> dict | None:
     if not isinstance(file_info, dict):
         return None
@@ -166,33 +205,28 @@ def _resolve_file_info_to_block(file_info: dict, capabilities: dict) -> dict | N
     if not _is_enabled(capabilities, capability):
         return None
 
-    result = _read_file_as_base64(file_path)
-    if not result:
-        return None
-
-    b64_data, detected_mime = result
-
-    if capability == "image":
-        return {
-            "type": "image_url",
-            "image_url": {"url": f"data:{detected_mime};base64,{b64_data}"},
-        }
-    elif capability == "audio":
-        return {
-            "type": "text",
-            "text": f"[audio data: {original_name or 'audio'}]",
-        }
-    elif capability == "video":
+    if capability in ("image", "video", "audio"):
+        result = _read_file_as_base64(file_path)
+        if result:
+            b64_data, detected_mime = result
+            if capability in ("image", "video", "audio"):
+                return {
+                    "type": capability,
+                    "base64": b64_data,
+                    "mime_type": detected_mime,
+                }
+        # 文件过大无法内联 base64，回退为文本占位（LLM 仍能感知附件）
         return {
             "type": "text",
-            "text": f"[video data: {original_name or 'video'}]",
+            "text": f"[{capability} data: {original_name or capability}]",
         }
-    elif capability == "pdf":
+
+    if capability == "pdf":
         return {
             "type": "text",
             "text": f"[pdf document: {original_name or 'document'}]",
         }
-    elif capability == "xlsx":
+    if capability == "xlsx":
         return {
             "type": "text",
             "text": f"[excel spreadsheet: {original_name or 'spreadsheet'}]",
@@ -212,10 +246,10 @@ def _resolve_url_to_block(url: str, capabilities: dict) -> dict | None:
     if not _is_enabled(capabilities, capability):
         return None
 
-    if capability == "image":
+    if capability in ("image", "video"):
         return {
-            "type": "image_url",
-            "image_url": {"url": url},
+            "type": capability,
+            "url": url,
         }
 
     return None
@@ -263,7 +297,7 @@ def collect_media_blocks(
             block = _resolve_file_info_to_block(value, caps)
             if block:
                 blocks.append(block)
-                if block.get("type") != "image_url" and _is_file_info(value):
+                if block.get("type") != "image" and _is_file_info(value):
                     _append_file_entry(file_entries, value, file_id)
             elif _is_file_info(value):
                 _append_file_entry(file_entries, value, file_id)
@@ -274,7 +308,7 @@ def collect_media_blocks(
                     block = _resolve_file_info_to_block(item, caps)
                     if block:
                         blocks.append(block)
-                        if block.get("type") != "image_url" and _is_file_info(item):
+                        if block.get("type") != "image" and _is_file_info(item):
                             _append_file_entry(file_entries, item, file_id)
                     elif _is_file_info(item):
                         _append_file_entry(file_entries, item, file_id)
