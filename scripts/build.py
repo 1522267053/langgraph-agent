@@ -1,11 +1,11 @@
 """
-跨平台构建脚本：Nuitka 模块编译 + PyInstaller 打包
+Cross-platform build script: Nuitka module compilation + PyInstaller packaging
 
-用法:
-    poetry run python scripts/build.py <版本号>             # 完整构建
-    poetry run python scripts/build.py <版本号> --skip-nuitka  # 跳过 Nuitka 步骤
+Usage:
+    poetry run python scripts/build.py <version>               # full build
+    poetry run python scripts/build.py <version> --skip-nuitka # skip Nuitka
 
-示例:
+Examples:
     poetry run python scripts/build.py 0.2.0
     poetry run python scripts/build.py 0.2.0 --skip-nuitka
 """
@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -27,7 +28,7 @@ NPM = "npm.cmd" if IS_WINDOWS else "npm"
 
 
 class BuildError(RuntimeError):
-    """构建步骤执行失败"""
+    """Raised when a build step fails"""
 
 
 def run(cmd: list[str], desc: str, cwd: Path | None = None) -> None:
@@ -36,10 +37,10 @@ def run(cmd: list[str], desc: str, cwd: Path | None = None) -> None:
     try:
         result = subprocess.run(cmd, cwd=workdir)
     except OSError as e:
-        raise BuildError(f"{desc} 启动失败: {e}") from e
+        raise BuildError(f"{desc} failed to start: {e}") from e
     if result.returncode != 0:
-        raise BuildError(f"{desc} 失败 (exit code {result.returncode})")
-    print(f"[OK] {desc} 完成")
+        raise BuildError(f"{desc} failed (exit code {result.returncode})")
+    print(f"[OK] {desc} done")
     print()
 
 
@@ -70,16 +71,16 @@ def set_version(version: str) -> None:
         flags=re.MULTILINE,
     )
     pyproject.write_text(content, encoding="utf-8")
-    print(f"  版本号已更新为 {version}")
+    print(f"  Version set to {version}")
 
 
 def build_frontend() -> None:
     frontend_dir = PROJECT_ROOT / "frontend"
     dist_index = frontend_dir / "dist" / "index.html"
     if dist_index.exists():
-        print("  前端构建产物已存在，跳过构建")
+        print("  Frontend dist exists, skip build")
         return
-    print("  未找到前端构建产物，开始构建...")
+    print("  Frontend dist not found, building...")
     run([NPM, "run", "build"], "npm run build", cwd=frontend_dir)
 
 
@@ -134,9 +135,9 @@ def run_pyinstaller() -> None:
 def _copy_file(src: Path, dest: Path, label: str) -> None:
     if src.exists():
         shutil.copy2(src, dest)
-        print(f"  {label} 已拷贝到 {dest.parent}/")
+        print(f"  {label} copied to {dest.parent}/")
     else:
-        print(f"  {label} 不存在，跳过拷贝")
+        print(f"  {label} not found, skip copy")
 
 
 def create_runtime_dirs() -> None:
@@ -164,9 +165,11 @@ def print_banner(args: argparse.Namespace) -> None:
     print()
 
 
-def print_summary(args: argparse.Namespace) -> None:
+def print_summary(args: argparse.Namespace, start_time: datetime) -> None:
     ext = ".exe" if IS_WINDOWS else ""
     nui_ext = ".pyd" if IS_WINDOWS else ".so"
+    elapsed = datetime.now() - start_time
+    elapsed_str = str(elapsed).split(".")[0]
     print("=" * 60)
     print("  Build complete!")
     print("=" * 60)
@@ -174,6 +177,8 @@ def print_summary(args: argparse.Namespace) -> None:
     print("  Output: dist/langgraph_agent/")
     print(f"  Executable: dist/langgraph_agent/langgraph_agent{ext}")
     print(f"  Version: {args.version}")
+    print(f"  Build finished at: {start_time:%Y-%m-%d %H:%M:%S}")
+    print(f"  Total build time: {elapsed_str}")
     print()
     if not args.skip_nuitka:
         print(f"  Business code: app.*{nui_ext} (compiled binary)")
@@ -185,29 +190,31 @@ def print_summary(args: argparse.Namespace) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="langgraph_agent 跨平台构建脚本 (Nuitka + PyInstaller)",
+        description="langgraph_agent cross-platform build script (Nuitka + PyInstaller)",
     )
-    parser.add_argument("version", help="版本号，例如 0.2.0")
+    parser.add_argument("version", help="Version number, e.g. 0.2.0")
     parser.add_argument(
         "--skip-nuitka",
         action="store_true",
-        help="跳过 Nuitka 模块编译步骤",
+        help="Skip the Nuitka module compilation step",
     )
     args = parser.parse_args()
 
     print_banner(args)
 
+    start_time = datetime.now()
+
     steps: list[tuple[str, Callable[[], None]]] = [
-        ("设置版本号", lambda: set_version(args.version)),
-        ("检查前端构建", build_frontend),
-        ("生成静态导入", generate_static_imports),
+        ("Setting version", lambda: set_version(args.version)),
+        ("Checking frontend build", build_frontend),
+        ("Generating static imports", generate_static_imports),
     ]
     if not args.skip_nuitka:
-        steps.append(("Nuitka 模块编译", compile_nuitka))
+        steps.append(("Compiling app with Nuitka", compile_nuitka))
     steps.extend(
         [
-            ("PyInstaller 打包", run_pyinstaller),
-            ("创建运行目录", create_runtime_dirs),
+            ("Running PyInstaller", run_pyinstaller),
+            ("Creating runtime directories", create_runtime_dirs),
         ]
     )
 
@@ -217,7 +224,7 @@ def main() -> int:
         print(f"\n[ERROR] {e}", file=sys.stderr)
         return 1
 
-    print_summary(args)
+    print_summary(args, start_time)
     return 0
 
 
