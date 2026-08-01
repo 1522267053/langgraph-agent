@@ -135,8 +135,8 @@ async def startup() -> None:
 
     logger.info("[OK] AI provider adapter cache loaded")
     if count == 0:
-        logger.info("AI 供应商表为空，触发首次同步...")
-        asyncio.create_task(ai_provider_service.sync_from_url())
+        logger.info("AI 供应商表为空，触发首次本地初始化...")
+        asyncio.create_task(ai_provider_service.sync_from_local())
 
     # ---- 打印自定义启动横幅 ----
     _log_startup_banner()
