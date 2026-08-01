@@ -141,6 +141,8 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
                 and_(Agenda.start_time <= end_str, effective_end >= cursor),
             )
             stmt = select(Agenda).where(cond).order_by(Agenda.start_time)
+            if status:
+                stmt = stmt.where(Agenda.status.in_(status))
             items = list((await db.execute(stmt)).scalars().all())
             if items:
                 anchor = max(
@@ -163,6 +165,8 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
                 and_(Agenda.start_time >= start_str, effective_end <= cursor_str),
             )
             stmt = select(Agenda).where(cond).order_by(Agenda.start_time.desc())
+            if status:
+                stmt = stmt.where(Agenda.status.in_(status))
             items = list((await db.execute(stmt)).scalars().all())
             if items:
                 anchor = min(i.start_time for i in items if i.start_time is not None)
