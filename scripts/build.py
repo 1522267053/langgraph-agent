@@ -11,34 +11,44 @@
 """
 
 import argparse
-import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 IS_WINDOWS = platform.system() == "Windows"
 NUITKA_EXT = ".cp312-win_amd64.pyd" if IS_WINDOWS else ".cpython-*.so"
+NPM = "npm.cmd" if IS_WINDOWS else "npm"
+
+
+class BuildError(RuntimeError):
+    """构建步骤执行失败"""
 
 
 def run(cmd: list[str], desc: str, cwd: Path | None = None) -> None:
     workdir = str(cwd if cwd is not None else PROJECT_ROOT)
     print(f"[{desc}]", flush=True)
-    result = subprocess.run(cmd, cwd=workdir)
+    try:
+        result = subprocess.run(cmd, cwd=workdir)
+    except OSError as e:
+        raise BuildError(f"{desc} 启动失败: {e}") from e
     if result.returncode != 0:
-        print(f"[ERROR] {desc} failed (exit code {result.returncode})", file=sys.stderr)
-        sys.exit(1)
-    print(f"[OK] {desc} done")
+        raise BuildError(f"{desc} 失败 (exit code {result.returncode})")
+    print(f"[OK] {desc} 完成")
     print()
 
 
-def step(step_num: int, total: int, label: str) -> None:
-    print(f"[{step_num}/{total}] {label}...")
-    print()
+def run_steps(steps: list[tuple[str, Callable[[], None]]]) -> None:
+    total = len(steps)
+    for i, (label, fn) in enumerate(steps, start=1):
+        print(f"[{i}/{total}] {label}...")
+        print()
+        fn()
 
 
 def set_version(version: str) -> None:
@@ -60,21 +70,17 @@ def set_version(version: str) -> None:
         flags=re.MULTILINE,
     )
     pyproject.write_text(content, encoding="utf-8")
-    print(f"  Version set to {version}")
+    print(f"  版本号已更新为 {version}")
 
 
 def build_frontend() -> None:
     frontend_dir = PROJECT_ROOT / "frontend"
     dist_index = frontend_dir / "dist" / "index.html"
     if dist_index.exists():
-        print("  Frontend dist exists, skip build")
+        print("  前端构建产物已存在，跳过构建")
         return
-
-    print("  Frontend dist not found, building...")
-    if IS_WINDOWS:
-        run(["cmd", "/c", "npm", "run", "build"], "npm run build", cwd=frontend_dir)
-    else:
-        run(["npm", "run", "build"], "npm run build", cwd=frontend_dir)
+    print("  未找到前端构建产物，开始构建...")
+    run([NPM, "run", "build"], "npm run build", cwd=frontend_dir)
 
 
 def generate_static_imports() -> None:
@@ -125,41 +131,28 @@ def run_pyinstaller() -> None:
     )
 
 
+def _copy_file(src: Path, dest: Path, label: str) -> None:
+    if src.exists():
+        shutil.copy2(src, dest)
+        print(f"  {label} 已拷贝到 {dest.parent}/")
+    else:
+        print(f"  {label} 不存在，跳过拷贝")
+
+
 def create_runtime_dirs() -> None:
     dist_base = PROJECT_ROOT / "dist" / "langgraph_agent"
     for sub in ("uploads", "data", "logs"):
         (dist_base / sub).mkdir(parents=True, exist_ok=True)
 
-    env_example = PROJECT_ROOT / ".env.example"
-    if env_example.exists():
-        shutil.copy2(env_example, dist_base / ".env")
-        print("  .env.example copied as .env to dist/langgraph_agent/")
-    else:
-        print("  .env.example not found, skip copy")
-
-    models_dev = PROJECT_ROOT / "models.dev.api.json"
-    if models_dev.exists():
-        shutil.copy2(models_dev, dist_base / "models.dev.api.json")
-        print("  models.dev.api.json copied to dist/langgraph_agent/")
-    else:
-        print("  models.dev.api.json not found, skip copy")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="langgraph_agent 跨平台构建脚本 (Nuitka + PyInstaller)",
+    _copy_file(PROJECT_ROOT / ".env.example", dist_base / ".env", ".env.example")
+    _copy_file(
+        PROJECT_ROOT / "models.dev.api.json",
+        dist_base / "models.dev.api.json",
+        "models.dev.api.json",
     )
-    parser.add_argument("version", help="版本号，例如 0.2.0")
-    parser.add_argument(
-        "--skip-nuitka",
-        action="store_true",
-        help="跳过 Nuitka 模块编译步骤",
-    )
-    args = parser.parse_args()
 
-    total_steps = 5 if args.skip_nuitka else 6
-    step_idx = 0
 
+def print_banner(args: argparse.Namespace) -> None:
     print("=" * 60)
     print("  langgraph_agent PyInstaller Build")
     print(f"  Version: {args.version}")
@@ -170,40 +163,15 @@ def main() -> None:
     print("=" * 60)
     print()
 
-    print(f"[0/{max(total_steps - 1, 0)}] Setting version to {args.version}...")
-    print()
-    set_version(args.version)
-    print(f"[OK] Version set to {args.version}")
-    print()
 
-    step_idx += 1
-    step(step_idx, total_steps, "Checking frontend build")
-    build_frontend()
-
-    step_idx += 1
-    step(step_idx, total_steps, "Generating static imports")
-    generate_static_imports()
-
-    if not args.skip_nuitka:
-        step_idx += 1
-        step(step_idx, total_steps, "Compiling app package with Nuitka (--module)")
-        compile_nuitka()
-
-    step_idx += 1
-    step(step_idx, total_steps, "Running PyInstaller (--onedir)")
-    run_pyinstaller()
-
-    step_idx += 1
-    step(step_idx, total_steps, "Creating runtime directories")
-    create_runtime_dirs()
-
+def print_summary(args: argparse.Namespace) -> None:
     ext = ".exe" if IS_WINDOWS else ""
     nui_ext = ".pyd" if IS_WINDOWS else ".so"
     print("=" * 60)
     print("  Build complete!")
     print("=" * 60)
     print()
-    print(f"  Output: dist/langgraph_agent/")
+    print("  Output: dist/langgraph_agent/")
     print(f"  Executable: dist/langgraph_agent/langgraph_agent{ext}")
     print(f"  Version: {args.version}")
     print()
@@ -215,5 +183,43 @@ def main() -> None:
     print()
 
 
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="langgraph_agent 跨平台构建脚本 (Nuitka + PyInstaller)",
+    )
+    parser.add_argument("version", help="版本号，例如 0.2.0")
+    parser.add_argument(
+        "--skip-nuitka",
+        action="store_true",
+        help="跳过 Nuitka 模块编译步骤",
+    )
+    args = parser.parse_args()
+
+    print_banner(args)
+
+    steps: list[tuple[str, Callable[[], None]]] = [
+        ("设置版本号", lambda: set_version(args.version)),
+        ("检查前端构建", build_frontend),
+        ("生成静态导入", generate_static_imports),
+    ]
+    if not args.skip_nuitka:
+        steps.append(("Nuitka 模块编译", compile_nuitka))
+    steps.extend(
+        [
+            ("PyInstaller 打包", run_pyinstaller),
+            ("创建运行目录", create_runtime_dirs),
+        ]
+    )
+
+    try:
+        run_steps(steps)
+    except BuildError as e:
+        print(f"\n[ERROR] {e}", file=sys.stderr)
+        return 1
+
+    print_summary(args)
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
