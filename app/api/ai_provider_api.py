@@ -9,7 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
 from app.schemas.base_schema import ApiResponse
-from app.services.ai_provider_service import ai_provider_service, _get_virtual_provider_dicts
+from app.services.ai_provider_service import (
+    ai_provider_service,
+    _get_virtual_provider_dicts,
+)
 from app.services.ai_model_service import ai_model_service
 
 

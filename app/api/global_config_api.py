@@ -90,7 +90,10 @@ class GlobalConfigApi:
         )
         async def list_providers(db: AsyncSession = Depends(get_db)):
             """获取所有已注册的 AI 供应商（从数据库读取）"""
-            from app.services.ai_provider_service import ai_provider_service, _get_virtual_provider_dicts
+            from app.services.ai_provider_service import (
+                ai_provider_service,
+                _get_virtual_provider_dicts,
+            )
 
             providers = await ai_provider_service.list_providers(db)
             data = _get_virtual_provider_dicts() + [
