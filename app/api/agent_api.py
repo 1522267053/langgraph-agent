@@ -171,13 +171,18 @@ class AgentApi:
             db: AsyncSession = Depends(get_db),
         ):
             """删除指定消息及之后的所有消息，返回被删除的用户消息内容用于重新编辑"""
-            deleted_content = await agent_executor_service.delete_messages_from(
+            deleted = await agent_executor_service.delete_messages_from(
                 db, session_id, message_id
             )
-            if deleted_content is None:
+            if deleted is None:
                 return ApiResponse.error(msg="消息不存在")
             return ApiResponse.success(
-                data={"content": deleted_content}, msg="删除成功"
+                data={
+                    "content": deleted["content"],
+                    "files": deleted["files"],
+                    "input_data": deleted["input_data"],
+                },
+                msg="删除成功",
             )
 
         @self.router.post(

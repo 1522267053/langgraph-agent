@@ -86,6 +86,9 @@ class AgentConversationService:
             raw_user = msg.additional_kwargs.get("_raw_user_content")
             if raw_user and role == "human":
                 kwargs["original_content"] = raw_user
+            raw_params = msg.additional_kwargs.get("_raw_input_params")
+            if raw_params and role == "human":
+                kwargs["input_data"] = raw_params
             if thinking:
                 kwargs["thinking"] = thinking
             if tool_calls is not None:

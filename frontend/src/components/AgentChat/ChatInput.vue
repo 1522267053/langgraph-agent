@@ -21,6 +21,7 @@ const props = defineProps<{
   totalTokens?: number
   latestPromptTokens?: number
   planMode?: boolean
+  restoreParams?: Record<string, unknown> | null
 }>()
 
 const emit = defineEmits<{
@@ -32,6 +33,7 @@ const emit = defineEmits<{
   ): void
   (e: 'stop'): void
   (e: 'toggle-plan-mode'): void
+  (e: 'restore-consumed'): void
 }>()
 
 const inputMessage = defineModel<string>('inputMessage', { default: '' })
@@ -112,6 +114,20 @@ function removeFile(fieldName: string, fileId: number): void {
   const files = paramFormData[fieldName] as FileInfo[]
   paramFormData[fieldName] = files.filter(f => f.id !== fileId)
 }
+
+watch(
+  () => props.restoreParams,
+  params => {
+    if (!params) return
+    for (const field of props.fields) {
+      if (field.name in params) {
+        paramFormData[field.name] = params[field.name]
+      }
+    }
+    emit('restore-consumed')
+  },
+  { immediate: true }
+)
 
 function handleSend() {
   if (sendMessageDisabled.value || props.isStreaming) return
