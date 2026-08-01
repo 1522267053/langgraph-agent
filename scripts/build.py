@@ -137,6 +137,13 @@ def create_runtime_dirs() -> None:
     else:
         print("  .env.example not found, skip copy")
 
+    models_dev = PROJECT_ROOT / "models.dev.api.json"
+    if models_dev.exists():
+        shutil.copy2(models_dev, dist_base / "models.dev.api.json")
+        print("  models.dev.api.json copied to dist/langgraph_agent/")
+    else:
+        print("  models.dev.api.json not found, skip copy")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
