@@ -31,6 +31,13 @@ logger = logging.getLogger(__name__)
 
 _FRONT_MATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
+_CAPABILITY_KEYS = ("image", "video", "audio", "pdf", "xlsx")
+
+
+def _has_any_capability(caps: Optional[dict]) -> bool:
+    """capabilities 是否已启用任意多模态能力（全 False/缺失则视为未初始化）"""
+    return bool(caps) and any(caps.get(k) for k in _CAPABILITY_KEYS)
+
 
 def _parse_skill_frontmatter(file_path: Path) -> Optional[dict]:
     """解析 SKILL.md 的 YAML front matter，提取 name/description"""
@@ -198,6 +205,11 @@ class BuiltinAgentService:
             if not builtin_flow.suggested_prompts:
                 builtin_flow.suggested_prompts = BUILTIN_AGENT_SUGGESTED_PROMPTS.copy()
                 changed = True
+            # 补偿：修复前创建的 LLM 节点 capabilities 全 False，
+            # 且 max_tokens/context_length 未按模型 limits 填充
+            node_changed = await self._compensate_llm_node(db, builtin_flow.id)
+            if node_changed:
+                changed = True
             if changed:
                 await db.commit()
                 logger.info("已为内置 Agent 补充缺失字段: id=%d", builtin_flow.id)
@@ -208,12 +220,57 @@ class BuiltinAgentService:
         logger.info("内置 Agent 创建成功: id=%d", flow.id)
         return flow.id
 
+    async def _compensate_llm_node(self, db: AsyncSession, flow_id: int) -> bool:
+        """
+        补偿存量内置 Agent 的 LLM 节点：按已配置模型的元数据补齐派生字段
+
+        - capabilities 全 False（或缺失）时，按模型 modalities 重新推导
+        - context_length 为空时，按模型 limits.context 填充
+        - max_tokens 为空时，按模型 limits.output 填充
+
+        Returns:
+            是否有字段被修改
+        """
+        node_query = select(FlowNode).where(
+            FlowNode.flow_id == flow_id,
+            FlowNode.node_type == NodeType.LLM.value,
+            FlowNode.is_delete == 0,
+        )
+        node_result = await db.execute(node_query)
+        llm_node = node_result.scalar_one_or_none()
+        if not llm_node or not llm_node.base_config:
+            return False
+
+        config = llm_node.base_config if isinstance(llm_node.base_config, dict) else {}
+        provider = config.get("provider")
+        model = config.get("model")
+        if not provider or not model:
+            return False
+
+        metadata = await self._get_model_metadata(db, provider, model)
+        changed = False
+
+        if not _has_any_capability(config.get("capabilities")):
+            config["capabilities"] = metadata["capabilities"]
+            changed = True
+        if not config.get("context_length") and metadata["context_length"]:
+            config["context_length"] = metadata["context_length"]
+            changed = True
+        if not config.get("max_tokens") and metadata["max_tokens"]:
+            config["max_tokens"] = metadata["max_tokens"]
+            changed = True
+
+        if changed:
+            llm_node.base_config = config
+        return changed
+
     async def sync_llm_config(self, db: AsyncSession) -> None:
         """
         全局配置变更后，同步更新内置 Agent 的 LLM 节点配置
 
         读取全局配置，查找内置 Agent 的 LLM 节点，
-        将空的 provider/model/api_key/base_url 回填为全局配置值。
+        将空的 provider/model/api_key/base_url 回填为全局配置值，
+        并按已配置模型的元数据联动派生 capabilities/max_tokens/context_length。
         """
         global_llm = await global_config_service.get_default_llm_config(db)
         if not global_llm.get("api_key"):
@@ -257,6 +314,21 @@ class BuiltinAgentService:
         if not config.get("context_length") and global_llm.get("context_length"):
             config["context_length"] = global_llm["context_length"]
             updated = True
+
+        # 模型已就位时，联动派生 capabilities / context_length / max_tokens
+        if config.get("provider") and config.get("model"):
+            metadata = await self._get_model_metadata(
+                db, config["provider"], config["model"]
+            )
+            if not _has_any_capability(config.get("capabilities")):
+                config["capabilities"] = metadata["capabilities"]
+                updated = True
+            if not config.get("context_length") and metadata["context_length"]:
+                config["context_length"] = metadata["context_length"]
+                updated = True
+            if not config.get("max_tokens") and metadata["max_tokens"]:
+                config["max_tokens"] = metadata["max_tokens"]
+                updated = True
 
         if updated:
             llm_node.base_config = config
@@ -374,7 +446,9 @@ class BuiltinAgentService:
 
         # 重置 flow 元数据
         flow.name = "AI 助手"
-        flow.description = "系统内置 AI 助手，支持通用对话、创建智能体与工作流、调用各类技能"
+        flow.description = (
+            "系统内置 AI 助手，支持通用对话、创建智能体与工作流、调用各类技能"
+        )
         flow.input_schema = DEFAULT_AGENT_INPUT_SCHEMA
         flow.suggested_prompts = BUILTIN_AGENT_SUGGESTED_PROMPTS.copy()
         await db.commit()
@@ -393,6 +467,53 @@ class BuiltinAgentService:
         logger.info("内置 Agent 已恢复出厂设置: id=%d", flow.id)
         return flow.id
 
+    async def _get_model_metadata(
+        self, db: AsyncSession, provider: str, model: str
+    ) -> dict:
+        """从模型元数据推导 LLM 节点可自动填充的配置
+
+        返回:
+            {
+                "capabilities": 多模态能力开关（modalities.input 映射 image/video/audio/pdf，xlsx 恒 False），
+                "max_tokens": 输出上限（limits.output），无则 0，
+                "context_length": 上下文窗口（limits.context），无则 0，
+            }
+        """
+        from app.models.ai_model import AIModel
+
+        caps = {
+            "image": False,
+            "video": False,
+            "audio": False,
+            "pdf": False,
+            "xlsx": False,
+        }
+        metadata = {"capabilities": caps, "max_tokens": 0, "context_length": 0}
+        if not provider or not model:
+            return metadata
+
+        query = select(AIModel).where(
+            AIModel.provider_id == provider,
+            AIModel.model_id == model,
+            AIModel.is_delete == 0,
+        )
+        result = await db.execute(query)
+        ai_model = result.scalar_one_or_none()
+        if not ai_model:
+            return metadata
+
+        modalities = ai_model.modalities or {}
+        input_mods = modalities.get("input") if isinstance(modalities, dict) else None
+        if isinstance(input_mods, list):
+            for modality in ("image", "video", "audio", "pdf"):
+                caps[modality] = modality in input_mods
+
+        limits = ai_model.limits or {}
+        if isinstance(limits, dict):
+            metadata["max_tokens"] = limits.get("output") or 0
+            metadata["context_length"] = limits.get("context") or 0
+        return metadata
+
     async def _build_nodes_and_edges(
         self, db: AsyncSession, flow: Flow, skills: list[dict], global_llm: dict
     ) -> None:
@@ -401,6 +522,11 @@ class BuiltinAgentService:
         model = global_llm.get("model", "")
         api_key = global_llm.get("api_key", "")
         base_url = global_llm.get("base_url", "")
+        model_meta = await self._get_model_metadata(db, provider_name, model)
+        capabilities = model_meta["capabilities"]
+        context_length = (
+            global_llm.get("context_length") or model_meta["context_length"] or 0
+        )
         from app.services.ai_provider_service import ai_provider_service
 
         if not base_url:
@@ -447,7 +573,8 @@ class BuiltinAgentService:
                         "model": model,
                         "api_key": api_key,
                         "base_url": base_url,
-                        "context_length": global_llm.get("context_length"),
+                        "context_length": context_length,
+                        "capabilities": capabilities,
                         "system_prompt": BUILTIN_AGENT_SYSTEM_PROMPT,
                         "user_prompt": "{{message}}",
                         "max_tool_iterations": 100,
@@ -458,6 +585,11 @@ class BuiltinAgentService:
                                 "type": "string",
                             }
                         ],
+                        **(
+                            {"max_tokens": model_meta["max_tokens"]}
+                            if model_meta["max_tokens"]
+                            else {}
+                        ),
                     },
                 ),
             },
