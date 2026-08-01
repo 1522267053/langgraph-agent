@@ -9,7 +9,8 @@ import type {
   AgentSession,
   AgentMessage,
   AgentChatRequest,
-  AgentResumeRequest
+  AgentResumeRequest,
+  AgentDeleteMessagesResult
 } from '@/types/agent'
 import type { FlowSSEHandlers, SSEWaitData } from '@/types/sse'
 import { createFlowSSEConnection } from '@/utils/sse'
@@ -93,7 +94,7 @@ export const agentApi = {
    * @param messageId 起始消息ID
    */
   deleteMessagesFrom(agentId: number, sessionId: number, messageId: number) {
-    return get<{ content: string }>(
+    return get<AgentDeleteMessagesResult>(
       `/agent/${agentId}/sessions/${sessionId}/deleteMessages/${messageId}`
     )
   },

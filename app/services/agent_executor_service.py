@@ -280,7 +280,7 @@ class AgentExecutorService(BaseExecutorService):
 
     async def delete_messages_from(
         self, db: AsyncSession, session_id: int, message_id: int
-    ) -> Optional[str]:
+    ) -> Optional[dict]:
         """
         删除指定消息及之后的所有消息，返回被删除的用户消息内容
 
@@ -290,7 +290,8 @@ class AgentExecutorService(BaseExecutorService):
             message_id: 起始消息ID（该消息及之后的所有消息都会被删除）
 
         Returns:
-            被删除的第一条用户消息内容，没有用户消息返回空字符串，消息不存在返回None
+            被删除的第一条用户消息的 {content, files, input_data}（用于回退恢复），
+            没有用户消息时字段为空，消息不存在返回 None
         """
         session = await self._get_session(db, session_id)
         if not session:
@@ -312,9 +313,15 @@ class AgentExecutorService(BaseExecutorService):
             return None
 
         user_message_content = ""
+        user_files: Optional[list] = None
+        user_input_data: Optional[dict] = None
         for msg in messages_to_delete:
             if msg.role == "human":
                 user_message_content = msg.original_content or msg.content
+                user_files = msg.files if isinstance(msg.files, list) else None
+                user_input_data = (
+                    msg.input_data if isinstance(msg.input_data, dict) else None
+                )
                 break
 
         message_ids = [msg.id for msg in messages_to_delete]
@@ -327,7 +334,11 @@ class AgentExecutorService(BaseExecutorService):
 
         await self._cleanup_thread_checkpoint(session_id)
 
-        return user_message_content
+        return {
+            "content": user_message_content,
+            "files": user_files,
+            "input_data": user_input_data,
+        }
 
     async def get_messages(
         self,
@@ -470,6 +481,21 @@ class AgentExecutorService(BaseExecutorService):
                         if not fid:
                             continue
                         file_path = item.get("file_path", "")
+                        # 缺 file_path 时按 id 从 DB 补全（回退恢复的附件仅带 id 与元信息）
+                        if not file_path:
+                            try:
+                                (
+                                    path,
+                                    original_name,
+                                    mime_type,
+                                ) = await file_service.get_download_path(db, fid)
+                                file_path = str(path)
+                                if not item.get("original_name"):
+                                    item["original_name"] = original_name
+                                if not item.get("mime_type"):
+                                    item["mime_type"] = mime_type
+                            except FileNotFoundError:
+                                continue
                         if file_path and not file_path.startswith("/"):
                             abs_path = settings.get_absolute_path(file_path)
                             item["file_path"] = str(abs_path) if abs_path else file_path

@@ -55,6 +55,9 @@ class AgentMessage(DbBaseModel):
     files: Mapped[Optional[dict]] = mapped_column(
         JSON, nullable=True, comment="附件文件列表"
     )
+    input_data: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True, comment="用户输入参数（回退恢复用）"
+    )
 
     def __repr__(self) -> str:
         return f"<AgentMessage(id={self.id}, session_id={self.session_id}, role={self.role})>"

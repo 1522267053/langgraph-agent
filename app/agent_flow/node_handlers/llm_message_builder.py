@@ -345,10 +345,42 @@ def append_user_message(
         HumanMessage(
             content=content,
             additional_kwargs={
-                "_raw_user_content": state.input_data.get("message", "")
+                "_raw_user_content": state.input_data.get("message", ""),
+                "_raw_input_params": _sanitize_input_params(state.input_data),
             },
         )
     )
+
+
+def _sanitize_input_params(input_data: dict) -> dict:
+    """提取可持久化的用户输入参数（回退恢复用）
+
+    排除 message 字段；file_list 项仅保留 id 与元信息，不落盘绝对路径。
+    """
+    params: dict = {}
+    for key, value in input_data.items():
+        if key == "message":
+            continue
+        if (
+            isinstance(value, list)
+            and value
+            and isinstance(value[0], dict)
+            and "id" in value[0]
+        ):
+            params[key] = [
+                {
+                    "id": item.get("id"),
+                    "original_name": item.get("original_name", ""),
+                    "mime_type": item.get("mime_type", ""),
+                    "file_type": item.get("file_type"),
+                    "file_size": item.get("file_size"),
+                }
+                for item in value
+                if item.get("id") is not None
+            ]
+        else:
+            params[key] = value
+    return params
 
 
 async def load_history_from_db(

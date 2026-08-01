@@ -178,6 +178,8 @@ const dynamicFields = computed<FlowIOField[]>(() => {
 
 const inputMessage = ref('')
 const showMemory = ref(false)
+/** 回退恢复信号：每次回退生成新对象，通知当前挂载的 ChatInput 恢复参数 */
+const restoreParamsSignal = ref<Record<string, unknown> | null>(null)
 
 onMounted(async () => {
   toolOutputStore.registerWsHandler()
@@ -412,9 +414,10 @@ function handleDeleteMessage(msg: (typeof store.chatMessages)[0]) {
 
   ElMessageBox.confirm('删除此消息及之后的对话？', '确定', { type: 'warning' })
     .then(async () => {
-      const deletedContent = await store.deleteMessagesFrom(msgId)
-      if (deletedContent) {
-        inputMessage.value = deletedContent
+      const deleted = await store.deleteMessagesFrom(msgId)
+      if (deleted) {
+        inputMessage.value = deleted.content
+        restoreInputParams(deleted)
       }
       ElMessage.success('已删除，可重新发送')
     })
@@ -428,13 +431,40 @@ function handleRevertFrom(dbMsgId: number) {
   }
   ElMessageBox.confirm('将删除此条及之后的所有内容，确定继续？', '确定', { type: 'warning' })
     .then(async () => {
-      const deletedContent = await store.deleteMessagesFrom(dbMsgId)
-      if (deletedContent) {
-        inputMessage.value = deletedContent
+      const deleted = await store.deleteMessagesFrom(dbMsgId)
+      if (deleted) {
+        inputMessage.value = deleted.content
+        restoreInputParams(deleted)
       }
       ElMessage.success('已删除')
     })
     .catch(() => {})
+}
+
+/**
+ * 回退恢复：将删除消息时携带的文件与其他输入参数恢复到输入框参数表单
+ */
+function restoreInputParams(
+  deleted: {
+    content: string
+    files?: Array<{ id: number; original_name: string; mime_type: string }>
+    input_data?: Record<string, unknown>
+  }
+) {
+  const params: Record<string, unknown> = deleted.input_data ? { ...deleted.input_data } : {}
+  // 旧消息无 input_data 时回退：把附件放入第一个 file_list 字段
+  if (deleted.files && deleted.files.length > 0) {
+    const firstFileField = dynamicFields.value.find(f => f.type === 'file_list')
+    if (firstFileField && !params[firstFileField.name]) {
+      params[firstFileField.name] = deleted.files
+    }
+  }
+  if (Object.keys(params).length > 0) {
+    restoreParamsSignal.value = params
+  } else {
+    // 无参数可恢复时清空信号，避免残留旧值污染后续输入框
+    restoreParamsSignal.value = null
+  }
 }
 
 function formatToolApprovalArgs(args?: Record<string, unknown>): string {
@@ -482,9 +512,11 @@ function handleRejectTools() {
             :total-tokens="store.totalSessionTokens"
             :latest-prompt-tokens="store.latestPromptTokens"
             :plan-mode="store.planMode"
+            :restore-params="restoreParamsSignal"
             @send="handleChatSend"
             @stop="handleStop"
             @toggle-plan-mode="store.togglePlanMode"
+            @restore-consumed="restoreParamsSignal = null"
           />
         </div>
       </div>
@@ -657,9 +689,11 @@ function handleRejectTools() {
           :total-tokens="store.totalSessionTokens"
           :latest-prompt-tokens="store.latestPromptTokens"
           :plan-mode="store.planMode"
+          :restore-params="restoreParamsSignal"
           @send="handleChatSend"
           @stop="handleStop"
           @toggle-plan-mode="store.togglePlanMode"
+          @restore-consumed="restoreParamsSignal = null"
         />
       </div>
 

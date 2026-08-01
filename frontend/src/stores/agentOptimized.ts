@@ -4,7 +4,12 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed, nextTick } from 'vue'
-import type { AgentFlow, AgentSession, AgentMessage } from '@/types/agent'
+import type {
+  AgentFlow,
+  AgentSession,
+  AgentMessage,
+  AgentDeleteMessagesResult
+} from '@/types/agent'
 import type { SSEWaitData, SSEEvent } from '@/types/sse'
 import type {
   StreamingMessage,
@@ -873,9 +878,13 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   /**
-   * 删除指定消息及之后的所有消息，   * @param messageId 要删除的消息ID
-   * @returns 被删除的用户消息内容，   */
-  async function deleteMessagesFrom(messageId: number): Promise<string | null> {
+   * 删除指定消息及之后的所有消息
+   * @param messageId 要删除的消息ID
+   * @returns 被删除的用户消息 {content, files, input_data}，用于回退恢复
+   */
+  async function deleteMessagesFrom(
+    messageId: number
+  ): Promise<AgentDeleteMessagesResult | null> {
     if (!currentAgent.value || !currentSession.value) return null
 
     try {
@@ -885,12 +894,12 @@ export const useAgentStore = defineStore('agent', () => {
         messageId
       )
       if (res.data.code === 1) {
-        const deletedContent = res.data.data?.content || null
+        const deleted = res.data.data
         const beforeCount = messages.value.length
         messages.value = messages.value.filter(m => m.id < messageId)
         messageTotal.value = Math.max(0, messageTotal.value - (beforeCount - messages.value.length))
         rebuildChatMessages()
-        return deletedContent
+        return deleted
       }
       return null
     } catch {
