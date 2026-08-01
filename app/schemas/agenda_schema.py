@@ -60,3 +60,22 @@ class CalendarEventsRequest(BaseModel):
     status: Optional[list[int]] = Field(
         None, description="状态筛选（如 [0, 1] 表示待办+进行中）"
     )
+
+
+class LoadMoreRequest(BaseModel):
+    """游标分页请求"""
+
+    cursor: str = Field(..., description="游标日期 YYYY-MM-DD")
+    direction: str = Field(
+        "forward", description="forward=向后加载 / backward=向前加载"
+    )
+    status: Optional[list[int]] = Field(None, description="状态筛选")
+
+
+class LoadMoreResponse(BaseModel):
+    """游标分页响应"""
+
+    items: list[AgendaBase]
+    next_cursor: Optional[str] = Field(
+        None, description="下一游标日期；None 表示无更多"
+    )
