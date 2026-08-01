@@ -19,6 +19,8 @@ from app.schemas.agenda_schema import (
     AgendaCreate,
     AgendaUpdate,
     CalendarEventsRequest,
+    LoadMoreRequest,
+    LoadMoreResponse,
 )
 from app.schemas.base_schema import ApiResponse
 from app.services.agenda_service import agenda_service
@@ -193,6 +195,20 @@ class AgendaApi(
             """获取 Tab 角标数量（今日和未来 / 未完成）"""
             counts = await agenda_service.get_tab_counts(db)
             return ApiResponse.success(data=counts, msg="查询成功")
+
+        @self.router.post("/load-more", response_model=ApiResponse[LoadMoreResponse])
+        async def get_load_more(
+            body: LoadMoreRequest,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """游标分页：获取一页日程及其下一游标（空白间隙自动跳过）"""
+            items, next_cursor = await agenda_service.get_list_page(
+                db, body.cursor, body.direction, body.status
+            )
+            views = AgendaBase.model_to_view_batch(items)
+            return ApiResponse.success(
+                data={"items": views, "next_cursor": next_cursor}, msg="查询成功"
+            )
 
 
 agenda_api = AgendaApi()

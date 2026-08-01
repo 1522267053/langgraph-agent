@@ -36,50 +36,24 @@ const listTab = ref<'upcoming' | 'incomplete' | 'history'>(initialTab)
 // ---- 批量选择 ----
 const selectedIds = ref<Set<number>>(new Set())
 
-// ---- 滚动加载（每次 30 天窗口） ----
+// ---- 滚动加载（游标分页，后端返回 next_cursor 跳过空白间隙） ----
 const loadingMore = ref(false)
 const hasMore = ref(true)
 const sentinelEl = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
 
-const STEP_DAYS = 30
-const MAX_DAYS = 365
-const MS_PER_DAY = 86400000
-
-// 游标：已加载与未加载的边界日期
+// 游标：下一次请求的起始日期
 const cursorDate = ref('')
 
 function fmtDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-/** 初始化游标到今天 */
-function initCursor() {
-  cursorDate.value = fmtDate(new Date())
-}
-
-/** 计算下一个 30 天窗口并推进游标，返回 null 表示到达上限 */
-function getNextRange(): { start: string; end: string } | null {
-  const todayStr = fmtDate(new Date())
-  const today = new Date(todayStr + 'T00:00:00')
-  const cursor = new Date(cursorDate.value + 'T00:00:00')
-
-  if (listTab.value === 'upcoming') {
-    const daysFromToday = Math.round((cursor.getTime() - today.getTime()) / MS_PER_DAY)
-    if (daysFromToday >= MAX_DAYS) return null
-    const start = cursorDate.value
-    const end = new Date(cursor.getTime() + (STEP_DAYS - 1) * MS_PER_DAY)
-    cursorDate.value = fmtDate(new Date(cursor.getTime() + STEP_DAYS * MS_PER_DAY))
-    return { start, end: fmtDate(end) }
-  } else {
-    const daysFromToday = Math.round((today.getTime() - cursor.getTime()) / MS_PER_DAY)
-    if (daysFromToday >= MAX_DAYS) return null
-    // end 包含 cursor 当天，使第一窗口能查到"今日已过期"的日程（按分钟判断需要包含今天）
-    const end = new Date(cursor.getTime())
-    const start = new Date(end.getTime() - (STEP_DAYS - 1) * MS_PER_DAY)
-    cursorDate.value = fmtDate(new Date(start.getTime() - MS_PER_DAY))
-    return { start: fmtDate(start), end: fmtDate(end) }
-  }
+/** 按当前 tab 决定加载方向与状态过滤 */
+function loadPage(cursor: string) {
+  const direction = listTab.value === 'upcoming' ? 'forward' : 'backward'
+  const statusFilter = listTab.value === 'incomplete' ? [0, 1] : undefined
+  return agendaApi.loadMore(cursor, direction, statusFilter)
 }
 
 function clientFilter(items: Agenda[]): Agenda[] {
@@ -98,17 +72,16 @@ function clientFilter(items: Agenda[]): Agenda[] {
 
 async function loadData() {
   selectedIds.value = new Set()
-  initCursor()
+  cursorDate.value = fmtDate(new Date())
   hasMore.value = true
   loading.value = true
   try {
-    const range = getNextRange()
-    if (range) {
-      const statusFilter = listTab.value === 'incomplete' ? [0, 1] : undefined
-      const res = await agendaApi.calendarEvents(range.start, range.end, statusFilter)
-      if (res.data.code === 1) {
-        allAgendas.value = clientFilter(res.data.data as Agenda[])
-      }
+    const res = await loadPage(cursorDate.value)
+    if (res.data.code === 1) {
+      const { items, next_cursor } = res.data.data
+      allAgendas.value = clientFilter(items)
+      if (next_cursor) cursorDate.value = next_cursor
+      else hasMore.value = false
     }
   } finally {
     loading.value = false
@@ -124,20 +97,26 @@ async function loadData() {
 
 async function loadMore() {
   if (loadingMore.value || !hasMore.value || loading.value) return
-  const range = getNextRange()
-  if (!range) {
-    hasMore.value = false
-    return
-  }
   loadingMore.value = true
   try {
-    const statusFilter = listTab.value === 'incomplete' ? [0, 1] : undefined
-    const res = await agendaApi.calendarEvents(range.start, range.end, statusFilter)
+    const res = await loadPage(cursorDate.value)
     if (res.data.code === 1) {
-      const items = clientFilter(res.data.data as Agenda[])
-      allAgendas.value = [...allAgendas.value, ...items]
-      // 没有新数据时停止继续加载
-      hasMore.value = items.length > 0
+      const { items, next_cursor } = res.data.data
+      const filtered = clientFilter(items)
+      allAgendas.value = [...allAgendas.value, ...filtered]
+      if (next_cursor) {
+        cursorDate.value = next_cursor
+        if (filtered.length === 0) {
+          // 空窗口但还有数据：sentinel 位置不变，需手动 re-observe 触发下一轮
+          await nextTick()
+          if (sentinelEl.value && observer) {
+            observer.unobserve(sentinelEl.value)
+            observer.observe(sentinelEl.value)
+          }
+        }
+      } else {
+        hasMore.value = false
+      }
     }
   } finally {
     loadingMore.value = false

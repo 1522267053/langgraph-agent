@@ -66,6 +66,13 @@ export const agendaApi = {
     if (status) params.status = status
     return post<Agenda[]>('/agenda/calendar-events', params)
   },
+  loadMore(cursor: string, direction: string, status?: number[]) {
+    return post<ApiResponse<{ items: Agenda[]; next_cursor: string | null }>>('/agenda/load-more', {
+      cursor,
+      direction,
+      status
+    })
+  },
   tabCounts() {
     return get<ApiResponse<{ upcoming: number; incomplete: number }>>('/agenda/tab-counts')
   }

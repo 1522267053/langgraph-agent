@@ -113,6 +113,78 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         result = await db.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_list_page(
+        self,
+        db: AsyncSession,
+        cursor: str,
+        direction: str = "forward",
+        status: Optional[list[int]] = None,
+        window_days: int = 90,
+    ) -> tuple[list[Agenda], Optional[str]]:
+        """按游标分页获取日程，返回 (items, next_cursor)。
+
+        - forward（今日和未来）：cursor 为起点，拉 [cursor, cursor+window] 相交日程，
+          锚点 = items 中最晚 effective_end，next_cursor = 锚点之后最早日程的开始日期。
+        - backward（未完成/查看以前）：cursor 为终点，拉 [cursor-window, cursor] 相交日程，
+          锚点 = items 中最早 start_time，next_cursor = 锚点之前最晚日程的开始日期。
+
+        空白间隙由 next_cursor 直接跳到下一片数据，不扫空窗口；无更多时 next_cursor 为 None。
+        """
+        cursor_dt = datetime.strptime(cursor, "%Y-%m-%d")
+        effective_end = func.coalesce(Agenda.end_time, Agenda.start_time)
+
+        if direction == "forward":
+            end_dt = cursor_dt + timedelta(days=window_days)
+            end_str = f"{end_dt:%Y-%m-%d} 23:59:59"
+            cond = or_(
+                Agenda.start_time.is_(None),
+                and_(Agenda.start_time <= end_str, effective_end >= cursor),
+            )
+            stmt = select(Agenda).where(cond).order_by(Agenda.start_time)
+            items = list((await db.execute(stmt)).scalars().all())
+            if items:
+                anchor = max(
+                    (i.end_time or i.start_time)
+                    for i in items
+                    if i.start_time is not None
+                )
+            else:
+                anchor = end_dt.replace(hour=23, minute=59, second=59)
+            next_stmt = select(func.min(func.date(Agenda.start_time))).where(
+                Agenda.start_time.is_not(None),
+                Agenda.start_time > anchor,
+            )
+        else:
+            start_dt = cursor_dt - timedelta(days=window_days)
+            start_str = f"{start_dt:%Y-%m-%d} 00:00:00"
+            cursor_str = f"{cursor} 23:59:59"
+            cond = or_(
+                Agenda.start_time.is_(None),
+                and_(Agenda.start_time >= start_str, effective_end <= cursor_str),
+            )
+            stmt = select(Agenda).where(cond).order_by(Agenda.start_time.desc())
+            items = list((await db.execute(stmt)).scalars().all())
+            if items:
+                anchor = min(i.start_time for i in items if i.start_time is not None)
+            else:
+                anchor = start_dt.replace(hour=0, minute=0)
+            next_stmt = select(func.max(func.date(Agenda.start_time))).where(
+                Agenda.start_time.is_not(None),
+                Agenda.start_time < anchor,
+            )
+
+        if status:
+            next_stmt = next_stmt.where(Agenda.status.in_(status))
+        next_val = (await db.execute(next_stmt)).scalar()
+        # SQLite 下 func.date() 返回 TEXT(str)，MySQL 下返回 date(datetime)
+        if next_val is None:
+            next_cursor = None
+        elif isinstance(next_val, str):
+            next_cursor = next_val
+        else:
+            next_cursor = next_val.strftime("%Y-%m-%d")
+        return items, next_cursor
+
     async def get_tab_counts(self, db: AsyncSession) -> dict[str, int]:
         """统计 Tab 角标数量（仅未完成日程：待办 + 进行中）
 
