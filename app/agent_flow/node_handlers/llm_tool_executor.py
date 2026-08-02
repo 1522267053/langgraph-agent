@@ -457,12 +457,17 @@ async def handle_tool_calls(
         *[_run_single_tool(tc) for tc in tool_calls], return_exceptions=True
     )
 
-    for tool_call, raw_result in results:
-        if isinstance(raw_result, Exception):
+    for item in results:
+        if isinstance(item, BaseException):
+            if isinstance(item, asyncio.CancelledError):
+                raise item
+            tool_call = {}
             raw_result = {
                 "success": False,
-                "error": f"工具执行异常: {str(raw_result)}",
+                "error": f"工具执行异常: {str(item)}",
             }
+        else:
+            tool_call, raw_result = item
 
         tool_name = tool_call.get("name", "")
         tool_id = tool_call.get("id", "")
