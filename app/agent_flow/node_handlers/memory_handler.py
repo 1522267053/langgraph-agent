@@ -664,8 +664,8 @@ class MemoryNodeHandler(BaseNodeHandler):
 
 class MemoryItem(BaseModel):
     model_config = {"extra": "ignore"}
-    title: str = Field(..., description="记忆标题（必填）")
-    content: str = Field(..., description="记忆内容（必填）")
+    title: str = Field(..., description="记忆标题（必填,50字以内）")
+    content: str = Field(..., description="记忆内容（必填，500字以内）")
     category: Optional[str] = Field(None, description="分类")
     importance: int = Field(3, description="重要程度1-5")
     tier: Optional[str] = Field(None, description="hot/warm/cold")
