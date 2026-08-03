@@ -29,6 +29,8 @@ _loading_server = None
 _tray_icon = None
 _shutdown_event = threading.Event()
 
+_LOADING_SERVER_KEEPALIVE_SECONDS = 30
+
 _LOADING_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -57,6 +59,18 @@ _LOADING_HTML = """<!DOCTYPE html>
 </script>
 </body>
 </html>"""
+
+
+def _is_main_server_ready() -> bool:
+    """轻量探测主服务是否已监听端口（连接被拒 → 未就绪，0.3s 超时）"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(0.3)
+    try:
+        sock.connect(("127.0.0.1", settings.app_port))
+        sock.close()
+        return True
+    except OSError:
+        return False
 
 
 def handle_duplicate_instance() -> bool:
@@ -96,13 +110,25 @@ def open_loading_page() -> None:
     """启动临时 HTTP 服务返回加载页，并立即用浏览器打开。
 
     使用真实 HTTP 服务而非 file:// 协议，避免 Windows 文件关联弹窗。
+    handler 在主服务已就绪时返回 302 跳转到主应用，覆盖浏览器冷启动慢于
+    程序启动的场景；否则返回原 HTML，由前端轮询 /api/health 后跳转。
     """
     global _loading_server
 
     html = _LOADING_HTML.replace("__PORT__", str(settings.app_port))
+    app_url = f"http://127.0.0.1:{settings.app_port}/"
 
     class _LoadingHandler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
+            if _is_main_server_ready():
+                logger.debug(
+                    "loading server 检测到主服务已就绪，302 跳转到 %s", app_url
+                )
+                self.send_response(HTTPStatus.FOUND)
+                self.send_header("Location", app_url)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                return
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
@@ -117,17 +143,26 @@ def open_loading_page() -> None:
 
 
 def stop_loading_server() -> None:
-    """关闭加载页 HTTP 服务（主服务就绪后调用）"""
+    """主服务就绪后延迟关闭 loading server（兜底浏览器冷启动慢）
+
+    延迟 _LOADING_SERVER_KEEPALIVE_SECONDS 秒，期间浏览器打开 loading URL
+    仍可访问，handler 检测到主服务已就绪后会返回 302 跳转到主应用。
+    """
     global _loading_server
-    if _loading_server is not None:
-        server = _loading_server
-        _loading_server = None
+    if _loading_server is None:
+        return
+    server = _loading_server
+    _loading_server = None
 
-        def _stop() -> None:
-            server.shutdown()  # 停止 serve_forever 循环
-            server.server_close()  # 关闭 socket 释放资源
+    def _stop() -> None:
+        time.sleep(_LOADING_SERVER_KEEPALIVE_SECONDS)
+        try:
+            server.shutdown()
+            server.server_close()
+        except Exception:
+            logger.exception("关闭 loading server 失败")
 
-        threading.Thread(target=_stop, daemon=True, name="loading-server-stop").start()
+    threading.Thread(target=_stop, daemon=True, name="loading-server-stop").start()
 
 
 def _start_uvicorn(app) -> None:
