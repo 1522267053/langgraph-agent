@@ -30,6 +30,69 @@ export const useFlowStore = defineStore('flow', () => {
   const edgesVersion = ref(0)
   const subViewParentId = ref<string | null>(null)
 
+  // ---- 撤销/重做历史栈（编辑器会话级，保存后不持久化） ----
+  const history = ref<{ nodes: Node[]; edges: Edge[] }[]>([])
+  const historyIndex = ref(-1)
+  const canUndo = computed(() => historyIndex.value > 0)
+  const canRedo = computed(
+    () => historyIndex.value >= 0 && historyIndex.value < history.value.length - 1
+  )
+  let _lastHistoryCoalesceKey: string | null = null
+  let _lastHistoryCoalesceTime = 0
+
+  function snapshotState() {
+    return {
+      nodes: JSON.parse(JSON.stringify(nodes.value)),
+      edges: JSON.parse(JSON.stringify(edges.value))
+    }
+  }
+
+  function resetHistory() {
+    history.value = [snapshotState()]
+    historyIndex.value = 0
+    _lastHistoryCoalesceKey = null
+  }
+
+  // coalesceKey：同一 key 在 400ms 内的连续记录合并为一步（用于配置输入防刷历史）
+  function recordHistory(coalesceKey?: string) {
+    const now = Date.now()
+    if (coalesceKey !== undefined) {
+      if (_lastHistoryCoalesceKey === coalesceKey && now - _lastHistoryCoalesceTime < 400) {
+        return
+      }
+    }
+    _lastHistoryCoalesceKey = coalesceKey ?? null
+    _lastHistoryCoalesceTime = now
+
+    history.value = history.value.slice(0, historyIndex.value + 1)
+    history.value.push(snapshotState())
+    if (history.value.length > 50) {
+      history.value.shift()
+    }
+    historyIndex.value = history.value.length - 1
+  }
+
+  function restoreSnapshot(snap: { nodes: Node[]; edges: Edge[] }) {
+    nodes.value = JSON.parse(JSON.stringify(snap.nodes))
+    edges.value = JSON.parse(JSON.stringify(snap.edges))
+    nodesVersion.value++
+    edgesVersion.value++
+    selectedNode.value = null
+    selectedEdge.value = null
+  }
+
+  function undo() {
+    if (historyIndex.value <= 0) return
+    historyIndex.value--
+    restoreSnapshot(history.value[historyIndex.value])
+  }
+
+  function redo() {
+    if (historyIndex.value >= history.value.length - 1) return
+    historyIndex.value++
+    restoreSnapshot(history.value[historyIndex.value])
+  }
+
   const globalLlmDefaults = ref<Record<string, unknown> | null>(null)
   let _globalLlmLoaded = false
 
@@ -107,6 +170,7 @@ export const useFlowStore = defineStore('flow', () => {
 
   function addSubViewNode(type: AllNodeType, position: { x: number; y: number }) {
     if (!subViewParentId.value) return
+    recordHistory()
     const subId = `${subViewParentId.value}__${generateId(type)}`
     const schemaDefaults = getDefaultConfig(type)
     const globalCfg = type === 'llm' ? getLlmDefaultConfig() : {}
@@ -128,6 +192,7 @@ export const useFlowStore = defineStore('flow', () => {
         edges.value = (res.data.data.edges || []).map(backendEdgeToVueFlow)
         nodesVersion.value++
         edgesVersion.value++
+        resetHistory()
       }
     } finally {
       loading.value = false
@@ -157,6 +222,7 @@ export const useFlowStore = defineStore('flow', () => {
     if (!copiedNode.value) {
       return null
     }
+    recordHistory()
     const newNode: Node = {
       ...JSON.parse(JSON.stringify(copiedNode.value)),
       id: generateId(copiedNode.value.type),
@@ -173,6 +239,7 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   function duplicateNode(node: Node): Node {
+    recordHistory()
     const newNode: Node = {
       ...JSON.parse(JSON.stringify(node)),
       id: generateId(node.type),
@@ -222,12 +289,14 @@ export const useFlowStore = defineStore('flow', () => {
     if (parentId) {
       node.id = `${parentId}__${node.id}`
     }
+    recordHistory()
     nodes.value.push(node)
     nodesVersion.value++
     return node
   }
 
   function addNode(type: AllNodeType, position: { x: number; y: number }) {
+    recordHistory()
     const schemaDefaults = getDefaultConfig(type)
     const globalCfg = type === 'llm' ? getLlmDefaultConfig() : {}
     const defaultCfg = { ...schemaDefaults, ...globalCfg }
@@ -238,6 +307,7 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   function removeNode(nodeId: string) {
+    recordHistory()
     const prefix = `${nodeId}__`
     const isLoopNode = nodes.value.some(n => n.id === nodeId && n.type === 'loop')
     nodes.value = nodes.value.filter(n => {
@@ -261,6 +331,7 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   function updateNodeData(nodeId: string, data: Partial<Node['data']>) {
+    recordHistory(nodeId)
     const index = nodes.value.findIndex(n => n.id === nodeId)
     if (index !== -1) {
       nodes.value[index] = {
@@ -282,6 +353,7 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   function removeEdge(edgeId: string) {
+    recordHistory()
     edges.value = edges.value.filter(e => e.id !== edgeId)
     edgesVersion.value++
     if (selectedEdge.value?.id === edgeId) {
@@ -403,6 +475,7 @@ export const useFlowStore = defineStore('flow', () => {
     nodesVersion.value++
     edgesVersion.value++
     _globalLlmLoaded = false
+    resetHistory()
   }
 
   return {
@@ -444,6 +517,13 @@ export const useFlowStore = defineStore('flow', () => {
     enterSubView,
     exitSubView,
     resetState,
-    loadGlobalLlmDefaults
+    loadGlobalLlmDefaults,
+    history,
+    historyIndex,
+    canUndo,
+    canRedo,
+    recordHistory,
+    undo,
+    redo
   }
 })

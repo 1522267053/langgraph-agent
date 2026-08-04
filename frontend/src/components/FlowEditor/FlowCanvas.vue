@@ -6,6 +6,7 @@ import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
 import { nodeTypes } from './nodes'
+import ContextMenu from './components/ContextMenu.vue'
 import { useFlowStore } from '@/stores/flowStore'
 import type { AllNodeType } from '@/types/flow'
 import '@vue-flow/core/dist/style.css'
@@ -23,6 +24,10 @@ const {
   onEdgeClick,
   onPaneClick,
   onNodesInitialized,
+  onNodeDragStart,
+  onNodeContextMenu,
+  onPaneContextMenu,
+  onEdgeContextMenu,
   project,
   findNode,
   fitView
@@ -184,6 +189,110 @@ onPaneClick(() => {
   emit('pane-click')
 })
 
+// ---- 右键菜单 ----
+const contextMenu = ref<{
+  visible: boolean
+  x: number
+  y: number
+  kind: 'node' | 'edge' | 'pane'
+  nodeId?: string
+  edgeId?: string
+}>({ visible: false, x: 0, y: 0, kind: 'pane' })
+
+// 拖拽开始前记录历史快照，单次拖拽=一步撤销
+onNodeDragStart(() => {
+  store.recordHistory()
+})
+
+onNodeContextMenu(({ event, node }) => {
+  event.preventDefault()
+  store.selectNode(node)
+  contextMenu.value = {
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+    kind: 'node',
+    nodeId: node.id
+  }
+})
+
+onPaneContextMenu((event: MouseEvent) => {
+  event.preventDefault()
+  store.selectNode(null)
+  store.selectEdge(null)
+  contextMenu.value = {
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+    kind: 'pane'
+  }
+})
+
+onEdgeContextMenu(({ event, edge }) => {
+  event.preventDefault()
+  store.selectEdge(edge)
+  contextMenu.value = {
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+    kind: 'edge',
+    edgeId: edge.id
+  }
+})
+
+function closeContextMenu() {
+  contextMenu.value.visible = false
+}
+
+function selectLocalNode(newNode: Node | null) {
+  if (!newNode) return
+  nextTick(() => {
+    localNodes.value.forEach(n => {
+      n.selected = n.id === newNode.id
+    })
+    const localNode = localNodes.value.find(n => n.id === newNode.id)
+    store.selectNode(localNode || newNode)
+  })
+}
+
+function pasteAtContextMenu() {
+  if (!flowContainer.value) return
+  const bounds = flowContainer.value.getBoundingClientRect()
+  const position = project({
+    x: contextMenu.value.x - bounds.left,
+    y: contextMenu.value.y - bounds.top
+  })
+  const newNode = store.pasteNode(position)
+  if (newNode) {
+    selectLocalNode(newNode)
+  }
+  closeContextMenu()
+}
+
+function copySelected() {
+  store.copySelectedNode()
+  closeContextMenu()
+}
+
+function duplicateSelected() {
+  if (store.selectedNode) {
+    const newNode = store.duplicateNode(store.selectedNode)
+    if (newNode) {
+      selectLocalNode(newNode)
+    }
+  }
+  closeContextMenu()
+}
+
+function deleteContextTarget() {
+  if (contextMenu.value.kind === 'node' && contextMenu.value.nodeId) {
+    store.removeNode(contextMenu.value.nodeId)
+  } else if (contextMenu.value.kind === 'edge' && contextMenu.value.edgeId) {
+    store.removeEdge(contextMenu.value.edgeId)
+  }
+  closeContextMenu()
+}
+
 function syncNodesToStore() {
   for (const localNode of localNodes.value) {
     const storeNode = store.nodes.find(n => n.id === localNode.id)
@@ -278,6 +387,33 @@ function handleKeyDown(event: KeyboardEvent) {
   }
 
   if (event.ctrlKey || event.metaKey) {
+    if (event.key === 'z' || event.key === 'Z') {
+      event.preventDefault()
+      if (event.shiftKey) {
+        store.redo()
+      } else {
+        store.undo()
+      }
+      return
+    }
+    if (event.key === 'y' || event.key === 'Y') {
+      event.preventDefault()
+      store.redo()
+      return
+    }
+    if (event.key === 's' || event.key === 'S') {
+      event.preventDefault()
+      store.saveFlow()
+      return
+    }
+    if (event.key === 'd' || event.key === 'D') {
+      event.preventDefault()
+      if (store.selectedNode) {
+        const newNode = store.duplicateNode(store.selectedNode)
+        selectLocalNode(newNode)
+      }
+      return
+    }
     if (event.key === 'c' || event.key === 'C') {
       if (store.selectedNode) {
         store.copySelectedNode()
@@ -287,13 +423,7 @@ function handleKeyDown(event: KeyboardEvent) {
     if (event.key === 'v' || event.key === 'V') {
       const newNode = store.pasteNode()
       if (newNode) {
-        nextTick(() => {
-          localNodes.value.forEach(n => {
-            n.selected = n.id === newNode.id
-          })
-          const localNode = localNodes.value.find(n => n.id === newNode.id)
-          store.selectNode(localNode || newNode)
-        })
+        selectLocalNode(newNode)
       }
       return
     }
@@ -350,6 +480,17 @@ onUnmounted(() => {
       <Controls />
       <MiniMap />
     </VueFlow>
+    <ContextMenu
+      v-if="contextMenu.visible"
+      :x="contextMenu.x"
+      :y="contextMenu.y"
+      :kind="contextMenu.kind"
+      @copy="copySelected"
+      @paste="pasteAtContextMenu"
+      @duplicate="duplicateSelected"
+      @delete="deleteContextTarget"
+      @close="closeContextMenu"
+    />
   </div>
 </template>
 
