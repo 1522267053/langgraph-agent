@@ -17,6 +17,7 @@ LoopNodeHandler 在 execute() 中迭代调用子图。
 """
 
 import asyncio
+from collections.abc import Iterable
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -166,12 +167,16 @@ class LoopNodeHandler(BaseNodeHandler):
         iteration_items: List[Any] = []
         if loop_mode == "for_each" and for_each_source:
             loop_array = self._resolve_variable(for_each_source, state)
-            if isinstance(loop_array, (list, tuple)):
+            if isinstance(loop_array, Iterable) and not isinstance(
+                loop_array, (str, bytes)
+            ):
                 iteration_items = list(loop_array)
             else:
-                logger.warning(
-                    f"循环节点[{loop_key}]的 for_each_source '{for_each_source}' 不是数组类型: {type(loop_array)}"
+                state.add_error(
+                    loop_key,
+                    f"循环节点[{loop_key}]的 for_each_source '{for_each_source}' 不是数组类型: {type(loop_array)}",
                 )
+                return state
         elif loop_mode == "condition" and condition_expression:
             iteration_items = self._resolve_condition_items(
                 condition_expression, state, max_count
@@ -306,8 +311,8 @@ class LoopNodeHandler(BaseNodeHandler):
                 if isinstance(result, dict):
                     if "variables" in result:
                         state.variables.update(result["variables"])
-                    if "output_data" in result:
-                        state.output_data.update(result["output_data"])
+                    # 不合并 output_data：循环体结束节点的输出会污染主流程 output_data
+                    # （最后一轮覆盖残留），循环输出统一走 nodes.<loopKey>.<name> 聚合通道
                     if "conversation_messages" in result:
                         state.conversation_messages.update(
                             result["conversation_messages"]
@@ -344,6 +349,7 @@ class LoopNodeHandler(BaseNodeHandler):
         total_count = len(items)
         semaphore = asyncio.Semaphore(concurrency)
         results: List[dict] = [None] * total_count
+        iter_states: List[Optional[dict]] = [None] * total_count
         failed = asyncio.Event()
         ctx = get_execution_context()
         execution_id = ctx.execution_id if ctx else 0
@@ -380,6 +386,11 @@ class LoopNodeHandler(BaseNodeHandler):
                     )
                     output = self._collect_output(loop_key, result, index)
                     results[index] = output
+                    iter_states[index] = {
+                        "variables": iter_state.variables.copy(),
+                        "conversation_messages": iter_state.conversation_messages.copy(),
+                        "errors": iter_state.errors.copy(),
+                    }
 
                 except Exception as exc:
                     logger.error(
@@ -396,6 +407,18 @@ class LoopNodeHandler(BaseNodeHandler):
             *(run_iteration(i, item) for i, item in enumerate(items)),
             return_exceptions=False,
         )
+
+        # ---- 按迭代顺序回写共享状态（与串行模式语义对齐，避免并发迭代状态丢失） ----
+        # 不合并 output_data：避免循环体结束节点输出污染主流程 output_data，
+        # 循环输出统一走 nodes.<loopKey>.<name> 聚合通道
+        for i in range(total_count):
+            iter_state = iter_states[i]
+            if iter_state is None:
+                continue
+            state.variables.update(iter_state["variables"])
+            state.conversation_messages.update(iter_state["conversation_messages"])
+            for err in iter_state["errors"]:
+                state.errors.append(err)
 
         return results
 
