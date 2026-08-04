@@ -312,13 +312,46 @@ class FlowNodeApi(
         return node
 
     async def update(self, db: AsyncSession, data: FlowNodeUpdate) -> FlowNode | None:
-        """更新节点"""
+        """更新节点（含循环嵌套/卡片引用/子Agent嵌套校验）"""
+        await self._validate_node_update(db, data)
         node = await flow_service.update_node(db, data)
         if node and data.node_type:
             await self._check_and_disable_scheduled_tasks(
                 db, node.flow_id, [data.node_type]
             )
         return node
+
+    async def _validate_node_update(
+        self, db: AsyncSession, data: FlowNodeUpdate
+    ) -> None:
+        """更新场景的结构校验：入参优先，缺失字段回落数据库现值。
+
+        在 update_node 提交前调用，避免校验失败时产生部分写入。
+        覆盖此前绕过 create/batch_create 的保存路径（改 node_key 拖入循环、
+        改子Agent agent_id、改卡片 ref_flow_id 等）。
+        """
+        if not data.id:
+            return
+        existing = await db.get(FlowNode, data.id)
+        if not existing:
+            return
+        provided = data.model_fields_set
+        node_type = data.node_type if "node_type" in provided else existing.node_type
+        node_key = data.node_key if "node_key" in provided else existing.node_key
+        ref_flow_id = (
+            data.ref_flow_id if "ref_flow_id" in provided else existing.ref_flow_id
+        )
+        base_config = (
+            data.base_config if "base_config" in provided else existing.base_config
+        )
+        await self._validate_node(
+            db,
+            existing.flow_id,
+            node_key,
+            node_type,
+            ref_flow_id,
+            base_config,
+        )
 
     async def delete(self, db: AsyncSession, id: int) -> None:
         """删除节点"""
@@ -357,11 +390,17 @@ class FlowNodeApi(
     async def batch_update(
         self, db: AsyncSession, data_list: list[FlowNodeUpdate]
     ) -> None:
-        """批量更新节点"""
+        """批量更新节点（含循环嵌套/卡片引用/子Agent嵌套校验）
+
+        所有节点先统一校验，通过后再统一写入，避免部分成功。
+        """
         for data in data_list:
             data.base_config = await self._inject_llm_defaults(
                 db, data.node_type, data.base_config
             )
+        for data in data_list:
+            await self._validate_node_update(db, data)
+        for data in data_list:
             await flow_service.update_node(db, data)
         flow_ids = {d.flow_id for d in data_list if d.flow_id}
         for fid in flow_ids:
