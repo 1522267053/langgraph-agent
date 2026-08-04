@@ -5,12 +5,15 @@
 主图和子图共用，通过 iteration_guard 参数控制是否启用迭代保护。
 """
 
+import logging
 from simpleeval import simple_eval, EvalWithCompoundTypes
 from langgraph.graph import END, StateGraph
 
 from app.agent_flow.flow_context import FlowState
 from app.models.flow_edge import FlowEdge
 from app.models.flow_node import FlowNode
+
+logger = logging.getLogger(__name__)
 
 
 def wire_edges(
@@ -217,7 +220,15 @@ def _add_conditional_edges(
                     if iteration_guard and edge.target_node_key in state.visited_nodes:
                         state.iteration_count += 1
                     return edge.target_node_key
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    f"条件边求值失败 [{source_key} -> {edge.target_node_key}]: "
+                    f"{expression} ({exc})"
+                )
+                state.add_error(
+                    source_key,
+                    f"条件边求值失败: {expression}（{exc}）",
+                )
                 continue
 
         return END
