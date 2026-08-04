@@ -162,7 +162,7 @@ export function useAvailableVariables(
     return undefined
   }
 
-  // 子视图选项：input 分组（2 级）+ 循环输入+子图节点输出在 nodes 分组（3 级）+ 循环内置变量在 variables 分组（2 级）
+  // 子视图选项：input 分组（2 级）+ 子图节点输出在 nodes 分组（3 级）+ 循环内置变量在 variables 分组（2 级）
   const subViewOptions = computed<CascaderOption[]>(() => {
     if (!flowStore.isInSubView || !flowStore.subViewParentId) return []
 
@@ -177,7 +177,6 @@ export function useAvailableVariables(
         type?: string
       }>
     ).filter(Boolean)
-    const nodeKey = (parentNode?.data?.node_key as string) || flowStore.subViewParentId
 
     const options: CascaderOption[] = []
 
@@ -200,26 +199,8 @@ export function useAvailableVariables(
       })
     }
 
-    // nodes 分组：循环输入 + 子图节点输出（3 级：nodes → key → field）
+    // nodes 分组：子图节点输出（3 级：nodes → key → field）
     const nodesChildren: CascaderOption[] = []
-
-    const mappingItems: CascaderOption[] = inputMappings
-      .filter(m => m.card_field)
-      .map(m => {
-        const resolvedType = m.type || resolveMappingType(m.source)
-        return {
-          value: `input_${m.card_field}`,
-          label: resolvedType ? `${m.card_field} (${resolvedType})` : m.card_field,
-          disabled: false
-        }
-      })
-    if (mappingItems.length > 0) {
-      nodesChildren.push({
-        value: nodeKey,
-        label: '循环输入',
-        children: mappingItems
-      })
-    }
 
     for (const node of upstreamNodes.value) {
       if (['start', 'condition', 'end'].includes(node.type || '')) continue

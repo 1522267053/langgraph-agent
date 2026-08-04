@@ -6,6 +6,7 @@ import type { FieldType } from '@/types/flow'
 import { fieldTypeOptions } from './types'
 import VariableSelector from '../components/VariableSelector.vue'
 import { useFlowStore } from '@/stores/flowStore'
+import { useAvailableVariables } from '@/composables/useAvailableVariables'
 
 const props = defineProps<{
   config: LoopConfig
@@ -79,6 +80,62 @@ const nodeKey = computed(() => {
   const node = store.nodes.find(n => n.id === props.currentNodeId)
   return node?.data?.node_key || props.currentNodeId
 })
+
+// ---- 条件表达式变量插入器 ----
+// 主视图下 useAvailableVariables(currentNodeId) 计算主流程上游节点及其输出
+const { variableOptions } = useAvailableVariables(props.currentNodeId)
+
+const conditionInputRef = ref<{ textarea?: HTMLTextAreaElement | null } | null>(null)
+
+const inserterGroups = computed(() => {
+  const groups: { name: string; items: { label: string; snippet: string }[] }[] = [
+    {
+      name: '循环内置',
+      items: [
+        { label: 'loop_index', snippet: 'loop_index' },
+        { label: 'loop_count', snippet: 'loop_count' }
+      ]
+    },
+    { name: '流程输入', items: [] },
+    { name: '上游节点输出', items: [] }
+  ]
+
+  // 流程输入：input['<field>']
+  const inputGroup = variableOptions.value.find(g => g.value === 'input')
+  for (const child of inputGroup?.children || []) {
+    groups[1].items.push({
+      label: String(child.label),
+      snippet: `input['${String(child.value)}']`
+    })
+  }
+
+  // 上游节点输出：variables['nodes.<id>.<var>']
+  const nodesGroup = variableOptions.value.find(g => g.value === 'nodes')
+  for (const node of nodesGroup?.children || []) {
+    for (const v of node.children || []) {
+      groups[2].items.push({
+        label: `${String(node.label)}.${String(v.label)}`,
+        snippet: `variables['nodes.${String(node.value)}.${String(v.value)}']`
+      })
+    }
+  }
+
+  return groups
+})
+
+function insertVariable(snippet: string): void {
+  const el = conditionInputRef.value?.textarea
+  let text = localConfig.value.condition_expression || ''
+  if (el && document.activeElement === el) {
+    const start = el.selectionStart ?? text.length
+    const end = el.selectionEnd ?? text.length
+    text = text.slice(0, start) + snippet + text.slice(end)
+  } else {
+    text = text ? `${text} ${snippet}` : snippet
+  }
+  localConfig.value.condition_expression = text
+  updateConfig()
+}
 </script>
 
 <template>
@@ -116,13 +173,37 @@ const nodeKey = computed(() => {
         </el-form-item>
 
         <el-form-item v-if="localConfig.loop_mode === 'condition'" label="条件表达式">
-          <el-input
-            v-model="localConfig.condition_expression"
-            type="textarea"
-            :rows="2"
-            placeholder="例如: loop_index < 10"
-            @blur="updateConfig"
-          />
+          <div class="condition-editor">
+            <el-popover placement="bottom-start" :width="300" trigger="click">
+              <template #reference>
+                <el-button size="small" class="insert-var-btn">插入变量</el-button>
+              </template>
+              <div class="var-insert-list">
+                <template v-for="g in inserterGroups" :key="g.name">
+                  <div v-if="g.items.length" class="var-insert-group">
+                    <div class="var-insert-group-title">{{ g.name }}</div>
+                    <div
+                      v-for="item in g.items"
+                      :key="item.snippet"
+                      class="var-insert-item"
+                      @click="insertVariable(item.snippet)"
+                    >
+                      <code>{{ item.snippet }}</code>
+                      <span class="var-insert-label">{{ item.label }}</span>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </el-popover>
+            <el-input
+              ref="conditionInputRef"
+              v-model="localConfig.condition_expression"
+              type="textarea"
+              :rows="2"
+              placeholder="例如: loop_index < 10"
+              @blur="updateConfig"
+            />
+          </div>
         </el-form-item>
 
         <el-form-item v-if="localConfig.loop_mode === 'for_each'" label="数组来源">
@@ -277,6 +358,61 @@ const nodeKey = computed(() => {
   background: #ecf5ff;
   border-radius: 4px;
   padding: 8px;
+}
+
+.condition-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.insert-var-btn {
+  align-self: flex-start;
+}
+
+.var-insert-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.var-insert-group-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #909399;
+  margin-bottom: 4px;
+}
+
+.var-insert-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.var-insert-item:hover {
+  background: #f5f7fa;
+}
+
+.var-insert-item code {
+  background: #f5f7fa;
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: #409eff;
+  font-family: monospace;
+  word-break: break-all;
+}
+
+.var-insert-label {
+  flex-shrink: 0;
+  color: #606266;
 }
 
 .loop-vars-hint {
