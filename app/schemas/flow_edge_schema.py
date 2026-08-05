@@ -33,5 +33,5 @@ class FlowEdgeCreate(FlowEdgeBase):
 
 class FlowEdgeUpdate(FlowEdgeBase):
     """更新流程边"""
-
-    pass
+    id: int = Field(..., description="ID")
+    

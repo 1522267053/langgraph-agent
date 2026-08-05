@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.flow_snapshot import FlowSnapshot
+from app.schemas.flow_schema import FlowIOSchema
 from app.schemas.flow_snapshot_schema import (
     FlowSnapshotCreate,
     FlowSnapshotUpdate,
@@ -209,8 +210,12 @@ class FlowSnapshotService(
             flow_id=snapshot.flow_id,
             name=flow_meta.get("name"),
             description=flow_meta.get("description"),
-            input_schema=flow_meta.get("input_schema"),
-            output_schema=flow_meta.get("output_schema"),
+            input_schema=FlowIOSchema(**flow_meta["input_schema"])
+            if flow_meta.get("input_schema")
+            else None,
+            output_schema=FlowIOSchema(**flow_meta["output_schema"])
+            if flow_meta.get("output_schema")
+            else None,
             ai_nodes=ai_nodes,
             ai_edges=ai_edges,
         )

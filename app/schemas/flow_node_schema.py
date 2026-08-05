@@ -34,5 +34,5 @@ class FlowNodeCreate(FlowNodeBase):
 
 class FlowNodeUpdate(FlowNodeBase):
     """更新流程节点"""
-
-    pass
+    id: int = Field(..., description="ID")
+    

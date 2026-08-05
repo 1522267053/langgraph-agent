@@ -21,7 +21,6 @@ from sqlalchemy import select, and_, Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import Memory, MemoryType
-from app.models.base_model import DbBaseModel
 from app.schemas.memory_schema import MemoryCondition, MemoryCreate, MemoryUpdate
 from app.services.base_service import BaseService
 from app.services.embedding_service import get_embedding_service_async

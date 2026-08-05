@@ -23,6 +23,7 @@ from app.models.knowledge_base import KnowledgeBase
 from app.models.mcp_server import McpServer
 from app.models.memory import Memory
 from app.models.skill import Skill
+from app.schemas.flow_schema import FlowIOSchema
 from app.services.flow_service import flow_service
 from app.services.knowledge_base_service import knowledge_base_service
 from app.services.mcp_server_service import mcp_server_service
@@ -659,8 +660,12 @@ class FlowTransferService:
                 name=unique_name,
                 flow_type=flow_data.get("flow_type", "flow"),
                 description=flow_data.get("description"),
-                input_schema=flow_data.get("input_schema"),
-                output_schema=flow_data.get("output_schema"),
+                input_schema=FlowIOSchema(**flow_data["input_schema"])
+                if flow_data.get("input_schema")
+                else None,
+                output_schema=FlowIOSchema(**flow_data["output_schema"])
+                if flow_data.get("output_schema")
+                else None,
                 ai_nodes=ai_nodes,
                 ai_edges=ai_edges,
             )
