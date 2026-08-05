@@ -61,19 +61,19 @@ class BaseView(BaseModel):
     通用模式定义
     """
 
-    id: Optional[int] = Field(None, description="ID")
-    creator_id: Optional[int] = Field(None, description="创建人ID")
+    id: Optional[int] = Field(default=None, description="ID")
+    creator_id: Optional[int] = Field(default=None, description="创建人ID")
     creator_type: Optional[int] = Field(
-        None, description="创建人类型：1=管理员，2=用户"
+        default=None, description="创建人类型：1=管理员，2=用户"
     )
-    creator_name: Optional[str] = Field(None, description="创建人名称")
-    create_time: Optional[ChinaDateTime] = Field(None, description="创建时间")
-    modifier_id: Optional[int] = Field(None, description="修改人ID")
+    creator_name: Optional[str] = Field(default=None, description="创建人名称")
+    create_time: Optional[ChinaDateTime] = Field(default=None, description="创建时间")
+    modifier_id: Optional[int] = Field(default=None, description="修改人ID")
     modifier_type: Optional[int] = Field(
-        None, description="修改人类型：1=管理员，2=用户"
+        default=None, description="修改人类型：1=管理员，2=用户"
     )
-    modifier_name: Optional[str] = Field(None, description="修改人名称")
-    modify_time: Optional[ChinaDateTime] = Field(None, description="修改时间")
+    modifier_name: Optional[str] = Field(default=None, description="修改人名称")
+    modify_time: Optional[ChinaDateTime] = Field(default=None, description="修改时间")
     model_config = ConfigDict(from_attributes=True, validate_assignment=True)
 
     def to_model(self, model_class: type[M]) -> M:

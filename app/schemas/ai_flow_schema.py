@@ -31,13 +31,15 @@ class AiFlowCreateReq(BaseModel):
     """创建空流程请求"""
 
     name: str = Field(..., description="流程名称", min_length=1, max_length=255)
-    description: Optional[str] = Field(None, description="流程描述")
-    flow_type: str = Field("flow", description="类型: flow=普通流程, agent=智能体")
+    description: Optional[str] = Field(default=None, description="流程描述")
+    flow_type: str = Field(
+        default="flow", description="类型: flow=普通流程, agent=智能体"
+    )
     input_schema: Optional[dict] = Field(
-        None, description="输入参数定义（含 fields 列表），创建时一步到位"
+        default=None, description="输入参数定义（含 fields 列表），创建时一步到位"
     )
     output_schema: Optional[dict] = Field(
-        None, description="输出参数定义（含 fields 列表）"
+        default=None, description="输出参数定义（含 fields 列表）"
     )
 
     @field_validator("flow_type")
@@ -56,15 +58,15 @@ class AiFlowBatchNodeItem(BaseModel):
 
     node_type: str = Field(..., description="节点类型")
     node_key: Optional[str] = Field(
-        None,
+        default=None,
         description="节点唯一标识（省略时自动生成，冲突时自动追加序号）",
     )
-    node_name: Optional[str] = Field(None, description="节点显示名称")
-    position_x: float = Field(0, description="X坐标（UI用）")
-    position_y: float = Field(0, description="Y坐标（UI用）")
-    base_config: Optional[dict] = Field(None, description="节点配置")
+    node_name: Optional[str] = Field(default=None, description="节点显示名称")
+    position_x: float = Field(default=0, description="X坐标（UI用）")
+    position_y: float = Field(default=0, description="Y坐标（UI用）")
+    base_config: Optional[dict] = Field(default=None, description="节点配置")
     ref_flow_id: Optional[int] = Field(
-        None, description="引用的流程ID（能力卡片节点用）"
+        default=None, description="引用的流程ID（能力卡片节点用）"
     )
 
     @field_validator("node_type")
@@ -104,12 +106,12 @@ class AiFlowNodeConfigItem(BaseModel):
     """批量配置节点的单个节点配置"""
 
     node_key: str = Field(..., description="节点唯一标识")
-    node_name: Optional[str] = Field(None, description="节点显示名称")
+    node_name: Optional[str] = Field(default=None, description="节点显示名称")
     base_config: Optional[dict] = Field(
-        None, description="节点配置（字段级合并到已有配置，未传的键保留原值）"
+        default=None, description="节点配置（字段级合并到已有配置，未传的键保留原值）"
     )
-    position_x: Optional[float] = Field(None, description="X坐标")
-    position_y: Optional[float] = Field(None, description="Y坐标")
+    position_x: Optional[float] = Field(default=None, description="X坐标")
+    position_y: Optional[float] = Field(default=None, description="Y坐标")
 
 
 class AiFlowNodesConfigReq(BaseModel):
@@ -147,8 +149,8 @@ class AiFlowEdgeItem(BaseModel):
         ...,
         description="目标节点handle ID：default（标准输入）, tools（工具输入）",
     )
-    condition: Optional[dict] = Field(None, description="条件表达式")
-    label: Optional[str] = Field(None, description="边标签")
+    condition: Optional[dict] = Field(default=None, description="条件表达式")
+    label: Optional[str] = Field(default=None, description="边标签")
 
     @field_validator("source_handle", "target_handle")
     @classmethod

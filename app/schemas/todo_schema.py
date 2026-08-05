@@ -3,11 +3,11 @@
 """
 
 from typing import Optional, List
-from pydantic import BaseModel, Field, ConfigDict
-from app.schemas.base_schema import ChinaDateTime
+from pydantic import Field, ConfigDict
+from app.schemas.base_schema import BaseView, ChinaDateTime
 
 
-class TodoItemBase(BaseModel):
+class TodoItemBase(BaseView):
     """任务计划项基础 Schema"""
 
     content: str = Field(..., description="任务内容")
@@ -24,16 +24,16 @@ class TodoItemCreate(TodoItemBase):
     pass
 
 
-class TodoItemUpdate(BaseModel):
+class TodoItemUpdate(BaseView):
     """更新任务计划项"""
 
-    content: Optional[str] = Field(None, description="任务内容")
-    status: Optional[str] = Field(None, description="状态")
-    priority: Optional[str] = Field(None, description="优先级")
-    position: Optional[int] = Field(None, description="排序位置")
+    content: Optional[str] = Field(default=None, description="任务内容")
+    status: Optional[str] = Field(default=None, description="状态")
+    priority: Optional[str] = Field(default=None, description="优先级")
+    position: Optional[int] = Field(default=None, description="排序位置")
 
 
-class TodoItemResponse(BaseModel):
+class TodoItemResponse(BaseView):
     """任务计划项响应"""
 
     model_config = ConfigDict(from_attributes=True)
@@ -45,10 +45,10 @@ class TodoItemResponse(BaseModel):
     status: str = Field(..., description="状态")
     priority: str = Field(..., description="优先级")
     position: int = Field(..., description="排序位置")
-    created_at: Optional[ChinaDateTime] = Field(None, description="创建时间")
+    created_at: Optional[ChinaDateTime] = Field(default=None, description="创建时间")
 
 
-class TodoListResponse(BaseModel):
+class TodoListResponse(BaseView):
     """任务计划列表响应"""
 
     ref_type: str = Field(..., description="关联类型")

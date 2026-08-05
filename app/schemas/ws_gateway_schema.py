@@ -11,15 +11,17 @@ from app.schemas.base_schema import BaseView, ChinaDateTime
 class WsGatewayConfigBase(BaseView):
     """WebSocket 网关配置基础视图"""
 
-    flow_id: Optional[int] = Field(None, description="关联流程ID")
-    name: Optional[str] = Field(None, description="网关名称")
-    token: Optional[str] = Field(None, description="唯一令牌")
-    description: Optional[str] = Field(None, description="描述")
-    input_config: Optional[dict] = Field(None, description="默认输入参数模板")
-    callback_url: Optional[str] = Field(None, description="回调 URL")
-    is_enabled: Optional[int] = Field(None, description="是否启用")
-    call_count: Optional[int] = Field(None, description="调用次数")
-    last_call_time: Optional[ChinaDateTime] = Field(None, description="最后调用时间")
+    flow_id: Optional[int] = Field(default=None, description="关联流程ID")
+    name: Optional[str] = Field(default=None, description="网关名称")
+    token: Optional[str] = Field(default=None, description="唯一令牌")
+    description: Optional[str] = Field(default=None, description="描述")
+    input_config: Optional[dict] = Field(default=None, description="默认输入参数模板")
+    callback_url: Optional[str] = Field(default=None, description="回调 URL")
+    is_enabled: Optional[int] = Field(default=None, description="是否启用")
+    call_count: Optional[int] = Field(default=None, description="调用次数")
+    last_call_time: Optional[ChinaDateTime] = Field(
+        default=None, description="最后调用时间"
+    )
 
 
 class WsGatewayConfigCreate(BaseView):
@@ -27,30 +29,30 @@ class WsGatewayConfigCreate(BaseView):
 
     flow_id: int = Field(..., description="关联流程ID")
     name: str = Field(..., description="网关名称")
-    description: Optional[str] = Field(None, description="描述")
-    input_config: Optional[dict] = Field(None, description="默认输入参数模板")
-    callback_url: Optional[str] = Field(None, description="回调 URL")
-    is_enabled: int = Field(1, description="是否启用")
+    description: Optional[str] = Field(default=None, description="描述")
+    input_config: Optional[dict] = Field(default=None, description="默认输入参数模板")
+    callback_url: Optional[str] = Field(default=None, description="回调 URL")
+    is_enabled: int = Field(default=1, description="是否启用")
 
 
 class WsGatewayConfigUpdate(BaseView):
     """更新网关"""
 
     id: int = Field(..., description="ID")
-    flow_id: Optional[int] = Field(None, description="关联流程ID")
-    name: Optional[str] = Field(None, description="网关名称")
-    description: Optional[str] = Field(None, description="描述")
-    input_config: Optional[dict] = Field(None, description="默认输入参数模板")
-    callback_url: Optional[str] = Field(None, description="回调 URL")
-    is_enabled: Optional[int] = Field(None, description="是否启用")
+    flow_id: Optional[int] = Field(default=None, description="关联流程ID")
+    name: Optional[str] = Field(default=None, description="网关名称")
+    description: Optional[str] = Field(default=None, description="描述")
+    input_config: Optional[dict] = Field(default=None, description="默认输入参数模板")
+    callback_url: Optional[str] = Field(default=None, description="回调 URL")
+    is_enabled: Optional[int] = Field(default=None, description="是否启用")
 
 
 class WsGatewayConfigCondition(BaseView):
     """查询条件"""
 
-    name: Optional[str] = Field(None, description="名称关键词")
-    flow_id: Optional[int] = Field(None, description="流程ID")
-    is_enabled: Optional[int] = Field(None, description="是否启用")
+    name: Optional[str] = Field(default=None, description="名称关键词")
+    flow_id: Optional[int] = Field(default=None, description="流程ID")
+    is_enabled: Optional[int] = Field(default=None, description="是否启用")
 
 
 # ---- 网关调用记录 Schema ----
@@ -59,29 +61,33 @@ class WsGatewayConfigCondition(BaseView):
 class WsGatewayCallRecordBase(BaseView):
     """网关调用记录基础视图"""
 
-    gateway_id: Optional[int] = Field(None, description="关联 ws_gateway_config.id")
-    flow_id: Optional[int] = Field(None, description="关联 flow.id")
-    ref_type: Optional[str] = Field(None, description="引用类型：session/execution")
-    ref_id: Optional[int] = Field(None, description="引用ID")
-    input_data: Optional[dict] = Field(None, description="输入数据快照")
-    status: Optional[int] = Field(None, description="状态")
-    output_data: Optional[dict] = Field(None, description="输出数据")
-    error_message: Optional[str] = Field(None, description="错误信息")
-    callback_status: Optional[str] = Field(None, description="回调状态")
-    started_at: Optional[ChinaDateTime] = Field(None, description="触发时间")
-    finished_at: Optional[ChinaDateTime] = Field(None, description="完成时间")
+    gateway_id: Optional[int] = Field(
+        default=None, description="关联 ws_gateway_config.id"
+    )
+    flow_id: Optional[int] = Field(default=None, description="关联 flow.id")
+    ref_type: Optional[str] = Field(
+        default=None, description="引用类型：session/execution"
+    )
+    ref_id: Optional[int] = Field(default=None, description="引用ID")
+    input_data: Optional[dict] = Field(default=None, description="输入数据快照")
+    status: Optional[int] = Field(default=None, description="状态")
+    output_data: Optional[dict] = Field(default=None, description="输出数据")
+    error_message: Optional[str] = Field(default=None, description="错误信息")
+    callback_status: Optional[str] = Field(default=None, description="回调状态")
+    started_at: Optional[ChinaDateTime] = Field(default=None, description="触发时间")
+    finished_at: Optional[ChinaDateTime] = Field(default=None, description="完成时间")
 
 
 class WsGatewayCallRecordResponse(WsGatewayCallRecordBase):
     """调用记录响应（含消息摘要）"""
 
-    message_count: Optional[int] = Field(None, description="消息数量")
+    message_count: Optional[int] = Field(default=None, description="消息数量")
 
 
 class WsGatewayCallRecordListResponse(BaseView):
     """调用记录列表响应"""
 
-    total: int = Field(0, description="总数")
+    total: int = Field(default=0, description="总数")
     items: list[WsGatewayCallRecordResponse] = Field(
         default_factory=list, description="列表"
     )
@@ -90,8 +96,8 @@ class WsGatewayCallRecordListResponse(BaseView):
 class WsGatewayCallRecordPageRequest(BaseView):
     """调用记录分页请求"""
 
-    page: int = Field(1, description="页码")
-    page_size: int = Field(20, description="每页条数")
+    page: int = Field(default=1, description="页码")
+    page_size: int = Field(default=20, description="每页条数")
 
 
 # ---- 网关会话查询 Schema（仅 Agent 类型流程） ----
@@ -100,19 +106,19 @@ class WsGatewayCallRecordPageRequest(BaseView):
 class WsGatewaySessionResponse(BaseView):
     """网关查询会话响应"""
 
-    id: Optional[int] = Field(None, description="会话ID")
-    flow_id: Optional[int] = Field(None, description="关联的 Agent Flow ID")
-    title: Optional[str] = Field(None, description="会话标题")
-    status: Optional[int] = Field(None, description="状态：1=活跃，0=已归档")
+    id: Optional[int] = Field(default=None, description="会话ID")
+    flow_id: Optional[int] = Field(default=None, description="关联的 Agent Flow ID")
+    title: Optional[str] = Field(default=None, description="会话标题")
+    status: Optional[int] = Field(default=None, description="状态：1=活跃，0=已归档")
     created_at: Optional[ChinaDateTime] = Field(
-        None, validation_alias="create_time", description="创建时间"
+        default=None, validation_alias="create_time", description="创建时间"
     )
 
 
 class WsGatewaySessionListResponse(BaseView):
     """会话列表响应"""
 
-    total: int = Field(0, description="总数")
+    total: int = Field(default=0, description="总数")
     items: list[WsGatewaySessionResponse] = Field(
         default_factory=list, description="会话列表"
     )
@@ -121,30 +127,30 @@ class WsGatewaySessionListResponse(BaseView):
 class WsGatewaySessionPageRequest(BaseView):
     """会话分页请求"""
 
-    page: int = Field(1, description="页码")
-    page_size: int = Field(20, description="每页条数")
+    page: int = Field(default=1, description="页码")
+    page_size: int = Field(default=20, description="每页条数")
 
 
 class WsGatewayMessageResponse(BaseView):
     """网关查询消息响应"""
 
-    id: Optional[int] = Field(None, description="消息ID")
-    role: Optional[str] = Field(None, description="角色")
-    content: Optional[str] = Field(None, description="内容")
-    thinking: Optional[str] = Field(None, description="思考内容")
-    tool_calls: Optional[list] = Field(None, description="工具调用")
-    tool_call_id: Optional[str] = Field(None, description="工具调用ID")
-    status: Optional[str] = Field(None, description="状态")
-    sequence: Optional[int] = Field(None, description="排序序号")
+    id: Optional[int] = Field(default=None, description="消息ID")
+    role: Optional[str] = Field(default=None, description="角色")
+    content: Optional[str] = Field(default=None, description="内容")
+    thinking: Optional[str] = Field(default=None, description="思考内容")
+    tool_calls: Optional[list] = Field(default=None, description="工具调用")
+    tool_call_id: Optional[str] = Field(default=None, description="工具调用ID")
+    status: Optional[str] = Field(default=None, description="状态")
+    sequence: Optional[int] = Field(default=None, description="排序序号")
     created_at: Optional[ChinaDateTime] = Field(
-        None, validation_alias="create_time", description="创建时间"
+        default=None, validation_alias="create_time", description="创建时间"
     )
 
 
 class WsGatewayMessageListResponse(BaseView):
     """消息列表响应"""
 
-    total: int = Field(0, description="总数")
+    total: int = Field(default=0, description="总数")
     items: list[WsGatewayMessageResponse] = Field(
         default_factory=list, description="列表"
     )
@@ -153,5 +159,7 @@ class WsGatewayMessageListResponse(BaseView):
 class WsGatewayMessagePageRequest(BaseView):
     """消息分页请求"""
 
-    before_id: Optional[int] = Field(None, description="游标ID（返回此ID之前的消息）")
-    limit: int = Field(20, description="每页条数")
+    before_id: Optional[int] = Field(
+        default=None, description="游标ID（返回此ID之前的消息）"
+    )
+    limit: int = Field(default=20, description="每页条数")

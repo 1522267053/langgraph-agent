@@ -23,7 +23,7 @@ class AgentSessionCreate(AgentSessionBase):
 class AgentSessionUpdate(BaseModel):
     """更新Agent会话"""
 
-    title: Optional[str] = Field(None, description="会话标题")
+    title: Optional[str] = Field(default=None, description="会话标题")
 
 
 class AgentSessionResponse(AgentSessionBase):
@@ -34,8 +34,8 @@ class AgentSessionResponse(AgentSessionBase):
     id: int = Field(..., description="会话ID")
     flow_id: int = Field(..., description="关联的Agent Flow ID")
     status: int = Field(..., description="状态：1=活跃，0=已归档")
-    created_at: Optional[ChinaDateTime] = Field(None, description="创建时间")
-    updated_at: Optional[ChinaDateTime] = Field(None, description="更新时间")
+    created_at: Optional[ChinaDateTime] = Field(default=None, description="创建时间")
+    updated_at: Optional[ChinaDateTime] = Field(default=None, description="更新时间")
 
 
 class AgentMessageBase(BaseModel):
@@ -44,16 +44,18 @@ class AgentMessageBase(BaseModel):
     role: str = Field(..., description="system/user/assistant/tool")
     content: str = Field(..., description="消息内容")
     original_content: Optional[str] = Field(
-        None, description="原始用户消息（未渲染模板）"
+        default=None, description="原始用户消息（未渲染模板）"
     )
-    thinking: Optional[str] = Field(None, description="思考内容")
-    tool_calls: Optional[List[dict]] = Field(None, description="工具调用列表")
-    tool_call_id: Optional[str] = Field(None, description="工具调用ID")
-    status: Optional[str] = Field(None, description="工具执行状态：success/error")
-    prompt_tokens: Optional[int] = Field(None, description="输入token数")
-    completion_tokens: Optional[int] = Field(None, description="输出token数")
-    total_tokens: Optional[int] = Field(None, description="总token数")
-    files: Optional[List[dict]] = Field(None, description="附件文件列表")
+    thinking: Optional[str] = Field(default=None, description="思考内容")
+    tool_calls: Optional[List[dict]] = Field(default=None, description="工具调用列表")
+    tool_call_id: Optional[str] = Field(default=None, description="工具调用ID")
+    status: Optional[str] = Field(
+        default=None, description="工具执行状态：success/error"
+    )
+    prompt_tokens: Optional[int] = Field(default=None, description="输入token数")
+    completion_tokens: Optional[int] = Field(default=None, description="输出token数")
+    total_tokens: Optional[int] = Field(default=None, description="总token数")
+    files: Optional[List[dict]] = Field(default=None, description="附件文件列表")
     """创建Agent消息"""
 
     pass
@@ -67,7 +69,7 @@ class AgentMessageResponse(AgentMessageBase):
     id: int = Field(..., description="消息ID")
     session_id: int = Field(..., description="会话ID")
     sequence: int = Field(..., description="排序序号")
-    created_at: Optional[ChinaDateTime] = Field(None, description="创建时间")
+    created_at: Optional[ChinaDateTime] = Field(default=None, description="创建时间")
 
 
 class AgentChatRequest(BaseModel):
@@ -86,15 +88,17 @@ class AgentResumeRequest(BaseModel):
 class AgentSessionPageRequest(BaseModel):
     """会话列表分页请求"""
 
-    page: int = Field(1, ge=1, description="页码")
-    page_size: int = Field(20, ge=1, le=100, description="每页条数")
+    page: int = Field(default=1, ge=1, description="页码")
+    page_size: int = Field(default=20, ge=1, le=100, description="每页条数")
 
 
 class AgentMessagePageRequest(BaseModel):
     """消息列表分页请求"""
 
-    before_id: Optional[int] = Field(None, description="分页游标，获取此ID之前的消息")
-    limit: int = Field(20, ge=1, le=100, description="每页条数")
+    before_id: Optional[int] = Field(
+        default=None, description="分页游标，获取此ID之前的消息"
+    )
+    limit: int = Field(default=20, ge=1, le=100, description="每页条数")
 
 
 class AgentSessionListResponse(BaseModel):
@@ -118,14 +122,18 @@ class AgentFlowResponse(BaseModel):
 
     id: int = Field(..., description="Flow ID")
     name: str = Field(..., description="名称")
-    description: Optional[str] = Field(None, description="描述")
+    description: Optional[str] = Field(default=None, description="描述")
     flow_type: str = Field(..., description="类型")
     status: int = Field(..., description="状态")
-    is_builtin: Optional[int] = Field(0, description="是否内置")
-    input_schema: Optional[FlowIOSchema] = Field(None, description="输入参数定义")
-    suggested_prompts: Optional[List[str]] = Field(None, description="建议提示词列表")
-    created_at: Optional[ChinaDateTime] = Field(None, description="创建时间")
-    updated_at: Optional[ChinaDateTime] = Field(None, description="更新时间")
+    is_builtin: Optional[int] = Field(default=0, description="是否内置")
+    input_schema: Optional[FlowIOSchema] = Field(
+        default=None, description="输入参数定义"
+    )
+    suggested_prompts: Optional[List[str]] = Field(
+        default=None, description="建议提示词列表"
+    )
+    created_at: Optional[ChinaDateTime] = Field(default=None, description="创建时间")
+    updated_at: Optional[ChinaDateTime] = Field(default=None, description="更新时间")
 
     @field_validator("input_schema", mode="before")
     @classmethod
@@ -143,9 +151,9 @@ class AgentFlowResponse(BaseModel):
 class AgentCompressResponse(BaseModel):
     """上下文压缩响应"""
 
-    summary: Optional[str] = Field(None, description="压缩摘要内容")
-    kept_count: int = Field(0, description="保留的消息数")
-    removed_count: int = Field(0, description="被压缩的消息数")
+    summary: Optional[str] = Field(default=None, description="压缩摘要内容")
+    kept_count: int = Field(default=0, description="保留的消息数")
+    removed_count: int = Field(default=0, description="被压缩的消息数")
 
 
 class AgentFlowListResponse(BaseModel):

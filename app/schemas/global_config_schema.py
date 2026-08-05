@@ -13,14 +13,18 @@ class InitConfigRequest(BaseModel):
     api_key: str = Field(..., description="API Key")
     model: str = Field(..., description="模型名称")
     base_url: Optional[str] = Field(
-        None, description="自定义 Base URL（为空则使用供应商默认）"
+        default=None, description="自定义 Base URL（为空则使用供应商默认）"
     )
     context_length: Optional[int] = Field(
-        None, description="模型上下文窗口大小（token数）"
+        default=None, description="模型上下文窗口大小（token数）"
     )
-    embedding_api_key: Optional[str] = Field(None, description="向量模型 API Key")
-    embedding_base_url: Optional[str] = Field(None, description="向量模型 Base URL")
-    embedding_model: Optional[str] = Field(None, description="向量模型名称")
+    embedding_api_key: Optional[str] = Field(
+        default=None, description="向量模型 API Key"
+    )
+    embedding_base_url: Optional[str] = Field(
+        default=None, description="向量模型 Base URL"
+    )
+    embedding_model: Optional[str] = Field(default=None, description="向量模型名称")
     login_password: str = Field(..., description="登录密码哈希（SHA-256）")
     login_username: str = Field(..., description="登录用户名（明文）")
 
@@ -28,23 +32,31 @@ class InitConfigRequest(BaseModel):
 class UpdateConfigRequest(BaseModel):
     """更新配置请求"""
 
-    provider: Optional[str] = Field(None, description="供应商标识")
-    api_key: Optional[str] = Field(None, description="API Key")
-    model: Optional[str] = Field(None, description="模型名称")
-    base_url: Optional[str] = Field(None, description="自定义 Base URL")
+    provider: Optional[str] = Field(default=None, description="供应商标识")
+    api_key: Optional[str] = Field(default=None, description="API Key")
+    model: Optional[str] = Field(default=None, description="模型名称")
+    base_url: Optional[str] = Field(default=None, description="自定义 Base URL")
     context_length: Optional[int] = Field(
-        None, description="模型上下文窗口大小（token数）"
+        default=None, description="模型上下文窗口大小（token数）"
     )
-    embedding_api_key: Optional[str] = Field(None, description="向量模型 API Key")
-    embedding_base_url: Optional[str] = Field(None, description="向量模型 Base URL")
-    embedding_model: Optional[str] = Field(None, description="向量模型名称")
-    login_password: Optional[str] = Field(None, description="新登录密码哈希（SHA-256）")
-    login_username: Optional[str] = Field(None, description="新登录用户名（明文）")
+    embedding_api_key: Optional[str] = Field(
+        default=None, description="向量模型 API Key"
+    )
+    embedding_base_url: Optional[str] = Field(
+        default=None, description="向量模型 Base URL"
+    )
+    embedding_model: Optional[str] = Field(default=None, description="向量模型名称")
+    login_password: Optional[str] = Field(
+        default=None, description="新登录密码哈希（SHA-256）"
+    )
+    login_username: Optional[str] = Field(
+        default=None, description="新登录用户名（明文）"
+    )
     current_password: Optional[str] = Field(
-        None, description="当前密码哈希（修改密码时必填，用于验证身份）"
+        default=None, description="当前密码哈希（修改密码时必填，用于验证身份）"
     )
     execution_notification_enabled: Optional[bool] = Field(
-        None, description="是否启用执行完成通知"
+        default=None, description="是否启用执行完成通知"
     )
 
 
