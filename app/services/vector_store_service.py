@@ -5,7 +5,7 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, cast
 import asyncio
 import threading
 
@@ -172,8 +172,8 @@ class ChromaVectorStoreService(VectorStoreService):
         await asyncio.to_thread(
             self._collection.add,
             documents=texts,
-            embeddings=embeddings,
-            metadatas=metadatas,
+            embeddings=cast(Any, embeddings),
+            metadatas=cast(Any, metadatas),
             ids=ids,
         )
 
@@ -192,7 +192,7 @@ class ChromaVectorStoreService(VectorStoreService):
 
         results = await asyncio.to_thread(
             self._collection.query,
-            query_embeddings=[query_embedding],
+            query_embeddings=cast(Any, [query_embedding]),
             n_results=k,
             where=where_filter,
             include=["documents", "metadatas", "distances"],
@@ -201,9 +201,9 @@ class ChromaVectorStoreService(VectorStoreService):
         formatted_results = []
         if results and results.get("ids"):
             ids = results["ids"][0]
-            documents = results.get("documents", [[]])[0]
-            metadatas = results.get("metadatas", [[]])[0]
-            distances = results.get("distances", [[]])[0]
+            documents = (results.get("documents") or [[]])[0]
+            metadatas = (results.get("metadatas") or [[]])[0]
+            distances = (results.get("distances") or [[]])[0]
 
             for i, id_ in enumerate(ids):
                 formatted_results.append(
@@ -248,13 +248,14 @@ class ChromaVectorStoreService(VectorStoreService):
         )
 
         if results and results.get("ids"):
+            documents = results.get("documents") or []
+            metadatas = results.get("metadatas") or []
+            embeddings = results.get("embeddings") or []
             return {
                 "id": results["ids"][0],
-                "text": results["documents"][0] if results.get("documents") else "",
-                "metadata": results["metadatas"][0] if results.get("metadatas") else {},
-                "embedding": results["embeddings"][0]
-                if results.get("embeddings")
-                else [],
+                "text": documents[0] if documents else "",
+                "metadata": metadatas[0] if metadatas else {},
+                "embedding": embeddings[0] if embeddings else [],
             }
 
         return None
@@ -263,7 +264,10 @@ class ChromaVectorStoreService(VectorStoreService):
         """统计向量数量"""
         if filter:
             where_filter = {k: v for k, v in filter.items()}
-            return await asyncio.to_thread(self._collection.count, where=where_filter)
+            result = await asyncio.to_thread(
+                self._collection.get, where=where_filter, include=[]
+            )
+            return len(result["ids"])
         return await asyncio.to_thread(self._collection.count)
 
 

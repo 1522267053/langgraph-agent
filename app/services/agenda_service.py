@@ -7,9 +7,9 @@
 import calendar
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple, cast
 
-from sqlalchemy import Select, and_, func, or_, select, update
+from sqlalchemy import CursorResult, Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agenda import Agenda, AgendaRecurrence, AgendaStatus
@@ -36,38 +36,40 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
             return query, count_query
 
         # 标题模糊查询
-        if getattr(condition, "title", None):
+        if condition.title:
             query, count_query = self._apply_like_filter(
                 query, count_query, "title", condition.title
             )
+        if query is not None and count_query is not None:
+            # 分类精确匹配
+            if condition.category:
+                query = query.where(Agenda.category == condition.category)
+                count_query = count_query.where(Agenda.category == condition.category)
 
-        # 分类精确匹配
-        if getattr(condition, "category", None):
-            query = query.where(Agenda.category == condition.category)
-            count_query = count_query.where(Agenda.category == condition.category)
+            # 状态精确匹配
+            if condition.status is not None:
+                query = query.where(Agenda.status == condition.status)
+                count_query = count_query.where(Agenda.status == condition.status)
 
-        # 状态精确匹配
-        if getattr(condition, "status", None) is not None:
-            query = query.where(Agenda.status == condition.status)
-            count_query = count_query.where(Agenda.status == condition.status)
+            # 创建人精确匹配
+            if condition.creator_name:
+                query = query.where(Agenda.creator_name == condition.creator_name)
+                count_query = count_query.where(
+                    Agenda.creator_name == condition.creator_name
+                )
 
-        # 创建人精确匹配
-        if getattr(condition, "creator_name", None):
-            query = query.where(Agenda.creator_name == condition.creator_name)
-            count_query = count_query.where(
-                Agenda.creator_name == condition.creator_name
-            )
+            # 开始时间范围（起）
+            if condition.start_date:
+                query = query.where(Agenda.start_time >= condition.start_date)
+                count_query = count_query.where(
+                    Agenda.start_time >= condition.start_date
+                )
 
-        # 开始时间范围（起）
-        if getattr(condition, "start_date", None):
-            query = query.where(Agenda.start_time >= condition.start_date)
-            count_query = count_query.where(Agenda.start_time >= condition.start_date)
-
-        # 开始时间范围（止，包含当天）
-        if getattr(condition, "end_date", None):
-            end_dt = f"{condition.end_date} 23:59:59"
-            query = query.where(Agenda.start_time <= end_dt)
-            count_query = count_query.where(Agenda.start_time <= end_dt)
+            # 开始时间范围（止，包含当天）
+            if condition.end_date:
+                end_dt = f"{condition.end_date} 23:59:59"
+                query = query.where(Agenda.start_time <= end_dt)
+                count_query = count_query.where(Agenda.start_time <= end_dt)
 
         return query, count_query
 
@@ -227,7 +229,7 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
             .where(Agenda.is_reminded == 0)
             .values(is_reminded=1)
         )
-        result = await db.execute(stmt)
+        result = cast(CursorResult[Any], await db.execute(stmt))
         await db.commit()
         return result.rowcount > 0
 
@@ -306,7 +308,7 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
             .where(Agenda.recurrence_generated == 0)
             .values(recurrence_generated=1)
         )
-        result = await db.execute(stmt)
+        result = cast(CursorResult[Any], await db.execute(stmt))
         return result.rowcount > 0
 
     async def get_expired_recurring_agendas(self, db: AsyncSession) -> list[Agenda]:

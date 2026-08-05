@@ -13,6 +13,7 @@ import logging
 from typing import Optional, AsyncGenerator, Dict, Any, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables.config import RunnableConfig
 from langgraph.types import Command
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -613,7 +614,7 @@ class AgentExecutorService(BaseExecutorService):
             graph = self._build_graph(
                 flow, 0, agent_conversation_service, session_id=session_id
             )
-            config = {
+            config: RunnableConfig = {
                 "configurable": {
                     "thread_id": f"agent_{session_id}",
                     "scope_type": "agent",
@@ -894,7 +895,7 @@ class AgentExecutorService(BaseExecutorService):
             graph = self._build_graph(
                 flow, 0, agent_conversation_service, session_id=session_id
             )
-            config = {
+            config: RunnableConfig = {
                 "configurable": {
                     "thread_id": f"agent_{session_id}",
                     "scope_type": "agent",

@@ -1,12 +1,14 @@
 """数据库工具函数"""
 
+from typing import Any
+
 from sqlalchemy import func
 from sqlalchemy.sql.expression import ColumnElement
 
 from app.config.settings import settings
 
 
-def date_trunc_expr(column: ColumnElement, grain: str = "day") -> ColumnElement:
+def date_trunc_expr(column: Any, grain: str = "day") -> ColumnElement[Any]:
     """跨数据库日期截断表达式（用于 GROUP BY）
 
     根据当前数据库类型生成兼容的日期截断 SQL 表达式。

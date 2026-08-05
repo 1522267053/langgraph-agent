@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import Memory, MemoryType
 from app.models.base_model import DbBaseModel
-from app.schemas.memory_schema import MemoryCreate, MemoryUpdate
+from app.schemas.memory_schema import MemoryCondition, MemoryCreate, MemoryUpdate
 from app.services.base_service import BaseService
 from app.services.embedding_service import get_embedding_service_async
 from app.services.vector_store_service import ChromaVectorStoreService
@@ -57,7 +57,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         self,
         query: Optional[Select],
         count_query: Optional[Select],
-        condition: Optional[DbBaseModel],
+        condition: Optional[MemoryCondition],
     ) -> Tuple[Optional[Select], Optional[Select]]:
         query, count_query = super()._apply_filters(query, count_query, condition)
 

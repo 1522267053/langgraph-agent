@@ -59,15 +59,16 @@ class KnowledgeDocumentService(
             obj_in.word_count = len(obj_in.content)
         return await super().create(db, obj_in)
 
-    async def update(self, db, obj_in):
+    async def update(
+        self,
+        db: AsyncSession,
+        obj_in: KnowledgeDocumentUpdate | KnowledgeDocument,
+    ) -> KnowledgeDocument:
         """
         更新文档，自动计算字数
         """
-        if hasattr(obj_in, "content") and obj_in.content is not None:
-            if hasattr(obj_in, "model_dump"):
-                data = obj_in.model_dump()
-                if "content" in data:
-                    obj_in.word_count = len(data["content"])
+        if obj_in.content is not None:
+            obj_in.word_count = len(obj_in.content)
         return await super().update(db, obj_in)
 
     # ---- 上传（异步） ----
@@ -112,6 +113,8 @@ class KnowledgeDocumentService(
         self, db: AsyncSession, document: KnowledgeDocument
     ) -> None:
         """解析文件内容并分段存储"""
+        if document.file_path is None:
+            return
         text_content = document_processor.extract_text_from_path(
             document.file_path, document.file_type
         )

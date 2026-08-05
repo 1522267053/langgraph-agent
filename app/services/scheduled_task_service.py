@@ -6,6 +6,7 @@
 
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,21 +18,24 @@ from app.models.scheduled_task import (
     TriggerType,
     LogStatus,
 )
+from app.schemas.scheduled_task_schema import ScheduledTaskCreate, ScheduledTaskUpdate
 from app.services.base_service import BaseService
 
 logger = logging.getLogger(__name__)
 
 
-class ScheduledTaskService(BaseService[ScheduledTask, ScheduledTask, ScheduledTask]):
+class ScheduledTaskService(BaseService[ScheduledTask, ScheduledTaskCreate, ScheduledTaskUpdate]):
     """定时任务服务"""
 
     def __init__(self):
         super().__init__(ScheduledTask)
         self._running_tasks: set[int] = set()
 
-    async def toggle_enabled(self, db: AsyncSession, task_id: int) -> ScheduledTask:
+    async def toggle_enabled(self, db: AsyncSession, task_id: int) -> Optional[ScheduledTask]:
         """切换定时任务的启用/禁用状态"""
         task = await self.get_by_id(db, task_id)
+        if task is None:
+            return None
         task.is_enabled = 0 if task.is_enabled == 1 else 1
         self._set_modifier_fields(task)
 
@@ -55,7 +59,8 @@ class ScheduledTaskService(BaseService[ScheduledTask, ScheduledTask, ScheduledTa
         import asyncio
 
         task = await self.get_by_id(db, task_id)
-
+        if task is None:
+            raise ValueError(f"定时任务不存在: task_id={task_id}")
         log = ScheduledTaskLog(
             task_id=task.id,
             trigger_type=TriggerType.MANUAL.value,

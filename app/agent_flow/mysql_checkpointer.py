@@ -108,8 +108,8 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
 
         根据 thread_id 和可选的 checkpoint_id 查询 checkpoint
         """
-        thread_id: str = config["configurable"]["thread_id"]
-        checkpoint_ns: str = config["configurable"].get("checkpoint_ns", "")
+        thread_id: str = config.get("configurable", {})["thread_id"]
+        checkpoint_ns: str = config.get("configurable", {}).get("checkpoint_ns", "")
 
         async with AsyncSessionLocal() as db:
             checkpoint_id = get_checkpoint_id(config)
@@ -354,8 +354,8 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
         """
         异步保存 checkpoint
         """
-        thread_id = config["configurable"]["thread_id"]
-        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        thread_id = config.get("configurable", {})["thread_id"]
+        checkpoint_ns = config.get("configurable", {}).get("checkpoint_ns", "")
 
         async with AsyncSessionLocal() as db:
             # 准备 checkpoint 数据
@@ -411,9 +411,9 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
         """
         异步保存 writes
         """
-        thread_id = config["configurable"]["thread_id"]
-        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
-        checkpoint_id = config["configurable"]["checkpoint_id"]
+        thread_id = config.get("configurable", {})["thread_id"]
+        checkpoint_ns = config.get("configurable", {}).get("checkpoint_ns", "")
+        checkpoint_id = config.get("configurable", {})["checkpoint_id"]
 
         async with AsyncSessionLocal() as db:
             # 查询已有的 writes
