@@ -8,8 +8,9 @@ description: |
   (4) 用户想向量化知识库文档、重新处理失败的文档、查看处理进度
   (5) 用户想搜索知识库分段内容
   (6) 用户想查看或管理 AI 生成的知识沉淀
+  (7) 用户想把知识库接入 Agent/Flow，或判断知识库为什么检索不到内容
 
-  触发词：「创建知识库」「上传文档」「向量化」「知识库」「知识沉淀」「文档分段」「搜索知识库」「重新处理文档」
+  触发词：「创建知识库」「添加知识库」「上传文档」「向量化」「知识库检索」「知识沉淀」「文档分段」「搜索知识库」「重新处理文档」「接入 Agent」
 ---
 
 # Knowledge Base Manager
@@ -24,6 +25,7 @@ description: |
 4. **向量化独立步骤**：上传处理完成（status=2）后，还需调用向量化接口才会进入 ChromaDB。未向量化的分段无法被语义检索命中
 5. **三层结构**：知识库 → 文档（document）→ 分段（segment）。分段会自动建立「标题索引」（按文档标题层级），供 Agent 工具三层导航
 6. **`/api/knowledge/*` 路径需登录态**：本机回环（127.0.0.1）调用免认证，外部调用需 session cookie
+7. **先处理、再向量化、最后接入**：不要在文档仍为待处理或失败状态时连接到 Agent；检索不到时先检查文档状态和向量化状态
 
 ## 知识库数据模型
 
@@ -223,6 +225,43 @@ POST /api/knowledge/insight/create
 1. Agent 中加 `knowledge` 类型节点，配置 `knowledge_base_id` + `top_k`
 2. 用工具边（`source_handle=default` → `target_handle=tools`）连到 LLM 节点
 3. 连接后 LLM 自动获得三层导航工具（search / title_search / get_paragraphs / adjacent / title_lookup）+ 沉淀工具（save_insight / delete_insight）
+
+## 通过 Agent/Flow 使用知识库
+
+按以下顺序配置：
+
+1. 确认知识库已启用，至少有一个文档处理完成（`processing_status=2`）。
+2. 确认文档已向量化；没有向量配置或向量化失败时，语义检索可能不可用。
+3. 在 Flow/Agent 编辑器添加 `knowledge` 节点。
+4. 设置 `knowledge_base_id` 和 `top_k`（建议 3-5，范围 1-50）。`knowledge_base_name` 仅用于显示。
+5. 将知识库节点的 `tools` 输出连接到 LLM 节点的 `tools` 输入，不要把它当作普通执行边。
+6. 让 LLM 先用全局搜索定位相关内容；需要精确引用时，再按“文档列表 → 标题树 → 段落 → 相邻段落”逐层导航。
+7. 只有在综合多个段落形成稳定结论时才调用 `knowledge_save_insight`；不要把单段原文、临时回答或不确定内容写入沉淀。
+
+工具模式下的工具名由节点 key 加前缀，具体名称以运行时工具列表为准。知识库节点本身不作为普通执行节点产生流程分支。
+
+## 添加知识库的最短流程
+
+```text
+创建知识库 → 上传文档 → 等待 processing_status=2 → 向量化 → 测试搜索 → 连接 knowledge 节点到 LLM
+```
+
+每一步都要确认接口返回 `code=1`。批量上传时逐个记录文档 ID，并逐个检查失败文档的 `error_message`；不要因为同一批次部分成功就跳过失败项。
+
+## 检索不到内容时
+
+1. 用 `GET /api/knowledge/document/get/{id}` 检查是否为 `processing_status=2`。
+2. 如果为 `0` 或 `1`，继续等待后台处理；如果为 `3`，读取 `error_message` 后调用 `POST /api/knowledge/document/reprocess/{id}`。
+3. 如果文档已处理完成但没有向量，调用对应文档或整个知识库的向量化接口，并等待状态从 `4` 回到 `2`。
+4. 用 `POST /api/knowledge/document/search-segments` 做直接搜索，区分是数据问题还是 Agent 节点连接问题。
+5. 直接搜索成功但 Agent 无结果时，检查节点的 `knowledge_base_id`、工具边、LLM 节点和工具调用日志。
+6. 检查 embedding 配置：`EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL` 可来自 `.env` 或全局配置。缺失时提示配置向量模型，不要伪造检索结果。
+
+## 安全与删除
+
+- 上传文档前确认其中没有不应进入模型上下文的密码、Token、个人信息或内部机密。
+- 删除知识库不会级联删除文档，建议先删除文档再删除知识库，避免产生孤儿文档。
+- 删除 AI 知识沉淀前确认其来源和影响；原始文档分段与沉淀是分开存储的。
 
 ## 分页查询示例
 
