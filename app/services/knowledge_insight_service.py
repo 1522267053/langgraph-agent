@@ -7,12 +7,11 @@
 
 import logging
 import threading
-from typing import Any, Optional, List
+from typing import Optional, List
 from sqlalchemy import select, and_, or_, Select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.knowledge_insight import KnowledgeInsight, KnowledgeInsightSegment
-from app.models.base_model import DbBaseModel
 from app.schemas.knowledge_insight_schema import (
     KnowledgeInsightCondition,
     KnowledgeInsightCreate,

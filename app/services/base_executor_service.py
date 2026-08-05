@@ -65,13 +65,13 @@ class BaseExecutorService:
             FlowNode.flow_id == flow_id, FlowNode.is_delete == 0
         )
         nodes_result = await db.execute(nodes_query)
-        flow.nodes = list(nodes_result.scalars().all())
+        flow.nodes = list(nodes_result.scalars().all())  # type: ignore[attr-defined]
 
         edges_query = select(FlowEdge).where(
             FlowEdge.flow_id == flow_id, FlowEdge.is_delete == 0
         )
         edges_result = await db.execute(edges_query)
-        flow.edges = list(edges_result.scalars().all())
+        flow.edges = list(edges_result.scalars().all())  # type: ignore[attr-defined]
 
         return flow
 

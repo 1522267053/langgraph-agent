@@ -45,6 +45,7 @@ from app.models.checkpoint import CheckpointModel, CheckpointWrite, CheckpointBl
 from app.models.conversation_message import ConversationMessage
 from app.agent_flow.exceptions import FlowValidationError
 from app.services.base_service import BaseService
+from app.schemas.base_schema import BaseView
 from app.schemas.flow_schema import (
     FieldType,
     FlowCreate,
@@ -56,6 +57,9 @@ from app.schemas.flow_node_schema import FlowNodeCreate, FlowNodeUpdate
 from app.schemas.flow_edge_schema import FlowEdgeCreate, FlowEdgeUpdate
 
 logger = logging.getLogger(__name__)
+
+# BaseView 系统字段（model_dump 时排除，避免写入节点配置）
+_VIEW_SYSTEM_FIELDS = set(BaseView.model_fields.keys())
 
 # Agent 默认输入参数（message 字段，所有 Agent 通用）
 DEFAULT_AGENT_INPUT_SCHEMA: FlowIOSchema = FlowIOSchema(
@@ -197,8 +201,12 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             name=unique_name,
             flow_type=source.flow_type,
             description=source.description,
-            input_schema=source.input_schema,
-            output_schema=source.output_schema,
+            input_schema=FlowIOSchema(**source.input_schema)
+            if source.input_schema
+            else None,
+            output_schema=FlowIOSchema(**source.output_schema)
+            if source.output_schema
+            else None,
             ai_nodes=ai_nodes,
             ai_edges=ai_edges,
         )
@@ -297,13 +305,13 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             FlowNode.flow_id == flow_id, FlowNode.is_delete == 0
         )
         nodes_result = await db.execute(nodes_query)
-        flow.nodes = list(nodes_result.scalars().all())
+        flow.nodes = list(nodes_result.scalars().all())  # type: ignore[attr-defined]
 
         edges_query = select(FlowEdge).where(
             FlowEdge.flow_id == flow_id, FlowEdge.is_delete == 0
         )
         edges_result = await db.execute(edges_query)
-        flow.edges = list(edges_result.scalars().all())
+        flow.edges = list(edges_result.scalars().all())  # type: ignore[attr-defined]
 
         return flow
 
@@ -1090,7 +1098,8 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         """
 
         flow = await self.get_by_id(db, flow_id, raise_not_found=True)
-
+        if flow is None:
+            raise ValueError("流程不存在，无法删除")
         if flow.is_builtin == 1:
             raise ValueError("内置助手不可被删除")
 
@@ -1151,20 +1160,23 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
     @staticmethod
     def _sync_schema_to_nodes(
         ai_nodes: list[dict],
-        input_schema: dict | None,
-        output_schema: dict | None,
+        input_schema: FlowIOSchema | None,
+        output_schema: FlowIOSchema | None,
     ) -> None:
         """将 input_schema/output_schema 同步到 start/end 节点的 base_config"""
-        if input_schema and input_schema.get("fields"):
+        if input_schema and input_schema.fields:
             for n in ai_nodes:
                 if n.get("node_type") == NodeType.START.value:
                     cfg = n.get("base_config") or {}
                     if not cfg.get("input_variables"):
-                        cfg["input_variables"] = input_schema["fields"]
+                        cfg["input_variables"] = [
+                            f.model_dump(exclude=_VIEW_SYSTEM_FIELDS)
+                            for f in input_schema.fields
+                        ]
                         n["base_config"] = cfg
                     break
 
-        if output_schema and output_schema.get("fields"):
+        if output_schema and output_schema.fields:
             for n in ai_nodes:
                 if n.get("node_type") == NodeType.END.value:
                     cfg = n.get("base_config") or {}
@@ -1172,11 +1184,11 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
                     if not existing or len(existing) == 0:
                         cfg["output_variables"] = [
                             {
-                                "name": f.get("name", ""),
-                                "source": f.get("description", ""),
-                                "type": f.get("type", "string"),
+                                "name": f.name or "",
+                                "source": f.description or "",
+                                "type": f.type.value,
                             }
-                            for f in output_schema["fields"]
+                            for f in output_schema.fields
                         ]
                         n["base_config"] = cfg
                     break
@@ -1187,8 +1199,8 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         name: str,
         flow_type: str,
         description: str | None,
-        input_schema: dict | None,
-        output_schema: dict | None,
+        input_schema: FlowIOSchema | None,
+        output_schema: FlowIOSchema | None,
         ai_nodes: list[dict],
         ai_edges: list[dict],
     ) -> Flow:
@@ -1199,8 +1211,8 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             name: 流程名称
             flow_type: 流程类型（flow/agent）
             description: 流程描述
-            input_schema: 输入参数定义（dict）
-            output_schema: 输出参数定义（dict）
+            input_schema: 输入参数定义（FlowIOSchema）
+            output_schema: 输出参数定义（FlowIOSchema）
             ai_nodes: AI 节点列表（dict 格式）
             ai_edges: AI 边列表（dict 格式）
 
@@ -1262,8 +1274,10 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             if error:
                 raise ValueError(error)
             await self.batch_create_edges(db, flow.id, edges_create)
-
-        return await self.get_with_nodes_and_edges(db, flow.id)
+        new_flow = await self.get_with_nodes_and_edges(db, flow.id)
+        if new_flow is None:
+            raise ValueError("流程创建失败，无法获取完整数据")
+        return new_flow
 
     async def full_update_flow(
         self,
@@ -1271,8 +1285,8 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         flow_id: int,
         name: str | None,
         description: str | None,
-        input_schema: dict | None,
-        output_schema: dict | None,
+        input_schema: FlowIOSchema | None,
+        output_schema: FlowIOSchema | None,
         ai_nodes: list[dict],
         ai_edges: list[dict],
     ) -> Flow:
@@ -1283,8 +1297,8 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             flow_id: 流程ID
             name: 流程名称
             description: 流程描述
-            input_schema: 输入参数定义（dict）
-            output_schema: 输出参数定义（dict）
+            input_schema: 输入参数定义（FlowIOSchema）
+            output_schema: 输出参数定义（FlowIOSchema）
             ai_nodes: AI 节点列表（全量，dict 格式）
             ai_edges: AI 边列表（全量，dict 格式）
 
@@ -1422,8 +1436,10 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             await self.batch_create_edges(db, flow_id, edges_to_create)
         for eu in edges_to_update:
             await self.update_edge(db, eu)
-
-        return await self.get_with_nodes_and_edges(db, flow_id)
+        new_flow = await self.get_with_nodes_and_edges(db, flow_id)
+        if new_flow is None:
+            raise ValueError("流程更新失败，无法获取完整数据")
+        return new_flow
 
     async def add_single_node(
         self,
