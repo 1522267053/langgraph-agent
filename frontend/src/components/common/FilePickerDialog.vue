@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { Search, Upload } from '@element-plus/icons-vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
+import { Delete, Search, Upload } from '@element-plus/icons-vue'
 import type { FileInfo, FileCondition } from '@/api/file'
 import { fileApi } from '@/api/file'
 import { formatFileSize, isImage, getFileTypeTag } from '@/utils/format'
@@ -39,6 +39,13 @@ const pageSize = ref(10)
 const loading = ref(false)
 const uploading = ref(false)
 const localSelected = ref(new Set<number>())
+const supportsPastedImage = computed(() => {
+  if (!props.accept) return true
+  return props.accept.split(',').some(type => {
+    const normalized = type.trim().toLowerCase()
+    return normalized === 'image/*' || normalized.startsWith('image/')
+  })
+})
 
 watch(
   () => props.modelValue,
@@ -55,7 +62,23 @@ watch(
 
 watch(visible, val => {
   emit('update:modelValue', val)
+  if (val) {
+    document.addEventListener('paste', handlePaste)
+  } else {
+    document.removeEventListener('paste', handlePaste)
+  }
 })
+
+function isAcceptedFile(file: File): boolean {
+  if (!props.accept) return true
+  return props.accept.split(',').some(type => {
+    const normalized = type.trim().toLowerCase()
+    if (normalized === '*/*') return true
+    if (normalized.endsWith('/*')) return file.type.toLowerCase().startsWith(normalized.slice(0, -1))
+    if (normalized.startsWith('.')) return file.name.toLowerCase().endsWith(normalized)
+    return file.type.toLowerCase() === normalized
+  })
+}
 
 async function loadFiles(): Promise<void> {
   loading.value = true
@@ -131,31 +154,108 @@ function isSelected(id: number): boolean {
   return localSelected.value.has(id)
 }
 
+async function handleDelete(file: FileInfo): Promise<void> {
+  try {
+    const res = await fileApi.delete(file.id)
+    if (res.data.code === 1) {
+      fileList.value = fileList.value.filter(item => item.id !== file.id)
+      localSelected.value.delete(file.id)
+      total.value = Math.max(0, total.value - 1)
+      ElMessage.success('删除成功')
+    }
+  } catch {
+    // 用户取消删除或请求失败
+  }
+}
+
+async function uploadFile(file: File, validateAccept = false): Promise<FileInfo | null> {
+  if (validateAccept && !isAcceptedFile(file)) {
+    ElMessage.warning('剪切板中的图片类型不符合当前文件限制')
+    return null
+  }
+  if (props.maxSize > 0 && file.size > props.maxSize * 1024 * 1024) {
+    ElMessage.warning(`文件大小不能超过 ${props.maxSize}MB`)
+    return null
+  }
+
+  uploading.value = true
+  try {
+    const res = await fileApi.upload(file, '')
+    if (res.data.code !== 1 || !res.data.data) {
+      ElMessage.error(res.data.msg || '上传失败')
+      return null
+    }
+    return res.data.data
+  } catch {
+    ElMessage.error('上传失败')
+    return null
+  } finally {
+    uploading.value = false
+  }
+}
+
+function selectUploadedFile(file: FileInfo): void {
+  if (props.multiple) {
+    if (
+      props.maxSelect > 0 &&
+      !localSelected.value.has(file.id) &&
+      localSelected.value.size >= props.maxSelect
+    ) {
+      ElMessage.warning(`最多选择 ${props.maxSelect} 个文件`)
+      return
+    }
+  } else {
+    localSelected.value.clear()
+  }
+  fileList.value = [file, ...fileList.value.filter(item => item.id !== file.id)]
+  localSelected.value.add(file.id)
+  total.value += 1
+}
+
+async function handlePaste(event: ClipboardEvent): Promise<void> {
+  if (!visible.value || !supportsPastedImage.value || uploading.value) return
+  const item = Array.from(event.clipboardData?.items || []).find(item =>
+    item.type.startsWith('image/')
+  )
+  if (!item) return
+
+  event.preventDefault()
+  const blob = item.getAsFile()
+  if (!blob) return
+  if (
+    props.multiple &&
+    props.maxSelect > 0 &&
+    localSelected.value.size >= props.maxSelect
+  ) {
+    ElMessage.warning(`最多选择 ${props.maxSelect} 个文件`)
+    return
+  }
+
+  const extension = blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+  const file = new File([blob], `clipboard-${Date.now()}.${extension}`, { type: blob.type })
+  const uploadedFile = await uploadFile(file, true)
+  if (!uploadedFile) return
+  selectUploadedFile(uploadedFile)
+  ElMessage.success('剪切板图片已上传并选中')
+}
+
 async function handleUpload(options: {
   file: File
   onSuccess: () => void
   onError: (err: Error) => void
 }): Promise<void> {
-  if (props.maxSize > 0 && options.file.size > props.maxSize * 1024 * 1024) {
-    ElMessage.warning(`文件大小不能超过 ${props.maxSize}MB`)
-    options.onError(new Error('文件过大'))
+  const uploadedFile = await uploadFile(options.file)
+  if (!uploadedFile) {
+    options.onError(new Error('上传失败'))
     return
   }
-  uploading.value = true
-  try {
-    const res = await fileApi.upload(options.file, '')
-    if (res.data.code === 1) {
-      options.onSuccess()
-      await loadFiles()
-    } else {
-      options.onError(new Error(res.data.msg || '上传失败'))
-    }
-  } catch {
-    options.onError(new Error('上传失败'))
-  } finally {
-    uploading.value = false
-  }
+  options.onSuccess()
+  await loadFiles()
 }
+
+onUnmounted(() => {
+  document.removeEventListener('paste', handlePaste)
+})
 
 function handleConfirm(): void {
   const ids = [...localSelected.value]
@@ -177,7 +277,8 @@ function handleCancel(): void {
     width="680px"
     :close-on-click-modal="false"
     destroy-on-close
-    @closed="handleCancel"
+    @mousedown.stop
+    @click.stop
   >
     <div class="file-picker-toolbar">
       <el-input
@@ -200,6 +301,10 @@ function handleCancel(): void {
           上传
         </el-button>
       </el-upload>
+    </div>
+    <div v-if="supportsPastedImage" class="paste-hint" :class="{ uploading }">
+      <span class="paste-hint-key">Ctrl+V</span>
+      <span>{{ uploading ? '正在上传剪切板图片...' : '粘贴剪切板图片，上传后将自动选中' }}</span>
     </div>
 
     <div v-loading="loading" class="file-picker-list">
@@ -226,9 +331,29 @@ function handleCancel(): void {
           </el-tag>
         </div>
         <div class="file-picker-info">
-          <span class="file-picker-name" :title="file.original_name">{{ file.original_name }}</span>
-          <span class="file-picker-size">{{ formatFileSize(file.file_size) }}</span>
+           <span class="file-picker-name" :title="file.original_name">{{ file.original_name }}</span>
+           <span class="file-picker-size">{{ formatFileSize(file.file_size) }}</span>
         </div>
+        <el-popconfirm
+          title="确定删除这个文件吗？"
+          confirm-button-text="删除"
+          cancel-button-text="取消"
+          confirm-button-type="danger"
+          width="200"
+          :teleported="false"
+          @confirm="handleDelete(file)"
+        >
+          <template #reference>
+            <el-button
+              class="file-picker-delete"
+              type="danger"
+              :icon="Delete"
+              link
+              title="删除文件"
+              @click.stop.prevent
+            />
+          </template>
+        </el-popconfirm>
       </div>
       <div v-if="!loading && fileList.length === 0" class="file-picker-empty">
         <el-text type="info">暂无文件</el-text>
@@ -262,6 +387,35 @@ function handleCancel(): void {
   display: flex;
   align-items: center;
   margin-bottom: 12px;
+}
+
+.paste-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 12px;
+  padding: 9px 12px;
+  color: #1d4ed8;
+  font-size: 13px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+}
+
+.paste-hint.uploading {
+  color: #92400e;
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.paste-hint-key {
+  padding: 2px 6px;
+  color: #1e40af;
+  font-size: 12px;
+  font-weight: 600;
+  background: #dbeafe;
+  border: 1px solid #93c5fd;
+  border-radius: 4px;
 }
 
 .file-picker-list {
@@ -315,6 +469,10 @@ function handleCancel(): void {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.file-picker-delete {
+  flex-shrink: 0;
 }
 
 .file-picker-name {
