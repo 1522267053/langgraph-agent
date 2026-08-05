@@ -40,7 +40,7 @@ def wire_edges(
     for edge in edges:
         source = edge.source_node_key
         target = edge.target_node_key
-        edge_id = (source, target, getattr(edge, "source_handle", None) or "")
+        edge_id = (source, target, edge.source_handle or "")
         if edge_id in seen_edges:
             continue
         seen_edges.add(edge_id)

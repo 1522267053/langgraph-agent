@@ -262,8 +262,8 @@ class McpToolManager:
             description=tool.description,
             args_schema=tool.args_schema,
             coroutine=locked_coro,
-            response_format=getattr(tool, "response_format", "content_and_artifact"),
-            metadata=getattr(tool, "metadata", None),
+            response_format=tool.response_format,
+            metadata=tool.metadata,
         )
 
     async def get_tools(

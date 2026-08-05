@@ -189,11 +189,7 @@ def validate_tool_pairs(messages: list[BaseMessage]) -> list[BaseMessage]:
                 ai.tool_calls = [
                     tc
                     for tc in ai.tool_calls
-                    if (
-                        tc.get("id", "")
-                        if isinstance(tc, dict)
-                        else getattr(tc, "id", "")
-                    )
+                    if (tc.get("id", "") if isinstance(tc, dict) else tc.id)
                     not in pending_ids
                 ]
                 if not ai.tool_calls:
@@ -205,7 +201,7 @@ def validate_tool_pairs(messages: list[BaseMessage]) -> list[BaseMessage]:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             flush_pending()
             pending_ids = {
-                tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+                tc.get("id", "") if isinstance(tc, dict) else tc.id
                 for tc in msg.tool_calls
             }
             result.append(msg)
@@ -275,16 +271,8 @@ def inject_resume_if_needed(
         if not isinstance(msg, AIMessage) or not msg.tool_calls:
             continue
         for tc in msg.tool_calls:
-            tc_id = (
-                tc.get("id", "")
-                if isinstance(tc, dict)
-                else getattr(tc, "id", "") or ""
-            )
-            tc_name = (
-                tc.get("name", "")
-                if isinstance(tc, dict)
-                else getattr(tc, "name", "") or ""
-            )
+            tc_id = tc.get("id", "") if isinstance(tc, dict) else tc.id or ""
+            tc_name = tc.get("name", "") if isinstance(tc, dict) else tc.name or ""
             if tc_id and tc_id not in matched_ids:
                 messages.append(
                     ToolMessage(

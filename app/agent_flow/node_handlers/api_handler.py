@@ -750,11 +750,7 @@ class ApiNodeHandler(BaseNodeHandler):
         output_vars = config.get("output_variables", [])
         if output_vars:
             for var in output_vars:
-                name = (
-                    var.get("name", "")
-                    if isinstance(var, dict)
-                    else getattr(var, "name", "")
-                )
+                name = var.get("name", "") if isinstance(var, dict) else var.name
                 if name:
                     value = state.get_node_variable(node.node_key, name)
                     if value is not None:

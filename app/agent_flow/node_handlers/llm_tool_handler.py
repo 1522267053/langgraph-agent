@@ -666,9 +666,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
             # 收集本轮调用的工具名（仅当前 ReAct 循环内新增调用，不查历史/DB）
             if response and response.tool_calls:
                 called_tools.update(
-                    tc.get("name", "")
-                    if isinstance(tc, dict)
-                    else getattr(tc, "name", "")
+                    tc.get("name", "") if isinstance(tc, dict) else tc.name
                     for tc in response.tool_calls
                 )
 
@@ -826,11 +824,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
             output_vars = [{"name": "result"}, {"name": "thinking"}]
 
         for var in output_vars:
-            name = (
-                var.get("name", "")
-                if isinstance(var, dict)
-                else getattr(var, "name", "")
-            )
+            name = var.get("name", "") if isinstance(var, dict) else var.name
             if name:
                 value = state.get_node_variable(node.node_key, name)
                 if value is not None:

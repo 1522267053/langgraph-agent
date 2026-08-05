@@ -224,7 +224,7 @@ def get_reasoning_from_message(message: BaseMessage) -> Optional[str]:
         reasoning_content 字符串，不存在则返回 None
     """
     if isinstance(message, AIMessage):
-        additional_kwargs = getattr(message, "additional_kwargs", None)
+        additional_kwargs = message.additional_kwargs
         if isinstance(additional_kwargs, dict):
             return additional_kwargs.get("reasoning_content")
     return None

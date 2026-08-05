@@ -93,7 +93,7 @@ class ScheduledTaskApi(
 
         schedule_type = (data.schedule_type or "cron") if data else "cron"
         if schedule_type == "once":
-            if not getattr(data, "run_at", None):
+            if not data.run_at:
                 raise HTTPException(
                     status_code=400,
                     detail="单次执行任务必须设置运行时间（run_at）",
@@ -104,7 +104,7 @@ class ScheduledTaskApi(
                     detail="运行时间不能早于当前时间",
                 )
         else:
-            if not (getattr(data, "cron_expression", None) or "").strip():
+            if not (data.cron_expression or "").strip():
                 raise HTTPException(
                     status_code=400,
                     detail="循环执行任务必须设置 Cron 表达式",
@@ -174,6 +174,8 @@ class ScheduledTaskApi(
             if is_enabling:
                 await self._check_flow_target(db, task.target_type, task.target_id)
             task = await scheduled_task_service.toggle_enabled(db, task_id)
+            if task is None:
+                return ApiResponse.error(msg="任务不存在")
             return ApiResponse.success(
                 data=ScheduledTaskBase.model_to_view(task), msg="操作成功"
             )

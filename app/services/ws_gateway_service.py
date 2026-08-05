@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select, func, desc
+from sqlalchemy import Select, select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ws_gateway import WsGatewayConfig
@@ -35,24 +35,35 @@ class WsGatewayService(
     def __init__(self):
         super().__init__(WsGatewayConfig)
 
-    def _apply_filters(self, query, count_query, condition: WsGatewayConfigCondition):
+    def _apply_filters(
+        self,
+        query: Optional[Select],
+        count_query: Optional[Select],
+        condition: Optional[WsGatewayConfigCondition],
+    ):
         """应用查询过滤条件"""
         query, count_query = super()._apply_filters(query, count_query, condition)
-        if condition:
-            if hasattr(condition, "name") and condition.name:
-                query, count_query = self._apply_like_filter(
-                    query, count_query, "name", condition.name
-                )
-            if hasattr(condition, "flow_id") and condition.flow_id:
-                query = query.where(WsGatewayConfig.flow_id == condition.flow_id)
-                count_query = count_query.where(
-                    WsGatewayConfig.flow_id == condition.flow_id
-                )
-            if hasattr(condition, "is_enabled") and condition.is_enabled is not None:
-                query = query.where(WsGatewayConfig.is_enabled == condition.is_enabled)
-                count_query = count_query.where(
-                    WsGatewayConfig.is_enabled == condition.is_enabled
-                )
+        if condition is None:
+            return query, count_query
+        
+        if condition.name:
+            query, count_query = self._apply_like_filter(
+                query, count_query, "name", condition.name
+            )
+
+        if query is None or count_query is None:
+            return query, count_query
+        
+        if condition.flow_id:
+            query = query.where(WsGatewayConfig.flow_id == condition.flow_id)
+            count_query = count_query.where(
+                WsGatewayConfig.flow_id == condition.flow_id
+            )
+        if condition.is_enabled is not None:
+            query = query.where(WsGatewayConfig.is_enabled == condition.is_enabled)
+            count_query = count_query.where(
+                WsGatewayConfig.is_enabled == condition.is_enabled
+            )
         return query, count_query
 
     async def get_bound_by_flow(
@@ -108,7 +119,7 @@ class WsGatewayService(
         return model
 
     async def update(
-        self, db: AsyncSession, obj_in: WsGatewayConfigUpdate
+        self, db: AsyncSession, obj_in: WsGatewayConfigUpdate | WsGatewayConfig
     ) -> WsGatewayConfig:
         """更新网关
 
@@ -117,7 +128,7 @@ class WsGatewayService(
         """
         if isinstance(obj_in, WsGatewayConfig):
             obj_id = obj_in.id
-            new_flow_id = getattr(obj_in, "flow_id", None)
+            new_flow_id = obj_in.flow_id
         else:
             data = obj_in.model_dump(exclude_unset=True)
             obj_id = data.get("id")
@@ -530,7 +541,8 @@ class WsGatewayService(
                 await self.update_call_record_ref(
                     db, record_id, "session", resolved_session_id
                 )
-
+        if resolved_session_id is None:
+            resolved_session_id = 0
         # 通知执行开始
         yield {
             "type": "call_started",

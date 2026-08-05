@@ -26,7 +26,7 @@ def extract_token_usage(message: BaseMessage) -> dict:
     """
     if not isinstance(message, (AIMessage, AIMessageChunk)):
         return {}
-    usage = getattr(message, "usage_metadata", None)
+    usage = message.usage_metadata
     result: dict = {}
     if usage:
         result = {
@@ -49,7 +49,7 @@ def extract_token_usage(message: BaseMessage) -> dict:
             result["reasoning_tokens"] = reasoning
         result["usage_metadata"] = usage
         return result
-    resp_meta = getattr(message, "response_metadata", {})
+    resp_meta = message.response_metadata
     token_usage = resp_meta.get("token_usage") or resp_meta.get("usage") or {}
     return {
         "prompt_tokens": token_usage.get("prompt_tokens"),
@@ -85,13 +85,9 @@ def extract_tool_calls(msg: BaseMessage) -> Optional[list[dict]]:
         return None
     return [
         {
-            "id": getattr(tc, "id", None) if hasattr(tc, "id") else tc.get("id"),
-            "name": getattr(tc, "name", None)
-            if hasattr(tc, "name")
-            else tc.get("name"),
-            "args": getattr(tc, "args", None)
-            if hasattr(tc, "args")
-            else tc.get("args"),
+            "id": tc.id if hasattr(tc, "id") else tc.get("id"),
+            "name": tc.name if hasattr(tc, "name") else tc.get("name"),
+            "args": tc.args if hasattr(tc, "args") else tc.get("args"),
         }
         for tc in msg.tool_calls
     ]
@@ -105,7 +101,7 @@ def extract_tool_status(msg: BaseMessage) -> Optional[str]:
     """
     if not isinstance(msg, ToolMessage):
         return None
-    status = getattr(msg, "additional_kwargs", {}).get("status")
+    status = msg.additional_kwargs.get("status")
     if status in ("success", "error"):
         return status
     content = msg.content
@@ -122,8 +118,8 @@ def extract_tool_status(msg: BaseMessage) -> Optional[str]:
 def extract_tool_info(msg: BaseMessage) -> tuple[Optional[str], Optional[str]]:
     """从 ToolMessage 中提取 tool_call_id 和 name。"""
     if isinstance(msg, ToolMessage):
-        tool_call_id = getattr(msg, "tool_call_id", None)
-        name = getattr(msg, "name", None)
+        tool_call_id = msg.tool_call_id
+        name = msg.name
         return tool_call_id, name
     return None, None
 
