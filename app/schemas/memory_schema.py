@@ -17,16 +17,16 @@ class MemoryExportItem(BaseModel):
 
     title: str = Field(..., description="标题")
     content: str = Field(..., description="内容")
-    memory_type: str = Field("cold", description="记忆层级")
-    category: str = Field("other", description="分类")
-    importance: int = Field(3, description="重要程度")
-    keywords: Optional[str] = Field(None, description="关键词")
+    memory_type: str = Field(default="cold", description="记忆层级")
+    category: str = Field(default="other", description="分类")
+    importance: int = Field(default=3, description="重要程度")
+    keywords: Optional[str] = Field(default=None, description="关键词")
 
 
 class MemoryExportRequest(BaseModel):
     agent_id: int = Field(..., description="Agent ID")
-    ids: Optional[list[int]] = Field(None, description="指定ID导出，空=全部")
-    tier: Optional[str] = Field(None, description="按层级过滤")
+    ids: Optional[list[int]] = Field(default=None, description="指定ID导出，空=全部")
+    tier: Optional[str] = Field(default=None, description="按层级过滤")
 
 
 class MemoryImportRequest(BaseModel):
@@ -35,63 +35,81 @@ class MemoryImportRequest(BaseModel):
 
 
 class MemoryImportResponse(BaseModel):
-    total: int = Field(0, description="导入总数")
-    imported: int = Field(0, description="成功数")
-    failed: int = Field(0, description="失败数")
+    total: int = Field(default=0, description="导入总数")
+    imported: int = Field(default=0, description="成功数")
+    failed: int = Field(default=0, description="失败数")
     errors: list[dict] = Field(default_factory=list, description="失败详情")
 
 
 class MemoryView(BaseView):
-    agent_id: Optional[int] = Field(None, description="所属Agent ID")
-    memory_type: Optional[str] = Field(None, description="记忆层级：hot/warm/cold")
-    category: Optional[str] = Field(None, description="分类")
-    title: Optional[str] = Field(None, description="标题")
-    content: Optional[str] = Field(None, description="内容")
-    keywords: Optional[str] = Field(None, description="关键词")
-    metadata_: Optional[dict] = Field(None, alias="metadata", description="扩展元数据")
-    source_session_id: Optional[str] = Field(None, description="来源会话ID")
-    importance: Optional[int] = Field(None, description="重要程度")
-    access_count: Optional[int] = Field(None, description="访问次数")
-    peak_tier: Optional[str] = Field(None, description="记忆达到过的最高层级")
-    last_access_time: Optional[datetime] = Field(None, description="最后访问时间")
+    agent_id: Optional[int] = Field(default=None, description="所属Agent ID")
+    memory_type: Optional[str] = Field(
+        default=None, description="记忆层级：hot/warm/cold"
+    )
+    category: Optional[str] = Field(default=None, description="分类")
+    title: Optional[str] = Field(default=None, description="标题")
+    content: Optional[str] = Field(default=None, description="内容")
+    keywords: Optional[str] = Field(default=None, description="关键词")
+    metadata_: Optional[dict] = Field(
+        default=None, alias="metadata", description="扩展元数据"
+    )
+    source_session_id: Optional[str] = Field(default=None, description="来源会话ID")
+    importance: Optional[int] = Field(default=None, description="重要程度")
+    access_count: Optional[int] = Field(default=None, description="访问次数")
+    peak_tier: Optional[str] = Field(default=None, description="记忆达到过的最高层级")
+    last_access_time: Optional[datetime] = Field(
+        default=None, description="最后访问时间"
+    )
 
     model_config = BaseView.model_config
 
 
 class MemoryCreate(BaseView):
     agent_id: int = Field(..., description="所属Agent ID")
-    memory_type: str = Field("cold", description="记忆层级：hot/warm/cold")
-    category: str = Field("other", description="分类")
+    memory_type: str = Field(default="cold", description="记忆层级：hot/warm/cold")
+    category: str = Field(default="other", description="分类")
     title: str = Field(..., max_length=50, description="标题")
     content: str = Field(..., max_length=500, description="内容")
-    keywords: Optional[str] = Field(None, description="关键词")
-    metadata_: Optional[dict] = Field(None, alias="metadata", description="扩展元数据")
-    source_session_id: Optional[str] = Field(None, description="来源会话ID")
-    importance: int = Field(3, description="重要程度")
+    keywords: Optional[str] = Field(default=None, description="关键词")
+    metadata_: Optional[dict] = Field(
+        default=None, alias="metadata", description="扩展元数据"
+    )
+    source_session_id: Optional[str] = Field(default=None, description="来源会话ID")
+    importance: int = Field(default=3, description="重要程度")
 
 
 class MemoryUpdate(BaseView):
     id: int = Field(..., description="ID")
-    memory_type: Optional[str] = Field(None, description="记忆层级")
-    category: Optional[str] = Field(None, description="分类")
-    title: Optional[str] = Field(None, max_length=50, description="标题")
-    content: Optional[str] = Field(None, max_length=500, description="内容")
-    keywords: Optional[str] = Field(None, description="关键词")
-    metadata_: Optional[dict] = Field(None, alias="metadata", description="扩展元数据")
-    importance: Optional[int] = Field(None, description="重要程度")
+    memory_type: Optional[str] = Field(default=None, description="记忆层级")
+    category: Optional[str] = Field(default=None, description="分类")
+    title: Optional[str] = Field(default=None, max_length=50, description="标题")
+    content: Optional[str] = Field(default=None, max_length=500, description="内容")
+    keywords: Optional[str] = Field(default=None, description="关键词")
+    metadata_: Optional[dict] = Field(
+        default=None, alias="metadata", description="扩展元数据"
+    )
+    importance: Optional[int] = Field(default=None, description="重要程度")
 
 
 class MemoryCondition(BaseView):
-    agent_id: Optional[int] = Field(None, description="所属Agent ID")
-    memory_type: Optional[str] = Field(None, description="记忆层级")
-    category: Optional[str] = Field(None, description="分类")
-    title: Optional[str] = Field(None, description="标题(模糊搜索)")
+    agent_id: Optional[int] = Field(default=None, description="所属Agent ID")
+    memory_type: Optional[str] = Field(default=None, description="记忆层级")
+    category: Optional[str] = Field(default=None, description="分类")
+    title: Optional[str] = Field(default=None, description="标题(模糊搜索)")
+    keywords: Optional[str] = Field(default=None, description="关键词")
 
 
-class MemorySearchRequest(BaseModel):
+class MemorySearchRequest(BaseView):
     """记忆语义搜索请求（向量优先，降级为关键词匹配）"""
 
     agent_id: int = Field(..., description="Agent ID")
     query: str = Field(..., min_length=1, description="搜索关键词")
-    tier: Optional[str] = Field(None, description="按层级过滤")
-    max_results: int = Field(20, ge=1, le=100, description="最大返回数")
+    tier: Optional[str] = Field(default=None, description="按层级过滤")
+    max_results: int = Field(default=20, ge=1, le=100, description="最大返回数")
+
+
+class MemoryRevectorizeRequest(BaseView):
+    """批量重新向量化记忆请求"""
+
+    agent_id: Optional[int] = Field(default=None, description="Agent ID")
+    ids: Optional[list[int]] = Field(default=None, description="指定ID，空=全部")

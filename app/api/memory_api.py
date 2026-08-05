@@ -20,6 +20,7 @@ from app.schemas.memory_schema import (
     MemoryExportRequest,
     MemoryImportRequest,
     MemorySearchRequest,
+    MemoryRevectorizeRequest,
 )
 
 
@@ -37,13 +38,12 @@ class MemoryApi(
             "/revectorize", response_model=ApiResponse, summary="批量重新向量化记忆"
         )
         async def revectorize_memories(
-            body: dict = ...,
+            body: MemoryRevectorizeRequest,
             db: AsyncSession = Depends(get_db),
         ):
             """批量重新向量化指定记忆，先删除旧向量再重新生成"""
-            ids = body.get("ids", [])
-            agent_id = body.get("agent_id")
-            result = await memory_service.revectorize(db, agent_id, ids)
+            ids = body.ids or []
+            result = await memory_service.revectorize(db, body.agent_id, ids)
             return ApiResponse.success(
                 data=result,
                 msg=f"向量化完成：成功 {result['success']} 条，失败 {result['failed']} 条",
