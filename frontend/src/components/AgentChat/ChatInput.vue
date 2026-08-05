@@ -199,7 +199,7 @@ function handleStop() {
           class="input-textarea"
           placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
           :disabled="isStreaming || isWaitingHuman"
-          rows="3"
+          rows="2"
           @keydown="handleKeyDown"
         ></textarea>
         <div class="input-toolbar">
