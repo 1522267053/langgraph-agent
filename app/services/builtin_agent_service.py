@@ -200,7 +200,7 @@ class BuiltinAgentService:
             # 补偿：旧版本创建的内置 Agent 可能没有 input_schema / suggested_prompts
             changed = False
             if not builtin_flow.input_schema:
-                builtin_flow.input_schema = DEFAULT_AGENT_INPUT_SCHEMA
+                builtin_flow.input_schema = DEFAULT_AGENT_INPUT_SCHEMA.model_dump()
                 changed = True
             if not builtin_flow.suggested_prompts:
                 builtin_flow.suggested_prompts = BUILTIN_AGENT_SUGGESTED_PROMPTS.copy()
@@ -449,7 +449,7 @@ class BuiltinAgentService:
         flow.description = (
             "系统内置 AI 助手，支持通用对话、创建智能体与工作流、调用各类技能"
         )
-        flow.input_schema = DEFAULT_AGENT_INPUT_SCHEMA
+        flow.input_schema = DEFAULT_AGENT_INPUT_SCHEMA.model_dump()
         flow.suggested_prompts = BUILTIN_AGENT_SUGGESTED_PROMPTS.copy()
         await db.commit()
 

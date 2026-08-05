@@ -45,31 +45,37 @@ from app.models.checkpoint import CheckpointModel, CheckpointWrite, CheckpointBl
 from app.models.conversation_message import ConversationMessage
 from app.agent_flow.exceptions import FlowValidationError
 from app.services.base_service import BaseService
-from app.schemas.flow_schema import FlowCreate, FlowUpdate
+from app.schemas.flow_schema import (
+    FieldType,
+    FlowCreate,
+    FlowIOField,
+    FlowIOSchema,
+    FlowUpdate,
+)
 from app.schemas.flow_node_schema import FlowNodeCreate, FlowNodeUpdate
 from app.schemas.flow_edge_schema import FlowEdgeCreate, FlowEdgeUpdate
 
 logger = logging.getLogger(__name__)
 
 # Agent 默认输入参数（message 字段，所有 Agent 通用）
-DEFAULT_AGENT_INPUT_SCHEMA: dict = {
-    "fields": [
-        {
-            "name": "message",
-            "type": "string",
-            "description": "用户消息",
-            "required": True,
-        },
-        {
-            "name": "files",
-            "type": "file_list",
-            "description": "上传文件",
-            "multiple": True,
-            "max_size": 20,
-            "required": False,
-        },
+DEFAULT_AGENT_INPUT_SCHEMA: FlowIOSchema = FlowIOSchema(
+    fields=[
+        FlowIOField(
+            name="message",
+            type=FieldType.STRING,
+            description="用户消息",
+            required=True,
+        ),
+        FlowIOField(
+            name="files",
+            type=FieldType.FILE_LIST,
+            description="上传文件",
+            multiple=True,
+            max_size=20,
+            required=False,
+        ),
     ]
-}
+)
 
 
 class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
