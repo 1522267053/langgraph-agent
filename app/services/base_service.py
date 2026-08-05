@@ -661,7 +661,7 @@ class BaseService(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
             print(f"删除了 {deleted_count} 条记录")
             ```
         """
-        query = select(self.model).where(getattr(self.model, "id").in_(ids))
+        query = select(self.model).where(self.model.id.in_(ids))
 
         result = await db.execute(query)
         objs = result.scalars().all()
@@ -863,7 +863,7 @@ class BaseService(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         self,
         query: Optional[Select],
         count_query: Optional[Select],
-        condition: Optional[DbBaseModel],
+        condition: Optional[Any],
     ) -> Tuple[Optional[Select], Optional[Select]]:
         """
         应用查询条件（内部方法）
@@ -887,7 +887,7 @@ class BaseService(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         Example:
             ```python
             # 重写以支持更多过滤类型
-            def _apply_filters(self, query, count_query, condition):
+            def _apply_filters(self, query: Optional[Select], count_query: Optional[Select], condition: Optional[Any]) -> Tuple[Optional[Select], Optional[Select]]:
                 # 先调用父类方法应用基础等值过滤
                 query, count_query = super()._apply_filters(query, count_query, condition)
 

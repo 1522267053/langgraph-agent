@@ -7,13 +7,14 @@
 
 import logging
 import threading
-from typing import Optional, List
+from typing import Any, Optional, List
 from sqlalchemy import select, and_, or_, Select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.knowledge_insight import KnowledgeInsight, KnowledgeInsightSegment
 from app.models.base_model import DbBaseModel
 from app.schemas.knowledge_insight_schema import (
+    KnowledgeInsightCondition,
     KnowledgeInsightCreate,
     KnowledgeInsightUpdate,
 )
@@ -50,30 +51,31 @@ class KnowledgeInsightService(
         self,
         query: Optional[Select],
         count_query: Optional[Select],
-        condition: Optional[DbBaseModel],
+        condition: Optional[KnowledgeInsightCondition],
     ) -> tuple[Optional[Select], Optional[Select]]:
         query, count_query = super()._apply_filters(query, count_query, condition)
 
         if not condition:
             return query, count_query
 
-        if hasattr(condition, "knowledge_base_id") and condition.knowledge_base_id:
-            query = query.where(
-                KnowledgeInsight.knowledge_base_id == condition.knowledge_base_id
-            )
-            count_query = count_query.where(
-                KnowledgeInsight.knowledge_base_id == condition.knowledge_base_id
-            )
+        if query is not None and count_query is not None:
+            if condition.knowledge_base_id:
+                query = query.where(
+                    KnowledgeInsight.knowledge_base_id == condition.knowledge_base_id
+                )
+                count_query = count_query.where(
+                    KnowledgeInsight.knowledge_base_id == condition.knowledge_base_id
+                )
 
-        if hasattr(condition, "question") and condition.question:
-            query, count_query = self._apply_like_filter(
-                query, count_query, "question", condition.question
-            )
+            if condition.question:
+                query, count_query = self._apply_like_filter(
+                    query, count_query, "question", condition.question
+                )
 
-        if hasattr(condition, "keywords") and condition.keywords:
-            query, count_query = self._apply_like_filter(
-                query, count_query, "keywords", condition.keywords
-            )
+            if condition.keywords:
+                query, count_query = self._apply_like_filter(
+                    query, count_query, "keywords", condition.keywords
+                )
 
         return query, count_query
 

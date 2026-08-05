@@ -8,13 +8,13 @@ import os
 import uuid
 from datetime import date
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import Select, select, or_
 
 from app.models.file import File
-from app.schemas.file_schema import FileBase, FileUpdate
+from app.schemas.file_schema import FileBase, FileCondition, FileUpdate
 from app.services.base_service import BaseService
 from app.config.settings import settings
 
@@ -33,9 +33,16 @@ class FileService(BaseService[File, FileBase, FileUpdate]):
     def __init__(self):
         super().__init__(File)
 
-    def _apply_filters(self, query, count_query, condition):
+    def _apply_filters(
+        self,
+        query: Optional[Select],
+        count_query: Optional[Select],
+        condition: Optional[FileCondition],
+    ) -> Tuple[Optional[Select], Optional[Select]]:
         mime_type_value = None
         original_name_value = None
+        if condition is None:
+            return query, count_query
         if condition and hasattr(condition, "mime_type") and condition.mime_type:
             mime_type_value = condition.mime_type
             condition.mime_type = None

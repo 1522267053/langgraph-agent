@@ -31,11 +31,12 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional, List, Any, AsyncGenerator, Dict
+from typing import Optional, List, Any, AsyncGenerator, Dict, cast
 
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
-from sqlalchemy import select, update
+from langchain_core.runnables.config import RunnableConfig
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import AsyncSessionLocal
@@ -294,7 +295,7 @@ class FlowExecutorService(BaseExecutorService):
             graph = self._build_graph(
                 expanded_flow, execution.id, self._conversation_service
             )
-            config = {
+            config: RunnableConfig = {
                 "configurable": {
                     "thread_id": f"flow_{execution.id}",
                     "scope_type": "flow",
@@ -353,16 +354,15 @@ class FlowExecutorService(BaseExecutorService):
                     wait_data=None,
                 )
             )
-            result = await db.execute(stmt)
+            result = cast(CursorResult[Any], await db.execute(stmt))
             if result.rowcount == 0:
                 yield FlowEventFactory.error("执行已被其他请求抢占，请刷新后重试")
                 return
             await db.refresh(execution)
             # 追加 human_input 到 human_inputs
-            execution.human_inputs = execution.human_inputs or {}
-            execution.human_inputs[f"human_input_{len(execution.human_inputs)}"] = (
-                human_input
-            )
+            human_inputs = execution.human_inputs or {}
+            human_inputs[f"human_input_{len(human_inputs)}"] = human_input
+            execution.human_inputs = human_inputs
             await db.commit()
 
             flow = await self._get_flow_with_details(
@@ -381,7 +381,7 @@ class FlowExecutorService(BaseExecutorService):
             graph = self._build_graph(
                 expanded_flow, execution.id, self._conversation_service
             )
-            config = {
+            config: RunnableConfig = {
                 "configurable": {
                     "thread_id": f"flow_{execution_id}",
                     "scope_type": "flow",
@@ -409,7 +409,7 @@ class FlowExecutorService(BaseExecutorService):
     async def _execute_graph_stream(
         self,
         graph: CompiledStateGraph,
-        config: dict,
+        config: RunnableConfig,
         execution_id: int,
         expanded_flow: ExpandedFlow,
         context: FlowContext,
@@ -436,10 +436,12 @@ class FlowExecutorService(BaseExecutorService):
             SSE 事件字典
         """
         node_map = {n.node_key: n for n in expanded_flow.nodes}
-
+        duration_ms = None
         try:
             if resume_input is not None:
-                config["configurable"]["_human_resume_input"] = resume_input
+                config.setdefault("configurable", {})["_human_resume_input"] = (
+                    resume_input
+                )
                 stream_input = Command(resume=resume_input)
             else:
                 stream_input = context.state.model_dump()
@@ -729,8 +731,8 @@ class FlowExecutorService(BaseExecutorService):
         steps: list[dict] = []
 
         for msg in messages:
-            role = getattr(msg, "role", "")
-            raw_content = getattr(msg, "content", "") or ""
+            role = msg.role
+            raw_content = msg.content or ""
             content = deserialize_content(raw_content)
 
             if role == "human":
@@ -742,8 +744,8 @@ class FlowExecutorService(BaseExecutorService):
                     }
                 )
             elif role == "ai":
-                thinking = getattr(msg, "thinking", "") or ""
-                tool_calls = getattr(msg, "tool_calls", None)
+                thinking = msg.thinking or ""
+                tool_calls = msg.tool_calls
 
                 steps.append(
                     {
@@ -760,9 +762,9 @@ class FlowExecutorService(BaseExecutorService):
                         "step": len(steps) + 1,
                         "role": "tool",
                         "content": content,
-                        "tool_call_id": getattr(msg, "tool_call_id", "") or "",
-                        "tool_name": getattr(msg, "name", "") or "",
-                        "status": getattr(msg, "status", "success") or "success",
+                        "tool_call_id": msg.tool_call_id or "",
+                        "tool_name": msg.name or "",
+                        "status": msg.status or "success",
                     }
                 )
 
@@ -789,7 +791,7 @@ class FlowExecutorService(BaseExecutorService):
         """获取通过 source_handle='tools' 边连接到 LLM 的工具节点 key 集合"""
         tool_keys: set[str] = set()
         for edge in flow.edges:
-            if getattr(edge, "source_handle", None) == "tools":
+            if edge.source_handle == "tools":
                 tool_keys.add(edge.source_node_key)
         return tool_keys
 
@@ -820,7 +822,10 @@ class FlowExecutorService(BaseExecutorService):
     # ---- 状态恢复 ----
 
     async def _restore_context_from_checkpoint(
-        self, execution: FlowExecution, expanded_flow: ExpandedFlow, config: dict
+        self,
+        execution: FlowExecution,
+        expanded_flow: ExpandedFlow,
+        config: RunnableConfig,
     ) -> FlowContext:
         """
         从 checkpoint 恢复执行上下文，失败时从执行记录恢复
@@ -920,7 +925,7 @@ class FlowExecutorService(BaseExecutorService):
             "question": question,
             "context": context_str,
         }
-
+        new_execution_id = 0
         async with AsyncSessionLocal() as db:
             execution = await self.get_execution(db, execution_id)
             if execution:
@@ -929,9 +934,10 @@ class FlowExecutorService(BaseExecutorService):
                 execution.wait_data = wait_data
                 execution.output_data = context.state.output_data
                 await db.commit()
+                new_execution_id = execution.id
 
         return FlowEventFactory.waiting_human(
-            execution_id=execution.id,
+            execution_id=new_execution_id,
             node_key=node_key,
             question=question,
             context=context_str,
