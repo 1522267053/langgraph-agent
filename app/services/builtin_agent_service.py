@@ -673,6 +673,22 @@ class BuiltinAgentService:
                     600,
                     fill_node_defaults("agenda"),
                 ),
+                (
+                    "mcp_tool",
+                    NodeType.MCP.value,
+                    "MCP 工具",
+                    700,
+                    600,
+                    fill_node_defaults("mcp"),
+                ),
+                (
+                    "sub_agent_tool",
+                    NodeType.SUB_AGENT.value,
+                    "子 Agent",
+                    900,
+                    600,
+                    fill_node_defaults("sub_agent"),
+                ),
             ]
         )
         for key, ntype, name, x, y, cfg in tool_nodes:
