@@ -288,7 +288,7 @@ class AiFlowApi:
             if error:
                 return ApiResponse.error(msg=error)
 
-            if any(getattr(e, "source_handle", None) == "tools" for e in edges_create):
+            if any(e.source_handle == "tools" for e in edges_create):
                 target_error = await flow_service.validate_tool_edge_targets(
                     db, flow_id, edges_create
                 )
@@ -419,7 +419,7 @@ class AiFlowApi:
                 "description": f.description or "",
                 "flow_type": f.flow_type,
                 "status": f.status,
-                "is_builtin": getattr(f, "is_builtin", 0),
+                "is_builtin": f.is_builtin,
             }
             for f in flows
         ]

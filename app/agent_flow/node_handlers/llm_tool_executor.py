@@ -146,7 +146,7 @@ async def setup_tool_handlers(
         # 注入 _working_dir（仅 Agent 类型，Shell 节点用作 cwd）
         if (
             hasattr(handler, "_working_dir")
-            and getattr(flow, "flow_type", None) == "agent"
+            and flow.flow_type == "agent"
             and hasattr(flow, "id")
         ):
             handler._working_dir = get_agent_work_dir(flow.id)
@@ -187,15 +187,13 @@ async def setup_tool_handlers(
 
     # 注入 WS 远程工具（仅智能体类型，远程工具仅 Agent 支持）
     # contextvar（WS execute 路径）优先；前端 SSE 路径 fallback 全局注册表
-    if getattr(flow, "flow_type", None) == FlowType.AGENT.value:
+    if flow.flow_type == FlowType.AGENT.value:
         from app.agent_flow.ws_tool_context import (
             _current_ws_conn,
             get_active_ws_conn,
         )
 
-        ws_conn = _current_ws_conn.get() or get_active_ws_conn(
-            getattr(flow, "id", None)
-        )
+        ws_conn = _current_ws_conn.get() or get_active_ws_conn(flow.id)
         if ws_conn and ws_conn.registered_tools:
             from app.agent_flow.remote_tool_builder import create_remote_tool
 

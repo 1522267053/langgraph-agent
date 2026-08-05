@@ -391,12 +391,10 @@ async def _handle_delete_message(conn: WSConnection, data: dict):
 def _serialize_message(m: Any) -> dict:
     """将消息对象序列化为 dict"""
     return {
-        "id": getattr(m, "id", None),
-        "role": getattr(m, "role", None),
-        "content": getattr(m, "content", None),
-        "create_time": getattr(m, "create_time", None).isoformat()
-        if getattr(m, "create_time", None)
-        else None,
+        "id": m.id,
+        "role": m.role,
+        "content": m.content,
+        "create_time": m.create_time.isoformat() if m.create_time else None,
     }
 
 

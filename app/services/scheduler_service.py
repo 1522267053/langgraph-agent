@@ -125,12 +125,12 @@ class SchedulerService:
             return
 
         job_id = f"scheduled_task_{task.id}"
-        schedule_type = getattr(task, "schedule_type", "cron") or "cron"
-        job_name = f"定时任务: {getattr(task, 'name', task.id)}"
+        schedule_type = task.schedule_type or "cron"
+        job_name = f"定时任务: {task.name}"
 
         try:
             if schedule_type == "once":
-                run_at = getattr(task, "run_at", None)
+                run_at = task.run_at
                 if not run_at:
                     logger.warning(f"定时任务[{task.id}] once 模式未设置 run_at，跳过")
                     return
@@ -148,7 +148,7 @@ class SchedulerService:
                 return
 
             # cron 模式
-            cron_expr = getattr(task, "cron_expression", "") or ""
+            cron_expr = task.cron_expression or ""
             if not cron_expr:
                 return
             parts = cron_expr.strip().split()
@@ -230,7 +230,7 @@ class SchedulerService:
                 logger.info(f"定时任务[{task.name}]执行完成")
 
                 # 单次任务执行完成后自动禁用（DateTrigger 已自动移除 job）
-                if getattr(task, "schedule_type", "cron") == "once":
+                if task.schedule_type == "once":
                     task.is_enabled = 0
                     task.next_run_time = None
                     await db.commit()
@@ -300,11 +300,7 @@ class SchedulerService:
         Args:
             agenda: Agenda 模型实例
         """
-        if (
-            agenda.remind_at
-            and getattr(agenda, "status", 0) != 2
-            and getattr(agenda, "is_delete", 0) != 1
-        ):
+        if agenda.remind_at and agenda.status != 2 and agenda.is_delete != 1:
             logger.debug(
                 f"日程提醒已注册[{agenda.id}]: {agenda.remind_at}（由轮询任务处理）"
             )

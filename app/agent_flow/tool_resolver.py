@@ -122,7 +122,7 @@ def filter_tools_by_intent(
     result: list[tuple[FlowNode, object]] = []
 
     for tool_node, edge in tool_edge_pairs:
-        condition = getattr(edge, "condition", None)
+        condition = edge.condition
         if not condition or not isinstance(condition, dict):
             result.append((tool_node, edge))
             continue

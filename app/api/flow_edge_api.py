@@ -74,7 +74,7 @@ class FlowEdgeApi(
         error = await flow_service.validate_agent_edges(db, flow_id, edges)
         if error:
             raise HTTPException(status_code=400, detail=error)
-        if any(getattr(e, "source_handle", None) == "tools" for e in edges):
+        if any(e.source_handle == "tools" for e in edges):
             target_error = await flow_service.validate_tool_edge_targets(
                 db, flow_id, edges
             )

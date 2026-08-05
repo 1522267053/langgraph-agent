@@ -525,8 +525,8 @@ class CardNodeHandler(BaseNodeHandler):
             result_vars = subgraph_result.get("variables", {})
             result_output = subgraph_result.get("output_data", {})
         else:
-            result_vars = getattr(subgraph_result, "variables", {})
-            result_output = getattr(subgraph_result, "output_data", {})
+            result_vars = subgraph_result.variables
+            result_output = subgraph_result.output_data
 
         result_state = FlowState.model_validate(
             {

@@ -153,7 +153,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         if not source:
             raise ValueError("流程不存在")
 
-        if getattr(source, "is_builtin", 0) == 1:
+        if source.is_builtin == 1:
             raise ValueError("内置流程不可复制")
 
         # 生成唯一名称
@@ -723,7 +723,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         # 收集本次提交的 tools 边
         tool_edges = []
         for edge_data in edges_data:
-            source_handle = getattr(edge_data, "source_handle", None)
+            source_handle = edge_data.source_handle
             if source_handle == "tools":
                 tool_edges.append(edge_data)
 
@@ -783,7 +783,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         for edge_data in edges_data:
             source_key = edge_data.source_node_key
             target_key = edge_data.target_node_key
-            source_handle = getattr(edge_data, "source_handle", None)
+            source_handle = edge_data.source_handle
             source_type = key_to_type.get(source_key, "")
             target_type = key_to_type.get(target_key, "")
 
@@ -837,8 +837,8 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         key_to_type = {row[0]: row[1] for row in nodes_result.fetchall()}
 
         for edge_data in edges_data:
-            src_handle = getattr(edge_data, "source_handle", None) or "default"
-            tgt_handle = getattr(edge_data, "target_handle", None) or "default"
+            src_handle = edge_data.source_handle or "default"
+            tgt_handle = edge_data.target_handle or "default"
             src_type = key_to_type.get(edge_data.source_node_key, "")
             tgt_type = key_to_type.get(edge_data.target_node_key, "")
 
@@ -882,9 +882,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         Returns:
             错误信息字符串，校验通过返回 None
         """
-        tool_edges = [
-            e for e in edges_data if getattr(e, "source_handle", None) == "tools"
-        ]
+        tool_edges = [e for e in edges_data if e.source_handle == "tools"]
         if not tool_edges:
             return None
 
@@ -924,9 +922,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         Returns:
             错误信息字符串，校验通过返回 None
         """
-        non_tool_edges = [
-            e for e in edges_data if getattr(e, "source_handle", None) != "tools"
-        ]
+        non_tool_edges = [e for e in edges_data if e.source_handle != "tools"]
         if not non_tool_edges:
             return None
 
@@ -1089,7 +1085,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
 
         flow = await self.get_by_id(db, flow_id, raise_not_found=True)
 
-        if getattr(flow, "is_builtin", 0) == 1:
+        if flow.is_builtin == 1:
             raise ValueError("内置助手不可被删除")
 
         execution_ids = []

@@ -763,8 +763,8 @@ class ShellNodeHandler(BaseNodeHandler):
             return self._working_dir
         ctx = get_execution_context()
         if ctx and ctx.expanded_flow is not None:
-            flow_type = getattr(ctx.expanded_flow, "flow_type", None)
-            flow_id = getattr(ctx.expanded_flow, "id", None) or ctx.flow_id
+            flow_type = ctx.expanded_flow.flow_type
+            flow_id = ctx.expanded_flow.id or ctx.flow_id
             if flow_type == "agent" and flow_id:
                 return get_agent_work_dir(flow_id)
         return None
@@ -902,11 +902,7 @@ class ShellNodeHandler(BaseNodeHandler):
         output_vars = config.get("output_variables", [])
         if output_vars:
             for var in output_vars:
-                name = (
-                    var.get("name", "")
-                    if isinstance(var, dict)
-                    else getattr(var, "name", "")
-                )
+                name = var.get("name", "") if isinstance(var, dict) else var.name
                 if name:
                     value = state.get_node_variable(node.node_key, name)
                     if value is not None:

@@ -163,11 +163,7 @@ class AgentConversationService:
                     ai.tool_calls = [
                         tc
                         for tc in ai.tool_calls
-                        if (
-                            tc.get("id", "")
-                            if isinstance(tc, dict)
-                            else getattr(tc, "id", "")
-                        )
+                        if (tc.get("id", "") if isinstance(tc, dict) else tc.id)
                         not in pending_ids
                     ]
                     if not ai.tool_calls:
@@ -179,7 +175,7 @@ class AgentConversationService:
             if isinstance(msg, AIMessage) and msg.tool_calls:
                 flush_pending()
                 pending_ids = {
-                    tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+                    tc.get("id", "") if isinstance(tc, dict) else tc.id
                     for tc in msg.tool_calls
                 }
                 result.append(msg)

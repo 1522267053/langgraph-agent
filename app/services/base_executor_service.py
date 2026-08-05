@@ -184,7 +184,7 @@ class BaseExecutorService:
             edge_id = (
                 edge.source_node_key,
                 edge.target_node_key,
-                getattr(edge, "source_handle", None) or "",
+                edge.source_handle or "",
             )
             if edge_id in seen_edge_ids:
                 continue

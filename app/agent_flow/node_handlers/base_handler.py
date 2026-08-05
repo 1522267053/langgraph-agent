@@ -375,7 +375,7 @@ class BaseNodeHandler(ABC):
         output_vars = raw.get("output_variables")
         if output_vars and isinstance(output_vars, list):
             names = [
-                v.get("name", "") if isinstance(v, dict) else getattr(v, "name", "")
+                v.get("name", "") if isinstance(v, dict) else v.name
                 for v in output_vars
             ]
             names = [n for n in names if n]
