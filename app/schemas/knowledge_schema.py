@@ -10,9 +10,9 @@ from app.schemas.base_schema import BaseView
 class KnowledgeBaseBase(BaseView):
     """知识库基础模型"""
 
-    name: Optional[str] = Field(None, description="知识库名称")
-    description: Optional[str] = Field(None, description="描述")
-    status: Optional[int] = Field(None, description="状态：0=禁用，1=启用")
+    name: Optional[str] = Field(default=None, description="知识库名称")
+    description: Optional[str] = Field(default=None, description="描述")
+    status: Optional[int] = Field(default=None, description="状态：0=禁用，1=启用")
 
 
 class KnowledgeBaseCreate(KnowledgeBaseBase):
@@ -30,17 +30,22 @@ class KnowledgeBaseUpdate(KnowledgeBaseBase):
 class KnowledgeDocumentBase(BaseView):
     """文档基础模型"""
 
-    knowledge_base_id: Optional[int] = Field(None, description="所属知识库ID")
-    title: Optional[str] = Field(None, description="文档标题")
-    content: Optional[str] = Field(None, description="文档内容")
-    file_type: Optional[str] = Field(None, description="文件类型：txt/md/docx/pdf")
-    file_path: Optional[str] = Field(None, description="原始文件存储路径")
-    word_count: Optional[int] = Field(None, description="字数")
-    segment_count: Optional[int] = Field(None, description="分段数量")
-    processing_status: Optional[int] = Field(
-        None, description="处理状态：0=待处理，1=处理中，2=已完成，3=失败，4=向量化中"
+    knowledge_base_id: Optional[int] = Field(default=None, description="所属知识库ID")
+    title: Optional[str] = Field(default=None, description="文档标题")
+    content: Optional[str] = Field(default=None, description="文档内容")
+    file_type: Optional[str] = Field(
+        default=None, description="文件类型：txt/md/docx/pdf"
     )
-    error_message: Optional[str] = Field(None, description="处理失败时的错误信息")
+    file_path: Optional[str] = Field(default=None, description="原始文件存储路径")
+    word_count: Optional[int] = Field(default=None, description="字数")
+    segment_count: Optional[int] = Field(default=None, description="分段数量")
+    processing_status: Optional[int] = Field(
+        default=None,
+        description="处理状态：0=待处理，1=处理中，2=已完成，3=失败，4=向量化中",
+    )
+    error_message: Optional[str] = Field(
+        default=None, description="处理失败时的错误信息"
+    )
 
 
 class KnowledgeDocumentCreate(KnowledgeDocumentBase):
@@ -59,13 +64,13 @@ class KnowledgeDocumentUpdate(KnowledgeDocumentBase):
 class KnowledgeDocumentSegmentBase(BaseView):
     """文档分段基础模型"""
 
-    document_id: Optional[int] = Field(None, description="所属文档ID")
-    segment_index: Optional[int] = Field(None, description="分段序号")
-    title: Optional[str] = Field(None, description="分段标题")
-    title_id: Optional[int] = Field(None, description="所属标题ID")
-    content: Optional[str] = Field(None, description="分段内容")
-    word_count: Optional[int] = Field(None, description="字数")
-    vector_id: Optional[str] = Field(None, description="向量存储ID")
+    document_id: Optional[int] = Field(default=None, description="所属文档ID")
+    segment_index: Optional[int] = Field(default=None, description="分段序号")
+    title: Optional[str] = Field(default=None, description="分段标题")
+    title_id: Optional[int] = Field(default=None, description="所属标题ID")
+    content: Optional[str] = Field(default=None, description="分段内容")
+    word_count: Optional[int] = Field(default=None, description="字数")
+    vector_id: Optional[str] = Field(default=None, description="向量存储ID")
 
 
 class KnowledgeDocumentSegmentCreate(BaseView):
@@ -73,7 +78,7 @@ class KnowledgeDocumentSegmentCreate(BaseView):
 
     document_id: int = Field(..., description="所属文档ID")
     segment_index: int = Field(..., description="分段序号")
-    title: Optional[str] = Field(None, description="分段标题")
+    title: Optional[str] = Field(default=None, description="分段标题")
     content: str = Field(..., description="分段内容")
     word_count: int = Field(default=0, description="字数")
 
@@ -115,7 +120,7 @@ class KnowledgeBaseVectorizeResult(BaseView):
     vectorized_segments: int = Field(..., description="已向量化分段数")
     failed_segments: int = Field(default=0, description="失败分段数")
     details: Optional[List[KnowledgeDocumentVectorizeResult]] = Field(
-        None, description="各文档详情"
+        default=None, description="各文档详情"
     )
 
 
@@ -125,13 +130,13 @@ class KnowledgeBaseVectorizeResult(BaseView):
 class KnowledgeDocumentTitleBase(BaseView):
     """文档标题索引基础模型"""
 
-    document_id: Optional[int] = Field(None, description="所属文档ID")
-    title_index: Optional[int] = Field(None, description="文档内标题序号")
-    level: Optional[int] = Field(None, description="标题级别 1-6")
-    title: Optional[str] = Field(None, description="标题文本")
-    start_segment_index: Optional[int] = Field(None, description="首段落序号")
-    end_segment_index: Optional[int] = Field(None, description="末段落序号")
-    vector_id: Optional[str] = Field(None, description="向量存储ID")
+    document_id: Optional[int] = Field(default=None, description="所属文档ID")
+    title_index: Optional[int] = Field(default=None, description="文档内标题序号")
+    level: Optional[int] = Field(default=None, description="标题级别 1-6")
+    title: Optional[str] = Field(default=None, description="标题文本")
+    start_segment_index: Optional[int] = Field(default=None, description="首段落序号")
+    end_segment_index: Optional[int] = Field(default=None, description="末段落序号")
+    vector_id: Optional[str] = Field(default=None, description="向量存储ID")
 
 
 class KnowledgeDocumentTitleCreate(BaseView):
@@ -188,15 +193,17 @@ class ParagraphItem(BaseModel):
 class AdjacentParagraphsResult(BaseModel):
     """相邻段落结果（工具返回用）"""
 
-    prev: Optional[ParagraphItem] = Field(None, description="上一个段落")
-    current: Optional[ParagraphItem] = Field(None, description="当前段落")
-    next: Optional[ParagraphItem] = Field(None, description="下一个段落")
+    prev: Optional[ParagraphItem] = Field(default=None, description="上一个段落")
+    current: Optional[ParagraphItem] = Field(default=None, description="当前段落")
+    next: Optional[ParagraphItem] = Field(default=None, description="下一个段落")
 
 
 class TitleLookupResult(BaseModel):
     """段落反向查找标题结果（工具返回用）"""
 
-    current_title: Optional[TitleTreeItem] = Field(None, description="当前所属标题")
+    current_title: Optional[TitleTreeItem] = Field(
+        default=None, description="当前所属标题"
+    )
     title_tree: List[TitleTreeItem] = Field(
         default_factory=list, description="文档完整标题树"
     )

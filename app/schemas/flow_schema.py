@@ -28,14 +28,14 @@ class FlowIOField(BaseView):
     type: FieldType = Field(
         ..., description="字段类型：string/number/boolean/object/array/file"
     )
-    description: Optional[str] = Field(None, description="字段描述")
-    placeholder: Optional[str] = Field(None, description="输入框占位提示文本")
+    description: Optional[str] = Field(default=None, description="字段描述")
+    placeholder: Optional[str] = Field(default=None, description="输入框占位提示文本")
     required: bool = Field(default=False, description="是否必填")
     accept: Optional[str] = Field(
-        None, description="允许的文件类型，如 image/*,.pdf,.docx"
+        default=None, description="允许的文件类型，如 image/*,.pdf,.docx"
     )
     multiple: bool = Field(default=False, description="是否允许多文件")
-    max_size: Optional[int] = Field(None, description="最大文件大小(MB)")
+    max_size: Optional[int] = Field(default=None, description="最大文件大小(MB)")
 
 
 class FlowIOSchema(BaseView):
@@ -47,19 +47,25 @@ class FlowIOSchema(BaseView):
 class FlowBase(BaseView):
     """流程基础模型"""
 
-    name: Optional[str] = Field(None, description="流程名称")
-    description: Optional[str] = Field(None, description="流程描述")
+    name: Optional[str] = Field(default=None, description="流程名称")
+    description: Optional[str] = Field(default=None, description="流程描述")
     flow_type: Optional[str] = Field(
-        None, description="类型：flow=普通流程，agent=智能体"
+        default=None, description="类型：flow=普通流程，agent=智能体"
     )
-    status: Optional[int] = Field(None, description="状态：0=草稿，1=已发布")
+    status: Optional[int] = Field(default=None, description="状态：0=草稿，1=已发布")
     saved_as_card: Optional[int] = Field(
-        None, description="是否已保存为能力卡片：0=否，1=是"
+        default=None, description="是否已保存为能力卡片：0=否，1=是"
     )
-    input_schema: Optional[FlowIOSchema] = Field(None, description="输入参数定义")
-    output_schema: Optional[FlowIOSchema] = Field(None, description="输出参数定义")
-    is_builtin: Optional[int] = Field(None, description="是否内置：0=否，1=是")
-    suggested_prompts: Optional[list[str]] = Field(None, description="建议提示词列表")
+    input_schema: Optional[FlowIOSchema] = Field(
+        default=None, description="输入参数定义"
+    )
+    output_schema: Optional[FlowIOSchema] = Field(
+        default=None, description="输出参数定义"
+    )
+    is_builtin: Optional[int] = Field(default=None, description="是否内置：0=否，1=是")
+    suggested_prompts: Optional[list[str]] = Field(
+        default=None, description="建议提示词列表"
+    )
 
     @field_validator("input_schema", "output_schema", mode="before")
     @classmethod
@@ -78,9 +84,9 @@ class FlowCreate(FlowBase):
 
     name: str = Field(..., description="流程名称")
     flow_type: Optional[str] = Field(
-        None, description="类型：flow=普通流程，agent=智能体"
+        default=None, description="类型：flow=普通流程，agent=智能体"
     )
-    is_builtin: Optional[int] = Field(0, description="是否内置：0=否，1=是")
+    is_builtin: Optional[int] = Field(default=0, description="是否内置：0=否，1=是")
 
 
 class FlowUpdate(FlowBase):
@@ -99,27 +105,27 @@ class FlowDetail(FlowBase):
 class VueFlowNodeData(BaseView):
     """Vue Flow 节点数据格式"""
 
-    label: Optional[str] = Field(None, description="节点标签")
-    config: Optional[dict] = Field(None, description="节点配置")
+    label: Optional[str] = Field(default=None, description="节点标签")
+    config: Optional[dict] = Field(default=None, description="节点配置")
 
 
 class VueFlowNode(BaseView):
     """Vue Flow 节点格式"""
 
-    id: Optional[str] = Field(None, description="节点ID")
-    type: Optional[str] = Field(None, description="节点类型")
-    position: Optional[dict] = Field(None, description="位置{x, y}")
-    data: Optional[VueFlowNodeData] = Field(None, description="节点数据")
+    id: Optional[str] = Field(default=None, description="节点ID")
+    type: Optional[str] = Field(default=None, description="节点类型")
+    position: Optional[dict] = Field(default=None, description="位置{x, y}")
+    data: Optional[VueFlowNodeData] = Field(default=None, description="节点数据")
 
 
 class VueFlowEdge(BaseView):
     """Vue Flow 边格式"""
 
-    id: Optional[str] = Field(None, description="边ID")
-    source: Optional[str] = Field(None, description="源节点ID")
-    target: Optional[str] = Field(None, description="目标节点ID")
-    label: Optional[str] = Field(None, description="边标签")
-    data: Optional[dict] = Field(None, description="边数据")
+    id: Optional[str] = Field(default=None, description="边ID")
+    source: Optional[str] = Field(default=None, description="源节点ID")
+    target: Optional[str] = Field(default=None, description="目标节点ID")
+    label: Optional[str] = Field(default=None, description="边标签")
+    data: Optional[dict] = Field(default=None, description="边数据")
 
 
 class VueFlowGraph(BaseView):

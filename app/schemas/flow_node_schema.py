@@ -10,16 +10,18 @@ from app.schemas.base_schema import BaseView
 class FlowNodeBase(BaseView):
     """流程节点基础模型"""
 
-    flow_id: Optional[int] = Field(None, description="流程ID")
+    flow_id: Optional[int] = Field(default=None, description="流程ID")
     node_type: Optional[str] = Field(
-        None, description="节点类型：start/end/condition/card"
+        default=None, description="节点类型：start/end/condition/card"
     )
-    node_key: Optional[str] = Field(None, description="节点唯一标识")
-    node_name: Optional[str] = Field(None, description="节点名称")
-    position_x: Optional[float] = Field(None, description="X坐标")
-    position_y: Optional[float] = Field(None, description="Y坐标")
-    base_config: Optional[dict] = Field(None, description="节点配置(JSON)")
-    ref_flow_id: Optional[int] = Field(None, description="引用的流程ID(能力卡片节点用)")
+    node_key: Optional[str] = Field(default=None, description="节点唯一标识")
+    node_name: Optional[str] = Field(default=None, description="节点名称")
+    position_x: Optional[float] = Field(default=None, description="X坐标")
+    position_y: Optional[float] = Field(default=None, description="Y坐标")
+    base_config: Optional[dict] = Field(default=None, description="节点配置(JSON)")
+    ref_flow_id: Optional[int] = Field(
+        default=None, description="引用的流程ID(能力卡片节点用)"
+    )
 
 
 class FlowNodeCreate(FlowNodeBase):

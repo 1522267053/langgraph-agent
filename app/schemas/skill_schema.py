@@ -34,11 +34,11 @@ class SkillUpdate(BaseView):
     """更新 Skill Schema"""
 
     id: int = Field(..., description="Skill ID")
-    category: Optional[str] = Field(None, description="分类")
-    tags: Optional[str] = Field(None, description="标签")
-    icon: Optional[str] = Field(None, description="图标名称")
-    is_enabled: Optional[int] = Field(None, description="是否启用")
-    sort_order: Optional[int] = Field(None, description="排序顺序")
+    category: Optional[str] = Field(default=None, description="分类")
+    tags: Optional[str] = Field(default=None, description="标签")
+    icon: Optional[str] = Field(default=None, description="图标名称")
+    is_enabled: Optional[int] = Field(default=None, description="是否启用")
+    sort_order: Optional[int] = Field(default=None, description="排序顺序")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -46,9 +46,9 @@ class SkillUpdate(BaseView):
 class SkillQuery(BaseView):
     """查询条件 Schema"""
 
-    name: Optional[str] = Field(None, description="名称（模糊搜索）")
-    category: Optional[str] = Field(None, description="分类")
-    is_enabled: Optional[int] = Field(None, description="是否启用")
+    name: Optional[str] = Field(default=None, description="名称（模糊搜索）")
+    category: Optional[str] = Field(default=None, description="分类")
+    is_enabled: Optional[int] = Field(default=None, description="是否启用")
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -12,21 +12,25 @@ from app.schemas.base_schema import BaseView, ChinaDateTime
 class AgendaBase(BaseView):
     """日程基础模型"""
 
-    title: Optional[str] = Field(None, description="标题")
-    description: Optional[str] = Field(None, description="备注")
-    start_time: Optional[ChinaDateTime] = Field(None, description="开始时间")
-    end_time: Optional[ChinaDateTime] = Field(None, description="结束时间")
-    category: Optional[str] = Field(None, description="分类：work/life/study/other")
-    priority: Optional[int] = Field(None, description="优先级：1=低/2=中/3=高")
-    location: Optional[str] = Field(None, description="地点")
-    recurrence: Optional[str] = Field(
-        None, description="重复规则：none/daily/weekly/monthly"
+    title: Optional[str] = Field(default=None, description="标题")
+    description: Optional[str] = Field(default=None, description="备注")
+    start_time: Optional[ChinaDateTime] = Field(default=None, description="开始时间")
+    end_time: Optional[ChinaDateTime] = Field(default=None, description="结束时间")
+    category: Optional[str] = Field(
+        default=None, description="分类：work/life/study/other"
     )
-    status: Optional[int] = Field(None, description="状态：0=待办/1=进行中/2=已完成")
-    completed_at: Optional[ChinaDateTime] = Field(None, description="完成时间")
-    color: Optional[str] = Field(None, description="颜色标签")
-    remind_at: Optional[ChinaDateTime] = Field(None, description="提醒时间")
-    is_reminded: Optional[int] = Field(None, description="是否已推送提醒")
+    priority: Optional[int] = Field(default=None, description="优先级：1=低/2=中/3=高")
+    location: Optional[str] = Field(default=None, description="地点")
+    recurrence: Optional[str] = Field(
+        default=None, description="重复规则：none/daily/weekly/monthly"
+    )
+    status: Optional[int] = Field(
+        default=None, description="状态：0=待办/1=进行中/2=已完成"
+    )
+    completed_at: Optional[ChinaDateTime] = Field(default=None, description="完成时间")
+    color: Optional[str] = Field(default=None, description="颜色标签")
+    remind_at: Optional[ChinaDateTime] = Field(default=None, description="提醒时间")
+    is_reminded: Optional[int] = Field(default=None, description="是否已推送提醒")
 
 
 class AgendaCreate(AgendaBase):
@@ -44,12 +48,16 @@ class AgendaUpdate(AgendaBase):
 class AgendaCondition(BaseView):
     """日程查询条件"""
 
-    title: Optional[str] = Field(None, description="标题（模糊查询）")
-    category: Optional[str] = Field(None, description="分类")
-    status: Optional[int] = Field(None, description="状态")
-    creator_name: Optional[str] = Field(None, description="创建人名称")
-    start_date: Optional[str] = Field(None, description="开始时间范围起（YYYY-MM-DD）")
-    end_date: Optional[str] = Field(None, description="开始时间范围止（YYYY-MM-DD）")
+    title: Optional[str] = Field(default=None, description="标题（模糊查询）")
+    category: Optional[str] = Field(default=None, description="分类")
+    status: Optional[int] = Field(default=None, description="状态")
+    creator_name: Optional[str] = Field(default=None, description="创建人名称")
+    start_date: Optional[str] = Field(
+        default=None, description="开始时间范围起（YYYY-MM-DD）"
+    )
+    end_date: Optional[str] = Field(
+        default=None, description="开始时间范围止（YYYY-MM-DD）"
+    )
 
 
 class CalendarEventsRequest(BaseModel):
@@ -58,7 +66,7 @@ class CalendarEventsRequest(BaseModel):
     start_date: str = Field(..., description="开始日期（YYYY-MM-DD）")
     end_date: str = Field(..., description="结束日期（YYYY-MM-DD）")
     status: Optional[list[int]] = Field(
-        None, description="状态筛选（如 [0, 1] 表示待办+进行中）"
+        default=None, description="状态筛选（如 [0, 1] 表示待办+进行中）"
     )
 
 
@@ -67,9 +75,9 @@ class LoadMoreRequest(BaseModel):
 
     cursor: str = Field(..., description="游标日期 YYYY-MM-DD")
     direction: str = Field(
-        "forward", description="forward=向后加载 / backward=向前加载"
+        default="forward", description="forward=向后加载 / backward=向前加载"
     )
-    status: Optional[list[int]] = Field(None, description="状态筛选")
+    status: Optional[list[int]] = Field(default=None, description="状态筛选")
 
 
 class LoadMoreResponse(BaseModel):
@@ -77,5 +85,5 @@ class LoadMoreResponse(BaseModel):
 
     items: list[AgendaBase]
     next_cursor: Optional[str] = Field(
-        None, description="下一游标日期；None 表示无更多"
+        default=None, description="下一游标日期；None 表示无更多"
     )
