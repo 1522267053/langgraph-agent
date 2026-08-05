@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.flow_service import flow_service
-from app.schemas.flow_schema import FlowCreate
+from app.schemas.flow_schema import FieldType, FlowCreate, FlowIOField, FlowIOSchema
 from app.schemas.flow_edge_schema import FlowEdgeCreate
 
 
@@ -29,8 +29,8 @@ class TemplateEdge(BaseModel):
 
     source_node_key: str = Field(..., description="源节点")
     target_node_key: str = Field(..., description="目标节点")
-    source_handle: str = Field("default", description="源handle")
-    target_handle: str = Field("default", description="目标handle")
+    source_handle: str = Field(default="default", description="源handle")
+    target_handle: str = Field(default="default", description="目标handle")
 
 
 class FlowTemplate(BaseModel):
@@ -43,8 +43,12 @@ class FlowTemplate(BaseModel):
     node_count: int = Field(0, description="节点数量")
     nodes: list[TemplateNode] = Field(default_factory=list, description="节点列表")
     edges: list[TemplateEdge] = Field(default_factory=list, description="边列表")
-    input_schema: dict = Field(default_factory=dict, description="输入参数定义")
-    output_schema: dict = Field(default_factory=dict, description="输出参数定义")
+    input_schema: FlowIOSchema = Field(
+        default_factory=FlowIOSchema, description="输入参数定义"
+    )
+    output_schema: FlowIOSchema = Field(
+        default_factory=FlowIOSchema, description="输出参数定义"
+    )
 
 
 # ---- 模板定义 ----
@@ -65,6 +69,7 @@ _register(
         name="空白流程",
         description="只有开始和结束节点的空白流程",
         flow_type="flow",
+        node_count=2,
         nodes=[
             TemplateNode(
                 node_type="start",
@@ -87,21 +92,30 @@ _register(
             ),
         ],
         edges=[
-            TemplateEdge(source_node_key="start", target_node_key="end"),
+            TemplateEdge(
+                source_node_key="start",
+                target_node_key="end",
+                source_handle="default",
+                target_handle="default",
+            ),
         ],
-        input_schema={
-            "fields": [
-                {
-                    "name": "message",
-                    "type": "string",
-                    "description": "用户消息",
-                    "required": True,
-                }
+        input_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="message",
+                    type=FieldType.STRING,
+                    description="用户消息",
+                    required=True,
+                )
             ]
-        },
-        output_schema={
-            "fields": [{"name": "result", "type": "string", "description": "输出结果"}]
-        },
+        ),
+        output_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="result", type=FieldType.STRING, description="输出结果"
+                )
+            ]
+        ),
     )
 )
 
@@ -112,6 +126,7 @@ _register(
         name="RAG 问答",
         description="接收用户问题 → 检索知识库 → LLM 总结回答",
         flow_type="flow",
+        node_count=4,
         nodes=[
             TemplateNode(
                 node_type="start",
@@ -165,19 +180,23 @@ _register(
             ),
             TemplateEdge(source_node_key="llm", target_node_key="end"),
         ],
-        input_schema={
-            "fields": [
-                {
-                    "name": "message",
-                    "type": "string",
-                    "description": "用户问题",
-                    "required": True,
-                }
+        input_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="message",
+                    type=FieldType.STRING,
+                    description="用户问题",
+                    required=True,
+                )
             ]
-        },
-        output_schema={
-            "fields": [{"name": "result", "type": "string", "description": "LLM 回答"}]
-        },
+        ),
+        output_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="result", type=FieldType.STRING, description="LLM 回答"
+                )
+            ]
+        ),
     )
 )
 
@@ -188,6 +207,7 @@ _register(
         name="智能客服",
         description="意图路由 → 自动回复或转人工",
         flow_type="flow",
+        node_count=5,
         nodes=[
             TemplateNode(
                 node_type="start",
@@ -270,19 +290,23 @@ _register(
             TemplateEdge(source_node_key="llm", target_node_key="end"),
             TemplateEdge(source_node_key="human", target_node_key="end"),
         ],
-        input_schema={
-            "fields": [
-                {
-                    "name": "message",
-                    "type": "string",
-                    "description": "用户消息",
-                    "required": True,
-                }
+        input_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="message",
+                    type=FieldType.STRING,
+                    description="用户消息",
+                    required=True,
+                )
             ]
-        },
-        output_schema={
-            "fields": [{"name": "result", "type": "string", "description": "客服回复"}]
-        },
+        ),
+        output_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="result", type=FieldType.STRING, description="客服回复"
+                )
+            ]
+        ),
     )
 )
 
@@ -293,6 +317,7 @@ _register(
         name="数据处理",
         description="接收输入 → Python 处理 → 输出结果",
         flow_type="flow",
+        node_count=3,
         nodes=[
             TemplateNode(
                 node_type="start",
@@ -332,19 +357,23 @@ _register(
             TemplateEdge(source_node_key="start", target_node_key="python"),
             TemplateEdge(source_node_key="python", target_node_key="end"),
         ],
-        input_schema={
-            "fields": [
-                {
-                    "name": "input_data",
-                    "type": "string",
-                    "description": "输入数据",
-                    "required": True,
-                }
+        input_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="input_data",
+                    type=FieldType.STRING,
+                    description="输入数据",
+                    required=True,
+                )
             ]
-        },
-        output_schema={
-            "fields": [{"name": "result", "type": "string", "description": "处理结果"}]
-        },
+        ),
+        output_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="result", type=FieldType.STRING, description="处理结果"
+                )
+            ]
+        ),
     )
 )
 
@@ -355,6 +384,7 @@ _register(
         name="空白智能体",
         description="只有 LLM 的空白智能体",
         flow_type="agent",
+        node_count=3,
         nodes=[
             TemplateNode(
                 node_type="start",
@@ -392,19 +422,21 @@ _register(
             TemplateEdge(source_node_key="start", target_node_key="llm"),
             TemplateEdge(source_node_key="llm", target_node_key="end"),
         ],
-        input_schema={
-            "fields": [
-                {
-                    "name": "message",
-                    "type": "string",
-                    "description": "用户消息",
-                    "required": True,
-                }
+        input_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="message",
+                    type=FieldType.STRING,
+                    description="用户消息",
+                    required=True,
+                )
             ]
-        },
-        output_schema={
-            "fields": [{"name": "result", "type": "string", "description": "AI 回复"}]
-        },
+        ),
+        output_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(name="result", type=FieldType.STRING, description="AI 回复")
+            ]
+        ),
     )
 )
 
@@ -415,6 +447,7 @@ _register(
         name="知识库助手",
         description="LLM 搭配知识库检索工具",
         flow_type="agent",
+        node_count=4,
         nodes=[
             TemplateNode(
                 node_type="start",
@@ -468,19 +501,21 @@ _register(
             ),
             TemplateEdge(source_node_key="llm", target_node_key="end"),
         ],
-        input_schema={
-            "fields": [
-                {
-                    "name": "message",
-                    "type": "string",
-                    "description": "用户消息",
-                    "required": True,
-                }
+        input_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="message",
+                    type=FieldType.STRING,
+                    description="用户消息",
+                    required=True,
+                )
             ]
-        },
-        output_schema={
-            "fields": [{"name": "result", "type": "string", "description": "AI 回复"}]
-        },
+        ),
+        output_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(name="result", type=FieldType.STRING, description="AI 回复")
+            ]
+        ),
     )
 )
 
@@ -491,6 +526,7 @@ _register(
         name="全能助手",
         description="LLM 搭配知识库、Python、Shell 等多种工具",
         flow_type="agent",
+        node_count=6,
         nodes=[
             TemplateNode(
                 node_type="start",
@@ -572,19 +608,21 @@ _register(
             ),
             TemplateEdge(source_node_key="llm", target_node_key="end"),
         ],
-        input_schema={
-            "fields": [
-                {
-                    "name": "message",
-                    "type": "string",
-                    "description": "用户消息",
-                    "required": True,
-                }
+        input_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="message",
+                    type=FieldType.STRING,
+                    description="用户消息",
+                    required=True,
+                )
             ]
-        },
-        output_schema={
-            "fields": [{"name": "result", "type": "string", "description": "AI 回复"}]
-        },
+        ),
+        output_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(name="result", type=FieldType.STRING, description="AI 回复")
+            ]
+        ),
     )
 )
 
@@ -619,7 +657,7 @@ async def create_from_template(
     description: Optional[str] = None,
 ) -> int:
     """从模板创建流程"""
-    template = get_template(template_id)
+    template: Optional[FlowTemplate] = get_template(template_id)
     if not template:
         raise ValueError(f"模板不存在: {template_id}")
 
