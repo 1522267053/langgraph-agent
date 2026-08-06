@@ -24,14 +24,18 @@ from app.services.base_service import BaseService
 logger = logging.getLogger(__name__)
 
 
-class ScheduledTaskService(BaseService[ScheduledTask, ScheduledTaskCreate, ScheduledTaskUpdate]):
+class ScheduledTaskService(
+    BaseService[ScheduledTask, ScheduledTaskCreate, ScheduledTaskUpdate]
+):
     """定时任务服务"""
 
     def __init__(self):
         super().__init__(ScheduledTask)
         self._running_tasks: set[int] = set()
 
-    async def toggle_enabled(self, db: AsyncSession, task_id: int) -> Optional[ScheduledTask]:
+    async def toggle_enabled(
+        self, db: AsyncSession, task_id: int
+    ) -> Optional[ScheduledTask]:
         """切换定时任务的启用/禁用状态"""
         task = await self.get_by_id(db, task_id)
         if task is None:
