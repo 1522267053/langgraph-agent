@@ -80,8 +80,8 @@ class NodeStartEvent(FlowEvent):
 
     node_key: str = Field(..., description="节点Key")
     node_type: str = Field(..., description="节点类型")
-    node_name: Optional[str] = Field(None, description="节点名称")
-    input_data: Optional[dict] = Field(None, description="输入数据")
+    node_name: Optional[str] = Field(default=None, description="节点名称")
+    input_data: Optional[dict] = Field(default=None, description="输入数据")
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.NODE_START
@@ -92,8 +92,8 @@ class NodeDoneEvent(FlowEvent):
 
     node_key: str = Field(..., description="节点Key")
     node_type: str = Field(..., description="节点类型")
-    output_data: Optional[dict] = Field(None, description="输出数据")
-    error: Optional[str] = Field(None, description="错误信息")
+    output_data: Optional[dict] = Field(default=None, description="输出数据")
+    error: Optional[str] = Field(default=None, description="错误信息")
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.NODE_DONE
@@ -135,8 +135,8 @@ class ToolCallEndEvent(FlowEvent):
 
     node_key: str = Field(..., description="节点Key")
     tool_name: str = Field(..., description="工具名称")
-    status: str = Field("success", description="执行状态：success / error")
-    result: Optional[Any] = Field(None, description="工具返回结果")
+    status: str = Field(default="success", description="执行状态：success / error")
+    result: Optional[Any] = Field(default=None, description="工具返回结果")
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.TOOL_CALL_END
@@ -160,10 +160,10 @@ class ToolApprovalEvent(FlowEvent):
 class SubAgentToolApprovalEvent(ToolApprovalEvent):
     """子Agent工具审批转发事件（通过父Agent的SSE流转发到前端）"""
 
-    is_sub_agent: bool = Field(True, description="是否来自子Agent")
-    sub_agent_id: int = Field(0, description="子Agent ID")
-    sub_session_id: int = Field(0, description="子Agent会话ID")
-    sub_agent_name: str = Field("", description="子Agent名称")
+    is_sub_agent: bool = Field(default=True, description="是否来自子Agent")
+    sub_agent_id: int = Field(default=0, description="子Agent ID")
+    sub_session_id: int = Field(default=0, description="子Agent会话ID")
+    sub_agent_name: str = Field(default="", description="子Agent名称")
 
 
 class WaitingHumanEvent(FlowEvent):
@@ -172,8 +172,8 @@ class WaitingHumanEvent(FlowEvent):
     execution_id: int = Field(..., description="执行记录ID")
     node_key: str = Field(..., description="节点Key")
     question: str = Field(..., description="问题")
-    context: Optional[str] = Field(None, description="上下文")
-    wait_data: Optional[dict] = Field(None, description="等待数据")
+    context: Optional[str] = Field(default=None, description="上下文")
+    wait_data: Optional[dict] = Field(default=None, description="等待数据")
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.WAITING_HUMAN
@@ -183,14 +183,14 @@ class TokenUsageEvent(FlowEvent):
     """Token用量事件（每次LLM调用后推送）"""
 
     node_key: str = Field(..., description="节点Key")
-    prompt_tokens: int = Field(0, description="输入token数")
-    completion_tokens: int = Field(0, description="输出token数")
-    total_tokens: int = Field(0, description="总token数")
-    model: str = Field("", description="模型名称")
-    provider: str = Field("", description="供应商标识")
-    cache_read_tokens: int = Field(0, description="缓存读取token数")
-    cache_write_tokens: int = Field(0, description="缓存写入token数")
-    reasoning_tokens: int = Field(0, description="推理token数")
+    prompt_tokens: int = Field(default=0, description="输入token数")
+    completion_tokens: int = Field(default=0, description="输出token数")
+    total_tokens: int = Field(default=0, description="总token数")
+    model: str = Field(default="", description="模型名称")
+    provider: str = Field(default="", description="供应商标识")
+    cache_read_tokens: int = Field(default=0, description="缓存读取token数")
+    cache_write_tokens: int = Field(default=0, description="缓存写入token数")
+    reasoning_tokens: int = Field(default=0, description="推理token数")
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.TOKEN_USAGE
@@ -219,8 +219,8 @@ class ErrorEvent(FlowEvent):
     """错误事件"""
 
     message: str = Field(..., description="错误信息")
-    execution_id: Optional[int] = Field(None, description="执行记录ID")
-    node_key: Optional[str] = Field(None, description="节点Key")
+    execution_id: Optional[int] = Field(default=None, description="执行记录ID")
+    node_key: Optional[str] = Field(default=None, description="节点Key")
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.ERROR
@@ -233,7 +233,7 @@ class LlmRetryEvent(FlowEvent):
     retry_count: int = Field(..., description="当前重试次数")
     max_retries: int = Field(..., description="最大重试次数")
     wait_seconds: float = Field(..., description="等待秒数")
-    node_key: Optional[str] = Field(None, description="节点Key")
+    node_key: Optional[str] = Field(default=None, description="节点Key")
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.LLM_RETRY
@@ -243,7 +243,7 @@ class ContextCompressingEvent(FlowEvent):
     """上下文压缩状态事件"""
 
     status: str = Field(..., description="压缩状态: compressing/done/failed")
-    removed_count: int = Field(0, description="压缩的消息数量")
+    removed_count: int = Field(default=0, description="压缩的消息数量")
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.CONTEXT_COMPRESSING
@@ -253,9 +253,9 @@ class FlowPreviewEvent(FlowEvent):
     """流程预览事件（工具执行后检测到流程变更时发送，前端渲染迷你画布）"""
 
     flow_id: int = Field(..., description="流程ID")
-    flow_name: str = Field("", description="流程名称")
+    flow_name: str = Field(default="", description="流程名称")
     action: str = Field(
-        "",
+        default="",
         description="变更类型: create/nodes_changed/edges_changed/config_changed/delete",
     )
     nodes: list[dict] = Field(

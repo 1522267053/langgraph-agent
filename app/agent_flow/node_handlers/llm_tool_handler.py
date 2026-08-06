@@ -107,17 +107,19 @@ class LlmNodeConfig(BaseNodeConfig):
         json_schema_extra={"options": []},
     )
     model: str = Field("", description="模型名称（留空则使用系统全局默认）")
-    api_key: Optional[str] = Field(None, description="API Key")
-    base_url: str = Field("", description="API 地址（为空则使用供应商默认地址）")
-    temperature: float = Field(0.7, description="温度参数（0-2），越高越随机")
-    max_tokens: int = Field(8192, description="最大生成 token 数")
-    max_tool_iterations: int = Field(20, description="最大工具调用轮次")
+    api_key: Optional[str] = Field(default=None, description="API Key")
+    base_url: str = Field(
+        default="", description="API 地址（为空则使用供应商默认地址）"
+    )
+    temperature: float = Field(default=0.7, description="温度参数（0-2），越高越随机")
+    max_tokens: int = Field(default=8192, description="最大生成 token 数")
+    max_tool_iterations: int = Field(default=20, description="最大工具调用轮次")
     history_mode: str = Field(
-        "node",
+        default="node",
         description="对话历史模式",
         json_schema_extra={"options": ["node", "flow", "none"]},
     )
-    max_history_turns: int = Field(10, description="最大对话历史轮次")
+    max_history_turns: int = Field(default=10, description="最大对话历史轮次")
     capabilities: dict = Field(
         default_factory=lambda: {
             "image": False,
@@ -129,41 +131,41 @@ class LlmNodeConfig(BaseNodeConfig):
         description="模型能力开关",
     )
     system_prompt: Optional[str] = Field(
-        None, description="系统提示词，定义 LLM 的角色和行为"
+        default=None, description="系统提示词，定义 LLM 的角色和行为"
     )
     user_prompt: str = Field(
         ...,
         description="用户提示词模板（必填，否则 LLM 收不到消息。支持变量插值，如: {{message}}）",
     )
     require_tool_approval: bool = Field(
-        False, description="危险工具执行前需要用户确认（仅 Agent 模式生效）"
+        default=False, description="危险工具执行前需要用户确认（仅 Agent 模式生效）"
     )
     extra_body: dict = Field(
-        {}, description="附加请求参数（JSON 对象，会合并到请求体中）"
+        default_factory=dict, description="附加请求参数（JSON 对象，会合并到请求体中）"
     )
     reasoning_effort: Optional[str] = Field(
-        None,
+        default=None,
         description="推理深度（low/medium/high），部分模型支持",
         json_schema_extra={"options": ["low", "medium", "high"]},
     )
     context_length: int = Field(
-        0, description="模型上下文窗口大小（token 数，0 表示不限制）"
+        default=0, description="模型上下文窗口大小（token 数，0 表示不限制）"
     )
     required_tools: list[str] = Field(
         default_factory=list,
         description="必需调用的工具名列表。LLM 本轮未调用时自动提醒重试（简单模式）",
     )
     tool_check_script: str = Field(
-        "",
+        default="",
         description="自定义检查脚本（高级模式，留空走简单模式）。"
         "签名: def main(called_tools, last_result): "
         "return {'need_retry': bool, 'hint': str}",
     )
     required_tools_max_retries: int = Field(
-        2, description="必需工具未调用时的最大提醒重试次数"
+        default=2, description="必需工具未调用时的最大提醒重试次数"
     )
     required_tools_hint: str = Field(
-        "",
+        default="",
         description="提醒消息模板，{{tools}} 占位符替换为缺失工具名（留空使用默认模板）",
     )
 
