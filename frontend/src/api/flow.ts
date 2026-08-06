@@ -10,7 +10,6 @@ import type {
   FlowNodeUpdate,
   FlowEdgeCreate,
   FlowEdgeUpdate,
-  FlowExportData,
   FlowImportResult,
   FlowSnapshot
 } from '@/types/flow'
@@ -68,11 +67,13 @@ export const flowApi = {
   },
 
   exportFlows(ids: number[]) {
-    return request.post<ApiResponse<FlowExportData>>('/flow/export', { ids })
+    return request.post('/flow/export', { ids }, { responseType: 'blob' })
   },
 
-  importFlows(data: FlowExportData) {
-    return request.post<ApiResponse<FlowImportResult>>('/flow/import', data)
+  importFlowPackage(file: File) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return request.post<ApiResponse<FlowImportResult>>('/flow/import', formData)
   },
 
   duplicate(id: number) {

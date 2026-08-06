@@ -3,7 +3,12 @@
 处理流程相关的路由定义
 """
 
-from fastapi import Depends
+import io
+import json
+from datetime import datetime
+
+from fastapi import Depends, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -182,29 +187,41 @@ class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
             except ValueError as e:
                 return ApiResponse.error(msg=str(e))
 
-        @self.router.post(
-            "/export", response_model=ApiResponse, summary="导出流程/智能体"
-        )
+        @self.router.post("/export", summary="导出流程/智能体（.lga 打包）")
         async def export_flows(
             body: FlowExportRequest, db: AsyncSession = Depends(get_db)
         ):
-            """批量导出流程及其依赖（卡片引用、MCP、知识库、技能、记忆）"""
+            """导出流程及其依赖（含知识库文档、技能文件），打包为 .lga（zip）"""
             try:
-                data = await flow_transfer_service.export_flows(db, body.ids)
-                return ApiResponse.success(
-                    data=data,
-                    msg=f"导出 {len(data['flows'])} 个流程",
-                )
+                zip_bytes = await flow_transfer_service.export_package(db, body.ids)
             except Exception as e:
                 return ApiResponse.error(msg=f"导出失败: {e}")
+            filename = f"flow_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.lga"
+            return StreamingResponse(
+                io.BytesIO(zip_bytes),
+                media_type="application/zip",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
 
         @self.router.post(
-            "/import", response_model=ApiResponse, summary="导入流程/智能体"
+            "/import",
+            response_model=ApiResponse,
+            summary="导入流程/智能体（.lga/.json）",
         )
-        async def import_flows(body: dict, db: AsyncSession = Depends(get_db)):
-            """导入流程及其所有依赖"""
+        async def import_flows(file: UploadFile, db: AsyncSession = Depends(get_db)):
+            """导入流程及其所有依赖，支持 .lga 打包文件与旧版 .json"""
+            filename = file.filename or ""
+            content = await file.read()
             try:
-                created, warnings = await flow_transfer_service.import_flows(db, body)
+                if filename.lower().endswith(".lga"):
+                    created, warnings = await flow_transfer_service.import_package(
+                        db, content
+                    )
+                else:
+                    import_data = json.loads(content.decode("utf-8"))
+                    created, warnings = await flow_transfer_service.import_flows(
+                        db, import_data
+                    )
                 return ApiResponse.success(
                     data={"created": created, "warnings": warnings},
                     msg=f"导入 {len(created)} 个流程"

@@ -18,6 +18,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowQuickExecute from '@/components/FlowEditor/FlowQuickExecute.vue'
 import ActionColumn from '@/components/common/ActionColumn.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { collectMcpCommandWarnings } from '@/utils/mcpCommand'
 
 const router = useRouter()
 const { isMobile } = useIsMobile()
@@ -201,21 +202,28 @@ async function handleExport(ids: number[]) {
   exportLoading.value = true
   try {
     const res = await flowApi.exportFlows(ids)
-    if (res.data.code === 1) {
-      const data = res.data.data as FlowExportData
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')
-      const flow = data.flows[0]
-      a.download = `${flow.name}_${flow.flow_type || 'flow'}_${timestamp}.json`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-      ElMessage.success('导出成功')
+    const blob = res.data as Blob
+    // 后端导出失败时返回 JSON（非 zip），解析错误信息
+    if (blob.type && blob.type.includes('json')) {
+      const text = await blob.text()
+      try {
+        const errData = JSON.parse(text)
+        ElMessage.error(errData.msg || '导出失败')
+      } catch {
+        ElMessage.error('导出失败')
+      }
+      return
     }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')
+    a.download = `flow_export_${timestamp}.lga`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success('导出成功')
   } catch {
     ElMessage.error('导出失败')
   } finally {
@@ -229,49 +237,95 @@ const importDialogVisible = ref(false)
 const importLoading = ref(false)
 const importFileData = ref<FlowExportData | null>(null)
 const importFileName = ref('')
+const importFile = ref<File | null>(null)
+const importIsPackage = ref(false)
 
 function handleOpenImport() {
   importFileData.value = null
   importFileName.value = ''
+  importFile.value = null
+  importIsPackage.value = false
   importDialogVisible.value = true
 }
 
 function handleImportFileChange(file: File) {
   importFileName.value = file.name
+  importFile.value = file
+  importIsPackage.value = file.name.toLowerCase().endsWith('.lga')
+  if (importIsPackage.value) {
+    // .lga 打包文件无法前端预览，直接进入待导入状态
+    importFileData.value = null
+    return
+  }
+  // 旧版 .json：FileReader 解析预览
   const reader = new FileReader()
   reader.onload = e => {
     try {
       const data = JSON.parse(e.target?.result as string) as FlowExportData
       if (!data.version || !data.flows || !Array.isArray(data.flows)) {
         ElMessage.error('无效的导入文件格式')
+        importFile.value = null
+        importFileName.value = ''
         return
       }
       importFileData.value = data
     } catch {
       ElMessage.error('文件解析失败，请检查文件格式')
+      importFile.value = null
+      importFileName.value = ''
     }
   }
   reader.readAsText(file)
 }
 
 async function handleConfirmImport() {
-  if (!importFileData.value) return
+  if (!importFile.value) return
+  // .json 导入前做命令依赖检查（告知性提示，.lga 走后端 warnings 兜底）
+  if (!importIsPackage.value && importFileData.value) {
+    const cmdWarnings = collectMcpCommandWarnings(importFileData.value.mcp_servers || [])
+    if (cmdWarnings.length > 0) {
+      const first = cmdWarnings[0]
+      const depNames = [...new Set(cmdWarnings.map(w => w.dependencyName))]
+      try {
+        await ElMessageBox.confirm(
+          `导入的 MCP 服务器使用了 ${depNames.join('、')} 相关命令（如「${first.command}」），如未安装请先下载，否则对应服务器将无法连接`,
+          '命令依赖检查',
+          {
+            confirmButtonText: first.downloadUrl ? '前往下载' : '知道了',
+            cancelButtonText: '继续导入',
+            type: 'warning',
+            distinguishCancelAndClose: true
+          }
+        )
+        if (first.downloadUrl) window.open(first.downloadUrl, '_blank')
+        return
+      } catch (action) {
+        if (action === 'close') return
+      }
+    }
+  }
   importLoading.value = true
   try {
-    const res = await flowApi.importFlows(importFileData.value)
+    const res = await flowApi.importFlowPackage(importFile.value)
     if (res.data.code === 1) {
       const result = res.data.data
       const warnings: string[] = result.warnings || []
+      importDialogVisible.value = false
+      loadData()
       if (warnings.length > 0) {
-        ElMessage.warning({
-          message: `导入 ${result.created.length} 个流程，${warnings.length} 条警告`,
-          duration: 5000
+        const message = `成功导入 ${result.created.length} 个流程，${warnings.length} 条警告`
+        let msgHtml = `<div style="max-height:300px;overflow-y:auto"><p style="font-weight:600;margin:0 0 8px">${message}</p><ul style="margin:0;padding-left:16px">`
+        for (const w of warnings) {
+          msgHtml += `<li style="color:#e6a23c;margin-bottom:4px">${w}</li>`
+        }
+        msgHtml += '</ul></div>'
+        await ElMessageBox.alert(msgHtml, '导入完成（有警告）', {
+          dangerouslyUseHTMLString: true,
+          confirmButtonText: '确定'
         })
       } else {
         ElMessage.success(`成功导入 ${result.created.length} 个流程`)
       }
-      importDialogVisible.value = false
-      loadData()
     }
   } catch {
     ElMessage.error('导入失败')
@@ -438,10 +492,10 @@ onMounted(() => {
       :close-on-click-modal="false"
     >
       <!-- 文件上传区域 -->
-      <div v-if="!importFileData" class="import-upload-area">
+      <div v-if="!importFile" class="import-upload-area">
         <el-upload
           drag
-          accept=".json"
+          accept=".lga,.json"
           :auto-upload="false"
           :show-file-list="false"
           :on-change="(f: any) => handleImportFileChange(f.raw)"
@@ -449,16 +503,26 @@ onMounted(() => {
           <div class="upload-content">
             <el-icon class="upload-icon"><Upload /></el-icon>
             <div class="upload-text">
-              将 JSON 文件拖拽到此处，或
+              将 .lga 或 .json 文件拖拽到此处，或
               <em>点击选择文件</em>
             </div>
-            <div class="upload-tip">仅支持由导出功能生成的 .json 文件</div>
+            <div class="upload-tip">支持 .lga 打包文件（含知识库/技能文件）或旧版 .json</div>
           </div>
         </el-upload>
       </div>
 
+      <!-- .lga 打包文件提示（无法前端预览） -->
+      <div v-else-if="importIsPackage" class="import-preview">
+        <el-alert type="info" :closable="false" show-icon class="import-tip">
+          已选择打包文件「{{ importFileName }}」，导入后可查看结果
+        </el-alert>
+        <div class="preview-section">
+          <p>打包文件（.lga）含完整知识库文档与技能文件，将在导入后自动还原。</p>
+        </div>
+      </div>
+
       <!-- 预览区域 -->
-      <div v-else class="import-preview">
+      <div v-else-if="importFileData" class="import-preview">
         <el-alert type="warning" :closable="false" show-icon class="import-tip">
           导入时如果有相同名称的内容，会创建新副本
         </el-alert>
@@ -503,7 +567,7 @@ onMounted(() => {
       <template #footer>
         <el-button @click="importDialogVisible = false">取消</el-button>
         <el-button
-          v-if="importFileData"
+          v-if="importFile"
           type="primary"
           :loading="importLoading"
           @click="handleConfirmImport"

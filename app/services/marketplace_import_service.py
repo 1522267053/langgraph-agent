@@ -113,15 +113,24 @@ class MarketplaceImportService:
     async def _import_flow(
         self, db: AsyncSession, file_bytes: bytes, resource_info: dict
     ) -> dict:
-        """导入 Flow/Agent：解析 JSON → 复用 flow_transfer_service"""
-        try:
-            import_data = json.loads(file_bytes.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            raise ValueError("无效的 JSON 文件")
-
+        """导入 Flow/Agent：.lga 打包文件（含知识库/技能文件）或旧版 .json"""
         from app.services.flow_transfer_service import flow_transfer_service
 
-        created, warnings = await flow_transfer_service.import_flows(db, import_data)
+        if zipfile.is_zipfile(BytesIO(file_bytes)):
+            # .lga 打包文件：含 manifest.json + 知识库文档 + 技能目录
+            created, warnings = await flow_transfer_service.import_package(
+                db, file_bytes
+            )
+        else:
+            # 旧版 .json
+            try:
+                import_data = json.loads(file_bytes.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise ValueError("无效的文件格式（应为 .json 或 .lga）")
+            created, warnings = await flow_transfer_service.import_flows(
+                db, import_data
+            )
+
         message = f"导入 {len(created)} 个流程"
         if warnings:
             message += f"，{len(warnings)} 个警告"
