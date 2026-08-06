@@ -930,7 +930,7 @@ class ShellNodeHandler(BaseNodeHandler):
 
         # ---- shell_executor ----
 
-        async def execute_shell(command: str) -> str:
+        async def execute_shell(command: str) -> str|dict:
             is_valid, error_msg = validate_command(command)
             if not is_valid:
                 return {"error": error_msg, "success": False}
@@ -1009,6 +1009,9 @@ class ShellNodeHandler(BaseNodeHandler):
                 f"若仍未完成则告知用户任务在后台运行，等待用户询问结果时再查询。"
                 f"用 shell_task_input 向进程发送输入，用 shell_task_cancel 终止任务。"
                 f"禁止危险命令: rm -rf /, format, mkfs, dd写入设备, fork炸弹等。"
+                f"命令必须为单行（禁止裸换行）：Windows 经 cmd.exe 执行，换行符会被当作命令分隔符，"
+                f"导致命令在首个换行处被截断、输出被静默丢弃（returncode=0 但 stdout 为空）；"
+                f"Python 多行代码用 `;` 连成单行或写入临时 .py 文件后执行。"
             ),
             func=None,
             coroutine=execute_shell,
@@ -1017,7 +1020,7 @@ class ShellNodeHandler(BaseNodeHandler):
 
         # ---- shell_task_status ----
 
-        async def query_task_status(task_id: str, wait_time: int = 8) -> str:
+        async def query_task_status(task_id: str, wait_time: int = 8) -> str|dict:
             _cleanup_expired_tasks()
             task = _background_tasks.get(task_id)
             if not task:
@@ -1055,7 +1058,7 @@ class ShellNodeHandler(BaseNodeHandler):
 
         # ---- shell_task_input ----
 
-        async def send_task_input(task_id: str, input_text: str) -> str:
+        async def send_task_input(task_id: str, input_text: str) -> str|dict:
             _cleanup_expired_tasks()
             task = _background_tasks.get(task_id)
             if not task:
@@ -1091,7 +1094,7 @@ class ShellNodeHandler(BaseNodeHandler):
 
         # ---- shell_task_cancel ----
 
-        async def cancel_task(task_id: str) -> str:
+        async def cancel_task(task_id: str) -> str|dict:
             _cleanup_expired_tasks()
             task = _background_tasks.get(task_id)
             if not task:
@@ -1151,7 +1154,7 @@ class ShellNodeHandler(BaseNodeHandler):
             limit: Optional[int] = None,
             start_char: Optional[int] = None,
             end_char: Optional[int] = None,
-        ) -> str:
+        ) -> str|dict:
             is_valid, error_msg = _validate_file_path(file_path)
             if not is_valid:
                 return {"error": error_msg, "success": False}
@@ -1247,7 +1250,7 @@ class ShellNodeHandler(BaseNodeHandler):
             old_string: str,
             new_string: str,
             replace_all: bool = False,
-        ) -> str:
+        ) -> str|dict:
             is_valid, error_msg = _validate_writable_path(file_path)
             if not is_valid:
                 return {"error": error_msg, "success": False}
@@ -1802,6 +1805,14 @@ class ShellNodeHandler(BaseNodeHandler):
             "- file_search 递归搜索文件内容（正则匹配），跨文件快速定位目标位置\n"
             "- list_files 按文件名 glob 匹配（如 **/*.py），用于查找文件或了解目录结构\n"
             "- 禁止用 cat 读取大文件，始终使用 file_read\n"
+            "### Windows 命令兼容性（重要）\n"
+            "- 命令在 Windows 上经 cmd.exe 执行，cmd.exe 把换行符当作命令分隔符，双引号字符串不能跨行。\n"
+            "- 含裸换行的命令会在首个换行处被截断，表现为 returncode=0 但 stdout 完全为空（输出被静默丢弃）。\n"
+            "- 正确写法：\n"
+            "  - Python 多行代码改用 `;` 连成单行，例如 `python -c \"import json; print(json.dumps({'a':1}))\"`\n"
+            "  - 代码含 if/for/def 等无法压平的逻辑时，先用 file_write 写入 .py 文件，再 `python <文件路径>` 执行\n"
+            "  - 多条独立命令用 `&&` 在同一行连接，不要跨行\n"
+            "- 反例（禁止）：`python -c \"<换行>import json<换行>print('x')<换行>\"` 会被截断导致输出丢失\n"
             f"\n临时文件输出目录: `{temp_dir}`（会被定时清理，勿存放重要数据）"
         ]
         if working_dir is not None:
