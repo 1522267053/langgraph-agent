@@ -45,7 +45,7 @@ class WsGatewayService(
         query, count_query = super()._apply_filters(query, count_query, condition)
         if condition is None:
             return query, count_query
-        
+
         if condition.name:
             query, count_query = self._apply_like_filter(
                 query, count_query, "name", condition.name
@@ -53,7 +53,7 @@ class WsGatewayService(
 
         if query is None or count_query is None:
             return query, count_query
-        
+
         if condition.flow_id:
             query = query.where(WsGatewayConfig.flow_id == condition.flow_id)
             count_query = count_query.where(
