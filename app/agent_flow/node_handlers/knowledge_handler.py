@@ -91,9 +91,11 @@ class VectorSearchInput(BaseModel):
 class SaveInsightInput(BaseModel):
     question: str = Field(..., description="触发问题/查询（用于后续语义检索）")
     answer: str = Field(..., description="AI生成的知识沉淀内容")
-    keywords: Optional[list[str]] = Field(None, description="关键词列表（辅助检索）")
+    keywords: Optional[list[str]] = Field(
+        default=None, description="关键词列表（辅助检索）"
+    )
     source_segment_ids: Optional[list[int]] = Field(
-        None, description="关联的段落ID列表（用于溯源）"
+        default=None, description="关联的段落ID列表（用于溯源）"
     )
 
 

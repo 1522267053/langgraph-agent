@@ -62,8 +62,10 @@ class ApiNodeConfig(BaseNodeConfig):
 class UploadFieldItem(BaseModel):
     model_config = {"extra": "ignore"}
     field: str = Field("file", description="multipart字段名")
-    file_ids: Optional[list[int]] = Field(None, description="文件ID列表")
-    file_paths: Optional[list[str]] = Field(None, description="文件绝对路径列表")
+    file_ids: Optional[list[int]] = Field(default=None, description="文件ID列表")
+    file_paths: Optional[list[str]] = Field(
+        default=None, description="文件绝对路径列表"
+    )
 
 
 class ApiCallInput(BaseModel):

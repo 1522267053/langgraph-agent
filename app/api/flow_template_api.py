@@ -20,7 +20,7 @@ class CreateFromTemplateRequest(BaseModel):
 
     template_id: str = Field(..., description="模板标识")
     name: str = Field(..., description="流程名称")
-    description: Optional[str] = Field(None, description="流程描述")
+    description: Optional[str] = Field(default=None, description="流程描述")
 
 
 class FlowTemplateApi:

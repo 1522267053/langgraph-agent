@@ -425,35 +425,39 @@ class _AgendaFields(BaseModel):
     end_time: Optional[ChinaDateTime] = Field(
         None, description="结束时间 YYYY-MM-DD HH:MM:SS"
     )
-    category: Optional[str] = Field(None, description="分类：work/life/study/other")
-    priority: Optional[int] = Field(None, description="优先级：1=低/2=中/3=高")
-    location: Optional[str] = Field(None, description="地点")
+    category: Optional[str] = Field(
+        default=None, description="分类：work/life/study/other"
+    )
+    priority: Optional[int] = Field(default=None, description="优先级：1=低/2=中/3=高")
+    location: Optional[str] = Field(default=None, description="地点")
     remind_at: Optional[ChinaDateTime] = Field(
-        None, description="提醒时间 YYYY-MM-DD HH:MM:SS"
+        default=None, description="提醒时间 YYYY-MM-DD HH:MM:SS"
     )
     recurrence: Optional[str] = Field(
-        None, description="重复规则：none/daily/weekday/weekly/monthly"
+        default=None, description="重复规则：none/daily/weekday/weekly/monthly"
     )
-    description: Optional[str] = Field(None, description="备注")
-    color: Optional[str] = Field(None, description="颜色标签")
+    description: Optional[str] = Field(default=None, description="备注")
+    color: Optional[str] = Field(default=None, description="颜色标签")
 
 
 class AgendaCreateInput(_AgendaFields):
     title: str = Field(..., description="日程标题")
-    category: str = Field("other", description="分类：work/life/study/other")
-    priority: int = Field(2, description="优先级：1=低/2=中/3=高")
+    category: str = Field(default="other", description="分类：work/life/study/other")
+    priority: int = Field(default=2, description="优先级：1=低/2=中/3=高")
     recurrence: str = Field(
-        "none", description="重复：none/daily/weekday/weekly/monthly"
+        default="none", description="重复：none/daily/weekday/weekly/monthly"
     )
 
 
 class AgendaListInput(BaseModel):
-    status: int = Field(-1, description="状态筛选：-1=全部/0=待办/1=进行中/2=已完成")
-    category: str = Field("", description="分类筛选：work/life/study/other")
-    search_keyword: str = Field("", description="关键词搜索标题和描述")
-    start_date: str = Field("", description="开始时间范围起 YYYY-MM-DD")
-    end_date: str = Field("", description="开始时间范围止 YYYY-MM-DD")
-    limit: int = Field(20, description="返回数量上限")
+    status: int = Field(
+        default=-1, description="状态筛选：-1=全部/0=待办/1=进行中/2=已完成"
+    )
+    category: str = Field(default="", description="分类筛选：work/life/study/other")
+    search_keyword: str = Field(default="", description="关键词搜索标题和描述")
+    start_date: str = Field(default="", description="开始时间范围起 YYYY-MM-DD")
+    end_date: str = Field(default="", description="开始时间范围止 YYYY-MM-DD")
+    limit: int = Field(default=20, description="返回数量上限")
 
 
 class AgendaUpdateInput(_AgendaFields):
@@ -466,8 +470,10 @@ class AgendaUpdateInput(_AgendaFields):
     """
 
     id: int = Field(..., description="日程ID")
-    title: str = Field("", description="新标题（不支持清空，传空串视为不变）")
-    status: Optional[int] = Field(None, description="新状态：0=待办/1=进行中/2=已完成")
+    title: str = Field(default="", description="新标题（不支持清空，传空串视为不变）")
+    status: Optional[int] = Field(
+        default=None, description="新状态：0=待办/1=进行中/2=已完成"
+    )
 
 
 class AgendaDeleteInput(BaseModel):

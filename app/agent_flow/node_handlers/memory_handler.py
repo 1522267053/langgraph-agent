@@ -666,10 +666,10 @@ class MemoryItem(BaseModel):
     model_config = {"extra": "ignore"}
     title: str = Field(..., description="记忆标题（必填,50字以内）")
     content: str = Field(..., description="记忆内容（必填，500字以内）")
-    category: Optional[str] = Field(None, description="分类")
-    importance: int = Field(3, description="重要程度1-5")
-    tier: Optional[str] = Field(None, description="hot/warm/cold")
-    keywords: Optional[str] = Field(None, description="关键词")
+    category: Optional[str] = Field(default=None, description="分类")
+    importance: int = Field(default=3, description="重要程度1-5")
+    tier: Optional[str] = Field(default=None, description="hot/warm/cold")
+    keywords: Optional[str] = Field(default=None, description="关键词")
 
 
 class MemorySaveInput(BaseModel):
@@ -682,17 +682,19 @@ class MemorySaveInput(BaseModel):
 class MemorySearchInput(BaseModel):
     query: str = Field(..., description="搜索关键词或自然语言")
     tier: Optional[list[str]] = Field(
-        None, description="hot/warm/cold，不传默认warm,cold，可传多个"
+        default=None, description="hot/warm/cold，不传默认warm,cold，可传多个"
     )
-    categories: Optional[list[str]] = Field(None, description="分类过滤，可传多个")
-    max_results: int = Field(5, ge=1, le=20, description="最大返回数")
-    min_score: float = Field(0.0, ge=0.0, le=1.0, description="最低相关度")
+    categories: Optional[list[str]] = Field(
+        default=None, description="分类过滤，可传多个"
+    )
+    max_results: int = Field(default=5, ge=1, le=20, description="最大返回数")
+    min_score: float = Field(default=0.0, ge=0.0, le=1.0, description="最低相关度")
 
 
 class MemoryListInput(BaseModel):
-    limit: int = Field(10, ge=1, le=50, description="返回数量")
-    tier: Optional[str] = Field(None, description="hot/warm/cold")
-    category: Optional[str] = Field(None, description="分类过滤")
+    limit: int = Field(default=10, ge=1, le=50, description="返回数量")
+    tier: Optional[str] = Field(default=None, description="hot/warm/cold")
+    category: Optional[str] = Field(default=None, description="分类过滤")
 
 
 class MemoryDeleteInput(BaseModel):
