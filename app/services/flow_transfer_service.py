@@ -6,7 +6,12 @@
 导入按依赖顺序：Skills → KnowledgeBases → MCPServers → Flows（拓扑序）→ Memories。
 """
 
+import io
+import json
 import logging
+import shutil
+import tempfile
+import zipfile
 from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
@@ -20,19 +25,32 @@ from app.models.flow import Flow, FlowType
 from app.models.flow_node import FlowNode
 from app.models.flow_edge import FlowEdge
 from app.models.knowledge_base import KnowledgeBase
+from app.models.knowledge_document import KnowledgeDocument, ProcessingStatus
 from app.models.mcp_server import McpServer
 from app.models.memory import Memory
 from app.models.skill import Skill
 from app.schemas.flow_schema import FlowIOSchema
 from app.services.flow_service import flow_service
 from app.services.knowledge_base_service import knowledge_base_service
+from app.services.knowledge_document_service import knowledge_document_service
 from app.services.mcp_server_service import mcp_server_service
 from app.services.memory_service import memory_service
 from app.services.skill_service import skill_service
+from app.utils.document_processor import document_processor
 
 logger = logging.getLogger(__name__)
 
 EXPORT_VERSION = "1.0"
+PACKAGE_VERSION = "2.0"
+
+
+def _safe_name(name: str) -> str:
+    """将名称转为安全的 zip 内文件/目录名，去除路径分隔符等非法字符"""
+    if not name:
+        return "unnamed"
+    safe = name.strip().replace("/", "_").replace("\\", "_").replace(":", "_")
+    return safe.replace("\x00", "").strip() or "unnamed"
+
 
 INTERNAL_NODE_FIELDS = frozenset(
     {
@@ -152,6 +170,47 @@ class FlowTransferService:
             "knowledge_bases": knowledge_bases,
             "skills": skills,
         }
+
+    async def export_package(self, db: AsyncSession, flow_ids: list[int]) -> bytes:
+        """导出为 .lga 打包文件（zip），含知识库文档与技能附属文件"""
+        data = await self.export_flows(db, flow_ids)
+        data["version"] = PACKAGE_VERSION
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            # 知识库原始文档文件（不含向量，导入端重新向量化）
+            for kb in data.get("knowledge_bases", []):
+                safe_kb = _safe_name(kb["name"])
+                for i, doc in enumerate(kb.get("documents", [])):
+                    abs_path = doc.pop("file_path", None)
+                    if abs_path and Path(abs_path).exists():
+                        ext = doc.get("file_type") or "dat"
+                        zip_name = (
+                            f"knowledge/{safe_kb}/{i:03d}_"
+                            f"{_safe_name(doc.get('title') or f'doc{i}')}.{ext}"
+                        )
+                        zf.write(abs_path, zip_name)
+                        doc["file_path"] = zip_name
+                    else:
+                        doc["file_path"] = None
+            # 技能整个目录（含 scripts/references/assets 等）
+            for skill in data.get("skills", []):
+                skill_path = skill.pop("skill_path", None)
+                if not skill_path:
+                    continue
+                skill_dir = Path(settings.get_absolute_path(skill_path)).parent
+                if not skill_dir.exists() or not skill_dir.is_dir():
+                    continue
+                base = f"skills/{_safe_name(skill['name'])}"
+                for p in skill_dir.rglob("*"):
+                    if p.is_file():
+                        rel = p.relative_to(skill_dir).as_posix()
+                        zf.write(str(p), f"{base}/{rel}")
+            zf.writestr(
+                "manifest.json",
+                json.dumps(data, ensure_ascii=False, indent=2),
+            )
+        return buf.getvalue()
 
     async def _collect_flows_recursive(
         self, db: AsyncSession, flow_ids: list[int], visited: set[int]
@@ -381,7 +440,7 @@ class FlowTransferService:
     async def _collect_knowledge_bases(
         self, db: AsyncSession, kb_ids: set[int]
     ) -> list[dict]:
-        """收集知识库元数据（不含向量和文档）"""
+        """收集知识库元数据及其文档清单（含原始文件路径，供打包使用）"""
         if not kb_ids:
             return []
         result = []
@@ -389,11 +448,26 @@ class FlowTransferService:
             kb = await knowledge_base_service.get_by_id(db, kid, raise_not_found=False)
             if not kb:
                 continue
+            documents = await knowledge_document_service.get_list(
+                db, filters=KnowledgeDocument(knowledge_base_id=kid)
+            )
+            doc_list = [
+                {
+                    "title": doc.title,
+                    "file_type": doc.file_type,
+                    "word_count": doc.word_count or 0,
+                    "segment_count": doc.segment_count or 0,
+                    # 本地绝对路径，export_package 打包时替换为 zip 内相对路径
+                    "file_path": doc.file_path,
+                }
+                for doc in documents
+            ]
             result.append(
                 {
                     "name": kb.name,
                     "description": kb.description,
                     "status": kb.status,
+                    "documents": doc_list,
                 }
             )
         return result
@@ -428,6 +502,8 @@ class FlowTransferService:
                     "icon": skill.icon,
                     "is_enabled": skill.is_enabled,
                     "skill_content": skill_content,
+                    # skill 目录的相对路径，export_package 据此打包整个目录
+                    "skill_path": skill.skill_path,
                 }
             )
         return result
@@ -463,12 +539,25 @@ class FlowTransferService:
     # ---- 导入 ----
 
     async def import_flows(
-        self, db: AsyncSession, import_data: dict
+        self,
+        db: AsyncSession,
+        import_data: dict,
+        file_root: Optional[Path] = None,
     ) -> tuple[list[dict], list[str]]:
-        """导入流程及所有依赖"""
+        """
+        导入流程及所有依赖
+
+        Args:
+            db: 数据库会话
+            import_data: 导入数据（manifest）
+            file_root: 打包文件解压目录；非空时按 2.0 还原知识库文档与技能目录，
+                为空时按 1.0 仅导入元数据（知识库为空壳、技能仅 SKILL.md）
+        """
         version = import_data.get("version")
-        if version != EXPORT_VERSION:
-            raise ValueError(f"不支持的版本: {version}，当前支持: {EXPORT_VERSION}")
+        if version not in (EXPORT_VERSION, PACKAGE_VERSION):
+            raise ValueError(
+                f"不支持的版本: {version}，当前支持: {EXPORT_VERSION}/{PACKAGE_VERSION}"
+            )
 
         warnings: list[str] = []
         created: list[dict] = []
@@ -480,10 +569,10 @@ class FlowTransferService:
         self._check_circular_refs(flows_data)
 
         skill_name_map = await self._import_skills(
-            db, import_data.get("skills", []), warnings
+            db, import_data.get("skills", []), warnings, file_root
         )
         kb_name_map = await self._import_knowledge_bases(
-            db, import_data.get("knowledge_bases", []), warnings
+            db, import_data.get("knowledge_bases", []), warnings, file_root
         )
         mcp_name_map = await self._import_mcp_servers(
             db, import_data.get("mcp_servers", []), warnings
@@ -510,27 +599,73 @@ class FlowTransferService:
 
         return created, warnings
 
+    async def import_package(
+        self, db: AsyncSession, zip_bytes: bytes
+    ) -> tuple[list[dict], list[str]]:
+        """从 .lga 打包文件（zip）导入：解压后调用 import_flows 还原文件"""
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+                try:
+                    manifest_raw = zf.read("manifest.json")
+                except KeyError:
+                    raise ValueError(".lga 文件中缺少 manifest.json")
+                manifest = json.loads(manifest_raw)
+        except zipfile.BadZipFile:
+            raise ValueError("无效的 .lga 文件（无法解压）")
+
+        tmpdir = tempfile.mkdtemp(prefix="lga_import_")
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+                zf.extractall(tmpdir)
+            return await self.import_flows(db, manifest, file_root=Path(tmpdir))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
     async def _import_skills(
-        self, db: AsyncSession, skills_data: list[dict], warnings: list[str]
+        self,
+        db: AsyncSession,
+        skills_data: list[dict],
+        warnings: list[str],
+        file_root: Optional[Path] = None,
     ) -> dict[str, int]:
-        """导入技能，返回 {原始名称: new_id}"""
+        """导入技能，返回 {原始名称: new_id}。file_root 非空时还原整个技能目录"""
         name_map: dict[str, int] = {}
         for s in skills_data:
             try:
                 original_name = s["name"]
                 unique_name = await self._ensure_unique_name(db, Skill, original_name)
 
-                skill_content = s.get("skill_content") or (
-                    f"---\nname: {unique_name}\ndescription: {s.get('description', '')}\n---\n"
-                )
                 skill_dir = Path(
                     settings.get_absolute_path(
                         f"{settings.upload_dir}/skills/{unique_name}"
                     )
                 )
                 skill_dir.mkdir(parents=True, exist_ok=True)
-                skill_file = skill_dir / "SKILL.md"
-                skill_file.write_text(skill_content, encoding="utf-8")
+
+                if file_root is not None:
+                    # 2.0：从解压目录复制整个技能目录（含 scripts/assets 等）
+                    src_dir = Path(file_root) / "skills" / original_name
+                    if src_dir.exists() and src_dir.is_dir():
+                        for p in src_dir.rglob("*"):
+                            if p.is_file():
+                                rel = p.relative_to(src_dir)
+                                dest = skill_dir / rel
+                                dest.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copy2(str(p), str(dest))
+                    # SKILL.md 兜底：目录复制后若缺失则用 skill_content 补写
+                    if not (skill_dir / "SKILL.md").exists():
+                        content = s.get("skill_content") or (
+                            f"---\nname: {unique_name}\n"
+                            f"description: {s.get('description', '')}\n---\n"
+                        )
+                        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+                else:
+                    # 1.0：仅写 SKILL.md
+                    skill_content = s.get("skill_content") or (
+                        f"---\nname: {unique_name}\n"
+                        f"description: {s.get('description', '')}\n---\n"
+                    )
+                    (skill_dir / "SKILL.md").write_text(skill_content, encoding="utf-8")
 
                 skill_path = f"{settings.upload_dir}/skills/{unique_name}/SKILL.md"
                 skill_obj = Skill(
@@ -556,9 +691,13 @@ class FlowTransferService:
         return name_map
 
     async def _import_knowledge_bases(
-        self, db: AsyncSession, kb_data: list[dict], warnings: list[str]
+        self,
+        db: AsyncSession,
+        kb_data: list[dict],
+        warnings: list[str],
+        file_root: Optional[Path] = None,
     ) -> dict[str, int]:
-        """导入知识库，返回 {原始名称: new_id}"""
+        """导入知识库，返回 {原始名称: new_id}。file_root 非空时还原文档并触发重新向量化"""
         name_map: dict[str, int] = {}
         for kb in kb_data:
             try:
@@ -576,6 +715,32 @@ class FlowTransferService:
                 await db.commit()
                 await db.refresh(kb_obj)
                 name_map[original_name] = kb_obj.id
+
+                # 2.0：还原原始文档，建记录为待处理，由定时任务自动解析+向量化
+                if file_root is not None:
+                    for doc in kb.get("documents", []):
+                        rel_path = doc.get("file_path")
+                        title = doc.get("title") or "未命名文档"
+                        if not rel_path:
+                            continue
+                        src = Path(file_root) / rel_path
+                        if not src.exists():
+                            continue
+                        content = src.read_bytes()
+                        file_path = await document_processor.save_bytes(
+                            content, title, kb_obj.id
+                        )
+                        document = KnowledgeDocument(
+                            knowledge_base_id=kb_obj.id,
+                            title=title,
+                            file_type=doc.get("file_type") or "",
+                            file_path=file_path,
+                            processing_status=ProcessingStatus.PENDING.value,
+                            is_delete=0,
+                        )
+                        db.add(document)
+                        await db.commit()
+
                 if unique_name != original_name:
                     warnings.append(
                         f"知识库「{original_name}」已存在，已创建副本「{unique_name}」"
@@ -611,6 +776,18 @@ class FlowTransferService:
                 configs = mcp.get("configs", {})
                 if configs:
                     await mcp_server_service.save_configs(db, server_obj.id, configs)
+                    # 命令可用性检测（后端兜底，命令缺失时给出提示）
+                    command = (
+                        configs.get("command") if isinstance(configs, dict) else None
+                    )
+                    if command:
+                        from app.agent_flow.mcp_manager import check_command
+
+                        check = check_command(str(command))
+                        if check["missing"]:
+                            warnings.append(
+                                f"MCP 服务器「{unique_name}」: {check['message']}"
+                            )
 
                 tools = mcp.get("tools_cache", [])
                 if tools:

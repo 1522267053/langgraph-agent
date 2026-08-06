@@ -976,20 +976,20 @@ class DocumentProcessor:
 
     # ---- 文件操作 ----
 
-    async def save_file(self, file: UploadFile, knowledge_base_id: int) -> str:
+    async def save_bytes(
+        self, content: bytes, filename: str, knowledge_base_id: int
+    ) -> str:
         """
-        保存上传的文件到本地
+        保存文档字节内容到本地
 
         Args:
-            file: 上传的文件
+            content: 文件字节内容
+            filename: 原始文件名（用于推断扩展名）
             knowledge_base_id: 知识库ID
 
         Returns:
-            文件存储路径
+            文件存储路径（绝对路径字符串）
         """
-        content = await file.read()
-
-        filename = file.filename or "unknown"
         ext = self._get_file_extension(filename)
 
         content_hash = hashlib.md5(content).hexdigest()[:8]
@@ -1003,6 +1003,21 @@ class DocumentProcessor:
         await asyncio.to_thread(_write_bytes, file_path, content)
 
         return str(file_path)
+
+    async def save_file(self, file: UploadFile, knowledge_base_id: int) -> str:
+        """
+        保存上传的文件到本地
+
+        Args:
+            file: 上传的文件
+            knowledge_base_id: 知识库ID
+
+        Returns:
+            文件存储路径
+        """
+        content = await file.read()
+        filename = file.filename or "unknown"
+        return await self.save_bytes(content, filename, knowledge_base_id)
 
 
 document_processor = DocumentProcessor()

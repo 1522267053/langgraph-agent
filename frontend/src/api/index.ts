@@ -23,6 +23,10 @@ const request: AxiosInstance = axios.create({
 /** 响应拦截器 */
 request.interceptors.response.use(
   response => {
+    // 文件下载（blob）跳过统一 code 校验，成功/失败由调用方处理
+    if (response.config.responseType === 'blob') {
+      return response
+    }
     const res = response.data as ApiResponse
     if (res.code !== 1) {
       if ((response.config as Record<string, unknown>).showError !== false) {
