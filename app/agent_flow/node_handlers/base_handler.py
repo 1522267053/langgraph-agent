@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 class NodeVariable(BaseModel):
     """节点变量（输入/输出通用，与前端对齐）"""
 
-    name: str = Field("", description="变量名")
-    source: str = Field("", description="来源路径")
-    type: Optional[str] = Field(None, description="数据类型")
+    name: str = Field(default="", description="变量名")
+    source: str = Field(default="", description="来源路径")
+    type: Optional[str] = Field(default=None, description="数据类型")
 
 
 class BaseNodeConfig(BaseModel):
