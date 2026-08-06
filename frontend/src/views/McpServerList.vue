@@ -4,6 +4,7 @@ import { Plus, Refresh, QuestionFilled, Edit, Delete } from '@element-plus/icons
 import { mcpServerApi } from '@/api/mcpServer'
 import ActionColumn from '@/components/common/ActionColumn.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { checkMcpCommand } from '@/utils/mcpCommand'
 import type {
   McpServer,
   McpServerConfig,
@@ -189,6 +190,26 @@ function resetForm() {
 async function handleSubmit() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
+
+  // 命令依赖检查（告知性提示，前端无法真实检测是否已安装，已装可选继续）
+  if (formData.transport === 'stdio' && formData.config?.command) {
+    const check = checkMcpCommand(formData.config.command)
+    if (check.matched) {
+      try {
+        await ElMessageBox.confirm(check.message, '命令依赖检查', {
+          confirmButtonText: check.downloadUrl ? '前往下载' : '知道了',
+          cancelButtonText: '继续保存',
+          type: 'warning',
+          distinguishCancelAndClose: true
+        })
+        if (check.downloadUrl) window.open(check.downloadUrl, '_blank')
+        return
+      } catch (action) {
+        // 关闭弹窗(X) 视为取消保存；点「继续保存」则走后续保存流程
+        if (action === 'close') return
+      }
+    }
+  }
 
   formLoading.value = true
   try {

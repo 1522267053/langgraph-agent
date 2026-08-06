@@ -10,6 +10,7 @@ MCP客户端管理器
 
 import asyncio
 import logging
+import shutil
 import sys
 import threading
 import time
@@ -31,6 +32,23 @@ MCP_TOOL_CALL_TIMEOUT = 120
 MCP_REMOTE_TOOL_CALL_TIMEOUT = 60
 MAX_CONNECTION_AGE = 600
 STDIO_CONSECUTIVE_TIMEOUT_LIMIT = 2
+
+# 常见 MCP 启动命令 → 依赖运行环境映射（命令缺失时给出友好提示与下载链接）
+COMMAND_DEPENDENCIES: dict[str, dict[str, str]] = {
+    "npx": {"name": "Node.js", "url": "https://nodejs.org/zh-cn/download"},
+    "node": {"name": "Node.js", "url": "https://nodejs.org/zh-cn/download"},
+    "npm": {"name": "Node.js", "url": "https://nodejs.org/zh-cn/download"},
+    "uvx": {
+        "name": "uv",
+        "url": "https://docs.astral.sh/uv/getting-started/installation/",
+    },
+    "uv": {
+        "name": "uv",
+        "url": "https://docs.astral.sh/uv/getting-started/installation/",
+    },
+    "python": {"name": "Python", "url": "https://www.python.org/downloads/"},
+    "python3": {"name": "Python", "url": "https://www.python.org/downloads/"},
+}
 
 
 class McpConnectionError(Exception):
@@ -61,6 +79,35 @@ def _extract_error_message(exc: Exception) -> str:
     if sys.version_info >= (3, 11) and isinstance(exc, ExceptionGroup):
         return "; ".join(_extract_error_message(e) for e in exc.exceptions)
     return str(exc)
+
+
+def check_command(command: str) -> dict:
+    """
+    检测命令是否可用（shutil.which），返回检测结果。
+
+    用于 MCP 启动前的真实检测：命令缺失时给出友好提示与依赖下载链接，
+    避免底层 FileNotFoundError 等冗长异常直接暴露给用户。
+
+    Returns:
+        {"command", "exists", "missing", "dependency_name?", "download_url?", "message"}
+    """
+    cmd = (command or "").strip()
+    dep = COMMAND_DEPENDENCIES.get(cmd)
+    exists = bool(cmd) and shutil.which(cmd) is not None
+    result: dict = {
+        "command": cmd,
+        "exists": exists,
+        "missing": bool(cmd) and not exists,
+    }
+    if result["missing"] and dep:
+        result["dependency_name"] = dep["name"]
+        result["download_url"] = dep["url"]
+        result["message"] = f"未找到命令「{cmd}」，请先安装 {dep['name']}"
+    elif result["missing"]:
+        result["message"] = f"未找到命令「{cmd}」，请确认对应运行环境是否已安装"
+    else:
+        result["message"] = ""
+    return result
 
 
 class ConnectionHolder:
@@ -573,6 +620,13 @@ class McpToolManager:
         try:
             config = await self._get_server_config(db, server_id)
             connection, timeout = self._build_connection(server.transport, config)
+            # stdio 类型启动前真实检测命令是否可用，缺失则直接返回友好错误
+            if server.transport == "stdio":
+                command = connection.get("command")
+                if command:
+                    check = check_command(str(command))
+                    if check["missing"]:
+                        return False, [], check["message"]
             holder = await self._start_connection(server, connection)
 
             tools = await load_mcp_tools(holder.session, server_name=server.name)
