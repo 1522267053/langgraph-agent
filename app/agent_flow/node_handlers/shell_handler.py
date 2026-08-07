@@ -140,7 +140,7 @@ def _command_targets_data_dir(command: str) -> bool:
     data_dir_resolved = str((BASE_DIR / "data").resolve())
     if data_dir_resolved in command:
         return True
-    if re.search(r'(?:^|[\s"\'>|;])(?:\.?[\\/])?data(?:[\\/]|$|\s)', command):
+    if re.search(r'(?:^|[\s"\'>|;])(?:\.?[\\/])?data(?:[\\/]|$)', command):
         return True
     return False
 
