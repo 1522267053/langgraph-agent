@@ -34,13 +34,7 @@ export type FlowType = 'flow' | 'agent'
 
 /** 字段类型 */
 export type FieldType =
-  | 'string'
-  | 'number'
-  | 'boolean'
-  | 'object'
-  | 'array'
-  | 'file_list'
-  | 'python_result'
+  'string' | 'number' | 'boolean' | 'object' | 'array' | 'file_list' | 'python_result'
 
 /** 流程输入输出字段定义 */
 export interface FlowIOField {
@@ -349,6 +343,36 @@ export interface FlowExportSkill {
   skill_content?: string
 }
 
+/** 导出的会话消息 */
+export interface FlowExportMessage {
+  role: string
+  content: string
+  original_content?: string
+  thinking?: string
+  tool_calls?: Record<string, unknown>
+  tool_call_id?: string
+  status?: string
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
+  sequence: number
+  files?: unknown
+  input_data?: Record<string, unknown>
+}
+
+/** 导出的会话 */
+export interface FlowExportSession {
+  title: string
+  status: number
+  messages: FlowExportMessage[]
+}
+
+/** 导出的会话历史（按 flow_name 分组） */
+export interface FlowExportSessionHistory {
+  flow_name: string
+  sessions: FlowExportSession[]
+}
+
 /** 导出文件的完整数据结构 */
 export interface FlowExportData {
   version: string
@@ -358,6 +382,16 @@ export interface FlowExportData {
   mcp_servers: FlowExportMcpServer[]
   knowledge_bases: FlowExportKnowledgeBase[]
   skills: FlowExportSkill[]
+  sessions?: FlowExportSessionHistory[]
+}
+
+/** 导出资源类型选项 */
+export interface FlowExportOptions {
+  include_mcp: boolean
+  include_knowledge: boolean
+  include_skills: boolean
+  include_memories: boolean
+  include_sessions: boolean
 }
 
 /** 导入结果 */

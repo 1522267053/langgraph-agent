@@ -13,7 +13,7 @@ import {
 } from '@element-plus/icons-vue'
 import JSZip from 'jszip'
 import { flowApi } from '@/api/flow'
-import type { Flow, FlowStatus, FlowType, FlowExportData } from '@/types/flow'
+import type { Flow, FlowStatus, FlowType, FlowExportData, FlowExportOptions } from '@/types/flow'
 import type { PaginatedResponse } from '@/types/common'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowQuickExecute from '@/components/FlowEditor/FlowQuickExecute.vue'
@@ -79,7 +79,7 @@ function onRowAction(row: Flow, key: string) {
       handleDuplicate(row)
       break
     case 'export':
-      handleExport([row.id!])
+      handleExport([row.id!], row.flow_type)
       break
     case 'edit':
       handleEdit(row)
@@ -198,11 +198,34 @@ function handleSelectionChange(rows: Flow[]) {
 // ---- 导出 ----
 
 const exportLoading = ref(false)
+const exportDialogVisible = ref(false)
+const exportTargetIds = ref<number[]>([])
+const exportTargetType = ref<FlowType>('flow')
+const exportOptions = reactive<FlowExportOptions>({
+  include_mcp: true,
+  include_knowledge: true,
+  include_skills: true,
+  include_memories: true,
+  include_sessions: false
+})
 
-async function handleExport(ids: number[]) {
+const isExportAgent = computed(() => exportTargetType.value === 'agent')
+
+function handleExport(ids: number[], flowType: FlowType = 'flow') {
+  exportTargetIds.value = ids
+  exportTargetType.value = flowType
+  exportOptions.include_mcp = true
+  exportOptions.include_knowledge = true
+  exportOptions.include_skills = true
+  exportOptions.include_memories = true
+  exportOptions.include_sessions = false
+  exportDialogVisible.value = true
+}
+
+async function handleConfirmExport() {
   exportLoading.value = true
   try {
-    const res = await flowApi.exportFlows(ids)
+    const res = await flowApi.exportFlows(exportTargetIds.value, { ...exportOptions })
     const blob = res.data as Blob
     // 后端导出失败时返回 JSON（非 zip），解析错误信息
     if (blob.type && blob.type.includes('json')) {
@@ -224,6 +247,7 @@ async function handleExport(ids: number[]) {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
+    exportDialogVisible.value = false
     ElMessage.success('导出成功')
   } catch {
     ElMessage.error('导出失败')
@@ -607,6 +631,45 @@ onMounted(() => {
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 导出对话框 -->
+    <el-dialog
+      v-model="exportDialogVisible"
+      title="选择导出内容"
+      width="480px"
+      :close-on-click-modal="false"
+    >
+      <div class="export-options">
+        <div class="export-option export-option-required">
+          <el-checkbox :model-value="true" disabled>流程/智能体</el-checkbox>
+          <span class="export-option-desc">导出主体（必选）</span>
+        </div>
+        <div class="export-option">
+          <el-checkbox v-model="exportOptions.include_mcp">MCP 服务器</el-checkbox>
+        </div>
+        <div class="export-option">
+          <el-checkbox v-model="exportOptions.include_knowledge">知识库</el-checkbox>
+        </div>
+        <div class="export-option">
+          <el-checkbox v-model="exportOptions.include_skills">技能</el-checkbox>
+        </div>
+        <template v-if="isExportAgent">
+          <div class="export-option">
+            <el-checkbox v-model="exportOptions.include_memories">记忆</el-checkbox>
+          </div>
+          <div class="export-option">
+            <el-checkbox v-model="exportOptions.include_sessions">会话历史</el-checkbox>
+            <span class="export-option-desc">含隐私数据，可能较大</span>
+          </div>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="exportDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exportLoading" @click="handleConfirmExport">
+          确认导出
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -841,6 +904,27 @@ onMounted(() => {
 }
 
 .kb-docs-count {
+  color: #94a3b8;
+}
+
+.export-options {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.export-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.export-option-required {
+  color: #64748b;
+}
+
+.export-option-desc {
+  font-size: 12px;
   color: #94a3b8;
 }
 </style>

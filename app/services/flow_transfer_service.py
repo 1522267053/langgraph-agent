@@ -17,10 +17,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import settings
+from app.models.agent_message import AgentMessage
+from app.models.agent_session import AgentSession
 from app.models.flow import Flow, FlowType
 from app.models.flow_node import FlowNode
 from app.models.flow_edge import FlowEdge
@@ -96,14 +99,53 @@ MEMORY_IMPORT_FIELDS = frozenset(
     }
 )
 
+# 消息导出白名单：剔除 id/session_id/审计字段，导入时重建关联
+MESSAGE_EXPORT_FIELDS = frozenset(
+    {
+        "role",
+        "content",
+        "original_content",
+        "thinking",
+        "tool_calls",
+        "tool_call_id",
+        "status",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "sequence",
+        "files",
+        "input_data",
+    }
+)
+
+
+class FlowExportOptions(BaseModel):
+    """导出资源类型选项（流程/智能体本身始终导出）"""
+
+    include_mcp: bool = Field(default=True, description="导出 MCP 服务器配置")
+    include_knowledge: bool = Field(default=True, description="导出知识库及文档")
+    include_skills: bool = Field(default=True, description="导出技能")
+    include_memories: bool = Field(default=True, description="导出记忆（仅智能体）")
+    include_sessions: bool = Field(
+        default=False, description="导出会话历史（含消息，仅智能体）"
+    )
+
 
 class FlowTransferService:
     """流程导入导出服务"""
 
     # ---- 导出 ----
 
-    async def export_flows(self, db: AsyncSession, flow_ids: list[int]) -> dict:
-        """导出指定流程及其所有依赖（卡片引用、MCP、知识库、技能、记忆）"""
+    async def export_flows(
+        self,
+        db: AsyncSession,
+        flow_ids: list[int],
+        options: Optional[FlowExportOptions] = None,
+    ) -> dict:
+        """导出指定流程及其所有依赖（按 options 控制资源类型）"""
+        if options is None:
+            options = FlowExportOptions()
+
         flows = await self._collect_flows_recursive(db, flow_ids, set())
         sorted_flows = self._topological_sort(flows)
         flow_name_map = {f.id: f.name for f in sorted_flows}
@@ -134,11 +176,7 @@ class FlowTransferService:
             if flow.flow_type == FlowType.AGENT.value:
                 agent_ids.append(flow.id)
 
-        mcp_servers = await self._collect_mcp_servers(db, mcp_server_ids)
-        knowledge_bases = await self._collect_knowledge_bases(db, knowledge_base_ids)
-        skills = await self._collect_skills(db, skill_ids)
-        memories = await self._collect_memories(db, agent_ids)
-
+        # 始终构建 name 映射（节点 config 的 ID→name 转换依赖它，不可省略）
         mcp_entities = await self._fetch_entity_list(db, McpServer, mcp_server_ids)
         kb_entities = await self._fetch_entity_list(
             db, KnowledgeBase, knowledge_base_ids
@@ -161,6 +199,31 @@ class FlowTransferService:
             sf = self._serialize_flow(flow, ref_maps)
             serialized_flows.append(sf)
 
+        # 按 options 条件收集附属资源（流程类型无 agent_ids，记忆/会话自然为空）
+        mcp_servers = (
+            await self._collect_mcp_servers(db, mcp_server_ids)
+            if options.include_mcp
+            else []
+        )
+        knowledge_bases = (
+            await self._collect_knowledge_bases(db, knowledge_base_ids)
+            if options.include_knowledge
+            else []
+        )
+        skills = (
+            await self._collect_skills(db, skill_ids) if options.include_skills else []
+        )
+        memories = (
+            await self._collect_memories(db, agent_ids)
+            if options.include_memories
+            else []
+        )
+        sessions = (
+            await self._collect_sessions(db, agent_ids)
+            if options.include_sessions
+            else []
+        )
+
         return {
             "version": EXPORT_VERSION,
             "export_time": datetime.now().isoformat(),
@@ -169,11 +232,17 @@ class FlowTransferService:
             "mcp_servers": mcp_servers,
             "knowledge_bases": knowledge_bases,
             "skills": skills,
+            "sessions": sessions,
         }
 
-    async def export_package(self, db: AsyncSession, flow_ids: list[int]) -> bytes:
+    async def export_package(
+        self,
+        db: AsyncSession,
+        flow_ids: list[int],
+        options: Optional[FlowExportOptions] = None,
+    ) -> bytes:
         """导出为 .lga 打包文件（zip），含知识库文档与技能附属文件"""
-        data = await self.export_flows(db, flow_ids)
+        data = await self.export_flows(db, flow_ids, options)
         data["version"] = PACKAGE_VERSION
 
         buf = io.BytesIO()
@@ -536,6 +605,61 @@ class FlowTransferService:
             )
         return result
 
+    async def _collect_sessions(
+        self, db: AsyncSession, agent_ids: list[int]
+    ) -> list[dict]:
+        """收集 Agent 会话历史（含消息），按 flow_name 分组"""
+        result = []
+        for agent_id in agent_ids:
+            flow = await flow_service.get_by_id(db, agent_id, raise_not_found=False)
+            if not flow:
+                continue
+            sessions = (
+                (
+                    await db.execute(
+                        select(AgentSession)
+                        .where(
+                            AgentSession.flow_id == agent_id,
+                            AgentSession.is_delete == 0,
+                        )
+                        .order_by(AgentSession.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not sessions:
+                continue
+            session_list = []
+            for s in sessions:
+                messages = (
+                    (
+                        await db.execute(
+                            select(AgentMessage)
+                            .where(
+                                AgentMessage.session_id == s.id,
+                                AgentMessage.is_delete == 0,
+                            )
+                            .order_by(AgentMessage.id)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                msg_items = []
+                for m in messages:
+                    item = {}
+                    for field in MESSAGE_EXPORT_FIELDS:
+                        val = getattr(m, field, None)
+                        if val is not None:
+                            item[field] = val
+                    msg_items.append(item)
+                session_list.append(
+                    {"title": s.title, "status": s.status, "messages": msg_items}
+                )
+            result.append({"flow_name": flow.name, "sessions": session_list})
+        return result
+
     # ---- 导入 ----
 
     async def import_flows(
@@ -595,6 +719,10 @@ class FlowTransferService:
 
         await self._import_memories(
             db, import_data.get("memories", []), flow_name_map, warnings
+        )
+
+        await self._import_sessions(
+            db, import_data.get("sessions", []), flow_name_map, warnings
         )
 
         return created, warnings
@@ -981,6 +1109,52 @@ class FlowTransferService:
                     )
                 except Exception as e:
                     warnings.append(f"记忆向量化部分失败: {e}")
+
+    async def _import_sessions(
+        self,
+        db: AsyncSession,
+        sessions_data: list[dict],
+        flow_name_map: dict[str, int],
+        warnings: list[str],
+    ) -> None:
+        """导入会话历史（含消息），按 flow_name 关联到新环境 flow_id
+
+        不处理 LangGraph checkpoint，首次对话时从 DB 消息自动重建上下文。
+        """
+        for entry in sessions_data:
+            flow_name = entry.get("flow_name", "")
+            flow_id = flow_name_map.get(flow_name)
+            if not flow_id:
+                warnings.append(
+                    f"会话所属流程「{flow_name}」未找到，"
+                    f"跳过 {len(entry.get('sessions', []))} 个会话"
+                )
+                continue
+
+            for s in entry.get("sessions", []):
+                try:
+                    session = AgentSession(
+                        flow_id=flow_id,
+                        title=s.get("title", "新对话"),
+                        status=s.get("status", 1),
+                    )
+                    db.add(session)
+                    await db.flush()  # 拿到新 session.id
+
+                    for m in s.get("messages", []):
+                        kwargs = {
+                            "session_id": session.id,
+                            "role": m.get("role", "user"),
+                            "content": m.get("content", ""),
+                        }
+                        for field in MESSAGE_EXPORT_FIELDS:
+                            if field in m and m[field] is not None:
+                                kwargs[field] = m[field]
+                        db.add(AgentMessage(**kwargs))
+                    await db.commit()
+                except Exception as e:
+                    await db.rollback()
+                    warnings.append(f"导入会话「{s.get('title', '?')}」失败: {e}")
 
     # ---- 工具方法 ----
 
