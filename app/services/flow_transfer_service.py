@@ -304,6 +304,10 @@ class FlowTransferService:
                     ref_id = config.get("ref_flow_id")
                     if ref_id and isinstance(ref_id, int) and ref_id not in visited:
                         child_ids.append(ref_id)
+                elif node.node_type == "sub_agent":
+                    aid = config.get("agent_id")
+                    if isinstance(aid, int) and aid not in visited:
+                        child_ids.append(aid)
 
             if child_ids:
                 result.extend(
@@ -321,6 +325,10 @@ class FlowTransferService:
                 ref_id = node.ref_flow_id
                 if ref_id and ref_id in flow_map:
                     ref_map[f.id].add(ref_id)
+                elif node.node_type == "sub_agent":
+                    agent_id = (node.base_config or {}).get("agent_id")
+                    if isinstance(agent_id, int) and agent_id in flow_map:
+                        ref_map[f.id].add(agent_id)
 
         in_degree: dict[int, int] = {f.id: 0 for f in flows}
         children: dict[int, list[int]] = defaultdict(list)
@@ -436,6 +444,11 @@ class FlowTransferService:
         if ref_id is not None:
             config["ref_flow_name"] = flow_name_map.get(ref_id)
             del config["ref_flow_id"]
+
+        agent_id = config.get("agent_id")
+        if agent_id is not None:
+            config["agent_name"] = flow_name_map.get(agent_id)
+            del config["agent_id"]
 
         return config
 
@@ -1035,6 +1048,13 @@ class FlowTransferService:
             else:
                 warnings.append(f"卡片节点引用的流程「{config_ref_name}」未找到")
 
+        agent_name = config.pop("agent_name", None)
+        if agent_name:
+            if agent_name in flow_name_map:
+                config["agent_id"] = flow_name_map[agent_name]
+            else:
+                warnings.append(f"子Agent「{agent_name}」未在导入数据中找到")
+
         mcp_names = config.pop("mcp_server_names", None)
         if mcp_names:
             ids = []
@@ -1159,15 +1179,19 @@ class FlowTransferService:
     # ---- 工具方法 ----
 
     def _check_circular_refs(self, flows_data: list[dict]) -> None:
-        """检查卡片引用是否存在循环"""
+        """检查卡片/子Agent引用是否存在循环"""
         name_set = {f["name"] for f in flows_data}
         graph: dict[str, list[str]] = defaultdict(list)
 
         for f in flows_data:
             for node in f.get("nodes", []):
-                if node.get("node_type") != "card":
+                node_type = node.get("node_type")
+                if node_type == "card":
+                    ref_name = node.get("ref_flow_name")
+                elif node_type == "sub_agent":
+                    ref_name = (node.get("base_config") or {}).get("agent_name")
+                else:
                     continue
-                ref_name = node.get("ref_flow_name")
                 if ref_name and ref_name in name_set:
                     graph[f["name"]].append(ref_name)
 
@@ -1176,7 +1200,7 @@ class FlowTransferService:
 
         def dfs(node: str) -> None:
             if node in path:
-                raise ValueError(f"检测到循环卡片引用: {node}")
+                raise ValueError(f"检测到循环引用: {node}")
             if node in visited:
                 return
             path.add(node)
