@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Plus,
@@ -11,6 +11,7 @@ import {
   Upload,
   CopyDocument
 } from '@element-plus/icons-vue'
+import JSZip from 'jszip'
 import { flowApi } from '@/api/flow'
 import type { Flow, FlowStatus, FlowType, FlowExportData } from '@/types/flow'
 import type { PaginatedResponse } from '@/types/common'
@@ -239,6 +240,12 @@ const importFileData = ref<FlowExportData | null>(null)
 const importFileName = ref('')
 const importFile = ref<File | null>(null)
 const importIsPackage = ref(false)
+const totalKbDocs = computed(() =>
+  (importFileData.value?.knowledge_bases || []).reduce(
+    (sum, kb) => sum + (kb.documents?.length || 0),
+    0
+  )
+)
 
 function handleOpenImport() {
   importFileData.value = null
@@ -248,13 +255,36 @@ function handleOpenImport() {
   importDialogVisible.value = true
 }
 
-function handleImportFileChange(file: File) {
+async function handleImportFileChange(file: File) {
   importFileName.value = file.name
   importFile.value = file
   importIsPackage.value = file.name.toLowerCase().endsWith('.lga')
   if (importIsPackage.value) {
-    // .lga 打包文件无法前端预览，直接进入待导入状态
+    // .lga 打包文件：用 JSZip 读取 manifest.json 预览（复用 .json 预览 UI）
     importFileData.value = null
+    try {
+      const zip = await JSZip.loadAsync(file)
+      const manifestFile = zip.file('manifest.json')
+      if (!manifestFile) {
+        ElMessage.error('.lga 文件中缺少 manifest.json')
+        importFile.value = null
+        importFileName.value = ''
+        return
+      }
+      const text = await manifestFile.async('text')
+      const data = JSON.parse(text) as FlowExportData
+      if (!data.version || !data.flows || !Array.isArray(data.flows)) {
+        ElMessage.error('无效的 .lga 文件格式')
+        importFile.value = null
+        importFileName.value = ''
+        return
+      }
+      importFileData.value = data
+    } catch {
+      ElMessage.error('.lga 文件解析失败，请检查文件格式')
+      importFile.value = null
+      importFileName.value = ''
+    }
     return
   }
   // 旧版 .json：FileReader 解析预览
@@ -280,8 +310,8 @@ function handleImportFileChange(file: File) {
 
 async function handleConfirmImport() {
   if (!importFile.value) return
-  // .json 导入前做命令依赖检查（告知性提示，.lga 走后端 warnings 兜底）
-  if (!importIsPackage.value && importFileData.value) {
+  // 导入前做 MCP 命令依赖检查（告知性提示，.lga 解析后同样检查）
+  if (importFileData.value) {
     const cmdWarnings = collectMcpCommandWarnings(importFileData.value.mcp_servers || [])
     if (cmdWarnings.length > 0) {
       const first = cmdWarnings[0]
@@ -511,10 +541,10 @@ onMounted(() => {
         </el-upload>
       </div>
 
-      <!-- .lga 打包文件提示（无法前端预览） -->
-      <div v-else-if="importIsPackage" class="import-preview">
+      <!-- .lga 打包文件：解析中或解析失败时显示（解析成功后复用下方预览区域） -->
+      <div v-else-if="importIsPackage && !importFileData" class="import-preview">
         <el-alert type="info" :closable="false" show-icon class="import-tip">
-          已选择打包文件「{{ importFileName }}」，导入后可查看结果
+          正在解析打包文件「{{ importFileName }}」...
         </el-alert>
         <div class="preview-section">
           <p>打包文件（.lga）含完整知识库文档与技能文件，将在导入后自动还原。</p>
@@ -552,6 +582,7 @@ onMounted(() => {
           <span v-if="importFileData.knowledge_bases?.length">
             知识库:
             <strong>{{ importFileData.knowledge_bases.length }}</strong>
+            <span v-if="totalKbDocs > 0" class="kb-docs-count">（{{ totalKbDocs }} 篇文档）</span>
           </span>
           <span v-if="importFileData.skills?.length">
             技能:
@@ -807,5 +838,9 @@ onMounted(() => {
 
 .preview-stats strong {
   color: #0f172a;
+}
+
+.kb-docs-count {
+  color: #94a3b8;
 }
 </style>
