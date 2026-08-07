@@ -12,7 +12,7 @@ import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Optional
 
-from RestrictedPython import compile_restricted_exec
+from RestrictedPython.compile import compile_restricted_exec
 from RestrictedPython.Guards import (
     guarded_iter_unpack_sequence,
     guarded_unpack_sequence,
@@ -456,14 +456,14 @@ class PythonNodeHandler(BaseNodeHandler):
 参数类型说明:
 {param_list}
 
-        允许导入的模块: math, json, re, datetime, collections, itertools, functools, decimal, statistics, hashlib, uuid, copy, dataclasses 等。
-        禁止导入危险模块（os, sys, subprocess, socket等），禁止访问 __dunder__ 属性。
-        返回值将作为执行结果。
+允许导入的模块: math, json, re, datetime, collections, itertools, functools, decimal, statistics, hashlib, uuid, copy, dataclasses 等。
+禁止导入危险模块（os, sys, subprocess, socket等），禁止访问 __dunder__ 属性。
+返回值将作为执行结果。
 
-        ## 文件保存约定
-        当 main() 返回以下格式时，内容将自动保存为文件并在聊天中预览：
-          {"__save_file__": True, "content_base64": "<base64编码的字节>", "mime_type": "image/png", "filename": "xxx.png"}
-        可用于生成图片/音频/视频后保存展示。base64 不会出现在对话里，只返回预览链接。"""
+## 文件保存约定
+当 main() 返回以下格式时，内容将自动保存为文件并在聊天中预览：
+    {"__save_file__": True, "content_base64": "<base64编码的字节>", "mime_type": "image/png", "filename": "xxx.png"}
+可用于生成图片/音频/视频后保存展示。base64 不会出现在对话里，只返回预览链接。"""
 
         async def execute_python(code: str, input_data: dict[str, Any] = None) -> dict:
             input_vars = input_data if input_data else {}
