@@ -321,11 +321,21 @@ export interface FlowExportMcpServer {
   tools_cache: FlowExportMcpToolCache[]
 }
 
+/** 导出的知识库文档 */
+export interface FlowExportKnowledgeDocument {
+  title: string
+  file_type?: string
+  word_count: number
+  segment_count: number
+  file_path?: string | null
+}
+
 /** 导出的知识库 */
 export interface FlowExportKnowledgeBase {
   name: string
   description?: string
   status: number
+  documents?: FlowExportKnowledgeDocument[]
 }
 
 /** 导出的技能 */
