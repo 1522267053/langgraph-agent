@@ -299,7 +299,14 @@ class VariableResolver:
                 try:
                     segments.append(int(idx_str))
                 except ValueError:
-                    segments.append(idx_str)
+                    cleaned = idx_str.strip()
+                    if (
+                        len(cleaned) >= 2
+                        and cleaned[0] in "\"'"
+                        and cleaned[-1] == cleaned[0]
+                    ):
+                        cleaned = cleaned[1:-1]
+                    segments.append(cleaned)
             else:
                 segments.append(part)
         return segments
@@ -323,7 +330,12 @@ class VariableResolver:
         return ".".join(parts)
 
     def _get_nested_value(self, data: dict | list, path: str) -> Any:
-        """获取嵌套字典/列表中的值，支持 [n] 数组索引"""
+        """获取嵌套字典/列表中的值，支持 [n] 数组索引
+
+        对命令执行类节点（python/shell）的包装字典做兼容：wrapper 结构为
+        {stdout, stderr, result, success}，函数返回值在 wrapper["result"]。
+        当直接取不到时，自动回退到 wrapper["result"] 上取同一路径。
+        """
         keys = self._parse_path(path)
         value: Any = data
         for key in keys:
@@ -336,7 +348,16 @@ class VariableResolver:
                 value = value.get(key)
             else:
                 return None
-        return value
+        if value is not None:
+            return value
+        # 兼容 wrapper：函数返回值在 data["result"]，直接取不到时回退
+        if (
+            isinstance(data, dict)
+            and "stdout" in data
+            and isinstance(data.get("result"), dict)
+        ):
+            return self._get_nested_value(data["result"], path)
+        return None
 
     def _nested_key_exists(self, data: dict | list, path: str) -> bool:
         """检查嵌套路径是否存在，支持 [n] 数组索引"""
