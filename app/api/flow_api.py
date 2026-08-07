@@ -16,7 +16,7 @@ from app.config.database import get_db
 from app.api.base_api import BaseApi, RouteConfig
 from app.models.flow import Flow, FlowType
 from app.services.flow_service import flow_service
-from app.services.flow_transfer_service import flow_transfer_service
+from app.services.flow_transfer_service import FlowExportOptions, flow_transfer_service
 from app.schemas.flow_schema import FlowBase, FlowCreate, FlowUpdate, FlowDetail
 from app.schemas.flow_node_schema import FlowNodeBase
 from app.schemas.flow_edge_schema import FlowEdgeBase
@@ -31,6 +31,9 @@ from app.schemas.base_schema import ApiResponse
 
 class FlowExportRequest(BaseModel):
     ids: list[int] = Field(..., description="要导出的流程ID列表")
+    options: FlowExportOptions = Field(
+        default_factory=FlowExportOptions, description="导出资源类型选项"
+    )
 
 
 class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
@@ -193,7 +196,9 @@ class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
         ):
             """导出流程及其依赖（含知识库文档、技能文件），打包为 .lga（zip）"""
             try:
-                zip_bytes = await flow_transfer_service.export_package(db, body.ids)
+                zip_bytes = await flow_transfer_service.export_package(
+                    db, body.ids, body.options
+                )
             except Exception as e:
                 return ApiResponse.error(msg=f"导出失败: {e}")
             filename = f"flow_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.lga"

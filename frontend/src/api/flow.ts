@@ -10,6 +10,7 @@ import type {
   FlowNodeUpdate,
   FlowEdgeCreate,
   FlowEdgeUpdate,
+  FlowExportOptions,
   FlowImportResult,
   FlowSnapshot
 } from '@/types/flow'
@@ -66,8 +67,8 @@ export const flowApi = {
     return request.post<ApiResponse<Flow>>('/flow/create-agent', data)
   },
 
-  exportFlows(ids: number[]) {
-    return request.post('/flow/export', { ids }, { responseType: 'blob' })
+  exportFlows(ids: number[], options?: FlowExportOptions) {
+    return request.post('/flow/export', { ids, options }, { responseType: 'blob' })
   },
 
   importFlowPackage(file: File) {
