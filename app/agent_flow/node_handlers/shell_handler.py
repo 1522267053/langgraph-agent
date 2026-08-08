@@ -135,14 +135,9 @@ DATA_READONLY_COMMANDS = {
 }
 
 
-def _command_targets_data_dir(command: str) -> bool:
-    """检测命令是否引用了项目数据目录（data/）"""
-    data_dir_resolved = str((BASE_DIR / "data").resolve())
-    if data_dir_resolved in command:
-        return True
-    if re.search(r'(?:^|[\s"\'>|;])(?:\.?[\\/])?data(?:[\\/]|$)', command):
-        return True
-    return False
+def _command_targets_data(command: str) -> bool:
+    """检测命令是否引用了数据库文件（langgraph_agent.db 及其 WAL/SHM 文件）"""
+    return "langgraph_agent.db" in command
 
 
 def validate_command(command: str) -> tuple[bool, str]:
@@ -165,7 +160,7 @@ def validate_command(command: str) -> tuple[bool, str]:
         if base_cmd in BLOCKED_COMMANDS:
             return False, f"命令 '{base_cmd}' 在禁止列表中"
 
-    if _command_targets_data_dir(command):
+    if _command_targets_data(command):
         base_cmd = first_word.split("/")[-1].split("\\")[-1]
         if base_cmd not in DATA_READONLY_COMMANDS:
             return False, f"不允许对数据目录执行写操作（仅支持查看），命令: {command}"
