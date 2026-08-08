@@ -431,6 +431,49 @@ def extract_files_from_params(params: dict) -> list[dict] | None:
     return files if files else None
 
 
+def normalize_file_value(value) -> dict | list[dict] | None:
+    """将上游节点输出的文件变量归一化为 collect_media_blocks 可处理的 file_info dict
+
+    兼容 Python __save_file__（嵌套 result）、API downloaded_file、流程输入三种格式。
+    """
+    if isinstance(value, list):
+        items = [normalize_file_value(v) for v in value]
+        return [item for item in items if item] or None
+    if not isinstance(value, dict):
+        return None
+
+    inner = value.get("result")
+    if isinstance(inner, dict) and any(
+        k in inner for k in ("file_id", "preview_url", "download_url")
+    ):
+        value = inner
+
+    file_id = value.get("file_id") or value.get("id")
+    mime_type = value.get("mime_type", "")
+    name = value.get("file_name") or value.get("original_name") or value.get("name", "")
+
+    file_path = value.get("file_path") or ""
+    if not file_path:
+        preview_url = value.get("preview_url", "")
+        if preview_url:
+            file_path = preview_url.lstrip("/")
+
+    if not file_path and not file_id:
+        return None
+
+    if file_path and not Path(file_path).is_absolute():
+        abs_path = settings.get_absolute_path(file_path)
+        if abs_path and abs_path.exists():
+            file_path = str(abs_path)
+
+    return {
+        "id": file_id,
+        "file_path": file_path,
+        "mime_type": mime_type,
+        "original_name": name,
+    }
+
+
 async def build_content_from_db_files(
     db,
     text: str,

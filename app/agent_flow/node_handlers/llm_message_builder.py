@@ -30,6 +30,7 @@ from app.utils.media_resolver import (
     build_multimodal_content,
     collect_media_blocks,
     filter_capabilities_by_adapter,
+    normalize_file_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -319,9 +320,22 @@ async def append_user_message(
 
     # 收集多模态内容（图片/文件等）
     capabilities = _effective_capabilities(node_config)
-    media_blocks, file_index = await collect_media_blocks(
-        state.input_data, capabilities
-    )
+
+    # 合并流程输入文件和上游节点文件变量
+    combined_input = dict(state.input_data)
+    file_input_sources = node_config.get("file_inputs", [])
+    if file_input_sources:
+        from app.agent_flow.variable_resolver import variable_resolver
+
+        for i, source in enumerate(file_input_sources):
+            value = variable_resolver.resolve_safe(source, state)
+            if not value:
+                continue
+            normalized = normalize_file_value(value)
+            if normalized:
+                combined_input[f"_file_input_{i}"] = normalized
+
+    media_blocks, file_index = await collect_media_blocks(combined_input, capabilities)
     prompt_text = (
         f"{actual_user_prompt}\n\n{file_index}" if file_index else actual_user_prompt
     )
