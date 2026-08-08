@@ -250,6 +250,9 @@ POST /api/ai/flow/{id}/edges/batch
 - 留空字段自动注入全局值
 - `user_prompt` 必填，`system_prompt` 强烈建议设置
 - `max_tool_iterations` 控制工具调用上限，测试时可设为 1 隔离干扰
+- **`file_inputs`（文件输入）**：上游节点文件变量路径列表，如 `["nodes.python_1.result", "nodes.api_1.downloaded_file"]`。解析后的文件自动作为多模态附件（图片/音频/视频/PDF）发送给模型，而非 JSON 序列化进 prompt 文本。兼容多种上游格式（Python `__save_file__` 的嵌套 `result`、API `downloaded_file`、流程输入 `file_list`）。**仅 Flow 模式可用，Agent 模式自动隐藏**
+  - 典型场景：Python 节点生成图片 → LLM 节点 `file_inputs: ["nodes.python_1.result"]` → 模型看到图片而非 JSON
+  - 变量值为文件数组时自动展开为多个附件
 - 输出变量：`result`、`thinking`、`called_tools`（本次对话新调用的工具名列表）
 - **必需工具检查**：LLM 本轮未调用指定工具时，自动注入提醒消息让 LLM 重试。仅检查本次 ReAct 循环新调用的工具（内存收集，不查 DB 历史），重试在 LLM 内部完成，用户只看到最终回复（无多段回复问题）。两种模式二选一：
   - **简单模式** `required_tools`: 必需工具名列表，如 `["send_wecom_message"]`，工具名精确匹配。**配置前先查 `GET /api/ai/flow/{id}/node/{node_key}/connected-tools`** 获取该 LLM 当前已连接的所有工具名
