@@ -600,7 +600,9 @@ async function loadLogs() {
                     <div>示例：*/5 * * * * = 每5分钟</div>
                   </div>
                 </template>
-                <el-icon style="vertical-align: -2px; margin-left: 2px; color: #94a3b8; cursor: help">
+                <el-icon
+                  style="vertical-align: -2px; margin-left: 2px; color: #94a3b8; cursor: help"
+                >
                   <QuestionFilled />
                 </el-icon>
               </el-tooltip>

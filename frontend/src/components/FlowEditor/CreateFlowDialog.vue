@@ -169,16 +169,8 @@ function removePrompt(index: number): void {
       </el-form-item>
       <el-form-item v-if="isAgentMode" label="建议提问">
         <div class="prompts-editor">
-          <div
-            v-for="(p, i) in suggestedPrompts"
-            :key="i"
-            class="prompt-row"
-          >
-            <el-input
-              v-model="suggestedPrompts[i]"
-              placeholder="输入建议提问内容"
-              size="small"
-            />
+          <div v-for="(p, i) in suggestedPrompts" :key="i" class="prompt-row">
+            <el-input v-model="suggestedPrompts[i]" placeholder="输入建议提问内容" size="small" />
             <el-button
               :icon="Delete"
               circle

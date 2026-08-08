@@ -402,11 +402,7 @@ onMounted(() => {
     </div>
 
     <!-- 新增/编辑弹窗 -->
-    <el-dialog
-      v-model="dialogVisible"
-      :title="isEdit ? '编辑网关' : '新建网关'"
-      width="600px"
-    >
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑网关' : '新建网关'" width="600px">
       <el-form label-position="top">
         <el-form-item label="名称" required>
           <el-input v-model="formData.name" placeholder="网关名称" />
@@ -526,8 +522,7 @@ onMounted(() => {
 {"action": "delete_session", "session_id": 123}
 
 // 心跳
-"ping"</pre
-              >
+"ping"</pre>
             </div>
             <div class="proto-section">
               <h4>服务端 → 客户端 事件</h4>
@@ -544,8 +539,7 @@ onMounted(() => {
 {"type": "tool_invoke", "data": {"call_id": "xxx", "name": "get_data", "args": {...}}}
 
 // 心跳响应
-"pong"</pre
-              >
+"pong"</pre>
             </div>
           </el-collapse-item>
         </el-collapse>

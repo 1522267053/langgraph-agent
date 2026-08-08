@@ -137,9 +137,8 @@ async function handleCopy(text: string): Promise<void> {
           :tool-name="segment.tool.name"
           :result="segment.tool.result"
         />
-        <pre v-else-if="segment.tool.status === 'error'" class="tool-content tool-content-error"
-          >执行失败</pre
-        >
+        <pre v-else-if="segment.tool.status === 'error'" class="tool-content tool-content-error">
+执行失败</pre>
       </template>
       <div v-else-if="segment.tool.status === 'running'" class="tool-content tool-loading-text">
         执行中...
@@ -469,5 +468,4 @@ async function handleCopy(text: string): Promise<void> {
   font-weight: 700;
   color: #1e293b;
 }
-
 </style>

@@ -187,7 +187,11 @@ export const agentApi = {
    * @param sessionId 会话ID
    */
   compressStatus(agentId: number, sessionId: number) {
-    return get<{ status: 'compressing' | 'done' | 'failed'; error?: string; removed_count?: number }>(`/agent/${agentId}/sessions/${sessionId}/compressing`)
+    return get<{
+      status: 'compressing' | 'done' | 'failed'
+      error?: string
+      removed_count?: number
+    }>(`/agent/${agentId}/sessions/${sessionId}/compressing`)
   },
 
   /**

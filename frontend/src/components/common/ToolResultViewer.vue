@@ -9,7 +9,7 @@ const props = defineProps<{
   result: unknown
 }>()
 
-let hljsModule: (typeof import('highlight.js').default) | null = null
+let hljsModule: typeof import('highlight.js').default | null = null
 
 async function loadHljs() {
   if (!hljsModule) {
@@ -94,7 +94,9 @@ const fileReadMeta = computed(() => {
   const lastLine = fileReadCodeLines.value[fileReadCodeLines.value.length - 1]
   const actualEnd = lastLine ? lastLine.lineNumber : offset + limit - 1
   const total = r.total_lines
-  return total ? `第 ${offset}-${actualEnd} 行 / 共 ${total} 行` : `${fileReadCodeLines.value.length} 行`
+  return total
+    ? `第 ${offset}-${actualEnd} 行 / 共 ${total} 行`
+    : `${fileReadCodeLines.value.length} 行`
 })
 
 interface DiffLine {
@@ -104,7 +106,7 @@ interface DiffLine {
 
 const diffLines = computed<DiffLine[]>(() => {
   const diff: string = parsedResult.value?.diff || ''
-  return diff.split('\n').map((line) => {
+  return diff.split('\n').map(line => {
     if (line.startsWith('-')) return { type: 'remove', text: line.slice(1) }
     if (line.startsWith('+')) return { type: 'add', text: line.slice(1) }
     return { type: 'add', text: line }
@@ -126,7 +128,7 @@ const mediaInfo = computed(() => {
 
 const copyText = computed(() => {
   if (isFileRead.value) {
-    return fileReadCodeLines.value.map((l) => l.text).join('\n')
+    return fileReadCodeLines.value.map(l => l.text).join('\n')
   }
   if (isTextEditor.value) {
     return parsedResult.value?.diff || ''
@@ -181,7 +183,7 @@ async function updateHighlighting() {
 
   if (isFileRead.value) {
     const lang = fileLanguage.value
-    highlightedLines.value = fileReadCodeLines.value.map((line) => {
+    highlightedLines.value = fileReadCodeLines.value.map(line => {
       try {
         const result = hljsModule!.highlight(line.text, { language: lang })
         return result.value
@@ -229,9 +231,9 @@ watch(
   <div v-else-if="isTextEditor" class="tool-edit-result">
     <div class="tool-result-header">
       <div class="tool-result-meta">
-        <span class="tool-result-path" :title="parsedResult?.file_path">{{
-          parsedResult?.file_path
-        }}</span>
+        <span class="tool-result-path" :title="parsedResult?.file_path">
+          {{ parsedResult?.file_path }}
+        </span>
         <span class="tool-result-info">替换 {{ parsedResult?.replaced_count }} 处</span>
       </div>
       <div class="tool-result-actions">
@@ -255,8 +257,9 @@ watch(
       size="small"
       class="tool-fallback-copy"
       @click="handleFallbackCopy"
-      >复制</el-button
     >
+      复制
+    </el-button>
     <!-- 文件结果：在返回数据下方追加预览/下载 -->
     <div v-if="isSaveFile && mediaInfo" class="tool-media-result">
       <div class="media-inline-preview">
@@ -280,8 +283,9 @@ watch(
           :icon="View"
           size="small"
           @click="openMediaPreview"
-          >查看预览</el-button
         >
+          查看预览
+        </el-button>
         <!-- 下载按钮：用 download_url（已登录带 cookie，FileResponse 返回原名） -->
         <el-button
           v-if="mediaInfo.download_url"
@@ -290,8 +294,9 @@ watch(
           tag="a"
           :href="mediaInfo.download_url"
           :download="mediaInfo.file_name"
-          >{{mediaInfo.file_name}}下载</el-button
         >
+          {{ mediaInfo.file_name }}下载
+        </el-button>
       </div>
     </div>
   </div>

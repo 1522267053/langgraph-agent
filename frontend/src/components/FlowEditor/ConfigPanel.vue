@@ -445,11 +445,7 @@ async function handleToggleCard(val: boolean | string): Promise<void> {
             </el-form-item>
             <el-form-item label="建议提问">
               <div class="prompts-editor">
-                <div
-                  v-for="(p, i) in flowConfig.suggested_prompts"
-                  :key="i"
-                  class="prompt-row"
-                >
+                <div v-for="(p, i) in flowConfig.suggested_prompts" :key="i" class="prompt-row">
                   <el-input
                     v-model="flowConfig.suggested_prompts[i]"
                     placeholder="输入建议提问内容，发送后即保存"

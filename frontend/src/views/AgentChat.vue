@@ -26,7 +26,15 @@ const toolOutputStore = useToolOutputStore()
 
 const messagesContainer = ref<HTMLElement | null>(null)
 
-const { autoScroll, isAtBottom, scrollToBottom, handleScroll, userScrolledUp, onUserScrollIntent, resetAutoScrollState } = useAutoScroll(messagesContainer, [
+const {
+  autoScroll,
+  isAtBottom,
+  scrollToBottom,
+  handleScroll,
+  userScrolledUp,
+  onUserScrollIntent,
+  resetAutoScrollState
+} = useAutoScroll(messagesContainer, [
   () => store.chatMessages.length,
   () => store.textContent,
   () => store.thinkingContent,
@@ -66,9 +74,7 @@ function handlePreviewSwitch(index: number) {
 
 const agentId = ref<number | null>(null)
 
-const isWelcomeMode = computed(
-  () => !store.messagesLoading && store.chatMessages.length === 0
-)
+const isWelcomeMode = computed(() => !store.messagesLoading && store.chatMessages.length === 0)
 
 function handleSuggestedPrompt(prompt: string) {
   inputMessage.value = prompt
@@ -444,13 +450,11 @@ function handleRevertFrom(dbMsgId: number) {
 /**
  * 回退恢复：将删除消息时携带的文件与其他输入参数恢复到输入框参数表单
  */
-function restoreInputParams(
-  deleted: {
-    content: string
-    files?: Array<{ id: number; original_name: string; mime_type: string }>
-    input_data?: Record<string, unknown>
-  }
-) {
+function restoreInputParams(deleted: {
+  content: string
+  files?: Array<{ id: number; original_name: string; mime_type: string }>
+  input_data?: Record<string, unknown>
+}) {
   const params: Record<string, unknown> = deleted.input_data ? { ...deleted.input_data } : {}
   // 旧消息无 input_data 时回退：把附件放入第一个 file_list 字段
   if (deleted.files && deleted.files.length > 0) {

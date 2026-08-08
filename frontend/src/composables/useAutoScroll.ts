@@ -54,13 +54,16 @@ export function useAutoScroll(
     }
     // trailing：冷却期内安排一次兜底，确保最新内容最终被滚动到底部
     if (_trailingTimer) return
-    _trailingTimer = setTimeout(() => {
-      _trailingTimer = null
-      _lastScrollAt = Date.now()
-      requestAnimationFrame(() => {
-        if (autoScroll.value && !userScrolledUp.value) scrollToBottom()
-      })
-    }, throttleMs - (Date.now() - _lastScrollAt))
+    _trailingTimer = setTimeout(
+      () => {
+        _trailingTimer = null
+        _lastScrollAt = Date.now()
+        requestAnimationFrame(() => {
+          if (autoScroll.value && !userScrolledUp.value) scrollToBottom()
+        })
+      },
+      throttleMs - (Date.now() - _lastScrollAt)
+    )
   }
 
   /** 重置全部滚动状态（切换 session 等场景调用，恢复自动滚动到底部） */

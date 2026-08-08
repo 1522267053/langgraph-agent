@@ -20,8 +20,7 @@ function getOutputVariablesForNode(node: Node, allNodes?: Node[]): NodeOutputVar
 
   if (nodeType === 'card') {
     const outputSchema = node.data?.config?.output_schema as
-      | { fields?: Array<{ name: string; type?: FieldType; description?: string }> }
-      | undefined
+      { fields?: Array<{ name: string; type?: FieldType; description?: string }> } | undefined
     const fields = outputSchema?.fields || []
     if (fields.length > 0) {
       return fields.map(f => ({
@@ -39,8 +38,7 @@ function getOutputVariablesForNode(node: Node, allNodes?: Node[]): NodeOutputVar
     const endNode = nodes.find(n => n.id.startsWith(prefix) && n.type === 'end')
     if (endNode) {
       const outputVars = (endNode.data?.config as Record<string, unknown>)?.output_variables as
-        | Array<{ name: string; type?: string; source?: string }>
-        | undefined
+        Array<{ name: string; type?: string; source?: string }> | undefined
       if (outputVars && outputVars.length > 0) {
         return outputVars
           .filter(v => v.name)
@@ -154,8 +152,7 @@ export function useAvailableVariables(
         const parentNode = flowStore.nodes.find(n => n.id === flowStore.subViewParentId)
         if (parentNode?.data?.config) {
           return (parentNode.data.config as Record<string, unknown>).for_each_item_type as
-            | FieldType
-            | undefined
+            FieldType | undefined
         }
       }
     }
@@ -374,8 +371,7 @@ export function getVariableTypeByPath(
       const parentNode = nodes.find(n => currentNodeId.startsWith(`${n.id}__`) && n.type === 'loop')
       if (parentNode?.data?.config) {
         return (parentNode.data.config as Record<string, unknown>).for_each_item_type as
-          | FieldType
-          | undefined
+          FieldType | undefined
       }
     }
   }
