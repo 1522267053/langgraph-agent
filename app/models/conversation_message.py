@@ -61,6 +61,9 @@ class ConversationMessage(DbBaseModel):
     sequence: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, comment="消息序号（用于排序）"
     )
+    files: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True, comment="附件文件列表"
+    )
     create_time: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, nullable=False, comment="创建时间"
     )

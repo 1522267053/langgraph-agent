@@ -415,3 +415,46 @@ def build_multimodal_content(text: str, media_blocks: list[dict]) -> str | list[
     content: list[dict] = [{"type": "text", "text": text}]
     content.extend(media_blocks)
     return content
+
+
+def extract_files_from_params(params: dict) -> list[dict] | None:
+    """从 _raw_input_params 中提取所有文件项（带 id 的列表值）"""
+    files: list[dict] = []
+    for value in params.values():
+        if (
+            isinstance(value, list)
+            and value
+            and isinstance(value[0], dict)
+            and "id" in value[0]
+        ):
+            files.extend(item for item in value if item.get("id") is not None)
+    return files if files else None
+
+
+async def build_content_from_db_files(
+    db,
+    text: str,
+    files: list[dict],
+    capabilities: dict | None = None,
+) -> str | list[dict]:
+    """从 DB 文件列表构建多模态 content（路径通过 file_service 查询）"""
+    from app.services.file_service import file_service
+
+    async def resolve_path(file_info: dict) -> str | None:
+        file_id = file_info.get("id")
+        if not file_id:
+            return None
+        try:
+            path, _, _ = await file_service.get_download_path(db, file_id)
+            return str(path)
+        except Exception:
+            logger.warning(f"解析文件路径失败: file_id={file_id}")
+            return None
+
+    media_blocks, file_index = await collect_media_blocks(
+        {"file_list": files}, capabilities, resolve_path=resolve_path
+    )
+    prompt_text = f"{text}\n\n{file_index}" if file_index else text
+    if media_blocks:
+        return build_multimodal_content(prompt_text, media_blocks)
+    return prompt_text
