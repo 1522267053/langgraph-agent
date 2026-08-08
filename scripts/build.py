@@ -140,11 +140,13 @@ def _copy_file(src: Path, dest: Path, label: str) -> None:
         print(f"  {label} not found, skip copy")
 
 
-def create_runtime_dirs() -> None:
-    dist_base = PROJECT_ROOT / "dist" / "langgraph_agent"
-    for sub in ("uploads", "data", "logs"):
-        (dist_base / sub).mkdir(parents=True, exist_ok=True)
+def copy_runtime_files() -> None:
+    """复制程序运行必需的配置文件到打包产物。
 
+    data/uploads/logs/temp/workspace 等运行时目录由程序启动时按需自动创建，
+    打包产物不再预创建，避免带入开发期间的运行时数据。
+    """
+    dist_base = PROJECT_ROOT / "dist" / "langgraph_agent"
     _copy_file(PROJECT_ROOT / ".env.example", dist_base / ".env", ".env.example")
     _copy_file(
         PROJECT_ROOT / "models.dev.api.json",
@@ -214,7 +216,7 @@ def main() -> int:
     steps.extend(
         [
             ("Running PyInstaller", run_pyinstaller),
-            ("Creating runtime directories", create_runtime_dirs),
+            ("Copying runtime config files", copy_runtime_files),
         ]
     )
 
