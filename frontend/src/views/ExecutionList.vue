@@ -23,6 +23,7 @@ const {
   isStreamRunning,
   isRunning,
   hasExecution,
+  attachedFiles,
   flowTodos,
   showHumanInputDialog,
   humanInputQuestion,
@@ -293,6 +294,7 @@ onUnmounted(() => {
           :streaming-content="streamingContent"
           :is-running="isRunning"
           :is-stream-running="isStreamRunning"
+          :attached-files="attachedFiles"
           :todos="flowTodos"
         />
       </div>

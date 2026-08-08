@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { VideoPlay, Loading, CircleCheck, CircleClose, Remove } from '@element-plus/icons-vue'
 import type {
   FlowExecution,
@@ -11,7 +11,7 @@ import type {
 import { EXECUTION_STATUS_TEXT, NODE_EXECUTION_STATUS_TEXT } from '@/types/execution'
 import AIMessageContent from '@/components/common/AIMessageContent.vue'
 import FilePreviewer from '@/components/common/FilePreviewer.vue'
-import type { FileItem } from '@/components/common/FilePreviewer.vue'
+import type { FileItem, ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import TodoList from '@/components/common/TodoList.vue'
 import type { Segment, TodoItem } from '@/types/segment'
 import { formatTokenCount, getNodeStatusType } from '@/utils/format'
@@ -47,6 +47,15 @@ const emit = defineEmits<{
   (e: 'resumeExecution', exec: FlowExecution): void
 }>()
 
+const imagePreviewVisible = ref(false)
+const previewUrls = ref<string[]>([])
+const previewIndex = ref(0)
+
+function handleImagePreview(data: ImagePreviewData) {
+  previewUrls.value = data.urls
+  previewIndex.value = data.index
+  imagePreviewVisible.value = true
+}
 function getStatusText(status: ExecutionStatus | undefined): string {
   if (status === undefined) return ''
   return EXECUTION_STATUS_TEXT[status]
@@ -161,7 +170,11 @@ function executionStepsToSegments(steps: ExecutionStep[]): Segment[] {
     <pre class="json-content">{{ JSON.stringify(execution.input_data, null, 2) }}</pre>
 
     <div v-if="attachedFiles && attachedFiles.length > 0" class="section-title">附件</div>
-    <FilePreviewer v-if="attachedFiles && attachedFiles.length > 0" :files="attachedFiles" />
+    <FilePreviewer
+      v-if="attachedFiles && attachedFiles.length > 0"
+      :files="attachedFiles"
+      @preview="handleImagePreview"
+    />
 
     <div class="section-title">输出数据</div>
     <pre class="json-content">{{
@@ -232,6 +245,14 @@ function executionStepsToSegments(steps: ExecutionStep[]): Segment[] {
       </div>
       <div v-if="nodeExecutions.length === 0" class="empty-text">暂无节点执行记录</div>
     </div>
+
+    <el-image-viewer
+      v-if="imagePreviewVisible"
+      :url-list="previewUrls"
+      :initial-index="previewIndex"
+      teleported
+      @close="imagePreviewVisible = false"
+    />
   </div>
   <div v-else-if="showEmptyState" class="empty-state">
     <el-empty description="暂无执行结果" :image-size="80" />
