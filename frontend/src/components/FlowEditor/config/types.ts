@@ -57,6 +57,7 @@ export interface LlmConfig {
   base_url: string
   capabilities: ModelCapabilities
   input_variables: NodeVariable[]
+  file_inputs?: string[]
   output_variables: NodeVariable[]
   system_prompt: string
   user_prompt: string

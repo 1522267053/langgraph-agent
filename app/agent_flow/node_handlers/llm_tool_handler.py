@@ -97,6 +97,11 @@ class LlmNodeConfig(BaseNodeConfig):
         default=[],
         description="输入变量映射列表",
     )
+    file_inputs: list[str] = Field(
+        default_factory=list,
+        description="文件输入变量路径列表（如 nodes.python_1.result），"
+        "解析后的文件作为多模态附件发送给模型",
+    )
     output_variables: list[NodeVariable] = Field(
         default=[NodeVariable(name="result"), NodeVariable(name="thinking")],
         description="输出变量列表",

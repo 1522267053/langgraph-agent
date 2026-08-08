@@ -71,12 +71,29 @@ watch(
     if (localConfig.value.required_tools_hint === undefined) {
       localConfig.value.required_tools_hint = ''
     }
+    if (!localConfig.value.file_inputs) {
+      localConfig.value.file_inputs = []
+    }
   }
 )
 const { addInputVariable, removeInputVariable, handleSourceTypeChange } = useInputVariables(
   localConfig,
   updateConfig
 )
+
+// ---- 文件输入（上游节点文件变量 → 多模态附件）----
+if (!localConfig.value.file_inputs) {
+  localConfig.value.file_inputs = []
+}
+function addFileInput() {
+  localConfig.value.file_inputs!.push('')
+  updateConfig()
+}
+function removeFileInput(index: number) {
+  localConfig.value.file_inputs!.splice(index, 1)
+  updateConfig()
+}
+
 const requiredToolsMode = ref(localConfig.value.tool_check_script ? 'script' : 'simple')
 
 watch(requiredToolsMode, val => {
@@ -173,6 +190,38 @@ watch(
       </div>
       <div class="config-hint">
         <el-text size="small" type="info">使用下拉选择器选择变量来源</el-text>
+      </div>
+    </div>
+
+    <div class="config-section">
+      <div class="section-title">
+        <span>文件输入</span>
+        <el-button type="primary" size="small" link @click="addFileInput">+ 添加文件</el-button>
+      </div>
+      <div class="input-variables">
+        <div v-for="(source, index) in localConfig.file_inputs" :key="index" class="input-variable">
+          <div class="variable-header">
+            <span class="variable-index">文件 {{ index + 1 }}</span>
+            <el-button type="danger" size="small" link @click="removeFileInput(index)">
+              删除
+            </el-button>
+          </div>
+          <el-form label-width="60px" size="small">
+            <el-form-item label="来源">
+              <VariableSelector
+                v-model="localConfig.file_inputs[index]"
+                :current-node-id="currentNodeId"
+                placeholder="选择上游节点的文件变量"
+                @update:model-value="updateConfig"
+              />
+            </el-form-item>
+          </el-form>
+        </div>
+      </div>
+      <div class="config-hint">
+        <el-text size="small" type="info">
+          选择上游节点的文件输出（如 Python 生成图片、API 下载文件），自动作为多模态附件发送给模型
+        </el-text>
       </div>
     </div>
 
