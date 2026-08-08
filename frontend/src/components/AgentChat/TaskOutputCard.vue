@@ -100,6 +100,7 @@ async function handleCancel(taskId: string) {
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .task-header {
