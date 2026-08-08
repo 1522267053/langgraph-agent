@@ -22,7 +22,7 @@ from langchain_core.messages import (
 from app.models.agent_message import AgentMessage
 
 from app.services.file_service import file_service
-from app.utils.media_resolver import MAX_FILE_SIZE, guess_mime_by_ext
+from app.utils.media_resolver import MAX_FILE_SIZE, format_file_label, guess_mime_by_ext
 from app.utils.message_utils import (
     extract_token_usage,
     extract_thinking,
@@ -312,6 +312,14 @@ class AgentConversationService:
                     continue
                 data = await asyncio.to_thread(file_path.read_bytes)
                 b64_data = base64.b64encode(data).decode("utf-8")
+                parts.append(
+                    {
+                        "type": "text",
+                        "text": format_file_label(
+                            file_id, original_name, mime_type, str(file_path)
+                        ),
+                    }
+                )
                 parts.append(
                     {
                         "type": capability,
