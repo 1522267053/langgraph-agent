@@ -297,7 +297,7 @@ def collect_media_blocks(
             block = _resolve_file_info_to_block(value, caps)
             if block:
                 blocks.append(block)
-                if block.get("type") != "image" and _is_file_info(value):
+                if _is_file_info(value):
                     _append_file_entry(file_entries, value, file_id)
             elif _is_file_info(value):
                 _append_file_entry(file_entries, value, file_id)
@@ -308,7 +308,7 @@ def collect_media_blocks(
                     block = _resolve_file_info_to_block(item, caps)
                     if block:
                         blocks.append(block)
-                        if block.get("type") != "image" and _is_file_info(item):
+                        if _is_file_info(item):
                             _append_file_entry(file_entries, item, file_id)
                     elif _is_file_info(item):
                         _append_file_entry(file_entries, item, file_id)
