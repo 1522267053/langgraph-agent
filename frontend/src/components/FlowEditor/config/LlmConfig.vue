@@ -251,7 +251,7 @@ watch(
           <el-input-number
             v-model="localConfig.max_tool_iterations"
             :min="1"
-            :max="100"
+            :max="200"
             @change="updateConfig"
           />
         </el-form-item>
