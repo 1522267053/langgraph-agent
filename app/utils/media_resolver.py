@@ -276,16 +276,83 @@ def _is_file_info(value) -> bool:
     return bool(value.get("file_path") or value.get("id"))
 
 
+def _resolve_file_meta(file_info: dict) -> tuple[str, str, str]:
+    """从 file_info 提取 (original_name, mime_type, abs_path)"""
+    original_name = file_info.get("original_name") or file_info.get("name") or "unknown"
+    file_path = file_info.get("file_path") or ""
+    mime_type = file_info.get("mime_type") or file_info.get("type") or ""
+    if not mime_type:
+        mime_type = guess_mime_by_ext(file_path or original_name)
+    abs_path = str(settings.get_absolute_path(file_path).resolve()) if file_path else ""
+    return original_name, mime_type, abs_path
+
+
+def format_file_label(
+    file_id: int | None, original_name: str, mime_type: str, abs_path: str
+) -> str:
+    """格式化文件内联标注文本，包含 file_id、文件名、MIME 和绝对路径"""
+    if file_id is not None:
+        label = f"[附件 file_id={file_id}: {original_name} ({mime_type})"
+    else:
+        label = f"[附件: {original_name} ({mime_type})"
+    if abs_path:
+        label += f", path={abs_path}"
+    return label + "]"
+
+
+def _build_inline_label(file_info: dict, file_id: int | None) -> str:
+    """从 file_info 构建媒体块内联标注文本"""
+    original_name, mime_type, abs_path = _resolve_file_meta(file_info)
+    return format_file_label(file_id, original_name, mime_type, abs_path)
+
+
+def _append_file_entry(
+    entries: list[str], file_info: dict, file_id: int | None
+) -> None:
+    """将文件信息追加到索引列表，包含绝对路径"""
+    original_name, mime_type, abs_path = _resolve_file_meta(file_info)
+    if file_id is not None:
+        entry = f"- file_id={file_id}, {original_name} ({mime_type})"
+    else:
+        entry = f"- {original_name} ({mime_type})"
+    if abs_path:
+        entry += f", path={abs_path}"
+    entries.append(entry)
+
+
+def _process_file_entry(
+    file_info: dict, caps: dict, blocks: list[dict], file_entries: list[str]
+) -> None:
+    """处理单个文件信息，媒体块(image/audio/video)前插入内联标注，其余归入索引文本"""
+    file_id = file_info.get("id")
+    block = _resolve_file_info_to_block(file_info, caps)
+    if block:
+        if block.get("type") in ("image", "audio", "video"):
+            blocks.append(
+                {"type": "text", "text": _build_inline_label(file_info, file_id)}
+            )
+            blocks.append(block)
+        else:
+            blocks.append(block)
+            if _is_file_info(file_info):
+                _append_file_entry(file_entries, file_info, file_id)
+    elif _is_file_info(file_info):
+        _append_file_entry(file_entries, file_info, file_id)
+
+
 def collect_media_blocks(
     input_data: dict, capabilities: dict | None = None
 ) -> tuple[list[dict], str]:
     """
     从 input_data 中收集媒体 content blocks 和文件索引文本
 
+    媒体块（image/audio/video）前插入内联标注（含 file_id 和路径），与块紧邻；
+    非媒体文件（pdf/xlsx 等）归入 [附件文件] 索引文本。
+
     Returns:
         (media_blocks, file_index_text)
-        - media_blocks: LangChain 多模态 content blocks（受 capabilities 控制）
-        - file_index_text: 上传文件的索引文本，包含 file_id 供 LLM 引用（始终生成）
+        - media_blocks: 含内联标注和媒体块的 content blocks 列表
+        - file_index_text: 非媒体文件的索引文本，包含 file_id 供 LLM 引用
     """
     blocks: list[dict] = []
     file_entries: list[str] = []
@@ -293,25 +360,11 @@ def collect_media_blocks(
 
     for value in input_data.values():
         if isinstance(value, dict):
-            file_id = value.get("id")
-            block = _resolve_file_info_to_block(value, caps)
-            if block:
-                blocks.append(block)
-                if _is_file_info(value):
-                    _append_file_entry(file_entries, value, file_id)
-            elif _is_file_info(value):
-                _append_file_entry(file_entries, value, file_id)
+            _process_file_entry(value, caps, blocks, file_entries)
         elif isinstance(value, list):
             for item in value:
                 if isinstance(item, dict):
-                    file_id = item.get("id")
-                    block = _resolve_file_info_to_block(item, caps)
-                    if block:
-                        blocks.append(block)
-                        if _is_file_info(item):
-                            _append_file_entry(file_entries, item, file_id)
-                    elif _is_file_info(item):
-                        _append_file_entry(file_entries, item, file_id)
+                    _process_file_entry(item, caps, blocks, file_entries)
                 elif isinstance(item, str):
                     block = _resolve_string_value(item, caps)
                     if block:
@@ -327,28 +380,6 @@ def collect_media_blocks(
         index_text = "\n".join(index_lines)
 
     return blocks, index_text
-
-
-def _append_file_entry(
-    entries: list[str], file_info: dict, file_id: int | None
-) -> None:
-    """将文件信息追加到索引列表，包含绝对路径"""
-    original_name = file_info.get("original_name") or file_info.get("name") or "unknown"
-    file_path = file_info.get("file_path") or ""
-    mime_type = file_info.get("mime_type") or file_info.get("type") or ""
-    if not mime_type:
-        mime_type = guess_mime_by_ext(file_path or original_name)
-    abs_path = str(settings.get_absolute_path(file_path).resolve()) if file_path else ""
-    if file_id is not None:
-        entries.append(
-            f"- file_id={file_id}, {original_name} ({mime_type})"
-            + (f", path={abs_path}" if abs_path else "")
-        )
-    else:
-        entries.append(
-            f"- {original_name} ({mime_type})"
-            + (f", path={abs_path}" if abs_path else "")
-        )
 
 
 def build_multimodal_content(text: str, media_blocks: list[dict]) -> str | list[dict]:
