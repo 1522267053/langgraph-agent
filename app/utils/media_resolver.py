@@ -5,9 +5,11 @@
 支持本地文件(base64)和 URL 两种来源。
 """
 
+import asyncio
 import base64
 import logging
 from pathlib import Path
+from typing import Awaitable, Callable
 from urllib.parse import urlparse
 
 from app.config.settings import settings
@@ -129,7 +131,7 @@ def _is_url(value: str) -> bool:
         return False
 
 
-def _read_file_as_base64(file_path: str) -> tuple[str, str] | None:
+async def _read_file_as_base64(file_path: str) -> tuple[str, str] | None:
     path = Path(file_path)
     if not path.exists() or not path.is_file():
         logger.warning("Media file not found: %s", file_path)
@@ -141,7 +143,7 @@ def _read_file_as_base64(file_path: str) -> tuple[str, str] | None:
         )
         return None
     try:
-        data = path.read_bytes()
+        data = await asyncio.to_thread(path.read_bytes)
         b64 = base64.b64encode(data).decode("utf-8")
         ext = path.suffix.lower()
         mime_type = _EXT_TO_MIME.get(ext, "application/octet-stream")
@@ -188,7 +190,9 @@ def filter_capabilities_by_adapter(capabilities: dict, adapter_type: str) -> dic
     }
 
 
-def _resolve_file_info_to_block(file_info: dict, capabilities: dict) -> dict | None:
+async def _resolve_file_info_to_block(
+    file_info: dict, capabilities: dict
+) -> dict | None:
     if not isinstance(file_info, dict):
         return None
 
@@ -206,7 +210,7 @@ def _resolve_file_info_to_block(file_info: dict, capabilities: dict) -> dict | N
         return None
 
     if capability in ("image", "video", "audio"):
-        result = _read_file_as_base64(file_path)
+        result = await _read_file_as_base64(file_path)
         if result:
             b64_data, detected_mime = result
             if capability in ("image", "video", "audio"):
@@ -255,7 +259,7 @@ def _resolve_url_to_block(url: str, capabilities: dict) -> dict | None:
     return None
 
 
-def _resolve_string_value(value: str, capabilities: dict) -> dict | None:
+async def _resolve_string_value(value: str, capabilities: dict) -> dict | None:
     if _is_url(value):
         return _resolve_url_to_block(value, capabilities)
     if len(value) > 4096:
@@ -263,7 +267,7 @@ def _resolve_string_value(value: str, capabilities: dict) -> dict | None:
     try:
         path = Path(value)
         if path.exists() and path.is_file():
-            return _resolve_file_info_to_block({"file_path": value}, capabilities)
+            return await _resolve_file_info_to_block({"file_path": value}, capabilities)
     except OSError:
         return None
     return None
@@ -320,12 +324,25 @@ def _append_file_entry(
     entries.append(entry)
 
 
-def _process_file_entry(
-    file_info: dict, caps: dict, blocks: list[dict], file_entries: list[str]
+async def _process_file_entry(
+    file_info: dict,
+    caps: dict,
+    blocks: list[dict],
+    file_entries: list[str],
+    resolve_path: Callable[[dict], Awaitable[str | None]] | None = None,
 ) -> None:
     """处理单个文件信息，媒体块(image/audio/video)前插入内联标注，其余归入索引文本"""
     file_id = file_info.get("id")
-    block = _resolve_file_info_to_block(file_info, caps)
+
+    if resolve_path:
+        try:
+            resolved = await resolve_path(file_info)
+        except Exception:
+            resolved = None
+        if resolved:
+            file_info = {**file_info, "file_path": resolved}
+
+    block = await _resolve_file_info_to_block(file_info, caps)
     if block:
         if block.get("type") in ("image", "audio", "video"):
             blocks.append(
@@ -340,14 +357,21 @@ def _process_file_entry(
         _append_file_entry(file_entries, file_info, file_id)
 
 
-def collect_media_blocks(
-    input_data: dict, capabilities: dict | None = None
+async def collect_media_blocks(
+    input_data: dict,
+    capabilities: dict | None = None,
+    resolve_path: Callable[[dict], Awaitable[str | None]] | None = None,
 ) -> tuple[list[dict], str]:
     """
     从 input_data 中收集媒体 content blocks 和文件索引文本
 
     媒体块（image/audio/video）前插入内联标注（含 file_id 和路径），与块紧邻；
     非媒体文件（pdf/xlsx 等）归入 [附件文件] 索引文本。
+
+    Args:
+        input_data: 输入数据（值为 file_info dict / list / str）
+        capabilities: 模型能力开关
+        resolve_path: 异步路径解析策略，None 时从 file_info["file_path"] 取路径
 
     Returns:
         (media_blocks, file_index_text)
@@ -360,17 +384,19 @@ def collect_media_blocks(
 
     for value in input_data.values():
         if isinstance(value, dict):
-            _process_file_entry(value, caps, blocks, file_entries)
+            await _process_file_entry(value, caps, blocks, file_entries, resolve_path)
         elif isinstance(value, list):
             for item in value:
                 if isinstance(item, dict):
-                    _process_file_entry(item, caps, blocks, file_entries)
+                    await _process_file_entry(
+                        item, caps, blocks, file_entries, resolve_path
+                    )
                 elif isinstance(item, str):
-                    block = _resolve_string_value(item, caps)
+                    block = await _resolve_string_value(item, caps)
                     if block:
                         blocks.append(block)
         elif isinstance(value, str):
-            block = _resolve_string_value(value, caps)
+            block = await _resolve_string_value(value, caps)
             if block:
                 blocks.append(block)
 

@@ -105,7 +105,7 @@ async def build_initial_messages(
         emit_fn=emit_fn,
         emit_tool_end_fn=emit_tool_end_fn,
     )
-    append_user_message(
+    await append_user_message(
         messages, state, node_config, user_prompt, resume_injected=resume_injected
     )
     return messages
@@ -290,7 +290,7 @@ def inject_resume_if_needed(
     return False
 
 
-def append_user_message(
+async def append_user_message(
     messages: list[BaseMessage],
     state: FlowState,
     node_config: dict,
@@ -319,7 +319,9 @@ def append_user_message(
 
     # 收集多模态内容（图片/文件等）
     capabilities = _effective_capabilities(node_config)
-    media_blocks, file_index = collect_media_blocks(state.input_data, capabilities)
+    media_blocks, file_index = await collect_media_blocks(
+        state.input_data, capabilities
+    )
     prompt_text = (
         f"{actual_user_prompt}\n\n{file_index}" if file_index else actual_user_prompt
     )

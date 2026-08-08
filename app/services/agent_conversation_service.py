@@ -5,8 +5,6 @@ Agent 对话历史服务（适配器模式）
 用于 Agent 模式下保存完整对话历史（含工具调用）
 """
 
-import asyncio
-import base64
 import logging
 from typing import Optional
 from sqlalchemy import select
@@ -22,7 +20,7 @@ from langchain_core.messages import (
 from app.models.agent_message import AgentMessage
 
 from app.services.file_service import file_service
-from app.utils.media_resolver import MAX_FILE_SIZE, format_file_label, guess_mime_by_ext
+from app.utils.media_resolver import build_multimodal_content, collect_media_blocks
 from app.utils.message_utils import (
     extract_token_usage,
     extract_thinking,
@@ -261,78 +259,26 @@ class AgentConversationService:
         files: list[dict],
         capabilities: Optional[dict] = None,
     ) -> str | list[dict]:
-        """根据附件文件信息重建多模态 content 列表
+        """根据附件文件信息重建多模态 content（委托 collect_media_blocks）"""
 
-        图片/视频/音频附件仅在对应 capabilities 开启时才注入媒体块，
-        与 media_resolver.collect_media_blocks 行为保持一致，避免向不支持
-        对应模态的模型发送媒体内容导致 400 错误。视频/音频文件过大无法
-        内联 base64 时回退为文本占位，避免超大文件导致内存溢出。
-        模型不支持或适配器未实现的模态同样回退为文本占位（说明文件存在）。
-        """
-        caps = capabilities or {}
-        media_capabilities = ("image", "video", "audio")
-        parts: list[dict] = [{"type": "text", "text": text}]
-
-        for file_info in files:
+        async def resolve_path(file_info: dict) -> str | None:
             file_id = file_info.get("id")
-            original_name = file_info.get("original_name") or "file"
-            mime_type = file_info.get("mime_type", "") or guess_mime_by_ext(
-                original_name
-            )
             if not file_id:
-                continue
-
-            capability = next(
-                (c for c in media_capabilities if mime_type.startswith(f"{c}/")),
-                None,
-            )
-            if not capability:
-                continue
-            if not caps.get(capability):
-                # 模型不支持或适配器未实现该模态：回退为文本占位说明文件存在
-                parts.append(
-                    {
-                        "type": "text",
-                        "text": f"[{capability} data: {original_name}]",
-                    }
-                )
-                continue
-
+                return None
             try:
-                file_path, _, _ = await file_service.get_download_path(db, file_id)
-                if not file_path.exists():
-                    continue
-                if capability != "image" and file_path.stat().st_size > MAX_FILE_SIZE:
-                    parts.append(
-                        {
-                            "type": "text",
-                            "text": f"[{capability} data: {original_name}]",
-                        }
-                    )
-                    continue
-                data = await asyncio.to_thread(file_path.read_bytes)
-                b64_data = base64.b64encode(data).decode("utf-8")
-                parts.append(
-                    {
-                        "type": "text",
-                        "text": format_file_label(
-                            file_id, original_name, mime_type, str(file_path)
-                        ),
-                    }
-                )
-                parts.append(
-                    {
-                        "type": capability,
-                        "base64": b64_data,
-                        "mime_type": mime_type,
-                    }
-                )
+                path, _, _ = await file_service.get_download_path(db, file_id)
+                return str(path)
             except Exception:
-                logger.warning(f"重建多模态消息失败: file_id={file_id}")
+                logger.warning(f"解析文件路径失败: file_id={file_id}")
+                return None
 
-        if len(parts) == 1:
-            return text
-        return parts
+        media_blocks, file_index = await collect_media_blocks(
+            {"file_list": files}, capabilities, resolve_path=resolve_path
+        )
+        prompt_text = f"{text}\n\n{file_index}" if file_index else text
+        if media_blocks:
+            return build_multimodal_content(prompt_text, media_blocks)
+        return prompt_text
 
 
 agent_conversation_service = AgentConversationService()
