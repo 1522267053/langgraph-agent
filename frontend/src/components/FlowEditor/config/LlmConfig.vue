@@ -193,7 +193,7 @@ watch(
       </div>
     </div>
 
-    <div class="config-section">
+    <div v-if="!isAgentMode" class="config-section">
       <div class="section-title">
         <span>文件输入</span>
         <el-button type="primary" size="small" link @click="addFileInput">+ 添加文件</el-button>
