@@ -882,9 +882,7 @@ export const useAgentStore = defineStore('agent', () => {
    * @param messageId 要删除的消息ID
    * @returns 被删除的用户消息 {content, files, input_data}，用于回退恢复
    */
-  async function deleteMessagesFrom(
-    messageId: number
-  ): Promise<AgentDeleteMessagesResult | null> {
+  async function deleteMessagesFrom(messageId: number): Promise<AgentDeleteMessagesResult | null> {
     if (!currentAgent.value || !currentSession.value) return null
 
     try {

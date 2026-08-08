@@ -387,7 +387,7 @@ const EXT_LANG_MAP: Record<string, string> = {
   pl: 'perl',
   pm: 'perl',
   vim: 'vim',
-  zig: 'zig',
+  zig: 'zig'
 }
 
 const SPECIAL_FILES: Record<string, string> = {
@@ -398,7 +398,7 @@ const SPECIAL_FILES: Record<string, string> = {
   'cargo.toml': 'ini',
   'pyproject.toml': 'ini',
   'package.json': 'json',
-  'tsconfig.json': 'json',
+  'tsconfig.json': 'json'
 }
 
 export function detectFileLanguage(filePath: string): string | null {

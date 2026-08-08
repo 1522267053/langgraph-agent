@@ -167,9 +167,7 @@ watch(
   () => route.path,
   path => {
     if (store.agents.length === 0) {
-      store
-        .loadAgents()
-        .catch(() => {})
+      store.loadAgents().catch(() => {})
     }
     if (/^\/chat/.test(path)) {
       const builtin = store.agents.find((a: { is_builtin?: number }) => a.is_builtin === 1)
@@ -471,7 +469,11 @@ function openDownloadUrl(): void {
                 />
               </div>
 
-              <div v-loading="store.sessionsLoading" element-loading-background="rgba(0,0,0,0.3)" class="session-list">
+              <div
+                v-loading="store.sessionsLoading"
+                element-loading-background="rgba(0,0,0,0.3)"
+                class="session-list"
+              >
                 <!-- 搜索结果 -->
                 <template v-if="isSearchMode">
                   <div v-if="searching" class="search-loading">
@@ -645,7 +647,11 @@ function openDownloadUrl(): void {
                   />
                 </div>
 
-                <div v-loading="store.sessionsLoading" element-loading-background="rgba(0,0,0,0.3)" class="drawer-session-list">
+                <div
+                  v-loading="store.sessionsLoading"
+                  element-loading-background="rgba(0,0,0,0.3)"
+                  class="drawer-session-list"
+                >
                   <div
                     v-for="session in store.sessions"
                     :key="session.id"

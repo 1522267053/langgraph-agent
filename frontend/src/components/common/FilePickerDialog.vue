@@ -74,7 +74,8 @@ function isAcceptedFile(file: File): boolean {
   return props.accept.split(',').some(type => {
     const normalized = type.trim().toLowerCase()
     if (normalized === '*/*') return true
-    if (normalized.endsWith('/*')) return file.type.toLowerCase().startsWith(normalized.slice(0, -1))
+    if (normalized.endsWith('/*'))
+      return file.type.toLowerCase().startsWith(normalized.slice(0, -1))
     if (normalized.startsWith('.')) return file.name.toLowerCase().endsWith(normalized)
     return file.type.toLowerCase() === normalized
   })
@@ -222,11 +223,7 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
   event.preventDefault()
   const blob = item.getAsFile()
   if (!blob) return
-  if (
-    props.multiple &&
-    props.maxSelect > 0 &&
-    localSelected.value.size >= props.maxSelect
-  ) {
+  if (props.multiple && props.maxSelect > 0 && localSelected.value.size >= props.maxSelect) {
     ElMessage.warning(`最多选择 ${props.maxSelect} 个文件`)
     return
   }
@@ -331,8 +328,8 @@ function handleCancel(): void {
           </el-tag>
         </div>
         <div class="file-picker-info">
-           <span class="file-picker-name" :title="file.original_name">{{ file.original_name }}</span>
-           <span class="file-picker-size">{{ formatFileSize(file.file_size) }}</span>
+          <span class="file-picker-name" :title="file.original_name">{{ file.original_name }}</span>
+          <span class="file-picker-size">{{ formatFileSize(file.file_size) }}</span>
         </div>
         <el-popconfirm
           title="确定删除这个文件吗？"

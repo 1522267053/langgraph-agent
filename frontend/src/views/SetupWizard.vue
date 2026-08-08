@@ -26,9 +26,12 @@ const loginPasswordConfirm = ref('')
 const loginUsername = ref('')
 
 const canSubmit = computed(() => {
-  if (
-    !(selectedProvider.value && apiKey.value.trim() && model.value.trim() && baseUrl.value.trim())
-  ) {
+  if (!(
+    selectedProvider.value &&
+    apiKey.value.trim() &&
+    model.value.trim() &&
+    baseUrl.value.trim()
+  )) {
     return false
   }
   if (!loginPassword.value || !loginUsername.value.trim()) return false
