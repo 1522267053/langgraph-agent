@@ -27,6 +27,7 @@ const {
   flowTodos,
   isRunning,
   hasExecution,
+  attachedFiles,
   showHumanInputDialog,
   humanInputQuestion,
   humanInputContext,
@@ -153,6 +154,7 @@ onUnmounted(() => {
             :streaming-content="streamingContent"
             :is-stream-running="isStreamRunning"
             :is-running="isRunning"
+            :attached-files="attachedFiles"
             :todos="flowTodos"
           />
           <div v-else class="result-placeholder">
