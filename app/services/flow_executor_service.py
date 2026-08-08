@@ -49,7 +49,7 @@ from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.agent_flow.flow_event import FlowEventFactory
 from app.agent_flow.variable_resolver import variable_resolver
 from app.services.base_executor_service import BaseExecutorService
-from app.services.conversation_service import ConversationService
+from app.services.conversation_service import conversation_service
 from app.services.interrupt_service import interrupt_service
 from app.utils.message_utils import deserialize_content
 
@@ -76,7 +76,6 @@ class FlowExecutorService(BaseExecutorService):
 
     def __init__(self):
         super().__init__()
-        self._conversation_service = ConversationService()
 
     # ---- 公共方法 ----
 
@@ -292,9 +291,7 @@ class FlowExecutorService(BaseExecutorService):
             )
             context.start()
 
-            graph = self._build_graph(
-                expanded_flow, execution.id, self._conversation_service
-            )
+            graph = self._build_graph(expanded_flow, execution.id, conversation_service)
             config: RunnableConfig = {
                 "configurable": {
                     "thread_id": f"flow_{execution.id}",
@@ -378,9 +375,7 @@ class FlowExecutorService(BaseExecutorService):
                 yield FlowEventFactory.error(f"展开能力卡片失败: {str(e)}")
                 return
 
-            graph = self._build_graph(
-                expanded_flow, execution.id, self._conversation_service
-            )
+            graph = self._build_graph(expanded_flow, execution.id, conversation_service)
             config: RunnableConfig = {
                 "configurable": {
                     "thread_id": f"flow_{execution_id}",

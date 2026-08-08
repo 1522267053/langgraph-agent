@@ -628,18 +628,14 @@ class AgentExecutorService(BaseExecutorService):
             plan_mode = bool((params or {}).pop("__plan_mode__", False))
 
             # 统一通过 input_schema 解析所有参数（包括 message）
-            pending_files = []
             if flow.input_schema:
                 all_params = dict(params) if params else {}
                 all_params["message"] = user_message
-                pending_files = await self._resolve_input_params(
+                await self._resolve_input_params(
                     db, all_params, flow.input_schema, input_data
                 )
             else:
                 input_data["message"] = user_message
-
-            if pending_files:
-                agent_conversation_service.set_pending_files(pending_files)
 
             context = FlowContext(
                 flow_id=flow.id,

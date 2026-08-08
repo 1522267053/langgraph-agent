@@ -19,8 +19,10 @@ from langchain_core.messages import (
 
 from app.models.agent_message import AgentMessage
 
-from app.services.file_service import file_service
-from app.utils.media_resolver import build_multimodal_content, collect_media_blocks
+from app.utils.media_resolver import (
+    build_content_from_db_files,
+    extract_files_from_params,
+)
 from app.utils.message_utils import (
     extract_token_usage,
     extract_thinking,
@@ -42,19 +44,6 @@ class AgentConversationService:
     与 ConversationService 接口兼容，但操作 agent_message 表
     """
 
-    def __init__(self):
-        self._pending_files: list[dict] | None = None
-
-    def set_pending_files(self, files: list[dict] | None):
-        """设置待保存到下一条 human 消息的附件信息"""
-        self._pending_files = files
-
-    def _consume_pending_files(self) -> list[dict] | None:
-        """消费并清除待保存的附件信息"""
-        files = self._pending_files
-        self._pending_files = None
-        return files
-
     async def add_messages(
         self,
         db: AsyncSession,
@@ -73,7 +62,6 @@ class AgentConversationService:
             tool_status = extract_tool_status(msg)
 
             role = normalize_role(msg)
-            files = self._consume_pending_files() if role == "human" else None
 
             kwargs: dict = {
                 "session_id": session_id,
@@ -87,6 +75,9 @@ class AgentConversationService:
             raw_params = msg.additional_kwargs.get("_raw_input_params")
             if raw_params and role == "human":
                 kwargs["input_data"] = raw_params
+                files = extract_files_from_params(raw_params)
+                if files:
+                    kwargs["files"] = files
             if thinking:
                 kwargs["thinking"] = thinking
             if tool_calls is not None:
@@ -101,8 +92,6 @@ class AgentConversationService:
                 kwargs["completion_tokens"] = token_usage["completion_tokens"]
             if token_usage.get("total_tokens") is not None:
                 kwargs["total_tokens"] = token_usage["total_tokens"]
-            if files is not None:
-                kwargs["files"] = files
 
             msg_record = AgentMessage(**kwargs)
             db.add(msg_record)
@@ -230,7 +219,7 @@ class AgentConversationService:
             content = msg.content or ""
             files = msg.files if isinstance(msg.files, list) else None
             if files:
-                content = await self._build_multimodal_content(
+                content = await build_content_from_db_files(
                     db, content, files, capabilities
                 )
             return HumanMessage(content=content)
@@ -251,34 +240,6 @@ class AgentConversationService:
             return ToolMessage(**kwargs)
         else:
             return HumanMessage(content=msg.content or "")
-
-    @staticmethod
-    async def _build_multimodal_content(
-        db: AsyncSession,
-        text: str,
-        files: list[dict],
-        capabilities: Optional[dict] = None,
-    ) -> str | list[dict]:
-        """根据附件文件信息重建多模态 content（委托 collect_media_blocks）"""
-
-        async def resolve_path(file_info: dict) -> str | None:
-            file_id = file_info.get("id")
-            if not file_id:
-                return None
-            try:
-                path, _, _ = await file_service.get_download_path(db, file_id)
-                return str(path)
-            except Exception:
-                logger.warning(f"解析文件路径失败: file_id={file_id}")
-                return None
-
-        media_blocks, file_index = await collect_media_blocks(
-            {"file_list": files}, capabilities, resolve_path=resolve_path
-        )
-        prompt_text = f"{text}\n\n{file_index}" if file_index else text
-        if media_blocks:
-            return build_multimodal_content(prompt_text, media_blocks)
-        return prompt_text
 
 
 agent_conversation_service = AgentConversationService()

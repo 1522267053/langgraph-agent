@@ -2,18 +2,24 @@
 对话历史服务
 """
 
+import logging
 from typing import Optional
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+
 from langchain_core.messages import (
-    BaseMessage,
-    SystemMessage,
-    HumanMessage,
     AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
     ToolMessage,
 )
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.conversation_message import ConversationMessage
+from app.utils.media_resolver import (
+    build_content_from_db_files,
+    extract_files_from_params,
+)
 from app.utils.message_utils import (
     extract_thinking,
     extract_tool_calls,
@@ -23,6 +29,8 @@ from app.utils.message_utils import (
     normalize_role,
     serialize_content,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationService:
@@ -44,11 +52,12 @@ class ConversationService:
             thinking = extract_thinking(msg)
             token_usage = extract_token_usage(msg)
             tool_status = extract_tool_status(msg)
+            role = normalize_role(msg)
 
             kwargs: dict = {
                 "execution_id": execution_id,
                 "node_key": node_key,
-                "role": normalize_role(msg),
+                "role": role,
                 "content": serialize_content(msg.content),
                 "sequence": start_sequence + i,
             }
@@ -68,6 +77,12 @@ class ConversationService:
                 kwargs["completion_tokens"] = token_usage["completion_tokens"]
             if token_usage.get("total_tokens") is not None:
                 kwargs["total_tokens"] = token_usage["total_tokens"]
+            if role == "human":
+                raw_params = msg.additional_kwargs.get("_raw_input_params")
+                if raw_params:
+                    files = extract_files_from_params(raw_params)
+                    if files:
+                        kwargs["files"] = files
 
             msg_record = ConversationMessage(**kwargs)
             db.add(msg_record)
@@ -100,7 +115,7 @@ class ConversationService:
         result = await db.execute(query)
         messages = result.scalars().all()
 
-        return [self._to_langchain_message(m) for m in messages]
+        return [await self._to_langchain_message(db, m, capabilities) for m in messages]
 
     async def get_full_history(
         self,
@@ -110,9 +125,7 @@ class ConversationService:
         capabilities: Optional[dict] = None,
     ) -> list[BaseMessage]:
         """获取全流程对话历史，limit=0 表示不限制"""
-        return await self.get_history(db, execution_id, None, limit)
-
-        await db.commit()
+        return await self.get_history(db, execution_id, None, limit, capabilities)
 
     async def get_max_sequence(
         self, db: AsyncSession, execution_id: int, node_key: str
@@ -129,12 +142,23 @@ class ConversationService:
         max_seq = result.scalar()
         return max_seq if max_seq is not None else -1
 
-    def _to_langchain_message(self, msg: ConversationMessage) -> BaseMessage:
-        """将数据库消息转换为LangChain消息"""
+    async def _to_langchain_message(
+        self,
+        db: AsyncSession,
+        msg: ConversationMessage,
+        capabilities: Optional[dict] = None,
+    ) -> BaseMessage:
+        """将数据库消息转换为 LangChain 消息（含附件的多模态重建）"""
         if msg.role == "system":
             return SystemMessage(content=msg.content or "")
         elif msg.role == "human":
-            return HumanMessage(content=msg.content or "")
+            content = msg.content or ""
+            files = msg.files if isinstance(msg.files, list) else None
+            if files:
+                content = await build_content_from_db_files(
+                    db, content, files, capabilities
+                )
+            return HumanMessage(content=content)
         elif msg.role == "ai":
             ai_msg = AIMessage(content=msg.content or "")
             if msg.tool_calls:
@@ -153,3 +177,6 @@ class ConversationService:
             return ToolMessage(**kwargs)
         else:
             return HumanMessage(content=msg.content or "")
+
+
+conversation_service = ConversationService()
