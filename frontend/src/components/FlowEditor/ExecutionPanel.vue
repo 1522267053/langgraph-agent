@@ -3,12 +3,12 @@ import { ref, watch, toRef } from 'vue'
 import { Close, VideoPause, Bottom } from '@element-plus/icons-vue'
 import type { FlowExecution, NodeExecution, ExecutionStatus } from '@/types/execution'
 import { EXECUTION_STATUS_TEXT } from '@/types/execution'
+import type { TodoItem } from '@/types/segment'
 import { getNodeStatusType } from '@/utils/format'
 import { useAutoScroll } from '@/composables/useAutoScroll'
 import ExecutionResultContent from '@/components/common/ExecutionResultContent.vue'
 import type {
-  StreamingContentItem,
-  TodoDisplayItem
+  StreamingContentItem
 } from '@/components/common/ExecutionResultContent.vue'
 
 const props = defineProps<{
@@ -25,7 +25,7 @@ const props = defineProps<{
   historyPageSize: number
   isRunning: boolean
   executionDetailLoading?: boolean
-  todos?: TodoDisplayItem[]
+  todos?: TodoItem[]
 }>()
 
 const emit = defineEmits<{
