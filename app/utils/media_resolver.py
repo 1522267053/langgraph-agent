@@ -443,6 +443,8 @@ def normalize_file_value(value) -> dict | list[dict] | None:
         return None
 
     inner = value.get("result")
+    if isinstance(inner, list):
+        return normalize_file_value(inner)
     if isinstance(inner, dict) and any(
         k in inner for k in ("file_id", "preview_url", "download_url")
     ):
