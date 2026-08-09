@@ -30,9 +30,18 @@ class MarketplaceApi:
             "/status", response_model=ApiResponse, summary="获取市场连接状态"
         )
         async def get_status(db: AsyncSession = Depends(get_db)):
-            """返回市场服务器地址和连接状态"""
+            """返回市场服务器地址和连接状态
+
+            若已配置服务器地址但 token 缺失/过期，自动尝试连接。
+            """
             server_url = await marketplace_service.get_server_url(db)
             connected = await marketplace_service.is_connected(db)
+            if not connected and server_url:
+                try:
+                    token = await marketplace_service.connect(db)
+                    connected = token is not None
+                except Exception:
+                    logger.warning("市场自动连接失败", exc_info=True)
             return ApiResponse.success(
                 data={
                     "server_url": server_url or "",
