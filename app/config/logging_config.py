@@ -300,8 +300,8 @@ def get_uvicorn_log_config() -> dict:
         if handler_key in log_config["handlers"]:
             log_config["handlers"][handler_key]["filters"] = ["video_range"]
 
-    # 在 default 和 console_default 上抑制 uvicorn 启动横幅（文件日志保留完整记录）
-    for handler_key in ("default", "console_default"):
+    # 在所有 default handler 上抑制 uvicorn 启动横幅（由 lifespan 自定义输出真实 IP）
+    for handler_key in ("default", "console_default", "file_default"):
         handler = log_config["handlers"][handler_key]
         if "filters" in handler:
             handler["filters"].append("uvicorn_startup")
