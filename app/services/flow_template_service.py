@@ -5,12 +5,13 @@
 """
 
 from typing import Optional
+
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.flow_service import flow_service
-from app.schemas.flow_schema import FieldType, FlowCreate, FlowIOField, FlowIOSchema
 from app.schemas.flow_edge_schema import FlowEdgeCreate
+from app.schemas.flow_schema import FieldType, FlowCreate, FlowIOField, FlowIOSchema
+from app.services.flow_service import flow_service
 
 
 class TemplateNode(BaseModel):
@@ -22,6 +23,9 @@ class TemplateNode(BaseModel):
     position_x: int = Field(0, description="X坐标")
     position_y: int = Field(0, description="Y坐标")
     base_config: dict = Field(default_factory=dict, description="节点配置")
+    ref_flow_id: Optional[int] = Field(
+        default=None, description="引用流程ID（card节点用）"
+    )
 
 
 class TemplateEdge(BaseModel):
@@ -38,9 +42,9 @@ class FlowTemplate(BaseModel):
 
     id: str = Field(..., description="模板标识")
     name: str = Field(..., description="模板名称")
-    description: str = Field("", description="模板描述")
-    flow_type: str = Field("flow", description="类型: flow/agent")
-    node_count: int = Field(0, description="节点数量")
+    description: str = Field(default="", description="模板描述")
+    flow_type: str = Field(default="flow", description="类型: flow/agent")
+    node_count: int = Field(default=0, description="节点数量")
     nodes: list[TemplateNode] = Field(default_factory=list, description="节点列表")
     edges: list[TemplateEdge] = Field(default_factory=list, description="边列表")
     input_schema: FlowIOSchema = Field(
@@ -49,6 +53,82 @@ class FlowTemplate(BaseModel):
     output_schema: FlowIOSchema = Field(
         default_factory=FlowIOSchema, description="输出参数定义"
     )
+    suggested_prompts: Optional[list[str]] = Field(
+        default=None, description="建议提示词列表（仅 agent 有效）"
+    )
+
+
+# ---- 模板内容常量 ----
+
+_SYSTEM_PROMPT_RAG = (
+    "你是一个知识库问答助手。回答用户问题前，请先调用知识库检索工具搜索相关资料，"
+    "然后基于检索到的内容进行回答。如果检索结果中没有相关信息，请如实告知用户。"
+    "请用中文回复。"
+)
+
+_SYSTEM_PROMPT_CUSTOMER_SERVICE = (
+    "你是一名专业的智能客服。请友好、专业、简洁地回答用户问题。\n"
+    "回答要求：\n"
+    "- 准确理解用户意图后给出清晰回答\n"
+    "- 涉及退款、投诉、纠纷等敏感问题时，建议用户转接人工客服\n"
+    "请用中文回复。"
+)
+
+_SYSTEM_PROMPT_BLANK_AGENT = (
+    "你是一个智能AI助手，能够回答问题、提供建议并帮助用户完成各类任务。"
+    "请根据用户需求提供清晰、准确、有条理的回复。请用中文回复。"
+)
+
+_SYSTEM_PROMPT_KNOWLEDGE_AGENT = (
+    "你是一个知识库助手，拥有知识库检索工具。\n"
+    "工作方式：\n"
+    "1. 收到用户问题后，先调用知识库检索工具搜索相关内容\n"
+    "2. 基于检索结果给出准确、有依据的回答\n"
+    "3. 如果知识库中没有相关信息，如实告知并尝试根据自身知识回答\n"
+    "请用中文回复。"
+)
+
+_SYSTEM_PROMPT_FULL_AGENT = (
+    "你是一个全能AI助手，拥有多种工具能力：\n"
+    "- 知识库检索：搜索知识库获取专业信息\n"
+    "- Python 代码执行：编写和运行代码处理数据\n"
+    "- Shell 命令：执行系统命令、管理文件\n\n"
+    "请根据用户需求选择最合适的工具完成任务。请用中文回复。"
+)
+
+_CODE_DATA_PIPELINE = """def main(input_data):
+    import json
+    try:
+        data = json.loads(input_data) if isinstance(input_data, str) else input_data
+        type_map = {dict: "dict", list: "list", str: "str", int: "int", float: "float"}
+        if isinstance(data, dict):
+            return {
+                "status": "success",
+                "field_count": len(data),
+                "fields": list(data.keys()),
+            }
+        return {
+            "status": "success",
+            "type": type_map.get(type(data), "unknown"),
+            "preview": str(data)[:200],
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}"""
+
+_CODE_PYTHON_TOOL = "def main(input_data):\n    return input_data"
+
+_SYSTEM_PROMPT_DEMO = (
+    "你是一个多功能演示智能体，集成了知识库检索、Python 代码执行、Shell 命令、"
+    "MCP 工具、技能加载、记忆管理、任务计划、日程管理和子 Agent 等多种工具能力。\n"
+    "请根据用户需求灵活选择合适的工具完成任务。请用中文回复。"
+)
+
+_CODE_PYTHON_DATA = (
+    "def main(input_data):\n"
+    '    return {"processed": True, "preview": str(input_data)[:200]}'
+)
+
+_CODE_LOOP_SUB = 'def main(item):\n    return f"已处理: {item}"'
 
 
 # ---- 模板定义 ----
@@ -62,26 +142,27 @@ def _register(t: FlowTemplate) -> FlowTemplate:
     return t
 
 
+# ===== Flow 模板 =====
+
 # 1. 空白流程
 _register(
     FlowTemplate(
         id="blank_flow",
         name="空白流程",
-        description="只有开始和结束节点的空白流程",
+        description="从零开始搭建流程，仅包含开始和结束节点",
         flow_type="flow",
-        node_count=2,
         nodes=[
             TemplateNode(
                 node_type="start",
                 node_key="start",
-                node_name="开始节点",
+                node_name="开始",
                 position_x=50,
                 position_y=200,
             ),
             TemplateNode(
                 node_type="end",
                 node_key="end",
-                node_name="结束节点",
+                node_name="结束",
                 position_x=350,
                 position_y=200,
                 base_config={
@@ -95,8 +176,6 @@ _register(
             TemplateEdge(
                 source_node_key="start",
                 target_node_key="end",
-                source_handle="default",
-                target_handle="default",
             ),
         ],
         input_schema=FlowIOSchema(
@@ -119,19 +198,19 @@ _register(
     )
 )
 
-# 2. RAG 问答
+# 2. RAG 知识库问答
 _register(
     FlowTemplate(
         id="rag_qa",
-        name="RAG 问答",
-        description="接收用户问题 → 检索知识库 → LLM 总结回答",
+        name="RAG 知识库问答",
+        description="用户提问 → LLM 调用知识库检索工具 → 基于检索结果回答"
+        "（创建后需为知识库节点选择目标知识库）",
         flow_type="flow",
-        node_count=4,
         nodes=[
             TemplateNode(
                 node_type="start",
                 node_key="start",
-                node_name="开始节点",
+                node_name="开始",
                 position_x=50,
                 position_y=200,
             ),
@@ -146,17 +225,18 @@ _register(
             TemplateNode(
                 node_type="llm",
                 node_key="llm",
-                node_name="LLM 总结",
+                node_name="LLM 回答",
                 position_x=250,
                 position_y=200,
                 base_config={
-                    "user_prompt": "根据知识库内容回答用户问题：\n\n{{input.message}}"
+                    "system_prompt": _SYSTEM_PROMPT_RAG,
+                    "user_prompt": "{{input.message}}",
                 },
             ),
             TemplateNode(
                 node_type="end",
                 node_key="end",
-                node_name="结束节点",
+                node_name="结束",
                 position_x=450,
                 position_y=200,
                 base_config={
@@ -200,19 +280,19 @@ _register(
     )
 )
 
-# 3. 智能客服
+# 3. 智能客服分流
 _register(
     FlowTemplate(
         id="customer_service",
-        name="智能客服",
-        description="意图路由 → 自动回复或转人工",
+        name="智能客服分流",
+        description="意图路由自动识别用户意图 → 常见问题由 LLM 自动回复 / "
+        "复杂问题转人工处理",
         flow_type="flow",
-        node_count=5,
         nodes=[
             TemplateNode(
                 node_type="start",
                 node_key="start",
-                node_name="开始节点",
+                node_name="开始",
                 position_x=50,
                 position_y=200,
             ),
@@ -223,18 +303,50 @@ _register(
                 position_x=250,
                 position_y=200,
                 base_config={
+                    "input_variable": "input.message",
                     "intents": [
                         {
                             "key": "auto_reply",
-                            "description": "可自动回复的常见问题",
-                            "examples": [],
-                            "rule": {"keywords": [], "regex_patterns": []},
+                            "description": "可自动回复的常见问题：产品咨询、使用帮助、信息查询",
+                            "examples": [
+                                "这个产品怎么用",
+                                "价格是多少",
+                                "你们的服务时间",
+                            ],
+                            "rule": {
+                                "keywords": [
+                                    "怎么用",
+                                    "价格",
+                                    "多少钱",
+                                    "服务时间",
+                                    "地址",
+                                    "电话",
+                                    "帮助",
+                                    "咨询",
+                                ],
+                                "regex_patterns": [],
+                            },
                         },
                         {
                             "key": "transfer",
-                            "description": "需转人工处理的复杂问题",
-                            "examples": [],
-                            "rule": {"keywords": [], "regex_patterns": []},
+                            "description": "需转人工的复杂问题：投诉、退款、纠纷",
+                            "examples": [
+                                "我要投诉",
+                                "要求退款",
+                                "转人工",
+                            ],
+                            "rule": {
+                                "keywords": [
+                                    "投诉",
+                                    "退款",
+                                    "退货",
+                                    "纠纷",
+                                    "人工",
+                                    "经理",
+                                    "差评",
+                                ],
+                                "regex_patterns": [],
+                            },
                         },
                     ],
                 },
@@ -242,11 +354,12 @@ _register(
             TemplateNode(
                 node_type="llm",
                 node_key="llm",
-                node_name="LLM 自动回复",
+                node_name="自动回复",
                 position_x=450,
                 position_y=120,
                 base_config={
-                    "user_prompt": "你是一个智能客服助手，请友好地回答用户问题。\n\n用户问题：{{input.message}}"
+                    "system_prompt": _SYSTEM_PROMPT_CUSTOMER_SERVICE,
+                    "user_prompt": "{{input.message}}",
                 },
             ),
             TemplateNode(
@@ -259,7 +372,7 @@ _register(
             TemplateNode(
                 node_type="end",
                 node_key="end",
-                node_name="结束节点",
+                node_name="结束",
                 position_x=650,
                 position_y=200,
                 base_config={
@@ -279,13 +392,11 @@ _register(
                 source_node_key="intent_router",
                 target_node_key="llm",
                 source_handle="auto_reply",
-                target_handle="default",
             ),
             TemplateEdge(
                 source_node_key="intent_router",
                 target_node_key="human",
                 source_handle="transfer",
-                target_handle="default",
             ),
             TemplateEdge(source_node_key="llm", target_node_key="end"),
             TemplateEdge(source_node_key="human", target_node_key="end"),
@@ -310,19 +421,19 @@ _register(
     )
 )
 
-# 4. 数据处理
+# 4. Python 数据处理
 _register(
     FlowTemplate(
         id="data_pipeline",
-        name="数据处理",
-        description="接收输入 → Python 处理 → 输出结果",
+        name="Python 数据处理",
+        description="接收输入数据 → Python 脚本处理 → 返回结构化结果"
+        "（可自定义处理逻辑）",
         flow_type="flow",
-        node_count=3,
         nodes=[
             TemplateNode(
                 node_type="start",
                 node_key="start",
-                node_name="开始节点",
+                node_name="开始",
                 position_x=50,
                 position_y=200,
             ),
@@ -333,13 +444,21 @@ _register(
                 position_x=250,
                 position_y=200,
                 base_config={
-                    "code": 'def main(input_data):\n    print("hello")\n    return ""'
+                    "code": _CODE_DATA_PIPELINE,
+                    "timeout": 30,
+                    "input_variables": [
+                        {
+                            "name": "input_data",
+                            "source": "input.input_data",
+                            "type": "string",
+                        }
+                    ],
                 },
             ),
             TemplateNode(
                 node_type="end",
                 node_key="end",
-                node_name="结束节点",
+                node_name="结束",
                 position_x=450,
                 position_y=200,
                 base_config={
@@ -347,7 +466,7 @@ _register(
                         {
                             "name": "result",
                             "source": "nodes.python.result",
-                            "type": "string",
+                            "type": "object",
                         }
                     ],
                 },
@@ -362,7 +481,7 @@ _register(
                 FlowIOField(
                     name="input_data",
                     type=FieldType.STRING,
-                    description="输入数据",
+                    description="输入数据（JSON 字符串或纯文本）",
                     required=True,
                 )
             ]
@@ -370,26 +489,28 @@ _register(
         output_schema=FlowIOSchema(
             fields=[
                 FlowIOField(
-                    name="result", type=FieldType.STRING, description="处理结果"
+                    name="result", type=FieldType.OBJECT, description="处理结果"
                 )
             ]
         ),
     )
 )
 
+
+# ===== Agent 模板 =====
+
 # 5. 空白智能体
 _register(
     FlowTemplate(
         id="blank_agent",
         name="空白智能体",
-        description="只有 LLM 的空白智能体",
+        description="通用对话智能体，支持自然语言交互，可按需扩展工具节点",
         flow_type="agent",
-        node_count=3,
         nodes=[
             TemplateNode(
                 node_type="start",
                 node_key="start",
-                node_name="开始节点",
+                node_name="开始",
                 position_x=50,
                 position_y=200,
             ),
@@ -399,12 +520,15 @@ _register(
                 node_name="AI 助手",
                 position_x=250,
                 position_y=200,
-                base_config={"user_prompt": "{{input.message}}"},
+                base_config={
+                    "system_prompt": _SYSTEM_PROMPT_BLANK_AGENT,
+                    "user_prompt": "{{input.message}}",
+                },
             ),
             TemplateNode(
                 node_type="end",
                 node_key="end",
-                node_name="结束节点",
+                node_name="结束",
                 position_x=450,
                 position_y=200,
                 base_config={
@@ -437,6 +561,12 @@ _register(
                 FlowIOField(name="result", type=FieldType.STRING, description="AI 回复")
             ]
         ),
+        suggested_prompts=[
+            "你好，请介绍一下你能做什么",
+            "帮我写一段 Python 代码",
+            "解释一下机器学习的基本概念",
+            "给我一些时间管理的建议",
+        ],
     )
 )
 
@@ -445,14 +575,14 @@ _register(
     FlowTemplate(
         id="knowledge_agent",
         name="知识库助手",
-        description="LLM 搭配知识库检索工具",
+        description="拥有知识库检索能力的对话智能体，自动判断何时检索并基于检索结果回答"
+        "（创建后需选择目标知识库）",
         flow_type="agent",
-        node_count=4,
         nodes=[
             TemplateNode(
                 node_type="start",
                 node_key="start",
-                node_name="开始节点",
+                node_name="开始",
                 position_x=50,
                 position_y=200,
             ),
@@ -463,7 +593,8 @@ _register(
                 position_x=250,
                 position_y=200,
                 base_config={
-                    "user_prompt": "根据知识库内容回答用户问题：\n\n{{input.message}}"
+                    "system_prompt": _SYSTEM_PROMPT_KNOWLEDGE_AGENT,
+                    "user_prompt": "{{input.message}}",
                 },
             ),
             TemplateNode(
@@ -477,7 +608,7 @@ _register(
             TemplateNode(
                 node_type="end",
                 node_key="end",
-                node_name="结束节点",
+                node_name="结束",
                 position_x=450,
                 position_y=200,
                 base_config={
@@ -516,6 +647,12 @@ _register(
                 FlowIOField(name="result", type=FieldType.STRING, description="AI 回复")
             ]
         ),
+        suggested_prompts=[
+            "帮我搜索产品使用文档",
+            "公司的请假流程是什么？",
+            "查找相关的技术规范",
+            "有哪些常见问题及解决方案？",
+        ],
     )
 )
 
@@ -524,14 +661,13 @@ _register(
     FlowTemplate(
         id="full_agent",
         name="全能助手",
-        description="LLM 搭配知识库、Python、Shell 等多种工具",
+        description="集成知识库检索、Python 代码执行、Shell 命令等多种工具的对话智能体",
         flow_type="agent",
-        node_count=6,
         nodes=[
             TemplateNode(
                 node_type="start",
                 node_key="start",
-                node_name="开始节点",
+                node_name="开始",
                 position_x=50,
                 position_y=200,
             ),
@@ -541,7 +677,10 @@ _register(
                 node_name="AI 助手",
                 position_x=250,
                 position_y=200,
-                base_config={"user_prompt": "{{input.message}}"},
+                base_config={
+                    "system_prompt": _SYSTEM_PROMPT_FULL_AGENT,
+                    "user_prompt": "{{input.message}}",
+                },
             ),
             TemplateNode(
                 node_type="knowledge",
@@ -557,9 +696,7 @@ _register(
                 node_name="Python 执行",
                 position_x=250,
                 position_y=50,
-                base_config={
-                    "code": 'def main(input_data):\n    print("hello")\n    return ""'
-                },
+                base_config={"code": _CODE_PYTHON_TOOL, "timeout": 30},
             ),
             TemplateNode(
                 node_type="shell",
@@ -567,12 +704,12 @@ _register(
                 node_name="Shell 命令",
                 position_x=400,
                 position_y=50,
-                base_config={"command": "dir /b\necho Done"},
+                base_config={"command": "echo ready", "timeout": 30},
             ),
             TemplateNode(
                 node_type="end",
                 node_key="end",
-                node_name="结束节点",
+                node_name="结束",
                 position_x=450,
                 position_y=200,
                 base_config={
@@ -623,6 +760,418 @@ _register(
                 FlowIOField(name="result", type=FieldType.STRING, description="AI 回复")
             ]
         ),
+        suggested_prompts=[
+            "搜索知识库，解释产品核心功能",
+            "用 Python 统计当前目录下的文件数量",
+            "执行系统命令查看磁盘使用情况",
+            "读取并分析指定文件的内容",
+        ],
+    )
+)
+
+# 8. 节点全景示例
+_register(
+    FlowTemplate(
+        id="all_nodes_demo",
+        name="节点全景示例",
+        description="展示所有节点类型的连接方式：意图路由分流 → 对话(LLM+全部工具) / "
+        "数据处理(API+条件+人工) / 批量循环（sub_agent/mcp/skill 需创建后配置引用）",
+        flow_type="flow",
+        nodes=[
+            # ---- 核心节点 ----
+            TemplateNode(
+                node_type="start",
+                node_key="start",
+                node_name="开始",
+                position_x=50,
+                position_y=100,
+            ),
+            TemplateNode(
+                node_type="intent_router",
+                node_key="intent_router",
+                node_name="意图路由",
+                position_x=250,
+                position_y=100,
+                base_config={
+                    "input_variable": "input.message",
+                    "intents": [
+                        {
+                            "key": "chat",
+                            "description": "日常对话、问答、知识查询",
+                            "examples": ["你好", "帮我查一下", "解释一下"],
+                            "rule": {"keywords": [], "regex_patterns": []},
+                        },
+                        {
+                            "key": "data",
+                            "description": "数据获取与处理：调用API、条件判断",
+                            "examples": ["获取数据", "调用接口"],
+                            "rule": {
+                                "keywords": ["数据", "接口", "api", "获取"],
+                                "regex_patterns": [],
+                            },
+                        },
+                        {
+                            "key": "batch",
+                            "description": "批量处理：循环执行任务",
+                            "examples": ["批量处理", "循环执行"],
+                            "rule": {
+                                "keywords": ["批量", "循环", "遍历"],
+                                "regex_patterns": [],
+                            },
+                        },
+                    ],
+                },
+            ),
+            TemplateNode(
+                node_type="llm",
+                node_key="llm",
+                node_name="LLM 对话",
+                position_x=500,
+                position_y=100,
+                base_config={
+                    "system_prompt": _SYSTEM_PROMPT_DEMO,
+                    "user_prompt": "{{input.message}}",
+                },
+            ),
+            TemplateNode(
+                node_type="end",
+                node_key="end_chat",
+                node_name="结束(对话)",
+                position_x=750,
+                position_y=100,
+                base_config={
+                    "output_variables": [
+                        {
+                            "name": "result",
+                            "source": "nodes.llm.result",
+                            "type": "string",
+                        }
+                    ],
+                },
+            ),
+            # ---- LLM 工具节点（tools 边连接到 LLM）----
+            TemplateNode(
+                node_type="knowledge",
+                node_key="knowledge",
+                node_name="知识库检索",
+                position_x=350,
+                position_y=-50,
+                base_config={"top_k": 5},
+            ),
+            TemplateNode(
+                node_type="python",
+                node_key="python_tool",
+                node_name="Python 工具",
+                position_x=475,
+                position_y=-50,
+                base_config={"code": _CODE_PYTHON_TOOL, "timeout": 30},
+            ),
+            TemplateNode(
+                node_type="shell",
+                node_key="shell",
+                node_name="Shell 命令",
+                position_x=600,
+                position_y=-50,
+                base_config={"command": "echo ready", "timeout": 30},
+            ),
+            TemplateNode(
+                node_type="mcp",
+                node_key="mcp",
+                node_name="MCP 工具",
+                position_x=725,
+                position_y=-50,
+                base_config={"mcp_server_ids": []},
+            ),
+            TemplateNode(
+                node_type="skill",
+                node_key="skill",
+                node_name="技能",
+                position_x=350,
+                position_y=-150,
+                base_config={"skill_ids": []},
+            ),
+            TemplateNode(
+                node_type="memory",
+                node_key="memory",
+                node_name="记忆",
+                position_x=475,
+                position_y=-150,
+            ),
+            TemplateNode(
+                node_type="todo",
+                node_key="todo",
+                node_name="任务计划",
+                position_x=600,
+                position_y=-150,
+            ),
+            TemplateNode(
+                node_type="agenda",
+                node_key="agenda",
+                node_name="日程",
+                position_x=725,
+                position_y=-150,
+            ),
+            TemplateNode(
+                node_type="sub_agent",
+                node_key="sub_agent",
+                node_name="子Agent",
+                position_x=850,
+                position_y=-150,
+                base_config={"agent_id": 0},
+            ),
+            # ---- 数据处理分支 ----
+            TemplateNode(
+                node_type="api",
+                node_key="api",
+                node_name="API 调用",
+                position_x=500,
+                position_y=300,
+                base_config={
+                    "api_url": "https://httpbin.org/get",
+                    "method": "GET",
+                    "headers": '{"Accept": "application/json"}',
+                },
+            ),
+            TemplateNode(
+                node_type="python",
+                node_key="python_data",
+                node_name="数据处理",
+                position_x=700,
+                position_y=300,
+                base_config={
+                    "code": _CODE_PYTHON_DATA,
+                    "timeout": 30,
+                    "input_variables": [
+                        {
+                            "name": "input_data",
+                            "source": "nodes.api.body",
+                            "type": "string",
+                        }
+                    ],
+                },
+            ),
+            TemplateNode(
+                node_type="condition",
+                node_key="condition",
+                node_name="条件判断",
+                position_x=900,
+                position_y=300,
+                base_config={
+                    "logic": "and",
+                    "rules": [
+                        {
+                            "variable": "nodes.api.status_code",
+                            "operator": "==",
+                            "value": "200",
+                        }
+                    ],
+                },
+            ),
+            TemplateNode(
+                node_type="human",
+                node_key="human",
+                node_name="人工审批",
+                position_x=1100,
+                position_y=350,
+            ),
+            TemplateNode(
+                node_type="end",
+                node_key="end_data",
+                node_name="结束(数据)",
+                position_x=1300,
+                position_y=300,
+                base_config={
+                    "output_variables": [
+                        {
+                            "name": "result",
+                            "source": "nodes.api.body",
+                            "type": "string",
+                        }
+                    ],
+                },
+            ),
+            # ---- 批量循环分支 ----
+            TemplateNode(
+                node_type="loop",
+                node_key="loop",
+                node_name="循环处理",
+                position_x=500,
+                position_y=500,
+                base_config={
+                    "loop_mode": "count",
+                    "max_count": 3,
+                    "input_mappings": [
+                        {"card_field": "item", "source": "input.message"}
+                    ],
+                },
+            ),
+            TemplateNode(
+                node_type="start",
+                node_key="loop__start",
+                node_name="循环-开始",
+                position_x=550,
+                position_y=580,
+            ),
+            TemplateNode(
+                node_type="python",
+                node_key="loop__python",
+                node_name="循环-处理",
+                position_x=670,
+                position_y=580,
+                base_config={
+                    "code": _CODE_LOOP_SUB,
+                    "timeout": 30,
+                    "input_variables": [
+                        {
+                            "name": "item",
+                            "source": "nodes.loop.input_item",
+                            "type": "string",
+                        }
+                    ],
+                },
+            ),
+            TemplateNode(
+                node_type="end",
+                node_key="loop__end",
+                node_name="循环-结束",
+                position_x=790,
+                position_y=580,
+                base_config={
+                    "output_variables": [
+                        {
+                            "name": "res",
+                            "source": "nodes.loop__python.result",
+                            "type": "string",
+                        }
+                    ],
+                },
+            ),
+            TemplateNode(
+                node_type="end",
+                node_key="end_batch",
+                node_name="结束(批量)",
+                position_x=950,
+                position_y=500,
+                base_config={
+                    "output_variables": [
+                        {
+                            "name": "result",
+                            "source": "nodes.loop.res",
+                            "type": "array",
+                        }
+                    ],
+                },
+            ),
+        ],
+        edges=[
+            # ---- 主流程：意图路由三分支 ----
+            TemplateEdge(source_node_key="start", target_node_key="intent_router"),
+            TemplateEdge(
+                source_node_key="intent_router",
+                target_node_key="llm",
+                source_handle="chat",
+            ),
+            TemplateEdge(source_node_key="llm", target_node_key="end_chat"),
+            TemplateEdge(
+                source_node_key="intent_router",
+                target_node_key="api",
+                source_handle="data",
+            ),
+            TemplateEdge(source_node_key="api", target_node_key="python_data"),
+            TemplateEdge(source_node_key="python_data", target_node_key="condition"),
+            TemplateEdge(
+                source_node_key="condition",
+                target_node_key="end_data",
+                source_handle="true",
+            ),
+            TemplateEdge(
+                source_node_key="condition",
+                target_node_key="human",
+                source_handle="false",
+            ),
+            TemplateEdge(source_node_key="human", target_node_key="end_data"),
+            TemplateEdge(
+                source_node_key="intent_router",
+                target_node_key="loop",
+                source_handle="batch",
+            ),
+            TemplateEdge(source_node_key="loop", target_node_key="end_batch"),
+            # ---- 循环内部子节点 ----
+            TemplateEdge(source_node_key="loop__start", target_node_key="loop__python"),
+            TemplateEdge(source_node_key="loop__python", target_node_key="loop__end"),
+            # ---- 工具边：全部工具节点 → LLM ----
+            TemplateEdge(
+                source_node_key="knowledge",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="python_tool",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="shell",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="mcp",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="skill",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="memory",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="todo",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="agenda",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="sub_agent",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+        ],
+        input_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="message",
+                    type=FieldType.STRING,
+                    description="用户消息",
+                    required=True,
+                )
+            ]
+        ),
+        output_schema=FlowIOSchema(
+            fields=[
+                FlowIOField(
+                    name="result", type=FieldType.STRING, description="流程输出结果"
+                )
+            ]
+        ),
     )
 )
 
@@ -667,6 +1216,7 @@ async def create_from_template(
         flow_type=template.flow_type,
         input_schema=template.input_schema or None,
         output_schema=template.output_schema or None,
+        suggested_prompts=template.suggested_prompts,
     )
     flow = await flow_service.create(db, flow_data)
 
