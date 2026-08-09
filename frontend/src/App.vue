@@ -166,7 +166,7 @@ async function handleLogout(): Promise<void> {
 watch(
   () => route.path,
   path => {
-    if (store.agents.length === 0) {
+    if (/^\/chat/.test(path) || store.agents.length === 0) {
       store.loadAgents().catch(() => {})
     }
     if (/^\/chat/.test(path)) {
