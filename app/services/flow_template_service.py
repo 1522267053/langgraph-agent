@@ -80,19 +80,24 @@ _SYSTEM_PROMPT_BLANK_AGENT = (
 )
 
 _SYSTEM_PROMPT_KNOWLEDGE_AGENT = (
-    "你是一个知识库助手，拥有知识库检索工具。\n"
-    "工作方式：\n"
-    "1. 收到用户问题后，先调用知识库检索工具搜索相关内容\n"
-    "2. 基于检索结果给出准确、有依据的回答\n"
-    "3. 如果知识库中没有相关信息，如实告知并尝试根据自身知识回答\n"
+    "你是一个知识库助手。系统已根据用户消息自动检索了相关知识库内容（见下方预检索结果）。\n"
+    "请优先基于预检索结果回答。如果结果不够或需要补充信息，"
+    "可以再使用知识库检索工具进行搜索。\n"
     "请用中文回复。"
 )
 
 _SYSTEM_PROMPT_FULL_AGENT = (
-    "你是一个全能AI助手，拥有多种工具能力：\n"
+    "你是一个全能AI助手，拥有以下全部工具能力：\n"
     "- 知识库检索：搜索知识库获取专业信息\n"
     "- Python 代码执行：编写和运行代码处理数据\n"
-    "- Shell 命令：执行系统命令、管理文件\n\n"
+    "- Shell 命令：执行系统命令、管理文件\n"
+    "- API 调用：发起 HTTP 请求获取外部数据\n"
+    "- MCP 工具：调用已配置的 MCP 服务\n"
+    "- 技能加载：使用已配置的技能\n"
+    "- 记忆管理：存储和检索长期记忆\n"
+    "- 任务计划：创建和管理待办任务\n"
+    "- 日程管理：管理日程安排\n"
+    "- 子Agent：委派任务给其他智能体\n\n"
     "请根据用户需求选择最合适的工具完成任务。请用中文回复。"
 )
 
@@ -163,7 +168,7 @@ _register(
                 node_type="end",
                 node_key="end",
                 node_name="结束",
-                position_x=350,
+                position_x=450,
                 position_y=200,
                 base_config={
                     "output_variables": [
@@ -218,7 +223,7 @@ _register(
                 node_type="knowledge",
                 node_key="knowledge",
                 node_name="知识库检索",
-                position_x=250,
+                position_x=350,
                 position_y=50,
                 base_config={"top_k": 5},
             ),
@@ -226,7 +231,7 @@ _register(
                 node_type="llm",
                 node_key="llm",
                 node_name="LLM 回答",
-                position_x=250,
+                position_x=350,
                 position_y=200,
                 base_config={
                     "system_prompt": _SYSTEM_PROMPT_RAG,
@@ -237,7 +242,7 @@ _register(
                 node_type="end",
                 node_key="end",
                 node_name="结束",
-                position_x=450,
+                position_x=650,
                 position_y=200,
                 base_config={
                     "output_variables": [
@@ -300,7 +305,7 @@ _register(
                 node_type="intent_router",
                 node_key="intent_router",
                 node_name="意图路由",
-                position_x=250,
+                position_x=350,
                 position_y=200,
                 base_config={
                     "input_variable": "input.message",
@@ -355,7 +360,7 @@ _register(
                 node_type="llm",
                 node_key="llm",
                 node_name="自动回复",
-                position_x=450,
+                position_x=650,
                 position_y=120,
                 base_config={
                     "system_prompt": _SYSTEM_PROMPT_CUSTOMER_SERVICE,
@@ -366,14 +371,14 @@ _register(
                 node_type="human",
                 node_key="human",
                 node_name="转人工",
-                position_x=450,
+                position_x=650,
                 position_y=280,
             ),
             TemplateNode(
                 node_type="end",
                 node_key="end",
                 node_name="结束",
-                position_x=650,
+                position_x=950,
                 position_y=200,
                 base_config={
                     "output_variables": [
@@ -441,7 +446,7 @@ _register(
                 node_type="python",
                 node_key="python",
                 node_name="Python 处理",
-                position_x=250,
+                position_x=350,
                 position_y=200,
                 base_config={
                     "code": _CODE_DATA_PIPELINE,
@@ -459,7 +464,7 @@ _register(
                 node_type="end",
                 node_key="end",
                 node_name="结束",
-                position_x=450,
+                position_x=650,
                 position_y=200,
                 base_config={
                     "output_variables": [
@@ -518,7 +523,7 @@ _register(
                 node_type="llm",
                 node_key="llm",
                 node_name="AI 助手",
-                position_x=250,
+                position_x=350,
                 position_y=200,
                 base_config={
                     "system_prompt": _SYSTEM_PROMPT_BLANK_AGENT,
@@ -529,7 +534,7 @@ _register(
                 node_type="end",
                 node_key="end",
                 node_name="结束",
-                position_x=450,
+                position_x=650,
                 position_y=200,
                 base_config={
                     "output_variables": [
@@ -575,7 +580,7 @@ _register(
     FlowTemplate(
         id="knowledge_agent",
         name="知识库助手",
-        description="拥有知识库检索能力的对话智能体，自动判断何时检索并基于检索结果回答"
+        description="拥有知识库检索能力的对话智能体：每轮自动预检索 + LLM 可补充搜索"
         "（创建后需选择目标知识库）",
         flow_type="agent",
         nodes=[
@@ -587,29 +592,41 @@ _register(
                 position_y=200,
             ),
             TemplateNode(
-                node_type="llm",
-                node_key="llm",
-                node_name="AI 助手",
-                position_x=250,
-                position_y=200,
-                base_config={
-                    "system_prompt": _SYSTEM_PROMPT_KNOWLEDGE_AGENT,
-                    "user_prompt": "{{input.message}}",
-                },
-            ),
-            TemplateNode(
                 node_type="knowledge",
                 node_key="knowledge",
                 node_name="知识库检索",
-                position_x=250,
-                position_y=50,
-                base_config={"top_k": 5},
+                position_x=350,
+                position_y=200,
+                base_config={
+                    "top_k": 5,
+                    "input_variables": [
+                        {
+                            "name": "query",
+                            "source": "input.message",
+                            "type": "string",
+                        }
+                    ],
+                },
+            ),
+            TemplateNode(
+                node_type="llm",
+                node_key="llm",
+                node_name="AI 助手",
+                position_x=650,
+                position_y=200,
+                base_config={
+                    "system_prompt": _SYSTEM_PROMPT_KNOWLEDGE_AGENT,
+                    "user_prompt": (
+                        "用户问题：{{input.message}}\n\n"
+                        "知识库预检索结果：\n{{nodes.knowledge.result}}"
+                    ),
+                },
             ),
             TemplateNode(
                 node_type="end",
                 node_key="end",
                 node_name="结束",
-                position_x=450,
+                position_x=950,
                 position_y=200,
                 base_config={
                     "output_variables": [
@@ -623,7 +640,8 @@ _register(
             ),
         ],
         edges=[
-            TemplateEdge(source_node_key="start", target_node_key="llm"),
+            TemplateEdge(source_node_key="start", target_node_key="knowledge"),
+            TemplateEdge(source_node_key="knowledge", target_node_key="llm"),
             TemplateEdge(
                 source_node_key="knowledge",
                 target_node_key="llm",
@@ -661,7 +679,8 @@ _register(
     FlowTemplate(
         id="full_agent",
         name="全能助手",
-        description="集成知识库检索、Python 代码执行、Shell 命令等多种工具的对话智能体",
+        description="集成全部工具能力的对话智能体：知识库、Python、Shell、API、MCP、"
+        "技能、记忆、任务计划、日程、子Agent（mcp/skill/sub_agent 需创建后配置引用）",
         flow_type="agent",
         nodes=[
             TemplateNode(
@@ -675,13 +694,14 @@ _register(
                 node_type="llm",
                 node_key="llm",
                 node_name="AI 助手",
-                position_x=250,
+                position_x=350,
                 position_y=200,
                 base_config={
                     "system_prompt": _SYSTEM_PROMPT_FULL_AGENT,
                     "user_prompt": "{{input.message}}",
                 },
             ),
+            # ---- 工具节点 第 1 行 ----
             TemplateNode(
                 node_type="knowledge",
                 node_key="knowledge",
@@ -694,7 +714,7 @@ _register(
                 node_type="python",
                 node_key="python",
                 node_name="Python 执行",
-                position_x=250,
+                position_x=350,
                 position_y=50,
                 base_config={"code": _CODE_PYTHON_TOOL, "timeout": 30},
             ),
@@ -702,15 +722,74 @@ _register(
                 node_type="shell",
                 node_key="shell",
                 node_name="Shell 命令",
-                position_x=400,
+                position_x=600,
                 position_y=50,
                 base_config={"command": "echo ready", "timeout": 30},
             ),
             TemplateNode(
+                node_type="api",
+                node_key="api",
+                node_name="API 调用",
+                position_x=850,
+                position_y=50,
+                base_config={
+                    "api_url": "https://httpbin.org/get",
+                    "method": "GET",
+                    "headers": '{"Accept": "application/json"}',
+                },
+            ),
+            TemplateNode(
+                node_type="mcp",
+                node_key="mcp",
+                node_name="MCP 工具",
+                position_x=1100,
+                position_y=50,
+                base_config={"mcp_server_ids": []},
+            ),
+            # ---- 工具节点 第 2 行 ----
+            TemplateNode(
+                node_type="skill",
+                node_key="skill",
+                node_name="技能",
+                position_x=100,
+                position_y=-50,
+                base_config={"skill_ids": []},
+            ),
+            TemplateNode(
+                node_type="memory",
+                node_key="memory",
+                node_name="记忆",
+                position_x=350,
+                position_y=-50,
+            ),
+            TemplateNode(
+                node_type="todo",
+                node_key="todo",
+                node_name="任务计划",
+                position_x=600,
+                position_y=-50,
+            ),
+            TemplateNode(
+                node_type="agenda",
+                node_key="agenda",
+                node_name="日程",
+                position_x=850,
+                position_y=-50,
+            ),
+            TemplateNode(
+                node_type="sub_agent",
+                node_key="sub_agent",
+                node_name="子Agent",
+                position_x=1100,
+                position_y=-50,
+                base_config={"agent_id": 0},
+            ),
+            # ---- 结束 ----
+            TemplateNode(
                 node_type="end",
                 node_key="end",
                 node_name="结束",
-                position_x=450,
+                position_x=650,
                 position_y=200,
                 base_config={
                     "output_variables": [
@@ -743,6 +822,48 @@ _register(
                 source_handle="tools",
                 target_handle="tools",
             ),
+            TemplateEdge(
+                source_node_key="api",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="mcp",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="skill",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="memory",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="todo",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="agenda",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="sub_agent",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
             TemplateEdge(source_node_key="llm", target_node_key="end"),
         ],
         input_schema=FlowIOSchema(
@@ -764,6 +885,8 @@ _register(
             "搜索知识库，解释产品核心功能",
             "用 Python 统计当前目录下的文件数量",
             "执行系统命令查看磁盘使用情况",
+            "调用 API 获取外部数据并分析",
+            "帮我创建一个任务计划",
             "读取并分析指定文件的内容",
         ],
     )
@@ -790,7 +913,7 @@ _register(
                 node_type="intent_router",
                 node_key="intent_router",
                 node_name="意图路由",
-                position_x=250,
+                position_x=350,
                 position_y=100,
                 base_config={
                     "input_variable": "input.message",
@@ -826,7 +949,7 @@ _register(
                 node_type="llm",
                 node_key="llm",
                 node_name="LLM 对话",
-                position_x=500,
+                position_x=700,
                 position_y=100,
                 base_config={
                     "system_prompt": _SYSTEM_PROMPT_DEMO,
@@ -837,7 +960,7 @@ _register(
                 node_type="end",
                 node_key="end_chat",
                 node_name="结束(对话)",
-                position_x=750,
+                position_x=1050,
                 position_y=100,
                 base_config={
                     "output_variables": [
@@ -854,7 +977,7 @@ _register(
                 node_type="knowledge",
                 node_key="knowledge",
                 node_name="知识库检索",
-                position_x=350,
+                position_x=450,
                 position_y=-50,
                 base_config={"top_k": 5},
             ),
@@ -862,7 +985,7 @@ _register(
                 node_type="python",
                 node_key="python_tool",
                 node_name="Python 工具",
-                position_x=475,
+                position_x=675,
                 position_y=-50,
                 base_config={"code": _CODE_PYTHON_TOOL, "timeout": 30},
             ),
@@ -870,7 +993,7 @@ _register(
                 node_type="shell",
                 node_key="shell",
                 node_name="Shell 命令",
-                position_x=600,
+                position_x=850,
                 position_y=-50,
                 base_config={"command": "echo ready", "timeout": 30},
             ),
@@ -878,7 +1001,7 @@ _register(
                 node_type="mcp",
                 node_key="mcp",
                 node_name="MCP 工具",
-                position_x=725,
+                position_x=1025,
                 position_y=-50,
                 base_config={"mcp_server_ids": []},
             ),
@@ -886,7 +1009,7 @@ _register(
                 node_type="skill",
                 node_key="skill",
                 node_name="技能",
-                position_x=350,
+                position_x=450,
                 position_y=-150,
                 base_config={"skill_ids": []},
             ),
@@ -894,28 +1017,28 @@ _register(
                 node_type="memory",
                 node_key="memory",
                 node_name="记忆",
-                position_x=475,
+                position_x=675,
                 position_y=-150,
             ),
             TemplateNode(
                 node_type="todo",
                 node_key="todo",
                 node_name="任务计划",
-                position_x=600,
+                position_x=850,
                 position_y=-150,
             ),
             TemplateNode(
                 node_type="agenda",
                 node_key="agenda",
                 node_name="日程",
-                position_x=725,
+                position_x=1025,
                 position_y=-150,
             ),
             TemplateNode(
                 node_type="sub_agent",
                 node_key="sub_agent",
                 node_name="子Agent",
-                position_x=850,
+                position_x=1250,
                 position_y=-150,
                 base_config={"agent_id": 0},
             ),
@@ -924,7 +1047,7 @@ _register(
                 node_type="api",
                 node_key="api",
                 node_name="API 调用",
-                position_x=500,
+                position_x=700,
                 position_y=300,
                 base_config={
                     "api_url": "https://httpbin.org/get",
@@ -936,7 +1059,7 @@ _register(
                 node_type="python",
                 node_key="python_data",
                 node_name="数据处理",
-                position_x=700,
+                position_x=1000,
                 position_y=300,
                 base_config={
                     "code": _CODE_PYTHON_DATA,
@@ -954,7 +1077,7 @@ _register(
                 node_type="condition",
                 node_key="condition",
                 node_name="条件判断",
-                position_x=900,
+                position_x=1300,
                 position_y=300,
                 base_config={
                     "logic": "and",
@@ -971,14 +1094,14 @@ _register(
                 node_type="human",
                 node_key="human",
                 node_name="人工审批",
-                position_x=1100,
+                position_x=1600,
                 position_y=350,
             ),
             TemplateNode(
                 node_type="end",
                 node_key="end_data",
                 node_name="结束(数据)",
-                position_x=1300,
+                position_x=1900,
                 position_y=300,
                 base_config={
                     "output_variables": [
@@ -995,7 +1118,7 @@ _register(
                 node_type="loop",
                 node_key="loop",
                 node_name="循环处理",
-                position_x=500,
+                position_x=700,
                 position_y=500,
                 base_config={
                     "loop_mode": "count",
@@ -1009,14 +1132,14 @@ _register(
                 node_type="start",
                 node_key="loop__start",
                 node_name="循环-开始",
-                position_x=550,
+                position_x=750,
                 position_y=580,
             ),
             TemplateNode(
                 node_type="python",
                 node_key="loop__python",
                 node_name="循环-处理",
-                position_x=670,
+                position_x=970,
                 position_y=580,
                 base_config={
                     "code": _CODE_LOOP_SUB,
@@ -1034,7 +1157,7 @@ _register(
                 node_type="end",
                 node_key="loop__end",
                 node_name="循环-结束",
-                position_x=790,
+                position_x=1190,
                 position_y=580,
                 base_config={
                     "output_variables": [
@@ -1050,7 +1173,7 @@ _register(
                 node_type="end",
                 node_key="end_batch",
                 node_name="结束(批量)",
-                position_x=950,
+                position_x=1350,
                 position_y=500,
                 base_config={
                     "output_variables": [
