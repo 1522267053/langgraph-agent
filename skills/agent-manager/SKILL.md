@@ -88,7 +88,7 @@ SSE 事件：`flow_start` → `node_start` → `node_thinking/node_content` → 
 POST /api/agent/{agent_id}/sessions
 ```
 
-无请求体，返回会话信息（含 `session_id`），后续对话需使用该 `session_id`。
+无请求体，返回会话信息，其中 `id` 字段为会话 ID，后续对话需使用该 ID。
 
 **发送消息**：
 
@@ -242,6 +242,13 @@ POST /api/ai/flow/{id}/edges/batch
 
 ❌ `start.message`（错误）→ ✅ `input.message`（正确）
 
+### 变量引用语法区分
+
+| 语法 | 适用场景 | 示例 |
+|------|---------|------|
+| `{{variable}}` 双花括号 | LLM 的 `system_prompt`/`user_prompt`、API 的 `api_url`/`body` 等模板文本 | `"user_prompt": "{{input.message}}"` |
+| 裸路径（不加花括号） | `output_variables.source`、`input_variables.source`、`condition.rules.variable`、`loop.input_mappings.source` | `{"source": "input.message"}` |
+
 ## 节点配置要点
 
 > 以下为关键要点，完整字段请查 config-schema。`output_variables` 由后端自动管理，非 end 节点不要传。
@@ -263,9 +270,19 @@ POST /api/ai/flow/{id}/edges/batch
 ### Python (`python`)
 - 用直接参数签名：`def main(message): ...`，不用 `**kwargs`
 - RestrictedPython 沙箱，支持 `requests` / `json` / `time` / `hashlib` 等模块，**支持网络请求**
+- **RestrictedPython 禁止语法**：
+  - ❌ 禁止访问 `__dunder__` 属性（如 `__name__`、`__class__`），需要类型名时用 `{dict: "dict", list: "list", str: "str", ...}` 字典查表替代 `type(x).__name__`
+  - ❌ 禁止 `eval`/`exec`/`compile`/`globals`/`locals`
+  - ❌ 禁止属性名以 `_` 开头的访问
+  - ✅ 允许 `import`（白名单模块）、`f-string`、列表推导、`try/except`
 - `timeout`: 默认 30s，5-300
 - 输出变量：`result`（自动管理为 `{stdout, stderr, result, success}`）
 - ⚠️ 返回值被包装，引用为 `nodes.<key>.result.<field>`
+- **数据流模式（default 边）必须配置 `input_variables`**：函数参数不会自动注入，需显式映射上游变量
+  ```json
+  "input_variables": [{"name": "input_data", "source": "input.input_data", "type": "string"}]
+  ```
+  参数名（`input_data`）必须与 `main(input_data)` 签名一致；`source` 是变量路径（不加 `{{}}`）
 - **工具模式**：
   - `use_preset_for_tool: true` 开启预设模式：LLM 不接触代码，只提供 input_variables 定义的业务参数
   - `description`: 工具描述，LLM 据此判断何时调用
@@ -295,6 +312,7 @@ POST /api/ai/flow/{id}/edges/batch
 
 ### Intent Router (`intent_router`)
 - 两级级联：**规则层**（keywords + regex，按 intents 顺序短路）→ **LLM 层**（语义分类）
+- **`input_variable`**：要路由的文本变量路径，默认 `input.question`。**大多数流程输入字段名为 `message`，必须显式设置为 `input.message`**，否则路由器收不到文本、所有规则和 LLM 分类均失效
 - 每个意图 `{key, description, examples, rule: {keywords, regex_patterns}}`
 - 分支边的 `source_handle` = 意图 key，未命中走 `default`
 - 启用 LLM 层需有效 `provider/model/api_key`（留空自动使用全局默认配置）；仅规则层可省略
@@ -331,6 +349,7 @@ POST /api/ai/flow/{id}/edges/batch
 - 子节点 key 带 `{loop_key}__` 前缀（双下划线），在**同一 flow** 内创建
 - 子节点必须含 start 和 end
 - `input_mappings`: `{card_field/name, source, type}` 两种格式等效
+- ⚠️ **`input_mappings` 的 `source` 必须在执行路径上可达**：如果引用的变量来自另一条 intent/condition 分支上的节点，而该节点未被执行，则变量不存在，loop 会报错"源变量不存在"。应使用 `input.message` 等全局可达的变量
 - 子 End 输出变量名固定用 `res`：`{"name":"res","source":"nodes.loop__python.result","type":"..."}`
 - Loop 聚合为数组：`nodes.<loop>.res`
 - 禁止嵌套 loop
@@ -371,6 +390,10 @@ POST /api/ai/flow/{id}/edges/batch
 | #3 | knowledge 空字符串报错 | 空字符串未转 `None`（需重启生效） |
 | #4 | card 执行报 `'str' object has no attribute 'get'` | 子 end 的 `output_variables` 存为字符串 |
 | #5 | intent_router 分支边被 Pydantic 拦截 | `validate_handle` 已改为动态校验 |
+| #6 | Python 节点报 `__name__ is an invalid attribute` | RestrictedPython 禁止 dunder 属性，需用类型字典替代 `type(x).__name__` |
+| #7 | Python 节点报 `main() missing required positional argument` | 数据流模式下未配置 `input_variables`，参数无法注入 |
+| #8 | intent_router 所有规则不匹配、走 default | `input_variable` 默认 `input.question`，与流程输入字段名（通常为 `message`）不匹配 |
+| #9 | loop 报 `源变量 'nodes.xxx.yyy' 不存在` | `input_mappings.source` 引用了另一条分支上的节点输出，该节点未执行 |
 
 ## Agent 运行时自我更新约束
 
