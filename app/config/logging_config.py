@@ -324,7 +324,7 @@ def get_uvicorn_log_config() -> dict:
     }
 
     log_config["root"] = {
-        "level": "INFO",
+        "level": settings.log_level.upper(),
         "handlers": ["console_default", "file_default"],
     }
 
