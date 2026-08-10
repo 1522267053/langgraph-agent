@@ -127,3 +127,15 @@ def get_agents_base_dir() -> Path:
     agents_dir = get_workspace_dir() / "agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
     return agents_dir
+
+
+def get_update_cache_dir() -> Path:
+    """自动更新缓存目录（workspace/update_cache/）
+
+    存放后台下载的整包、回滚备份、状态标记文件。归到 workspace 下统一管理运行时数据，
+    避免污染应用根目录。更新时仅替换 exe + _internal，用户数据（data/uploads/.env）不受影响。
+    主程序与 updater 通过 zip_path.parent 共享同一目录。
+    """
+    cache_dir = get_workspace_dir() / "update_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir

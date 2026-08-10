@@ -102,6 +102,14 @@ class Settings(BaseSettings):
     # 版本更新检查接口地址
     version_check_url: str = Field(default="", alias="VERSION_CHECK_URL")
 
+    # 自动更新配置
+    update_force_remind_interval: int = Field(
+        default=300, alias="UPDATE_FORCE_REMIND_INTERVAL"
+    )  # 强制更新就绪后的周期提示间隔（秒）
+    update_health_check_timeout: int = Field(
+        default=60, alias="UPDATE_HEALTH_CHECK_TIMEOUT"
+    )  # updater 等待新版本健康检查通过的超时时间（秒）
+
     # 日志配置
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_dir: str = Field(default="logs", alias="LOG_DIR")

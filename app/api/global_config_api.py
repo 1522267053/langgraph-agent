@@ -2,18 +2,12 @@
 全局配置 API 路由
 """
 
-import asyncio
 import logging
-import time
-from typing import Optional
 
-import httpx
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
-from app.config.settings import settings
-from app.config.version import __version__, is_newer
 from app.schemas.base_schema import ApiResponse
 from app.schemas.global_config_schema import (
     InitConfigRequest,
@@ -28,11 +22,6 @@ from app.middleware.auth_middleware import (
 )
 
 logger = logging.getLogger(__name__)
-
-_UPDATE_CACHE_TTL = 3600
-_update_cache: Optional[dict] = None
-_update_cache_ts: float = 0
-_update_lock = asyncio.Lock()
 
 
 class GlobalConfigApi:
@@ -148,97 +137,6 @@ class GlobalConfigApi:
                     request.execution_notification_enabled
                 )
             return ApiResponse.success(msg="更新成功")
-
-        @self.router.get(
-            "/check-update",
-            response_model=ApiResponse,
-            summary="检查更新",
-        )
-        async def check_update(refresh: bool = False):
-            """检查是否有新版本可用，结果缓存 1 小时，refresh=true 绕过缓存"""
-            global _update_cache, _update_cache_ts
-
-            check_url = settings.version_check_url
-            if not check_url:
-                return ApiResponse.success(
-                    data={
-                        "has_update": False,
-                        "current_version": __version__,
-                        "latest_version": __version__,
-                        "release_notes": "",
-                        "download_url": "",
-                        "published_at": "",
-                        "force_upgrade": False,
-                    }
-                )
-
-            now = time.time()
-            if (
-                not refresh
-                and _update_cache
-                and (now - _update_cache_ts) < _UPDATE_CACHE_TTL
-            ):
-                return ApiResponse.success(data=_update_cache)
-
-            async with _update_lock:
-                now = time.time()
-                if (
-                    not refresh
-                    and _update_cache
-                    and (now - _update_cache_ts) < _UPDATE_CACHE_TTL
-                ):
-                    return ApiResponse.success(data=_update_cache)
-
-                try:
-                    from app.config.database import AsyncSessionLocal
-
-                    async with AsyncSessionLocal() as db:
-                        await global_config_service.ensure_marketplace_cache(db)
-                    async with httpx.AsyncClient(timeout=10) as client:
-                        resp = await client.get(check_url)
-                        resp.raise_for_status()
-                    body = resp.json()
-                    remote = body.get("data") or body
-                    latest_version = remote.get("version", "")
-                    has_update = bool(
-                        latest_version and is_newer(latest_version, __version__)
-                    )
-                    download_url = remote.get("download_url", "")
-                    if download_url and not download_url.startswith("http"):
-                        from urllib.parse import urlparse
-
-                        parsed = urlparse(check_url)
-                        base_url = f"{parsed.scheme}://{parsed.netloc}{download_url}"
-                        token = global_config_service.marketplace_token
-                        if token:
-                            sep = "&" if "?" in download_url else "?"
-                            base_url = f"{base_url}{sep}token={token}"
-                        download_url = base_url
-                    result = {
-                        "has_update": has_update,
-                        "current_version": __version__,
-                        "latest_version": latest_version or __version__,
-                        "release_notes": remote.get("release_notes", ""),
-                        "download_url": download_url,
-                        "published_at": remote.get("published_at", ""),
-                        "force_upgrade": bool(remote.get("force_upgrade", False)),
-                    }
-                    _update_cache = result
-                    _update_cache_ts = now
-                    return ApiResponse.success(data=result)
-                except Exception as e:
-                    logger.warning("检查更新失败: %s", e)
-                    return ApiResponse.success(
-                        data={
-                            "has_update": False,
-                            "current_version": __version__,
-                            "latest_version": __version__,
-                            "release_notes": "",
-                            "download_url": "",
-                            "published_at": "",
-                            "force_upgrade": False,
-                        }
-                    )
 
 
 global_config_api = GlobalConfigApi()

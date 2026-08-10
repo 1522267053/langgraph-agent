@@ -68,7 +68,8 @@ EXEMPT_PATHS = {
     "/api/auth/check",
     "/api/config/check",
     "/api/config/providers",
-    "/api/config/check-update",
+    "/api/update/check-update",
+    "/api/update/status",
     "/api/health",
     # WS 网关文件传输端点（token 自鉴权，见 ws_gateway_api.py）
     "/api/ws-gateway/upload",
