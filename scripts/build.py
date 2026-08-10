@@ -173,6 +173,7 @@ def build_updater() -> None:
     if not updater_src.exists():
         raise BuildError(f"updater 打包产物不存在: {updater_src}")
     shutil.copy2(updater_src, dist_base / f"updater{ext}")
+    updater_src.unlink()  # 清理 PyInstaller 中间产物，已复制进主程序目录
     print(f"  updater{ext} copied to {dist_base}/")
 
 
@@ -189,8 +190,10 @@ def package_release_zip(version: str) -> None:
     if not dist_base.exists():
         raise BuildError("主程序打包产物不存在，无法生成发布包")
 
+    release_dir = PROJECT_ROOT / "release"
+    release_dir.mkdir(parents=True, exist_ok=True)
     tag = "windows" if IS_WINDOWS else "linux"
-    zip_path = PROJECT_ROOT / "dist" / f"langgraph_agent_{version}_{tag}.zip"
+    zip_path = release_dir / f"langgraph_agent_{version}_{tag}.zip"
 
     file_count = 0
     total_bytes = 0
@@ -252,7 +255,7 @@ def print_summary(args: argparse.Namespace, start_time: datetime) -> None:
     print()
     tag = "windows" if IS_WINDOWS else "linux"
     print(f"  Updater: dist/langgraph_agent/updater{ext}")
-    print(f"  Release: dist/langgraph_agent_{args.version}_{tag}.zip")
+    print(f"  Release: release/langgraph_agent_{args.version}_{tag}.zip")
     print()
 
 
