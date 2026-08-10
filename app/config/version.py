@@ -3,17 +3,17 @@
 
 版本号单一数据源为项目根目录的 version.json。get_version() 每次调用均重新
 读取文件，便于运行期热更新版本号而无须重启进程。
-路径解析基于本模块位置（app/config/version.py → 上溯三级），开发环境指向
-项目根，打包环境（PyInstaller/Nuitka）指向资源目录，与 version.json 的
-datas 收集位置（target "."）天然对齐。version.json 缺失或损坏时回退到内置
-默认值，保证启动健壮性。
+文件定位与 .env 一致，使用 build_utils.BASE_DIR：开发环境为项目根目录，
+打包环境为 exe 同级目录（由 copy_runtime_files 复制到位）。
+version.json 缺失或损坏时回退到内置默认值，保证启动健壮性。
 """
 
 import json
-from pathlib import Path
+
+from app.config.build_utils import BASE_DIR
 
 _DEFAULT_VERSION = "0.0.0"
-_VERSION_FILE = Path(__file__).resolve().parents[2] / "version.json"
+_VERSION_FILE = BASE_DIR / "version.json"
 
 
 def get_version() -> str:
