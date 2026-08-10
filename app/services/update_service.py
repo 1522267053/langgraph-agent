@@ -77,10 +77,16 @@ class UpdateService:
     # ---- 版本检查 ----
 
     async def fetch_latest_version(self) -> dict:
-        """远程拉取最新版本信息（按当前平台过滤，每次实时请求不缓存）"""
+        """远程拉取最新版本信息（按当前平台过滤，每次实时请求）
+
+        成功取到远程响应（含"明确无更新"）时同步刷新 _latest_info 缓存，
+        使后续 get_status() 反映最新检查结果；网络异常时保留原缓存，
+        避免瞬时抖动清掉已知的强制升级提示。
+        """
         check_url = settings.version_check_url
         if not check_url:
-            return _no_update_result()
+            self._latest_info = _no_update_result()
+            return self._latest_info
 
         try:
             from app.config.database import AsyncSessionLocal
@@ -97,7 +103,8 @@ class UpdateService:
             body = resp.json()
             remote = body.get("data")
             if not remote:
-                return _no_update_result()
+                self._latest_info = _no_update_result()
+                return self._latest_info
             latest = remote.get("version", "")
             has_update = bool(latest and is_newer(latest, __version__))
             download_url = remote.get("download_url", "")
@@ -110,7 +117,7 @@ class UpdateService:
                 if token:
                     qsep = "&" if "?" in download_url else "?"
                     download_url = f"{download_url}{qsep}token={token}"
-            return {
+            info = {
                 "has_update": has_update,
                 "current_version": __version__,
                 "latest_version": latest or __version__,
@@ -122,6 +129,8 @@ class UpdateService:
                 "published_at": remote.get("published_at", ""),
                 "force_upgrade": bool(remote.get("force_upgrade", False)),
             }
+            self._latest_info = info
+            return info
         except Exception as e:
             logger.warning("检查更新失败: %s", e)
             return _no_update_result()
