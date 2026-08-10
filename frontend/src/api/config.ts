@@ -69,9 +69,6 @@ export const configApi = {
   },
   updateConfig(data: UpdateConfigRequest): Promise<{ data: ApiResponse }> {
     return post('/config/update', data)
-  },
-  checkUpdate(refresh?: boolean): Promise<{ data: ApiResponse<UpdateCheckResult> }> {
-    return get<UpdateCheckResult>(`/config/check-update${refresh ? '?refresh=true' : ''}`)
   }
 }
 
@@ -87,4 +84,50 @@ export interface UpdateCheckResult {
 
 export async function hashPassword(password: string): Promise<string> {
   return sha256(password)
+}
+
+export type UpdateState =
+  'idle' | 'downloading' | 'ready' | 'applying' | 'done' | 'failed' | 'rolled_back'
+
+export interface UpdateResult {
+  result: string
+  error?: string
+  ts?: string
+}
+
+export interface UpdateStatus {
+  state: UpdateState
+  version: string
+  progress: number
+  error: string
+  current_version: string
+  latest_version: string
+  has_update: boolean
+  download_url: string
+  file_size: number
+  release_notes: string
+  force_upgrade: boolean
+  published_at: string
+  last_result: UpdateResult | null
+}
+
+export const updateApi = {
+  checkUpdate() {
+    return get<UpdateCheckResult>('/update/check-update')
+  },
+  getStatus() {
+    return get<UpdateStatus>('/update/status')
+  },
+  download() {
+    return post<UpdateStatus>('/update/download')
+  },
+  apply() {
+    return post('/update/apply')
+  },
+  cancel() {
+    return post<UpdateStatus>('/update/cancel')
+  },
+  ack() {
+    return post('/update/ack')
+  }
 }

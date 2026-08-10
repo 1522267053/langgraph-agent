@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, inject, type Ref } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Link, Warning, CircleCheck, Bell } from '@element-plus/icons-vue'
 import { requestPermission as requestBrowserNotifyPermission } from '@/composables/useBrowserNotification'
 import {
   configApi,
+  updateApi,
   type GlobalConfigData,
   type UpdateConfigRequest,
-  type UpdateCheckResult,
+  type UpdateStatus,
   hashPassword
 } from '@/api/config'
 import { useMarketplaceStore } from '@/stores/marketplaceStore'
@@ -49,9 +50,9 @@ async function handleRequestNotifyPermission() {
 }
 
 const currentVersion = ref('0.1.0')
-const updateInfo = ref<UpdateCheckResult | null>(null)
+const updateStatus = ref<UpdateStatus | null>(null)
 const updateChecking = ref(false)
-const forceUpgradeInfo = inject<Ref<UpdateCheckResult | null>>('forceUpgradeInfo')
+let statusTimer: ReturnType<typeof setInterval> | null = null
 
 function clearAutoLoginData() {
   localStorage.removeItem('auto_login')
@@ -80,9 +81,14 @@ async function loadConfig() {
 onMounted(async () => {
   loading.value = true
   await loadConfig()
+  await loadUpdateStatus()
   loading.value = false
   marketplaceStore.loadStatus()
   checkForUpdates()
+})
+
+onUnmounted(() => {
+  if (statusTimer) clearInterval(statusTimer)
 })
 
 async function handleSave() {
@@ -171,20 +177,36 @@ function handleDisconnectMarketplace() {
   ElMessage.success('已断开连接')
 }
 
-async function checkForUpdates(refresh = false): Promise<void> {
+async function loadUpdateStatus(): Promise<void> {
+  try {
+    const res = await updateApi.getStatus()
+    updateStatus.value = res.data.data
+    if (updateStatus.value) {
+      currentVersion.value = updateStatus.value.current_version
+      if (updateStatus.value.last_result) {
+        updateApi.ack().catch(() => {})
+      }
+      if (updateStatus.value.state === 'downloading') {
+        startStatusPolling()
+      }
+    }
+  } catch {
+    // handled by interceptor
+  }
+}
+
+async function checkForUpdates(): Promise<void> {
   updateChecking.value = true
   try {
-    const res = await configApi.checkUpdate(refresh)
-    updateInfo.value = res.data.data
-    if (updateInfo.value) {
-      currentVersion.value = updateInfo.value.current_version
+    const res = await updateApi.checkUpdate()
+    const info = res.data.data
+    if (info) {
+      currentVersion.value = info.current_version
     }
-    if (forceUpgradeInfo.value) {
-      if (updateInfo.value?.force_upgrade && updateInfo.value.has_update) {
-        forceUpgradeInfo.value = updateInfo.value
-      } else {
-        forceUpgradeInfo.value = null
-      }
+    if (info?.has_update && info.force_upgrade && updateStatus.value?.state === 'idle') {
+      await triggerDownload()
+    } else {
+      await loadUpdateStatus()
     }
   } catch {
     // handled by interceptor
@@ -193,9 +215,74 @@ async function checkForUpdates(refresh = false): Promise<void> {
   }
 }
 
+async function triggerDownload(): Promise<void> {
+  try {
+    const res = await updateApi.download()
+    updateStatus.value = res.data.data
+    startStatusPolling()
+  } catch {
+    // handled by interceptor
+  }
+}
+
+async function applyUpdate(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `确定重启并更新到 v${updateStatus.value?.version}？更新期间服务将短暂中断。`,
+      '更新确认',
+      {
+        confirmButtonText: '重启更新',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+  } catch {
+    return
+  }
+  try {
+    await updateApi.apply()
+    ElMessage.success('更新已启动，服务即将重启...')
+  } catch {
+    // handled by interceptor
+  }
+}
+
+async function cancelDownload(): Promise<void> {
+  try {
+    const res = await updateApi.cancel()
+    updateStatus.value = res.data.data
+    stopStatusPolling()
+  } catch {
+    // handled by interceptor
+  }
+}
+
+function startStatusPolling(): void {
+  if (statusTimer) return
+  statusTimer = setInterval(async () => {
+    try {
+      const res = await updateApi.getStatus()
+      updateStatus.value = res.data.data
+      if (updateStatus.value && updateStatus.value.state !== 'downloading') {
+        stopStatusPolling()
+      }
+    } catch {
+      // ignore polling errors
+    }
+  }, 3000)
+}
+
+function stopStatusPolling(): void {
+  if (statusTimer) {
+    clearInterval(statusTimer)
+    statusTimer = null
+  }
+}
+
 function openDownloadUrl(): void {
-  if (updateInfo.value?.download_url) {
-    window.open(updateInfo.value.download_url, '_blank')
+  const url = updateStatus.value?.download_url
+  if (url) {
+    window.open(url, '_blank')
   }
 }
 </script>
@@ -474,42 +561,129 @@ function openDownloadUrl(): void {
         </template>
 
         <div class="update-actions">
-          <el-button type="primary" plain :loading="updateChecking" @click="checkForUpdates(true)">
+          <el-button type="primary" plain :loading="updateChecking" @click="checkForUpdates">
             检查更新
           </el-button>
         </div>
 
-        <template v-if="updateInfo">
-          <template v-if="updateInfo.has_update">
-            <div
-              class="update-notice"
-              :class="{ 'update-notice--force': updateInfo.force_upgrade }"
-            >
-              <div class="update-notice-icon">
-                <el-icon :size="20"><Warning /></el-icon>
-              </div>
-              <div class="update-notice-body">
-                <div class="update-notice-title">
-                  {{ updateInfo.force_upgrade ? '需要强制升级' : '发现新版本' }}
-                  <span class="update-version-tag">v{{ updateInfo.latest_version }}</span>
-                </div>
-                <div v-if="updateInfo.release_notes" class="update-notice-desc">
-                  {{ updateInfo.release_notes }}
-                </div>
-              </div>
+        <!-- 上次更新结果 -->
+        <div
+          v-if="updateStatus?.last_result"
+          class="update-result-notice"
+          :class="{
+            'update-result--success': updateStatus.last_result.result === 'success',
+            'update-result--fail': ['failed', 'rolled_back', 'interrupted'].includes(
+              updateStatus.last_result.result
+            )
+          }"
+        >
+          <el-icon :size="16">
+            <CircleCheck v-if="updateStatus.last_result.result === 'success'" />
+            <Warning v-else />
+          </el-icon>
+          <span>
+            {{
+              updateStatus.last_result.result === 'success'
+                ? '上次更新成功'
+                : updateStatus.last_result.result === 'rolled_back'
+                  ? '上次更新失败，已自动回滚'
+                  : updateStatus.last_result.result === 'interrupted'
+                    ? '上次更新被中断'
+                    : '上次更新失败'
+            }}
+            <span v-if="updateStatus.last_result.error" class="update-result-error">
+              （{{ updateStatus.last_result.error }}）
+            </span>
+          </span>
+        </div>
+
+        <!-- 下载中 -->
+        <template v-if="updateStatus?.state === 'downloading'">
+          <div class="update-progress">
+            <div class="update-progress-info">
+              正在下载 v{{ updateStatus.version }}... {{ updateStatus.progress }}%
             </div>
+            <el-progress :percentage="updateStatus.progress" :stroke-width="8" :show-text="false" />
             <div class="update-download-row">
-              <span v-if="updateInfo.published_at" class="update-pub-time">
-                发布于 {{ updateInfo.published_at }}
-              </span>
-              <el-button type="primary" @click="openDownloadUrl">前往下载</el-button>
+              <el-button size="small" @click="cancelDownload">取消下载</el-button>
             </div>
-          </template>
-          <div v-else class="update-up-to-date">
-            <el-icon :size="16"><CircleCheck /></el-icon>
-            <span>已是最新版本</span>
           </div>
         </template>
+
+        <!-- 就绪，待重启 -->
+        <template v-else-if="updateStatus?.state === 'ready'">
+          <div
+            class="update-notice"
+            :class="{ 'update-notice--force': updateStatus.force_upgrade }"
+          >
+            <div class="update-notice-icon">
+              <el-icon :size="20"><Warning /></el-icon>
+            </div>
+            <div class="update-notice-body">
+              <div class="update-notice-title">
+                {{ updateStatus.force_upgrade ? '请尽快重启升级' : '新版本已就绪' }}
+                <span class="update-version-tag">v{{ updateStatus.version }}</span>
+              </div>
+              <div v-if="updateStatus.release_notes" class="update-notice-desc">
+                {{ updateStatus.release_notes }}
+              </div>
+            </div>
+          </div>
+          <div class="update-download-row">
+            <el-button type="primary" @click="applyUpdate">重启更新</el-button>
+            <el-button @click="openDownloadUrl">前往下载</el-button>
+          </div>
+        </template>
+
+        <!-- 下载失败 -->
+        <template v-else-if="updateStatus?.state === 'failed'">
+          <div class="update-notice update-notice--force">
+            <div class="update-notice-body">
+              <div class="update-notice-title">下载失败</div>
+              <div v-if="updateStatus.error" class="update-notice-desc">
+                {{ updateStatus.error }}
+              </div>
+            </div>
+          </div>
+          <div class="update-download-row">
+            <el-button type="primary" @click="triggerDownload">重试下载</el-button>
+            <el-button @click="openDownloadUrl">前往下载</el-button>
+          </div>
+        </template>
+
+        <!-- 发现新版本（待下载） -->
+        <template v-else-if="updateStatus?.has_update">
+          <div
+            class="update-notice"
+            :class="{ 'update-notice--force': updateStatus.force_upgrade }"
+          >
+            <div class="update-notice-icon">
+              <el-icon :size="20"><Warning /></el-icon>
+            </div>
+            <div class="update-notice-body">
+              <div class="update-notice-title">
+                {{ updateStatus.force_upgrade ? '需要强制升级' : '发现新版本' }}
+                <span class="update-version-tag">v{{ updateStatus.latest_version }}</span>
+              </div>
+              <div v-if="updateStatus.release_notes" class="update-notice-desc">
+                {{ updateStatus.release_notes }}
+              </div>
+            </div>
+          </div>
+          <div class="update-download-row">
+            <span v-if="updateStatus.published_at" class="update-pub-time">
+              发布于 {{ updateStatus.published_at }}
+            </span>
+            <el-button type="primary" @click="triggerDownload">下载更新</el-button>
+            <el-button @click="openDownloadUrl">前往下载</el-button>
+          </div>
+        </template>
+
+        <!-- 已是最新 -->
+        <div v-else-if="updateStatus" class="update-up-to-date">
+          <el-icon :size="16"><CircleCheck /></el-icon>
+          <span>已是最新版本</span>
+        </div>
       </el-card>
     </div>
   </div>
@@ -576,6 +750,47 @@ function openDownloadUrl(): void {
 
 .update-actions {
   margin-bottom: 4px;
+}
+
+.update-result-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  color: #64748b;
+}
+
+.update-result--success {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #16a34a;
+}
+
+.update-result--fail {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #dc2626;
+}
+
+.update-result-error {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.update-progress {
+  margin-top: 12px;
+}
+
+.update-progress-info {
+  font-size: 13px;
+  color: #475569;
+  margin-bottom: 8px;
+  font-weight: 500;
 }
 
 .update-notice {

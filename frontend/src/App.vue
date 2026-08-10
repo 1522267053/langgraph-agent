@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, provide, h } from 'vue'
+import { ref, computed, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Setting,
@@ -27,7 +27,7 @@ import { ElMessageBox, ElMessage, ElNotification, ElButton } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { useAgentStore } from '@/stores'
 import { authApi } from '@/api/auth'
-import { configApi, type UpdateCheckResult } from '@/api/config'
+import { updateApi, type UpdateStatus } from '@/api/config'
 import {
   connectWebSocket,
   setWatchingAgentId,
@@ -63,8 +63,9 @@ const DEFAULT_AGENT_KEY = 'default_agent_id'
 const builtinAgentId = ref<number | null>(null)
 const defaultAgentId = ref<number | null>(null)
 const currentUser = ref<string | null>(null)
-const forceUpgradeInfo = ref<UpdateCheckResult | null>(null)
-provide('forceUpgradeInfo', forceUpgradeInfo)
+const updateStatus = ref<UpdateStatus | null>(null)
+let statusTimer: ReturnType<typeof setInterval> | null = null
+let forceRemindTimer: ReturnType<typeof setInterval> | null = null
 
 function loadDefaultAgentId(): number | null {
   const val = localStorage.getItem(DEFAULT_AGENT_KEY)
@@ -82,15 +83,92 @@ async function loadCurrentUser(): Promise<void> {
 
 async function checkAppUpdate(): Promise<void> {
   try {
-    const res = await configApi.checkUpdate()
-    const data = res.data.data
-    if (data?.force_upgrade && data.has_update) {
-      forceUpgradeInfo.value = data
-    } else {
-      forceUpgradeInfo.value = null
+    const res = await updateApi.checkUpdate()
+    const info = res.data.data
+    if (!info?.has_update) return
+    // 仅强制更新自动后台下载并周期提醒，普通更新只在设置页由用户手动下载
+    if (info.force_upgrade) {
+      await updateApi.download().catch(() => {})
+      await refreshUpdateStatus()
+      startStatusPolling()
     }
   } catch {
     // 静默失败
+  }
+}
+
+async function refreshUpdateStatus(): Promise<void> {
+  try {
+    const res = await updateApi.getStatus()
+    updateStatus.value = res.data.data
+    updateForceRemind()
+  } catch {
+    // 静默失败
+  }
+}
+
+function startStatusPolling(): void {
+  if (statusTimer) return
+  statusTimer = setInterval(async () => {
+    await refreshUpdateStatus()
+    if (updateStatus.value && updateStatus.value.state !== 'downloading') {
+      stopStatusPolling()
+    }
+  }, 3000)
+}
+
+function stopStatusPolling(): void {
+  if (statusTimer) {
+    clearInterval(statusTimer)
+    statusTimer = null
+  }
+}
+
+function updateForceRemind(): void {
+  const st = updateStatus.value
+  if (st?.state === 'ready' && st.force_upgrade) {
+    if (!forceRemindTimer) {
+      showForceRemind()
+      forceRemindTimer = setInterval(showForceRemind, 5 * 60 * 1000)
+    }
+  } else if (forceRemindTimer) {
+    clearInterval(forceRemindTimer)
+    forceRemindTimer = null
+  }
+}
+
+function showForceRemind(): void {
+  const st = updateStatus.value
+  if (!st) return
+  ElNotification({
+    type: 'warning',
+    title: '更新提醒',
+    message: h('div', { style: 'display:flex; align-items:center; gap:12px' }, [
+      h('span', `新版本 v${st.version} 已就绪，建议尽快重启更新`),
+      h(
+        ElButton,
+        { type: 'primary', size: 'small', onClick: () => applyUpdate() },
+        () => '重启更新'
+      )
+    ]),
+    duration: 10000,
+    position: 'top-right'
+  })
+}
+
+async function applyUpdate(): Promise<void> {
+  try {
+    await updateApi.apply()
+    ElMessage.success('更新已启动，服务即将重启...')
+  } catch {
+    // handled by interceptor
+  }
+}
+
+function openDownloadUrl(): void {
+  const url = updateStatus.value?.download_url
+  if (url) {
+    window.open(url, '_blank')
   }
 }
 
@@ -395,22 +473,20 @@ function handleSessionPageChange(page: number): void {
   if (!chatAgentId.value) return
   store.loadSessions(chatAgentId.value, page)
 }
-
-function openDownloadUrl(): void {
-  if (forceUpgradeInfo.value?.download_url) {
-    window.open(forceUpgradeInfo.value.download_url, '_blank')
-  }
-}
 </script>
 
 <template>
   <el-config-provider :locale="zhCn">
     <div class="app-container" @click="handleAppClick">
-      <div v-if="forceUpgradeInfo" class="force-upgrade-banner">
-        <span class="banner-text">
-          发现新版本 {{ forceUpgradeInfo.latest_version }}，当前版本过低，请尽快升级
-        </span>
-        <el-button type="warning" size="small" @click="openDownloadUrl">前往下载</el-button>
+      <div
+        v-if="updateStatus?.state === 'ready'"
+        :class="['update-ready-banner', { 'force-style': updateStatus.force_upgrade }]"
+      >
+        <span class="banner-text">新版本 v{{ updateStatus.version }} 已就绪，建议重启更新</span>
+        <el-button type="warning" size="small" @click="applyUpdate">重启更新</el-button>
+        <el-button size="small" type="success" @click="openDownloadUrl">
+          前往下载
+        </el-button>
       </div>
       <div class="app-body">
         <template v-if="!isEditorPage">
@@ -765,18 +841,22 @@ function openDownloadUrl(): void {
   overflow: hidden;
 }
 
-.force-upgrade-banner {
+.update-ready-banner {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 16px;
   padding: 8px 16px;
-  background: #dc2626;
+  background: #3b82f6;
   color: #fff;
   font-size: 14px;
   font-weight: 500;
   flex-shrink: 0;
-  z-index: 9999;
+  z-index: 150;
+}
+
+.update-ready-banner.force-style {
+  background: #dc2626;
 }
 
 .banner-text {

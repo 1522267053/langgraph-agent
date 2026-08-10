@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -155,6 +156,67 @@ def copy_runtime_files() -> None:
     )
 
 
+def build_updater() -> None:
+    """PyInstaller --onefile 打包 updater.py 为独立更新器，并复制到主程序目录。
+
+    必须在 run_pyinstaller 之后执行（依赖 dist/langgraph_agent/ 已生成）。
+    updater 与主 exe 同级放置（_internal 之外），避免被自身替换逻辑覆盖。
+    """
+    run(
+        ["poetry", "run", "pyinstaller", "updater.spec", "--noconfirm"],
+        "pyinstaller updater.spec",
+    )
+
+    ext = ".exe" if IS_WINDOWS else ""
+    updater_src = PROJECT_ROOT / "dist" / f"updater{ext}"
+    dist_base = PROJECT_ROOT / "dist" / "langgraph_agent"
+    if not updater_src.exists():
+        raise BuildError(f"updater 打包产物不存在: {updater_src}")
+    shutil.copy2(updater_src, dist_base / f"updater{ext}")
+    print(f"  updater{ext} copied to {dist_base}/")
+
+
+_RELEASE_EXCLUDE_DIRS = {"data", "uploads", "logs", "workspace"}
+
+
+def package_release_zip(version: str) -> None:
+    """将 dist/langgraph_agent/ 打包为自动更新用的发布 zip。
+
+    仅包含 exe + updater + _internal，排除所有用户数据与运行时配置，
+    确保客户端解压时不会覆盖用户的 .env / data / uploads 等。
+    """
+    dist_base = PROJECT_ROOT / "dist" / "langgraph_agent"
+    if not dist_base.exists():
+        raise BuildError("主程序打包产物不存在，无法生成发布包")
+
+    tag = "windows" if IS_WINDOWS else "linux"
+    zip_path = PROJECT_ROOT / "dist" / f"langgraph_agent_{version}_{tag}.zip"
+
+    file_count = 0
+    total_bytes = 0
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for item in dist_base.rglob("*"):
+            if not item.is_file():
+                continue
+            rel_parts = item.relative_to(dist_base).parts
+            top = rel_parts[0]
+            if top in _RELEASE_EXCLUDE_DIRS:
+                continue
+            if top.startswith(".env"):
+                continue
+            arcname = str(item.relative_to(dist_base))
+            zf.write(item, arcname)
+            file_count += 1
+            total_bytes += item.stat().st_size
+
+    zip_size = zip_path.stat().st_size
+    print(f"  发布包: {zip_path.name}")
+    print(
+        f"  文件数: {file_count}, 原始: {total_bytes / 1024 / 1024:.1f}MB, "
+        f"压缩后: {zip_size / 1024 / 1024:.1f}MB"
+    )
+
+
 def print_banner(args: argparse.Namespace) -> None:
     print("=" * 60)
     print("  langgraph_agent PyInstaller Build")
@@ -188,6 +250,10 @@ def print_summary(args: argparse.Namespace, start_time: datetime) -> None:
     else:
         print("  All code: .pyc (PyInstaller default, Nuitka skipped)")
     print()
+    tag = "windows" if IS_WINDOWS else "linux"
+    print(f"  Updater: dist/langgraph_agent/updater{ext}")
+    print(f"  Release: dist/langgraph_agent_{args.version}_{tag}.zip")
+    print()
 
 
 def main() -> int:
@@ -216,7 +282,9 @@ def main() -> int:
     steps.extend(
         [
             ("Running PyInstaller", run_pyinstaller),
+            ("Building updater", build_updater),
             ("Copying runtime config files", copy_runtime_files),
+            ("Packaging release zip", lambda: package_release_zip(args.version)),
         ]
     )
 
