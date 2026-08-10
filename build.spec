@@ -28,7 +28,6 @@ datas = [
     ("frontend/dist", "frontend/dist"),
     ("skills", "skills"),
     ("app/utils/_static_imports.py", "app/utils"),
-    ("version.json", "."),
     ("logo.ico", "."),
 ]
 

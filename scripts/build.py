@@ -152,6 +152,9 @@ def copy_runtime_files() -> None:
         dist_base / "models.dev.api.json",
         "models.dev.api.json",
     )
+    _copy_file(
+        PROJECT_ROOT / "version.json", dist_base / "version.json", "version.json"
+    )
 
 
 def build_updater() -> None:
