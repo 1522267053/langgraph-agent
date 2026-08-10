@@ -27,7 +27,7 @@ from app.config.build_utils import (
     get_update_cache_dir,
 )
 from app.config.settings import settings
-from app.config.version import __version__, is_newer
+from app.config.version import get_version, is_newer
 from app.services.global_config_service import global_config_service
 
 logger = logging.getLogger(__name__)
@@ -44,10 +44,11 @@ class UpdateState(str, Enum):
 
 
 def _no_update_result() -> dict:
+    current = get_version()
     return {
         "has_update": False,
-        "current_version": __version__,
-        "latest_version": __version__,
+        "current_version": current,
+        "latest_version": current,
         "platform": "",
         "release_notes": "",
         "download_url": "",
@@ -106,7 +107,8 @@ class UpdateService:
                 self._latest_info = _no_update_result()
                 return self._latest_info
             latest = remote.get("version", "")
-            has_update = bool(latest and is_newer(latest, __version__))
+            current = get_version()
+            has_update = bool(latest and is_newer(latest, current))
             download_url = remote.get("download_url", "")
             if download_url and not download_url.startswith("http"):
                 from urllib.parse import urlparse
@@ -119,8 +121,8 @@ class UpdateService:
                     download_url = f"{download_url}{qsep}token={token}"
             info = {
                 "has_update": has_update,
-                "current_version": __version__,
-                "latest_version": latest or __version__,
+                "current_version": current,
+                "latest_version": latest or current,
                 "platform": remote.get("platform", ""),
                 "release_notes": remote.get("release_notes", ""),
                 "download_url": download_url,
@@ -297,13 +299,14 @@ class UpdateService:
     # ---- 状态查询 ----
 
     def get_status(self) -> dict:
+        current = get_version()
         return {
             "state": self._state,
             "version": self._version,
             "progress": self._progress,
             "error": self._error,
-            "current_version": __version__,
-            "latest_version": self._latest_info.get("latest_version", __version__),
+            "current_version": current,
+            "latest_version": self._latest_info.get("latest_version", current),
             "has_update": self._latest_info.get("has_update", False),
             "download_url": self._latest_info.get("download_url", ""),
             "file_size": self._latest_info.get("file_size", 0),

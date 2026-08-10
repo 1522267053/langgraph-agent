@@ -309,12 +309,12 @@ def create_tray_icon() -> None:
 
     image = _load_icon_image()
 
-    from app.config.version import __version__
+    from app.config.version import get_version
 
     _tray_icon = pystray.Icon(
         "langgraph_agent",
         image,
-        f"智能体平台 v{__version__}（启动中...）",
+        f"智能体平台 v{get_version()}（启动中...）",
         _build_tray_menu(),
     )
     _tray_icon.run_detached()
@@ -339,9 +339,9 @@ def run_with_tray(app) -> None:
         if not _wait_for_server(timeout=30):
             logger.warning("服务在 30 秒内未就绪，仍创建托盘图标")
         stop_loading_server()
-        from app.config.version import __version__
+        from app.config.version import get_version
 
-        icon.title = f"智能体平台 v{__version__}"
+        icon.title = f"智能体平台 v{get_version()}"
         icon.notify("服务已就绪", "智能体平台")
 
     threading.Thread(

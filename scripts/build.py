@@ -11,6 +11,7 @@ Examples:
 """
 
 import argparse
+import json
 import platform
 import re
 import shutil
@@ -54,14 +55,11 @@ def run_steps(steps: list[tuple[str, Callable[[], None]]]) -> None:
 
 
 def set_version(version: str) -> None:
-    version_file = PROJECT_ROOT / "app" / "config" / "version.py"
-    content = version_file.read_text(encoding="utf-8")
-    content = re.sub(
-        r'__version__\s*=\s*"[^"]*"',
-        f'__version__ = "{version}"',
-        content,
+    version_json = PROJECT_ROOT / "version.json"
+    version_json.write_text(
+        json.dumps({"version": version}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
-    version_file.write_text(content, encoding="utf-8")
 
     pyproject = PROJECT_ROOT / "pyproject.toml"
     content = pyproject.read_text(encoding="utf-8")
