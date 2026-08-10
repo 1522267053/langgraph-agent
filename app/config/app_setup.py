@@ -106,13 +106,13 @@ def _register_health_check(app: FastAPI) -> None:
     @app.get("/api/health", tags=["健康检查"])
     async def health_check():
         """健康检查"""
-        from app.config.version import __version__
+        from app.config.version import get_version
 
         return ApiResponse.success(
             {
                 "message": "欢迎使用langraph智能体平台API",
                 "status": "running",
-                "version": __version__,
+                "version": get_version(),
             }
         )
 
