@@ -61,16 +61,45 @@ def _is_process_alive(pid: int) -> bool:
 
 
 def _wait_process_exit(pid: int, timeout: int, log_file) -> bool:
-    """等待进程退出，返回 True 表示已退出"""
+    """等待进程退出，超时则强制终止。返回 True 表示进程已退出"""
     deadline = time.time() + timeout
     while time.time() < deadline:
         if not _is_process_alive(pid):
             _log(log_file, f"主进程 {pid} 已退出")
             return True
         time.sleep(0.5)
+    if not _is_process_alive(pid):
+        _log(log_file, f"主进程 {pid} 已退出")
+        return True
+    _log(log_file, f"等待超时（{timeout}s），主进程仍存活，强制终止")
+    _force_kill(pid, log_file)
+    time.sleep(2)
     alive = _is_process_alive(pid)
-    _log(log_file, f"等待超时（{timeout}s），进程{'仍存活' if alive else '已退出'}")
+    if alive:
+        _log(log_file, f"强制终止后主进程 {pid} 仍存活，更新中止")
+    else:
+        _log(log_file, f"主进程 {pid} 已强制终止")
     return not alive
+
+
+def _force_kill(pid: int, log_file) -> None:
+    """强制终止进程（跨平台兜底）"""
+    import signal
+
+    try:
+        if IS_WIN:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                timeout=10,
+            )
+        else:
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(3)
+            if _is_process_alive(pid):
+                os.kill(pid, signal.SIGKILL)
+    except Exception as e:
+        _log(log_file, f"强制终止失败: {e}")
 
 
 def _popen_detached(cmd: list[str], cwd: str | None = None) -> subprocess.Popen:
