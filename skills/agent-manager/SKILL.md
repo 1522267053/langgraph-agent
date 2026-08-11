@@ -22,6 +22,7 @@ description: |
 4. **Python 节点输出双层包装**：返回值被包在 `{stdout, stderr, result, success}` 中，引用路径为 `nodes.<key>.result.<field>` 而非 `nodes.<key>.<field>`
 5. **创建完毕后必须测试**：`POST /api/execution/stream/{id}` 验证流程能正常执行，确认输出符合预期后再告知用户完成
 6. **LLM 的 provider/model/api_key/base_url 留空 `""`**：系统自动注入全局默认值
+7. **节点标识一律用 `node_key`，不是 `id`**：所有 `/api/ai/flow/*` 节点操作接口（创建/配置/删除）都通过 `node_key`（逻辑键名）定位节点。`/detail` 返回的 `id` 是数据库主键，仅用于流程路径 `{id}`，**不能**作为 `batch/config` 等接口请求体的节点标识
 
 ## API 速查
 
@@ -180,6 +181,22 @@ POST /api/ai/flow/{id}/nodes/batch
 ```
 
 每个节点必填 `position_x` / `position_y`。建议：start(100,200)、llm(350,200)、end(600,200)
+
+### 批量更新配置示例
+
+```json
+POST /api/ai/flow/{id}/nodes/batch/config
+{
+  "nodes": [
+    {"node_key": "llm", "base_config": {"required_tools": ["send_wecom_message"]}},
+    {"node_key": "end", "base_config": {"output_variables": "[{\"name\":\"result\",\"source\":\"nodes.llm.result\",\"type\":\"string\"}]"}}
+  ]
+}
+```
+
+- `node_key` **必须**取自 `nodes/batch` 创建接口返回或 `/detail` 详情的节点 `node_key` 字段，**不是** `id`（数据库主键）
+- `base_config` 为字段级合并：只传要修改的字段，未传的键保留原值
+- 可选的顶层更新字段：`node_name`、`position_x`、`position_y`
 
 ### 创建边示例
 
