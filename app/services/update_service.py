@@ -13,6 +13,8 @@ import hashlib
 import json
 import logging
 import os
+import threading
+import time
 import zipfile
 from enum import Enum
 from pathlib import Path
@@ -265,7 +267,7 @@ class UpdateService:
 
         self._set_state(UpdateState.APPLYING)
         self._launch_updater(str(updater_path), str(zip_path))
-        asyncio.create_task(self._delayed_exit())
+        threading.Thread(target=self._delayed_exit, daemon=True).start()
         return {"started": True}
 
     def _launch_updater(self, updater_path: str, zip_path: str) -> None:
@@ -290,9 +292,13 @@ class UpdateService:
             subprocess.Popen(cmd, start_new_session=True, close_fds=True)
         logger.info("updater 已启动: %s", updater_path)
 
-    async def _delayed_exit(self) -> None:
-        """延迟退出主进程，让 apply 响应先返回前端"""
-        await asyncio.sleep(1.5)
+    def _delayed_exit(self) -> None:
+        """延迟退出主进程（daemon 线程），让 apply 响应先返回前端
+
+        用独立线程而非 asyncio.create_task，避免未保存引用的 task 被 GC
+        导致协程不执行（Linux 打包环境曾因此主进程不退出）。
+        """
+        time.sleep(1.5)
         logger.info("主进程退出，交由 updater 接管")
         os._exit(0)
 
