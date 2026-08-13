@@ -473,7 +473,7 @@ onMounted(() => {
             </div>
           </el-descriptions-item>
           <el-descriptions-item label="描述">
-            {{ detailGateway.description || '-' }}
+            <div class="desc-text">{{ detailGateway.description || '-' }}</div>
           </el-descriptions-item>
           <el-descriptions-item label="默认输入参数">
             <pre v-if="detailGateway.input_config" class="json-preview">{{
@@ -602,6 +602,16 @@ onMounted(() => {
   max-height: 200px;
   overflow: auto;
   margin: 0;
+}
+
+.desc-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+  line-height: 1.6;
+  color: #475569;
 }
 
 .proto-guide {
