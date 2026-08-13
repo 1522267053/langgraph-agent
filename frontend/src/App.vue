@@ -158,7 +158,16 @@ function showForceRemind(): void {
 
 async function applyUpdate(): Promise<void> {
   try {
-    await updateApi.apply()
+    const res = await updateApi.apply()
+    const data = res.data.data
+    if (data?.manual_update) {
+      ElMessageBox.alert(
+        `${data.message || '检测到服务由 systemd 托管，请手动更新'}<br><br><strong>更新包路径：</strong><br><code>${data.package_path}</code>`,
+        '需要手动更新',
+        { confirmButtonText: '我知道了', type: 'warning', dangerouslyUseHTMLString: true }
+      )
+      return
+    }
     ElMessage.success('更新已启动，服务即将重启...')
   } catch {
     // handled by interceptor

@@ -61,6 +61,9 @@ class UpdateApi:
             result = await update_service.apply_update()
             if "error" in result:
                 return ApiResponse.error(msg=result["error"])
+            if result.get("manual_update"):
+                # systemd 环境：返回标记供前端弹窗引导手动更新，不触发"更新已启动"
+                return ApiResponse.success(data=result)
             return ApiResponse.success(data=result, msg="更新已启动，即将重启")
 
         @self.router.post(
