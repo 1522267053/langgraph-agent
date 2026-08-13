@@ -95,6 +95,13 @@ export interface UpdateResult {
   ts?: string
 }
 
+export interface ApplyUpdateResult {
+  started?: boolean
+  manual_update?: boolean
+  package_path?: string
+  message?: string
+}
+
 export interface UpdateStatus {
   state: UpdateState
   version: string
@@ -122,7 +129,7 @@ export const updateApi = {
     return post<UpdateStatus>('/update/download')
   },
   apply() {
-    return post('/update/apply')
+    return post<ApplyUpdateResult>('/update/apply')
   },
   cancel() {
     return post<UpdateStatus>('/update/cancel')

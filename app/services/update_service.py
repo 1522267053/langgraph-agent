@@ -24,6 +24,7 @@ import httpx
 
 from app.config.build_utils import (
     BASE_DIR,
+    IS_LINUX,
     IS_PACKAGED,
     IS_WINDOWS,
     get_update_cache_dir,
@@ -33,6 +34,27 @@ from app.config.version import get_version, is_newer
 from app.services.global_config_service import global_config_service
 
 logger = logging.getLogger(__name__)
+
+
+def _is_under_systemd() -> bool:
+    """检测当前进程是否由 systemd 作为 service 管理。
+
+    systemd 默认 KillMode=control-group 会在主进程退出时连带终止同 cgroup 的 updater，
+    且 Restart= 策略会抢占端口，导致自动更新流程不可靠。检测到该环境时引导手动更新。
+    """
+    if not IS_LINUX:
+        return False
+    # systemd 拉起 service 时必设 INVOCATION_ID（最可靠标志），nohup/前台运行不会有
+    if os.environ.get("INVOCATION_ID"):
+        return True
+    # 兜底：cgroup 路径含 systemd unit 标识
+    try:
+        cgroup = Path("/proc/self/cgroup").read_text(encoding="utf-8")
+        if ".service" in cgroup or ".slice" in cgroup:
+            return True
+    except OSError:
+        pass
+    return False
 
 
 class UpdateState(str, Enum):
@@ -257,6 +279,18 @@ class UpdateService:
             self._error = "更新包文件丢失"
             self._set_state(UpdateState.FAILED)
             return {"error": self._error}
+
+        # systemd 托管环境下自动替换会与进程管理冲突（updater 被连坐终止 + 端口抢占），
+        # 引导手动更新，状态保持 READY 不污染
+        if _is_under_systemd():
+            return {
+                "manual_update": True,
+                "package_path": str(zip_path),
+                "message": (
+                    "检测到服务由 systemd 托管，自动重启替换会与进程管理冲突。"
+                    "请手动更新：停止服务(systemctl stop) → 解压替换程序文件 → 启动服务(systemctl start)"
+                ),
+            }
 
         ext = ".exe" if IS_WINDOWS else ""
         updater_path = BASE_DIR / f"updater{ext}"
