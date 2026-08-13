@@ -18,11 +18,10 @@ description: |
 
 1. **创建/更新节点前，必须先查询 config-schema**：`GET /api/ai/flow/node-types/{type}/config-schema`
 2. **`base_config` 字段级合并**：只传入要修改的字段即可，未传的字段保留原值（建议更新前 `GET /api/ai/flow/{id}/detail` 了解当前配置）
-3. **`output_variables` 必须是 JSON 对象数组** `[{"name","source","type"}]`，不能是字符串，否则执行时报错
+3. **`output_variables` 字段类型为 string**：后端存储为 JSON 序列化字符串，传入时需用 `json.dumps()` 把 `[{...}]` 序列化为字符串。**直接传对象数组会被 Pydantic 拒绝，报"Input should be a valid list"**。示例：`"output_variables": "[{\"name\":\"content\",\"source\":\"nodes.llm.result\",\"type\":\"string\"}]"`
 4. **Python 节点输出双层包装**：返回值被包在 `{stdout, stderr, result, success}` 中，引用路径为 `nodes.<key>.result.<field>` 而非 `nodes.<key>.<field>`
 5. **创建完毕后必须测试**：`POST /api/execution/stream/{id}` 验证流程能正常执行，确认输出符合预期后再告知用户完成
 6. **LLM 的 provider/model/api_key/base_url 留空 `""`**：系统自动注入全局默认值
-7. **节点标识一律用 `node_key`，不是 `id`**：所有 `/api/ai/flow/*` 节点操作接口（创建/配置/删除）都通过 `node_key`（逻辑键名）定位节点。`/detail` 返回的 `id` 是数据库主键，仅用于流程路径 `{id}`，**不能**作为 `batch/config` 等接口请求体的节点标识
 
 ## API 速查
 
@@ -99,15 +98,31 @@ POST /api/agent/{agent_id}/sessions/{session_id}/chat
 
 ```json
 {
-  "content": "你好",
-  "params": {}
+  "content": "[张三](msg_001): 你好",
+  "params": {"bot_name": "吴国邦", "chat_type": "group"}
 }
 ```
 
-- `content`：必填，用户消息内容
-- `params`：可选，扩展参数（含文件字段等）
+- `content`：必填，用户消息内容（注意：Agent 模式下应使用 flow 的 `input_schema` 中定义的字段值或包含模板变量 `{{...}}`）
+- `params`：必填，对应 flow 的 `input_schema.fields` 定义。**每个字段都要传值**（包括 `required=false` 的可选字段，否则模板渲染失败）。也可以传空 dict `{}`（某些 HTTP 客户端会将空 dict 序列化为空字符串 `""`，导致后端 Pydantic 报错"Input should be a valid dictionary"——务必传至少一个 key-value 对）
 
-SSE 事件：`flow_start` → `node_start` → `node_thinking/node_content` → `node_done` → ... → `flow_done/waiting_human/error`
+> **常见陷阱**：
+> - HTTP 客户端把空 dict `{}` 序列化为空字符串 `""` 会报"params: Input should be a valid dictionary"
+> - `content` 字段名是固定的，不会自动用 `input_schema` 的字段名替换；模板变量在 LLM 节点的 `user_prompt` 里通过 `{{input.field_name}}` 引用
+
+SSE 事件：`flow_start` → `node_start` → `node_thinking/node_content` → `node_done` → `token_usage` → ... → `flow_done/waiting_human/error`
+
+> **SSE 事件完整列表**：
+> - `flow_start`：流程开始，含 `flow_id`、`execution_id`
+> - `node_start`：节点开始执行
+> - `node_thinking`：LLM 思考过程（流式）
+> - `node_content`：LLM 输出内容（流式，逐 token 推送）
+> - `node_done`：节点完成
+> - `token_usage`：LLM token 消耗，含 `prompt_tokens`/`completion_tokens`/`total_tokens`/`model`/`provider`/`cache_read_tokens`/`cache_write_tokens`/`reasoning_tokens`
+> - `flow_done`：流程成功完成，`data.output_data` 含 end 节点 output_variables 解析结果
+> - `waiting_human`：Human 节点暂停等待用户输入，含 `execution_id`/`node_key`/`question`
+> - `error`：流程出错
+> - **ws-gateway 远程工具**还会推送 `tool_invoke`，请求客户端执行本地函数
 
 #### 3. 人工输入恢复执行
 
@@ -129,9 +144,11 @@ POST /api/execution/human-input-stream/{execution_id}
 
 | | 智能体 (`agent`) | 工作流 (`flow`) |
 |--|-----------------|----------------|
-| 结构 | start→llm→end + 工具节点 | 任意 DAG |
+| 结构 | **必须** start→llm→end + 工具节点 | 任意 DAG |
 | LLM | 仅限 1 个 | 不限 |
 | 支持节点 | start/end/condition/intent_router/llm + 工具节点(mcp/knowledge/skill/python/shell/memory/todo/agenda/api/sub_agent) | 所有节点类型 |
+
+> ⚠️ **Agent 强制要求**：Agent 必须包含 **end 节点**。`/api/agent/{id}/sessions/{sid}/chat` 接口会在缺少 end 节点时报错「智能体缺少结束节点」。即使 Flow 执行（`/api/execution/stream/{id}`）对 end 缺失宽容，但 Agent 对话路径强制校验。
 
 > **媒体文件生成**: python 工具的 main() 返回 `{"__save_file__": true, "content_base64": ..., "mime_type": ...}` 可自动保存并在聊天中预览；api 工具设置 download_file=true 下载二进制文件同样自动预览。详见 references/api.md。
 
@@ -182,21 +199,34 @@ POST /api/ai/flow/{id}/nodes/batch
 
 每个节点必填 `position_x` / `position_y`。建议：start(100,200)、llm(350,200)、end(600,200)
 
-### 批量更新配置示例
+> **技巧**：end 节点的 `output_variables` 可以在创建时直接通过 `base_config.output_variables` 一并传入（JSON 字符串格式），不必走 `batch/config` 二次更新：
+> ```json
+> {"node_type": "end", "node_key": "end", "node_name": "结束", "position_x": 600, "position_y": 200,
+>  "base_config": {"output_variables": "[{\"name\":\"content\",\"source\":\"nodes.llm.result\",\"type\":\"string\"}]"}}
+> ```
+
+### 批量更新节点配置示例
 
 ```json
 POST /api/ai/flow/{id}/nodes/batch/config
 {
   "nodes": [
-    {"node_key": "llm", "base_config": {"required_tools": ["send_wecom_message"]}},
-    {"node_key": "end", "base_config": {"output_variables": "[{\"name\":\"result\",\"source\":\"nodes.llm.result\",\"type\":\"string\"}]"}}
+    {
+      "node_key": "end",
+      "base_config": {"output_variables": "[{\"name\":\"content\",\"source\":\"nodes.llm.result\",\"type\":\"string\"}]"}
+    },
+    {
+      "node_key": "llm",
+      "base_config": {"required_tools": ["send_reply"]}
+    }
   ]
 }
 ```
 
-- `node_key` **必须**取自 `nodes/batch` 创建接口返回或 `/detail` 详情的节点 `node_key` 字段，**不是** `id`（数据库主键）
-- `base_config` 为字段级合并：只传要修改的字段，未传的键保留原值
-- 可选的顶层更新字段：`node_name`、`position_x`、`position_y`
+> ⚠️ **常见陷阱**：
+> - body 字段名必须是 **`nodes`**（不是 `configs`），传错会被 Pydantic 拒绝
+> - `output_variables` 必须是 **JSON 字符串**（见核心规则 #3）
+> - `base_config` 字段级合并：只传要修改的字段，未传的字段保留原值
 
 ### 创建边示例
 
@@ -209,6 +239,25 @@ POST /api/ai/flow/{id}/edges/batch
   ]
 }
 ```
+
+> ⚠️ **常见陷阱**：
+> - body 字段名必须是 **`edges`**（根级数组是错误格式），传错会被 Pydantic 拒绝
+> - 每条边的 `source_node_key` / `target_node_key` 必须对应已存在的节点
+> - 删除节点时（`nodes/batch/delete`）会**级联删除**所有相关边
+> - **HTTP 客户端 bug 提示**：某些 HTTP 客户端在传输 `{"edges": [...]}` 时可能把根 dict 错误地序列化为其他格式。如果遇到 `body -> edges: Input should be a valid list` 错误，请检查客户端的 JSON 序列化逻辑（特别是 dict 中含特殊字符时）
+
+### 批量删除边示例
+
+```json
+POST /api/ai/flow/{id}/edges/batch/delete
+{
+  "edges": [
+    {"source_node_key": "start", "target_node_key": "llm", "source_handle": "default", "target_handle": "default"}
+  ]
+}
+```
+
+> 删除边的 body 字段名同样是 **`edges`**，数组元素为要删除的边定义（与创建时格式一致，通过完整四元组匹配）。
 
 ### 工具节点连接到 LLM
 

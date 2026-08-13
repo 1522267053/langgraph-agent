@@ -14,7 +14,7 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 | GET | `/api/ai/flow/node-types` | 所有节点类型 |
 | GET | `/api/ai/flow/node-types/{type}/config-schema` | 节点配置字段 |
 | POST | `/api/ai/flow/{id}/nodes/batch` | 批量创建节点（node_key 省略则自动生成） |
-| POST | `/api/ai/flow/{id}/nodes/batch/config` | 批量更新配置（节点标识用 node_key，base_config 字段级合并） |
+| POST | `/api/ai/flow/{id}/nodes/batch/config` | 批量更新配置（base_config 字段级合并） |
 | POST | `/api/ai/flow/{id}/nodes/batch/delete` | 批量删除节点（级联删边） |
 | POST | `/api/ai/flow/{id}/edges/batch` | 批量创建边 |
 | POST | `/api/ai/flow/{id}/edges/batch/delete` | 批量删除边 |
@@ -22,58 +22,6 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 | POST | `/api/execution/stream/{id}` | 执行 Flow（SSE） |
 | POST | `/api/agent/{id}/sessions` | 创建 Agent 会话 |
 | POST | `/api/agent/{id}/sessions/{sid}/chat` | Agent 聊天（SSE） |
-
-## 节点操作请求体示例
-
-> ⚠️ **节点标识一律用 `node_key`**（节点的逻辑键名），`/detail` 返回的 `id` 是数据库主键，**不能**用于 `nodes/batch/config`、`nodes/batch/delete` 等接口。
-
-### POST /api/ai/flow/{id}/nodes/batch（批量创建）
-
-```json
-{
-  "nodes": [
-    {"node_type": "start", "node_key": "start", "node_name": "开始", "position_x": 100, "position_y": 200},
-    {"node_type": "llm", "node_key": "llm", "node_name": "AI助手", "position_x": 350, "position_y": 200,
-     "base_config": {"provider": "", "model": "", "system_prompt": "你是..."}},
-    {"node_type": "end", "node_key": "end", "node_name": "结束", "position_x": 600, "position_y": 200}
-  ]
-}
-```
-
-`node_type` 必填；`node_key` 省略时自动生成，冲突时自动追加序号。响应 `created_nodes` 中的 `node_key` 供后续配置/建边使用。
-
-### POST /api/ai/flow/{id}/nodes/batch/config（批量配置）
-
-```json
-{
-  "nodes": [
-    {"node_key": "llm", "base_config": {"required_tools": ["send_wecom_message"]}},
-    {"node_key": "end", "base_config": {"output_variables": "[{\"name\":\"result\",\"source\":\"nodes.llm.result\",\"type\":\"string\"}]"}}
-  ]
-}
-```
-
-- `node_key` **必填**，取自创建接口返回值或 `/detail` 详情的节点 `node_key` 字段
-- `base_config` 字段级合并：只传要修改的字段，未传的键保留原值
-- 可选的顶层更新字段：`node_name`、`position_x`、`position_y`
-- ❌ 传 `{"id": 106, "base_config": {...}}` 会报 `node_key: Field required`
-
-### POST /api/ai/flow/{id}/nodes/batch/delete（批量删除）
-
-```json
-{"node_keys": ["llm", "python_1"]}
-```
-
-### POST /api/ai/flow/{id}/edges/batch（批量创建边）
-
-```json
-{
-  "edges": [
-    {"source_node_key": "start", "target_node_key": "llm", "source_handle": "default", "target_handle": "default"},
-    {"source_node_key": "python_1", "target_node_key": "llm", "source_handle": "tools", "target_handle": "tools"}
-  ]
-}
-```
 
 ## 工具信息接口详情
 
@@ -137,7 +85,7 @@ SSE 事件: `flow_start` → `node_start` → `node_thinking` / `node_content` /
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `inputFields` | array | 输入字段定义，元素: `{name, type, description, required, accept?, multiple?, max_size?}` |
+| `input_variables` | array | 流程入口的输入参数定义，元素: `{name, type, description, placeholder?, required?, accept?, multiple?, max_size?}`。**注意**：通常不需要直接配置此字段，flow 的 `input_schema` 在 `POST /api/ai/flow/create` 时已通过顶层 `input_schema` 设置，start 节点会自动同步 |
 
 ### end
 
@@ -310,6 +258,72 @@ memory 分类: `decision/preference/lesson/relation/event/task/other`
 |---|---|---|
 | `default` | `default` | 标准数据流 |
 | `tools` | `tools` | 工具边，目标必须 LLM |
+
+---
+
+## 批量操作接口完整字段名（重要！）
+
+下表汇总批量操作接口的 body 字段名（这些字段名容易混淆，必须严格匹配）：
+
+| 接口 | body 字段 | 元素格式 | 说明 |
+|------|----------|---------|------|
+| `POST /api/ai/flow/{id}/nodes/batch` | `nodes` | `{node_type, node_key, node_name, position_x, position_y, base_config?}` | 批量创建节点 |
+| `POST /api/ai/flow/{id}/nodes/batch/config` | `nodes` | `{node_key, base_config}` | 批量更新节点配置（字段级合并） |
+| `POST /api/ai/flow/{id}/nodes/batch/delete` | `node_keys` | `[string, ...]` | 批量删除节点（**级联删边**） |
+| `POST /api/ai/flow/{id}/edges/batch` | `edges` | `{source_node_key, target_node_key, source_handle, target_handle}` | 批量创建边 |
+| `POST /api/ai/flow/{id}/edges/batch/delete` | `edges` | 同上 | 批量删除边（按完整四元组匹配） |
+
+> ⚠️ **特别注意**：
+> - `nodes/batch/delete` 字段名是 **`node_keys`**（数组，元素是字符串），不是 `nodes`！
+> - `nodes/batch` 和 `nodes/batch/config` 字段名都是 `nodes`（数组，元素是对象）
+> - `output_variables` 字段值必须是 **JSON 字符串**，不是对象数组（见 SKILL.md 核心规则 #3）
+
+### 完整请求示例
+
+```json
+// 1. 批量创建节点
+POST /api/ai/flow/16/nodes/batch
+{
+  "nodes": [
+    {"node_type": "start", "node_key": "start", "node_name": "开始", "position_x": 100, "position_y": 200},
+    {"node_type": "llm", "node_key": "llm", "node_name": "AI助手", "position_x": 350, "position_y": 200,
+     "base_config": {"system_prompt": "你是...", "user_prompt": "{{input.message}}"}},
+    {"node_type": "end", "node_key": "end", "node_name": "结束", "position_x": 600, "position_y": 200,
+     "base_config": {"output_variables": "[{\"name\":\"content\",\"source\":\"nodes.llm.result\",\"type\":\"string\"}]"}}
+  ]
+}
+
+// 2. 批量更新节点配置
+POST /api/ai/flow/16/nodes/batch/config
+{
+  "nodes": [
+    {"node_key": "llm", "base_config": {"required_tools": ["send_reply"]}}
+  ]
+}
+
+// 3. 批量删除节点
+POST /api/ai/flow/16/nodes/batch/delete
+{
+  "node_keys": ["end_old", "llm_old"]
+}
+
+// 4. 批量创建边
+POST /api/ai/flow/16/edges/batch
+{
+  "edges": [
+    {"source_node_key": "start", "target_node_key": "llm", "source_handle": "default", "target_handle": "default"},
+    {"source_node_key": "llm", "target_node_key": "end", "source_handle": "default", "target_handle": "default"}
+  ]
+}
+
+// 5. 批量删除边
+POST /api/ai/flow/16/edges/batch/delete
+{
+  "edges": [
+    {"source_node_key": "old_node", "target_node_key": "llm", "source_handle": "default", "target_handle": "default"}
+  ]
+}
+```
 | `true` / `false` | `default` | condition 分支（必须同时有 true+false） |
 | `<intent_key>` | `default` | intent_router 分支（`default` 为兜底） |
 
