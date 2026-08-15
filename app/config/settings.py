@@ -29,10 +29,10 @@ class Settings(BaseSettings):
     database_password: str = Field(default="", alias="DATABASE_PASSWORD")
     database_name: str = Field(default="langgraph_agent", alias="DATABASE_NAME")
     database_pool_size: int = Field(
-        default=50, alias="DATABASE_POOL_SIZE"
-    )  # 连接池大小（建议 >= AI_MATCH_MAX_WORKERS + 10）
+        default=20, alias="DATABASE_POOL_SIZE"
+    )  # 连接池大小（SQLite / MySQL 均生效）
     database_max_overflow: int = Field(
-        default=30, alias="DATABASE_MAX_OVERFLOW"
+        default=10, alias="DATABASE_MAX_OVERFLOW"
     )  # 连接池溢出大小（总连接数 = POOL_SIZE + MAX_OVERFLOW）
 
     # 应用配置
