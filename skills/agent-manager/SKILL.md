@@ -447,20 +447,6 @@ POST /api/ai/flow/{id}/edges/batch/delete
 - **会话保留**：子 Agent 的会话保留在其聊天页面，标题为 `[子Agent调用] {task[:40]}`
 - **取消传播**：父 Agent 被取消时自动中断子 Agent
 
-## 已修复 Bug 记录
-
-| # | 问题 | 根因 |
-|---|------|------|
-| #1 | LLM 执行后 `llm_result`/`thinking` 不保存 | `_run_react_loop` 缺少 `state.set_node_variable()` |
-| #2 | intent_router 无法 batch 创建 | Pydantic 验证列表缺少该类型 |
-| #3 | knowledge 空字符串报错 | 空字符串未转 `None`（需重启生效） |
-| #4 | card 执行报 `'str' object has no attribute 'get'` | 子 end 的 `output_variables` 存为字符串 |
-| #5 | intent_router 分支边被 Pydantic 拦截 | `validate_handle` 已改为动态校验 |
-| #6 | Python 节点报 `__name__ is an invalid attribute` | RestrictedPython 禁止 dunder 属性，需用类型字典替代 `type(x).__name__` |
-| #7 | Python 节点报 `main() missing required positional argument` | 数据流模式下未配置 `input_variables`，参数无法注入 |
-| #8 | intent_router 所有规则不匹配、走 default | `input_variable` 默认 `input.question`，与流程输入字段名（通常为 `message`）不匹配 |
-| #9 | loop 报 `源变量 'nodes.xxx.yyy' 不存在` | `input_mappings.source` 引用了另一条分支上的节点输出，该节点未执行 |
-
 ## Agent 运行时自我更新约束
 
 Agent 在对话执行过程中**能否修改自身流程图**，受以下机制约束。
