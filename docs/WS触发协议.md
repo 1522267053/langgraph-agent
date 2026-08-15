@@ -43,11 +43,14 @@ ws://<host>:<port>/ws/trigger/{token}
 |-------|------|
 | `4404` | token 无效（网关不存在） |
 | `4403` | 网关已禁用（`is_enabled=false`） |
+| `4408` | 连接空闲超时（默认 120 秒未收到任何消息，含 ping） |
 | `4409` | Agent 类型已有活跃连接 |
 
 ### 4. 心跳
 
 客户端发送纯文本 `ping`，服务端回复纯文本 `pong`（非 JSON）。
+
+> **接入义务**：客户端必须周期性发送 `ping`（建议间隔 30 秒，须小于服务端空闲超时 `WS_TRIGGER_IDLE_TIMEOUT`，默认 120 秒）。超过空闲超时未收到任何消息的连接将被服务端以 `4408` 断开——半开连接（NAT 超时、进程被杀）会永久占用 Agent 网关的唯一连接槽，心跳是唯一的回收手段。
 
 ---
 
@@ -129,7 +132,41 @@ Agent/Flow 执行中触发人工交互（Human 节点 `interrupt()`）后，执�
 - 恢复可能再次触发 `human_input_required`（多轮交互），继续 resume 即可
 - 响应事件流与 execute 同构（`call_started` 的 `data` 含 `resumed: true` 和 `session_id`/`execution_id`）
 
-### 3. register_tools — 注册远程工具（仅 Agent 类型）
+### 3. tool_approval — 确认/拒绝待审批的工具调用（仅 Agent 类型）
+
+Agent 执行中 LLM 调用了开启审批的工具时，事件流下发 `tool_approval_required`（含 `data.tool_calls` 待审批调用列表），执行挂起等待确认。客户端征询用户后通过本指令恢复：
+
+```json
+{
+  "action": "tool_approval",
+  "session_id": 15,
+  "result": "approved"
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `session_id` | 必填。待审批的会话 ID（须归属该网关） |
+| `result` | 必填。`approved`（放行执行）或 `rejected`（拒绝，工具收到拒绝结果继续推理） |
+
+响应：`{"type": "tool_approval_result", "data": {"session_id": 15, "resolved": true}}`。`resolved=false` 表示该会话当前没有待审批的工具（可能已超时或已完成），客户端可忽略。
+
+### 4. cancel — 取消正在执行的会话/执行记录
+
+```json
+{ "action": "cancel", "session_id": 15 }
+```
+
+| 字段 | 说明 |
+|------|------|
+| `session_id` | **Agent 类型必填**：待取消的会话 ID |
+| `execution_id` | **Flow 类型必填**：待取消的执行记录 ID |
+
+- Agent：设置中断标志并取消挂起的工具审批，执行循环在检测点自行停止，最终下发 `flow_done`（`status=cancelled`）
+- Flow：中断标志 + 执行状态落库 CANCELLED（仅 RUNNING / WAITING_HUMAN 状态可取消）
+- 响应：`{"type": "cancel_accepted", "data": {"session_id": 15}}`（或 `execution_id`）；目标不可取消时返回 `error` 事件
+
+### 5. register_tools — 注册远程工具（仅 Agent 类型）
 
 客户端注册的函数可被 Agent 在执行中反向调用（服务端下发 `tool_invoke`，客户端返回 `tool_result`）：
 
@@ -193,7 +230,7 @@ Agent 调用远程工具时服务端下发：
 - `result` 为字符串（推荐 JSON 字符串，与内置工具返回格式一致）
 - 并发执行时多个 `tool_invoke` 可能交错，`call_id` 为 uuid，按其匹配
 
-### 4. unregister_tools — 注销远程工具
+### 6. unregister_tools — 注销远程工具
 
 ```json
 { "action": "unregister_tools" }
@@ -201,7 +238,7 @@ Agent 调用远程工具时服务端下发：
 
 响应：`{"type": "tools_unregistered", "data": {}}`
 
-### 5. 会话管理指令（仅 Agent 类型）
+### 7. 会话管理指令（仅 Agent 类型）
 
 | action | 参数 | 响应事件 | 说明 |
 |--------|------|---------|------|
@@ -225,6 +262,8 @@ Agent 调用远程工具时服务端下发：
 | `call_started` | execute/resume 开始（`data.call_id`、`data.session_id`） |
 | `tools_registered` / `tools_unregistered` | 工具注册/注销回执 |
 | `tool_invoke` | Agent 反向调用远程工具 |
+| `tool_approval_result` | tool_approval 指令回执（`data.resolved` 是否命中待审批） |
+| `cancel_accepted` | cancel 指令已受理（后续下发 `flow_done` status=cancelled） |
 | `session_*` / `messages_list` / `message_deleted` | 会话管理回执 |
 
 ### 执行事件（转发自执行引擎）
@@ -242,7 +281,7 @@ Agent 调用远程工具时服务端下发：
 | `node_content` | `node_key`、`content` | LLM 回答内容（流式增量） |
 | `tool_call_start` | `node_key`、`tool_name`、`tool_args` | 工具调用开始 |
 | `tool_call_end` | `node_key`、`tool_name`、`status`、`result` | 工具调用结束 |
-| `tool_approval_required` | `node_key`、`tool_calls`、`approval_needed` | 工具调用需要审批（SSE 流内确认） |
+| `tool_approval_required` | `node_key`、`tool_calls`、`approval_needed` | 工具调用需要审批（用 tool_approval 指令确认/拒绝） |
 | `human_input_required` | `type`、`question`、`context`、`tool_call_id` | Agent 人工交互 interrupt（用 resume 恢复） |
 | `waiting_human` | `execution_id`、`node_key`、`question`、`context`、`wait_data` | Flow Human 节点等待输入（用 resume 恢复） |
 | `token_usage` | `prompt_tokens`、`completion_tokens`、`total_tokens`、`model`、`provider` | Token 用量 |
@@ -325,6 +364,15 @@ import websockets
 async def main():
     uri = "ws://127.0.0.1:8000/ws/trigger/<你的token>"
     async with websockets.connect(uri) as ws:
+
+        async def heartbeat():
+            # 接入义务：周期 ping，防止空闲超时被 4408 断开
+            while True:
+                await asyncio.sleep(30)
+                await ws.send("ping")
+
+        hb = asyncio.create_task(heartbeat())
+
         # 注册远程工具（可选）
         await ws.send(json.dumps({
             "action": "register_tools",
@@ -372,11 +420,23 @@ async def main():
                 }))
                 continue
 
+            # 工具审批 → 征询用户后 tool_approval
+            if event["type"] == "tool_approval_required":
+                names = event["data"].get("approval_needed", [])
+                answer = input(f"是否批准工具 {names}？(y/n) > ")
+                await ws.send(json.dumps({
+                    "action": "tool_approval",
+                    "session_id": 15,
+                    "result": "approved" if answer.lower() == "y" else "rejected",
+                }))
+                continue
+
             # 按 call_id 路由（并发时事件交错）
             call_id = event.get("call_id")
             print(f"[call={call_id}] {event['type']}: {event.get('data', {})}")
 
             if event["type"] == "flow_done":
+                hb.cancel()
                 break
 
 
