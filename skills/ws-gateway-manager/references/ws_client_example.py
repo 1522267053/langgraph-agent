@@ -13,6 +13,13 @@ from datetime import datetime
 
 import websockets
 
+# Windows 控制台默认 GBK，LLM 输出含 emoji 时报 UnicodeEncodeError
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 SERVER_HOST = os.environ.get("WS_HOST", "127.0.0.1:8000")
 WS_TOKEN = os.environ.get("WS_TOKEN", "YOUR_WS_TOKEN_HERE")
 
@@ -46,6 +53,7 @@ async def _drain(ws, *, on_content=_on_content, on_tool_invoke=None):
         elif t == "tool_invoke" and on_tool_invoke:
             await on_tool_invoke(e["data"])
         elif t == "flow_done":
+            print(f"\n[flow_done] status={e['data'].get('status')} output={json.dumps(e['data'].get('output_data'), ensure_ascii=False)[:200]}")
             return e
         elif t == "error":
             print(f"\n[错误] {e['data']['message']}")
@@ -590,10 +598,11 @@ async def example_human_resume():
             await _send(ws, action="create_session", title="人工交互测试")
             session_id = (await _recv(ws))["data"]["session_id"]
             await _send(
-                ws,
-                action="execute",
-                session_id=session_id,
-                message="这件事你不能确定，请向我确认后再回答",
+                ws, action="execute", session_id=session_id,
+                message=(
+                    "请调用 request_human_help 工具向真人求助确认："
+                    "是否同意执行本次测试任务？"
+                ),
             )
         else:
             await _send(ws, action="execute")
@@ -658,7 +667,7 @@ async def example_tool_approval():
             ws,
             action="execute",
             session_id=session_id,
-            message="帮我执行一个 shell 命令看看当前目录",
+            message="请立即调用 shell_executor 工具，command 参数填 echo hello_ws_test，然后把工具的真实输出原样告诉我",
         )
         async for raw in ws:
             e = json.loads(raw)
