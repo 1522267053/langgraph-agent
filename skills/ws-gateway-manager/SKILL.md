@@ -7,8 +7,9 @@ description: |
   (2) 外部系统通过 WebSocket 连接触发流程执行，实时接收流式结果
   (3) 注册远程工具，让 Agent 反向调用客户端函数
   (4) 管理会话（创建/切换/列表/删除）
+  (5) 人工交互恢复（resume）、工具审批（tool_approval）、取消执行（cancel）、多会话并发（call_id 路由）
 
-  触发词：「创建网关」「管理网关」「websocket 触发」「远程工具」「网关会话」「注册工具」
+  触发词：「创建网关」「管理网关」「websocket 触发」「远程工具」「网关会话」「注册工具」「人工交互」「工具审批」「取消执行」「并发会话」
 ---
 
 # WebSocket 网关管理
@@ -21,11 +22,12 @@ description: |
 2. **token 自动生成**：创建网关 时后端 `uuid.uuid4().hex` 生成 token
 3. **实时流式返回**：执行结果通过 WebSocket 逐 token 流式推送（node_content/flow_done/token_usage 等），无需轮询。**完整事件列表见下方「执行指令」章节**
 4. **Agent 专属功能**：远程工具注册、会话管理（创建/切换/列表/删除/消息查询）仅 Agent 类型支持。Flow 类型调用会返回 `"仅 Agent 类型支持"` 错误
-5. **并发限制**：同一连接同时只允许一个 execute 执行
+5. **并发模型（会话级）**：Agent 类型同一 `session_id` 正在执行时新 execute 被拒绝（错误「会话 X 正在执行中」）；不同会话、新建会话、Flow 类型可并发执行。并发时事件流交错，**每个执行事件顶层携带 `call_id`**（调用记录 ID，`call_started` 事件首次下发），客户端按 `call_id` 路由
 6. **CRUD 需登录态**：管理接口（`/api/ws-gateway/page/create/update/delete`）需要 session cookie
 7. **输入合并**：`input_data = {**gateway.input_config, **客户端参数}`（排除 `action` 和 `session_id`），客户端参数覆盖默认模板
 8. **工具名**：远程工具直接使用客户端注册的原始名称，超时 120 秒
 9. **文件传输 token 鉴权**：上传（`POST /api/ws-gateway/upload`）/下载（`GET /api/ws-gateway/download/{file_id}`）由网关 token 自鉴权，**免登录**（已豁免认证白名单）。上传返回 `file_id`，可塞进 `execute` 的 `files` 字段；下载严格校验文件归属该网关关联的 flow
+10. **空闲超时**：连接空闲超过 `WS_TRIGGER_IDLE_TIMEOUT`（默认 120 秒，0 关闭）未收到任何消息（含 ping）时服务端以关闭码 `4408` 断开。客户端**必须周期发送 ping**（建议 30 秒间隔）
 
 ## 管理接口（HTTP）
 
@@ -97,16 +99,19 @@ ws://host/ws/trigger/{token}
 | 指令 | 用途 | 适用类型 |
 |------|------|:------:|
 | `execute` | 发送消息/数据触发执行 | 全部 |
+| `resume` | 恢复等待人工输入的执行（Agent 传 `session_id`，Flow 传 `execution_id`，`input` 为输入内容） | 全部 |
+| `cancel` | 取消正在执行的会话/执行记录 | 全部 |
 | `register_tools` | 注册远程工具 | 仅 Agent |
 | `unregister_tools` | 注销所有远程工具 | 仅 Agent |
 | `tool_result` | 返回工具执行结果（回应 tool_invoke） | 仅 Agent |
+| `tool_approval` | 确认/拒绝待审批的工具调用（`result`=approved/rejected） | 仅 Agent |
 | `create_session` | 创建新会话 | 仅 Agent |
 | `switch_session` | 切换当前会话 | 仅 Agent |
 | `list_sessions` | 查询会话列表 | 仅 Agent |
 | `delete_session` | 删除会话（含消息 + checkpoint） | 仅 Agent |
 | `get_messages` | 查询会话历史消息（游标分页） | 仅 Agent |
 | `delete_message` | 删除指定消息及其后所有消息 | 仅 Agent |
-| `ping`（纯文本） | 心跳，服务端回 `pong` | 全部 |
+| `ping`（纯文本） | 心跳，服务端回 `pong`（**必须周期发送**，否则空闲超时 4408 断开） | 全部 |
 
 ### 执行指令
 
@@ -180,11 +185,41 @@ Agent 类型 flow 通常有自定义 `input_schema`（如 `bot_name`、`chat_typ
 > | `node_done` | 节点完成 | ✅ |
 > | `token_usage` | LLM token 消耗统计 | ✅ |
 > | `flow_done` | 流程完成，`data.output_data` 含 end 节点 output_variables 解析结果 | ✅ |
-> | `waiting_human` | Human 节点暂停等待用户输入（Agent 类型需 resume） | ❌ |
+> | `call_started` | 执行开始，`data.call_id`/`data.session_id`；之后的所有执行事件顶层携带 `call_id` | ✅ |
+> | `waiting_human` | Human 节点暂停等待用户输入（用 `resume` 恢复，Flow 传 execution_id） | ❌ |
+> | `human_input_required` | Agent 人工协助中断（用 `resume` + session_id 恢复） | ❌ |
+> | `tool_approval_required` | 工具调用待审批（用 `tool_approval` 指令确认/拒绝） | ❌ |
+> | `tool_approval_result` | tool_approval 指令回执（`data.resolved` 是否命中待审批） | ❌ |
+> | `cancel_accepted` | cancel 指令已受理，随后下发 `flow_done(status=cancelled)` | ❌ |
 > | `error` | 流程出错 | ❌ |
 > | `tool_invoke` | Agent 调用 ws-gateway 远程工具（仅 Agent 类型，需通过 `tool_result` 返回结果） | ❌ |
 
-> ⚠️ **注意**：旧版示例中的 `call_started` 事件在当前实现中**不存在**，请勿依赖。
+### 人工交互与控制指令
+
+**resume — 恢复等待人工输入的执行**（Agent 传 `session_id`，Flow 从 `waiting_human` 事件取 `execution_id`）：
+
+```json
+{"action": "resume", "session_id": 5, "input": "同意，按方案A执行"}
+```
+
+恢复后可能再次触发中断（多轮交互），继续 resume 即可。Flow 的并发恢复由执行记录 CAS 乐观锁保护（被抢占时报「执行已被其他请求抢占」）。
+
+**tool_approval — 工具审批**（仅 Agent，工具节点开启「调用审批」时触发）：
+
+```json
+{"action": "tool_approval", "session_id": 5, "result": "approved"}
+```
+
+`result` 为 `approved`（放行）或 `rejected`（拒绝）。无待审批时返回 `{"type":"tool_approval_result","data":{"resolved":false}}`，可安全忽略。
+
+**cancel — 取消执行**：
+
+```json
+{"action": "cancel", "session_id": 5}
+{"action": "cancel", "execution_id": 12}
+```
+
+受理后回 `cancel_accepted`，执行终止时下发 `flow_done`（`status=cancelled`）。Flow 仅 RUNNING/WAITING_HUMAN 状态可取消。
 
 ## 文件传输（token 鉴权）
 
@@ -315,17 +350,21 @@ asyncio.run(main())
 
 ## 客户端示例代码
 
-见 [references/ws_client_example.py](references/ws_client_example.py)，包含 7 个完整示例：
+见 [references/ws_client_example.py](references/ws_client_example.py)，包含 11 个完整示例：
 
 | 编号 | 名称 | 演示内容 |
 |------|------|---------|
 | 1 | 最简执行 | 连接 → 发消息 → 逐 token 接收流式回复 |
 | 2 | 远程工具 | 注册 `get_local_time`/`calculate` 函数，Agent 调用后回传结果 |
 | 3 | 会话管理 | 创建多会话、多轮对话、切换、列表 |
-| 4 | 封装客户端类 | 后台 task 自动处理 `tool_invoke`，适合集成到实际项目 |
+| 4 | 封装客户端类 | 后台心跳 + 自动处理 `tool_invoke`，execute 按 call_id 返回 Future，适合集成到实际项目 |
 | 5 | 指定 session_id 继续 | 用已知 session_id 跨连接恢复上下文（先创建，后恢复） |
 | 6 | 文件传输 | 上传本地图片 → 带 `file_id` 执行 → 下载 Agent 产物（依赖 httpx） |
 | 7 | 文件工具 | 注册文件处理工具，前端聊天触发时双向传输文件（依赖 httpx） |
+| 8 | 人工交互 resume | `human_input_required`/`waiting_human` → 征询输入 → `resume` 恢复（支持多轮） |
+| 9 | 工具审批 tool_approval | `tool_approval_required` → 征询批准/拒绝 → `tool_approval` 恢复 |
+| 10 | 取消执行 cancel | 执行中 `cancel` → `cancel_accepted` → `flow_done(status=cancelled)` |
+| 11 | 并发多会话 + call_id | 双会话并发 execute、同会话锁拒绝演示、事件按 `call_id` 分流、30 秒心跳保活 |
 
 运行方式：
 
@@ -337,6 +376,10 @@ WS_TOKEN=你的token python references/ws_client_example.py
 
 # 直接运行指定示例
 WS_TOKEN=你的token python references/ws_client_example.py 2     # 远程工具
+WS_TOKEN=你的token python references/ws_client_example.py 8     # 人工交互 resume
+WS_TOKEN=你的token python references/ws_client_example.py 9     # 工具审批
+WS_TOKEN=你的token python references/ws_client_example.py 10    # 取消执行
+WS_TOKEN=你的token python references/ws_client_example.py 11    # 并发多会话
 
 # 示例 5：先创建会话
 WS_TOKEN=你的token python references/ws_client_example.py 5
