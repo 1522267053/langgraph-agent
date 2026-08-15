@@ -200,6 +200,47 @@ Flow 类型（直接传参数，作为 input_data）：
 {"action": "unregister_tools"}
 ```
 
+### resume — 恢复等待人工输入的执行
+
+Agent 类型（传 session_id）：
+```json
+{"action": "resume", "session_id": 5, "input": "同意，按方案A执行"}
+```
+
+Flow 类型（execution_id 取自 `waiting_human` 事件的 `data.execution_id`）：
+```json
+{"action": "resume", "execution_id": 12, "input": "确认"}
+```
+
+`input` 必填（人工输入内容）。恢复可能再次触发中断（多轮交互），继续 resume 即可。响应事件流与 execute 同构（`call_started` 的 `data` 含 `resumed: true`）。
+
+### tool_approval — 确认/拒绝待审批的工具调用（仅 Agent）
+
+```json
+{"action": "tool_approval", "session_id": 5, "result": "approved"}
+```
+
+- `result`：`approved`（放行执行）或 `rejected`（拒绝，工具收到拒绝结果后 LLM 继续推理）
+- 前置事件：执行中下发 `tool_approval_required`（含 `data.tool_calls` 待审批列表）
+- 响应：`{"type": "tool_approval_result", "data": {"session_id": 5, "resolved": true}}`
+- `resolved=false` 表示当前无待审批工具（已超时或已完成），可安全忽略
+
+### cancel — 取消正在执行的会话/执行记录
+
+Agent 类型：
+```json
+{"action": "cancel", "session_id": 5}
+```
+
+Flow 类型：
+```json
+{"action": "cancel", "execution_id": 12}
+```
+
+- 响应：`{"type": "cancel_accepted", "data": {...}}`，随后执行终止下发 `flow_done`（`status=cancelled`）
+- Flow 仅 RUNNING / WAITING_HUMAN 状态可取消，否则返回错误事件
+- 目标不存在或不属于该网关时返回错误事件
+
 ### tool_result — 返回工具执行结果
 
 成功：
@@ -286,6 +327,8 @@ Flow 类型（直接传参数，作为 input_data）：
 
 纯文本 `ping`，服务端回纯文本 `pong`。
 
+**必须周期发送**（建议 30 秒间隔）：连接空闲超过 `WS_TRIGGER_IDLE_TIMEOUT`（默认 120 秒，0 关闭）未收到任何消息时，服务端以关闭码 `4408` 断开。
+
 ---
 
 ## 服务端 → 客户端事件
@@ -295,9 +338,11 @@ Flow 类型（直接传参数，作为 input_data）：
 | type | 说明 |
 |------|------|
 | `connected` | 连接确认，含 gateway_id/flow_id/flow_type/upload_url/download_url_template |
-| `call_started` | 执行开始，含 call_id/session_id |
+| `call_started` | 执行开始，含 call_id/session_id；之后的所有执行事件顶层携带 `call_id`（并发时按其路由） |
 | `tools_registered` | 工具注册确认 |
 | `tools_unregistered` | 工具注销确认 |
+| `tool_approval_result` | tool_approval 指令回执（`data.resolved` 是否命中待审批） |
+| `cancel_accepted` | cancel 指令已受理（随后下发 flow_done status=cancelled） |
 | `session_created` | 会话创建成功 |
 | `session_switched` | 会话切换成功 |
 | `sessions_list` | 会话列表查询结果 |
@@ -321,7 +366,9 @@ Flow 类型（直接传参数，作为 input_data）：
 | `node_done` | node_key, node_type | 节点结束 |
 | `flow_done` | execution_id, status, output_data | **执行完成**（status: success/cancelled/failed） |
 | `error` | message | 执行错误 |
-| `waiting_human` | node_key, question, wait_data | 等待人工输入（中断） |
+| `waiting_human` | execution_id, node_key, question, wait_data | Flow Human 节点等待输入（用 resume + execution_id 恢复） |
+| `human_input_required` | question, context | Agent 人工协助中断（用 resume + session_id 恢复） |
+| `tool_approval_required` | node_key, tool_calls, approval_needed | 工具调用待审批（用 tool_approval 指令确认/拒绝） |
 
 ### tool_invoke — 远程工具调用请求
 
@@ -348,15 +395,19 @@ Flow 类型（直接传参数，作为 input_data）：
 |--------|------|
 | 4404 | token 无效（网关不存在） |
 | 4403 | Gateway 已禁用 |
+| 4408 | 连接空闲超时（默认 120 秒未收到任何消息，含 ping） |
+| 4409 | Agent 类型已有活跃连接（全局单连接） |
 
 ### 执行阶段错误
 
 ```json
-{"type": "error", "data": {"message": "正在执行中，请等待完成"}}
+{"type": "error", "data": {"message": "会话 5 正在执行中，请等待完成"}}
 ```
 
 常见错误：
-- `正在执行中，请等待完成` — 并发保护
-- `会话 X 不存在或不属于该 Agent` — session_id 无效
+- `会话 X 正在执行中，请等待完成` — 同一会话并发保护（不同会话/新建会话可并发）
+- `会话 X 不存在或不属于该网关` — session_id 无效或归属校验失败
+- `执行记录 X 不存在或不属于该网关流程` — execution_id 无效或归属校验失败
 - `仅 Agent 类型支持创建会话` — Flow 类型不支持会话操作
+- `result 必须为 approved 或 rejected` — tool_approval 参数错误
 - `远程工具 X 执行超时（120秒）` — tool_result 未在超时内返回

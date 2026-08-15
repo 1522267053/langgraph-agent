@@ -104,15 +104,27 @@ async def example_remote_tools():
         except Exception as e:
             return f"计算错误: {e}"
 
-    handlers = {"get_local_time": lambda **kw: get_local_time(),
-                "calculate": lambda **kw: calculate(kw.get("expression", ""))}
+    handlers = {
+        "get_local_time": lambda **kw: get_local_time(),
+        "calculate": lambda **kw: calculate(kw.get("expression", "")),
+    }
     tool_defs = [
-        {"name": "get_local_time", "description": "获取客户端本地时间",
-         "parameters": {"type": "object", "properties": {}}},
-        {"name": "calculate", "description": "在客户端执行数学计算",
-         "parameters": {"type": "object",
-                        "properties": {"expression": {"type": "string", "description": "数学表达式"}},
-                        "required": ["expression"]}},
+        {
+            "name": "get_local_time",
+            "description": "获取客户端本地时间",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "calculate",
+            "description": "在客户端执行数学计算",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {"type": "string", "description": "数学表达式"}
+                },
+                "required": ["expression"],
+            },
+        },
     ]
 
     async with websockets.connect(_url()) as ws:
@@ -194,59 +206,112 @@ async def example_sessions():
 
 
 class WsGatewayWSClient:
-    """封装客户端：后台自动处理 tool_invoke，execute 返回 Future"""
+    """封装客户端：后台心跳 + 自动处理 tool_invoke，execute 按 call_id 返回结果
 
-    def __init__(self, url):
+    - 心跳：默认每 30 秒发送 ping（服务端默认 120 秒空闲断开，关闭码 4408）
+    - 并发：execute 可同时发起多个，事件按顶层 call_id 路由到各自的 Future
+    """
+
+    def __init__(self, url, heartbeat_interval=30):
         self.url = url
-        self.ws:websockets.ClientConnection = None
+        self.heartbeat_interval = heartbeat_interval
+        self.ws = None
+        self.flow_type = None
         self._funcs = {}
         self._schemas = []
-        self._done = None
+        self._pending_executes = []  # 等待 call_started 绑定的 Future（FIFO）
+        self._active_calls = {}  # call_id -> Future
+        self._heartbeat_task = None
 
     def tool(self, name, description, parameters, func):
         """注册本地函数为远程工具"""
         self._funcs[name] = func
-        self._schemas.append({"name": name, "description": description, "parameters": parameters})
+        self._schemas.append(
+            {"name": name, "description": description, "parameters": parameters}
+        )
 
     async def connect(self):
-        self.ws:websockets.ClientConnection = await websockets.connect(self.url)
+        self.ws = await websockets.connect(self.url)
         conn = json.loads(await self.ws.recv())
         self.flow_type = conn["data"].get("flow_type")
         if self._schemas and self.flow_type != "agent":
             print(f"[警告] 远程工具仅 Agent 类型支持，当前为 {self.flow_type}")
         elif self._schemas:
-            await self.ws.send(json.dumps({"action": "register_tools", "tools": self._schemas}))
+            await self.ws.send(
+                json.dumps({"action": "register_tools", "tools": self._schemas})
+            )
             reg = json.loads(await self.ws.recv())
             if reg["type"] == "error":
                 print(f"[错误] 工具注册失败: {reg['data']['message']}")
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         asyncio.create_task(self._loop())
 
+    async def _heartbeat_loop(self):
+        """周期 ping，防止空闲超时被服务端断开（4408）"""
+        try:
+            while True:
+                await asyncio.sleep(self.heartbeat_interval)
+                await self.ws.send("ping")
+        except asyncio.CancelledError:
+            pass
+
     async def _loop(self):
+        """后台事件循环：tool_invoke 即时回调；执行事件按 call_id 路由"""
         async for raw in self.ws:
             if raw == "pong":
                 continue
             e = json.loads(raw)
-            if e["type"] == "tool_invoke":
+            t = e["type"]
+            if t == "tool_invoke":
                 d = e["data"]
                 fn = self._funcs.get(d["name"])
                 result = fn(**d.get("args", {})) if fn else "未知工具"
-                await self.ws.send(json.dumps(
-                    {"action": "tool_result", "call_id": d["call_id"], "result": str(result)}
-                ))
-            elif e["type"] in ("flow_done", "error") and self._done and not self._done.done():
-                self._done.set_result(e)
+                await self.ws.send(
+                    json.dumps(
+                        {
+                            "action": "tool_result",
+                            "call_id": d["call_id"],
+                            "result": str(result),
+                        }
+                    )
+                )
+            elif t == "call_started":
+                cid = e["data"].get("call_id")
+                if self._pending_executes and cid is not None:
+                    self._active_calls[cid] = self._pending_executes.pop(0)
+            else:
+                cid = e.get("call_id")
+                fut = self._active_calls.get(cid) if cid is not None else None
+                if fut and not fut.done() and t in ("flow_done", "error"):
+                    fut.set_result(e)
             if hasattr(self, "on_event"):
                 self.on_event(e)
 
-    async def execute(self, message, session_id=None):
-        payload = {"action": "execute", "message": message}
+    async def execute(self, message=None, session_id=None, **extra):
+        """触发执行并等待该次执行的 flow_done/error（按 call_id 路由，可并发调用）"""
+        payload = {"action": "execute"}
+        if message is not None:
+            payload["message"] = message
         if session_id:
             payload["session_id"] = session_id
-        self._done = asyncio.get_event_loop().create_future()
+        payload.update(extra)
+        fut = asyncio.get_event_loop().create_future()
+        self._pending_executes.append(fut)
         await self.ws.send(json.dumps(payload))
-        return await self._done
+        return await fut
+
+    async def cancel(self, *, session_id=None, execution_id=None):
+        """取消正在执行的会话（Agent）或执行记录（Flow）"""
+        payload = {"action": "cancel"}
+        if session_id:
+            payload["session_id"] = session_id
+        if execution_id:
+            payload["execution_id"] = execution_id
+        await self.ws.send(json.dumps(payload))
 
     async def close(self):
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
         if self.ws:
             await self.ws.close()
 
@@ -255,13 +320,18 @@ async def example_client_class():
     """封装客户端类 + 自动工具回调"""
     print("\n=== 示例 4：封装客户端 ===")
     client = WsGatewayWSClient(_url())
-    client.tool("get_env", "获取客户端环境变量",
-                {"type": "object",
-                 "properties": {"name": {"type": "string", "description": "变量名"}},
-                 "required": ["name"]},
-                lambda name: os.environ.get(name, f"未设置: {name}"))
-    client.on_event = lambda e: e["type"] == "node_content" and print(
-        e["data"]["content"], end="", flush=True
+    client.tool(
+        "get_env",
+        "获取客户端环境变量",
+        {
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "变量名"}},
+            "required": ["name"],
+        },
+        lambda name: os.environ.get(name, f"未设置: {name}"),
+    )
+    client.on_event = lambda e: (
+        e["type"] == "node_content" and print(e["data"]["content"], end="", flush=True)
     )
     await client.connect()
     if client.flow_type != "agent":
@@ -298,14 +368,19 @@ async def example_resume():
             sid = (await _recv(ws))["data"]["session_id"]
             print(f"[创建会话] session_id={sid}")
             print(f"[记下此 ID，下次: python ws_client_example.py 5 {sid}]\n")
-            await _send(ws, action="execute",
-                        message="我叫李四，Python 开发者，记住", session_id=sid)
+            await _send(
+                ws,
+                action="execute",
+                message="我叫李四，Python 开发者，记住",
+                session_id=sid,
+            )
             await _drain(ws)
             print(f"\n\n[完成] 下次运行: python ws_client_example.py 5 {sid}")
         else:
             print(f"=== 示例 5：恢复会话 {sid}（新连接）===\n")
-            await _send(ws, action="execute",
-                        message="我叫什么名字？做什么的？", session_id=sid)
+            await _send(
+                ws, action="execute", message="我叫什么名字？做什么的？", session_id=sid
+            )
             await _drain(ws)
             print("\n\n[完成] Agent 记住了上下文")
 
@@ -448,9 +523,7 @@ async def example_file_tool():
                             ws,
                             action="tool_result",
                             call_id=call_id,
-                            result=json.dumps(
-                                {"success": False, "error": "下载失败"}
-                            ),
+                            result=json.dumps({"success": False, "error": "下载失败"}),
                         )
                         continue
                     original = resp.content
@@ -494,6 +567,251 @@ async def example_file_tool():
 
 
 # ============================================================
+# 示例 8：人工交互（human_input_required / waiting_human → resume）
+# ============================================================
+
+
+async def example_human_resume():
+    """人工交互闭环：执行暂停 → 征询本地输入 → resume 恢复
+
+    前置：Agent 启用了「人工协助」能力（LLM 主动求助触发
+    human_input_required），或 Flow 含 Human 节点（触发 waiting_human）。
+    Agent 类型 resume 传 session_id；Flow 类型从 waiting_human 事件取
+    execution_id。可能多轮交互（resume 后再次暂停），循环处理即可。
+    """
+    print("\n=== 示例 8：人工交互（resume）===")
+    print("[提示] 需要触发人工交互的消息才会暂停，可按需修改 message")
+    async with websockets.connect(_url()) as ws:
+        conn_data = (await _recv(ws))["data"]
+        is_agent = conn_data.get("flow_type") == "agent"
+
+        session_id = None
+        if is_agent:
+            await _send(ws, action="create_session", title="人工交互测试")
+            session_id = (await _recv(ws))["data"]["session_id"]
+            await _send(
+                ws,
+                action="execute",
+                session_id=session_id,
+                message="这件事你不能确定，请向我确认后再回答",
+            )
+        else:
+            await _send(ws, action="execute")
+
+        async for raw in ws:
+            e = json.loads(raw)
+            t = e["type"]
+            if t in ("human_input_required", "waiting_human"):
+                question = e["data"].get("question", "需要您的输入")
+                if t == "waiting_human":
+                    execution_id = e["data"].get("execution_id")
+                answer = input(f"\n[需要你的输入] {question}\n> ")
+                if is_agent:
+                    await _send(
+                        ws, action="resume", session_id=session_id, input=answer
+                    )
+                else:
+                    await _send(
+                        ws, action="resume", execution_id=execution_id, input=answer
+                    )
+            elif t == "node_content":
+                _on_content(e)
+            elif t == "flow_done":
+                print(f"\n[完成] status={e['data'].get('status')}")
+                break
+            elif t == "error":
+                print(f"\n[错误] {e['data'].get('message')}")
+                break
+
+
+# ============================================================
+# 示例 9：工具审批（tool_approval_required → tool_approval）
+# ============================================================
+
+
+async def example_tool_approval():
+    """工具审批闭环：待审批事件 → 征询批准/拒绝 → tool_approval 恢复
+
+    前置：Agent 的某个工具节点开启了「调用审批」（如 shell 节点），
+    且执行消息会触发该工具。无待审批时调用 tool_approval 返回
+    resolved=false（本示例开头演示该情况）。
+    """
+    print("\n=== 示例 9：工具审批（tool_approval）===")
+    print("[提示] 需 Agent 有开启审批的工具才会触发，可按需修改 message")
+    async with websockets.connect(_url()) as ws:
+        conn_data = (await _recv(ws))["data"]
+        if not _check_agent(conn_data):
+            return
+
+        await _send(ws, action="create_session", title="审批测试")
+        session_id = (await _recv(ws))["data"]["session_id"]
+
+        # 无待审批时调用：resolved=false，可安全忽略
+        await _send(
+            ws, action="tool_approval", session_id=session_id, result="approved"
+        )
+        r = await _recv(ws)
+        if r["type"] == "tool_approval_result":
+            print(f"[无待审批] resolved={r['data']['resolved']}（预期 false）")
+
+        await _send(
+            ws,
+            action="execute",
+            session_id=session_id,
+            message="帮我执行一个 shell 命令看看当前目录",
+        )
+        async for raw in ws:
+            e = json.loads(raw)
+            t = e["type"]
+            if t == "tool_approval_required":
+                names = e["data"].get("approval_needed", [])
+                answer = input(f"\n[待审批工具] {names}\n是否批准？(y/n) > ")
+                await _send(
+                    ws,
+                    action="tool_approval",
+                    session_id=session_id,
+                    result="approved" if answer.strip().lower() == "y" else "rejected",
+                )
+            elif t == "node_content":
+                _on_content(e)
+            elif t == "flow_done":
+                print(f"\n[完成] status={e['data'].get('status')}")
+                break
+            elif t == "error":
+                print(f"\n[错误] {e['data'].get('message')}")
+                break
+
+
+# ============================================================
+# 示例 10：取消执行（cancel）
+# ============================================================
+
+
+async def example_cancel():
+    """执行中取消：cancel → cancel_accepted → flow_done(status=cancelled)
+
+    Agent 传 session_id；Flow 传 execution_id（从 flow_start 事件获取）。
+    收到首段输出后取消，观察 status=cancelled 的 flow_done。
+    """
+    print("\n=== 示例 10：取消执行（cancel）===")
+    async with websockets.connect(_url()) as ws:
+        conn_data = (await _recv(ws))["data"]
+        is_agent = conn_data.get("flow_type") == "agent"
+
+        session_id = execution_id = None
+        if is_agent:
+            await _send(ws, action="create_session", title="取消测试")
+            session_id = (await _recv(ws))["data"]["session_id"]
+            await _send(
+                ws,
+                action="execute",
+                session_id=session_id,
+                message="写一篇 2000 字关于人工智能发展史的长文",
+            )
+        else:
+            await _send(ws, action="execute")
+
+        cancelled = False
+        got_content = False
+        async for raw in ws:
+            e = json.loads(raw)
+            t = e["type"]
+            if t == "flow_start":
+                execution_id = e["data"].get("execution_id")
+            elif t == "node_content":
+                _on_content(e)
+                if not got_content:
+                    got_content = True
+                    # 收到首段输出后取消
+                    if is_agent:
+                        await _send(ws, action="cancel", session_id=session_id)
+                    else:
+                        await _send(ws, action="cancel", execution_id=execution_id)
+                    cancelled = True
+            elif t == "cancel_accepted":
+                print(f"\n[已受理取消] {e['data']}")
+            elif t == "flow_done":
+                status = e["data"].get("status")
+                print(f"\n[完成] status={status}" + ("（已取消）" if cancelled else ""))
+                break
+            elif t == "error":
+                print(f"\n[错误] {e['data'].get('message')}")
+                break
+
+
+# ============================================================
+# 示例 11：多会话并发 + call_id 事件路由 + 心跳保活
+# ============================================================
+
+
+async def example_concurrent():
+    """并发执行：不同会话并行 execute，事件按顶层 call_id 分流
+
+    - 同一会话执行中再 execute 会被拒绝（「会话 X 正在执行中」），
+      客户端应本地排队重试
+    - 不同会话并发执行，事件流交错，靠顶层 call_id 区分归属
+    - 心跳：30 秒 ping（服务端默认 120 秒空闲断开，关闭码 4408）
+    """
+    print("\n=== 示例 11：并发多会话 + call_id 路由 ===")
+    async with websockets.connect(_url()) as ws:
+        conn_data = (await _recv(ws))["data"]
+        if not _check_agent(conn_data):
+            return
+
+        async def create(title):
+            await _send(ws, action="create_session", title=title)
+            r = await _recv(ws)
+            if r["type"] == "error":
+                raise RuntimeError(r["data"]["message"])
+            return r["data"]["session_id"]
+
+        s1 = await create("并发A")
+        s2 = await create("并发B")
+        print(f"[会话] A={s1} B={s2}")
+
+        async def heartbeat():
+            while True:
+                await asyncio.sleep(30)
+                await ws.send("ping")
+
+        hb = asyncio.create_task(heartbeat())
+
+        # 同一会话连发两条：第二条会被会话锁拒绝
+        await _send(ws, action="execute", session_id=s1, message="用一句话介绍 Python")
+        await _send(ws, action="execute", session_id=s1, message="再介绍一次")
+
+        # 不同会话并发
+        await _send(
+            ws, action="execute", session_id=s2, message="用一句话介绍 LangGraph"
+        )
+
+        streams = {}  # call_id -> 内容片段
+        done_calls = set()
+        try:
+            async for raw in ws:
+                if raw == "pong":
+                    continue
+                e = json.loads(raw)
+                t = e["type"]
+                cid = e.get("call_id")
+                if t == "call_started":
+                    streams[cid] = []
+                    print(f"[call {cid}] 开始 session={e['data'].get('session_id')}")
+                elif t == "node_content" and cid in streams:
+                    streams[cid].append(e["data"]["content"])
+                elif t == "error" and "正在执行中" in e["data"].get("message", ""):
+                    print(f"[会话锁拒绝] {e['data']['message']}")
+                elif t == "flow_done" and cid is not None:
+                    done_calls.add(cid)
+                    text = "".join(streams.get(cid, []))
+                    print(f"[call {cid}] 完成: {text[:50]}...")
+                    if streams and len(done_calls) == len(streams):
+                        break
+        finally:
+            hb.cancel()
+
+
+# ============================================================
 # 主入口
 # ============================================================
 
@@ -505,6 +823,10 @@ EXAMPLES = {
     "5": ("指定 session_id 继续", example_resume),
     "6": ("文件传输", example_file_transfer),
     "7": ("文件工具", example_file_tool),
+    "8": ("人工交互 resume", example_human_resume),
+    "9": ("工具审批 tool_approval", example_tool_approval),
+    "10": ("取消执行 cancel", example_cancel),
+    "11": ("并发多会话 + call_id", example_concurrent),
 }
 
 
@@ -518,7 +840,7 @@ async def main():
         print("选择示例：")
         for k, (name, _) in EXAMPLES.items():
             print(f"  {k}. {name}")
-        choice = input("输入编号 (1-7): ").strip()
+        choice = input("输入编号 (1-11): ").strip()
 
     if choice in EXAMPLES:
         await EXAMPLES[choice][1]()
