@@ -147,7 +147,7 @@ async function loadModels(providerId: string) {
   }
 }
 
-async function onProviderChange() {
+async function onProviderChange(newVal: string, oldVal: string) {
   if (_init.value) return
   if (props.resetOnProviderChange) {
     model.value = ''
@@ -157,11 +157,13 @@ async function onProviderChange() {
     contextLength.value = undefined
     if (maxTokens.value !== undefined) maxTokens.value = undefined
   }
-  const defaultUrl = getProviderBaseUrl(provider.value)
-  if (defaultUrl && !baseUrl.value) {
-    baseUrl.value = defaultUrl
+  // base_url 为空或仍是旧供应商默认值（非用户自定义）时，跟随替换为新供应商默认值
+  const prevDefault = oldVal ? getProviderBaseUrl(oldVal) : ''
+  const nextDefault = getProviderBaseUrl(newVal)
+  if (nextDefault && (!baseUrl.value || baseUrl.value === prevDefault)) {
+    baseUrl.value = nextDefault
   }
-  await loadModels(provider.value)
+  await loadModels(newVal)
   applyModelAutoFill()
   emit('change')
 }
