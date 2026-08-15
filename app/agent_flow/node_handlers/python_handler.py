@@ -462,7 +462,7 @@ class PythonNodeHandler(BaseNodeHandler):
 
 ## 文件保存约定
 当 main() 返回以下格式时，内容将自动保存为文件并在聊天中预览：
-    {"__save_file__": True, "content_base64": "<base64编码的字节>", "mime_type": "image/png", "filename": "xxx.png"}
+    {{"__save_file__": True, "content_base64": "<base64编码的字节>", "mime_type": "image/png", "filename": "xxx.png"}}
 可用于生成图片/音频/视频后保存展示。base64 不会出现在对话里，只返回预览链接。"""
 
         async def execute_python(code: str, input_data: dict[str, Any] = None) -> dict:
