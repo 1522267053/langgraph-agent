@@ -106,7 +106,8 @@ async function handleSave() {
     const data: UpdateConfigRequest = {
       provider: selectedProvider.value || undefined,
       model: model.value.trim() || undefined,
-      base_url: baseUrl.value.trim() || undefined,
+      // 空串显式发送，用于清空 base_url（虚拟供应商）；真实供应商后端会回退官方默认值
+      base_url: baseUrl.value.trim(),
       context_length: parseContextLength(contextLength.value),
       embedding_model: embeddingModel.value.trim() || undefined,
       embedding_base_url: embeddingBaseUrl.value.trim() || undefined,
