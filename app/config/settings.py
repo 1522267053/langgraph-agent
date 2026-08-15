@@ -99,6 +99,10 @@ class Settings(BaseSettings):
     # 资源市场服务器地址
     marketplace_server_url: str = Field(default="", alias="MARKETPLACE_SERVER_URL")
 
+    # WS trigger 连接空闲超时（秒）：超过该时间未收到任何消息（含 ping）则断开，
+    # 防止半开连接永久占用 Agent 网关唯一连接槽；0 表示不启用
+    ws_trigger_idle_timeout: int = Field(default=120, alias="WS_TRIGGER_IDLE_TIMEOUT")
+
     # 版本更新检查接口地址
     version_check_url: str = Field(default="", alias="VERSION_CHECK_URL")
 

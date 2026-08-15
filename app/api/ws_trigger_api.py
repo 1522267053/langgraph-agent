@@ -12,6 +12,10 @@
   客户端按 call_id 路由事件
 - resume 指令恢复等待人工输入的执行：Agent 传 session_id，Flow 传
   execution_id，input 为人工输入内容
+- tool_approval 指令确认/拒绝待审批的工具调用（Agent 类型）
+- cancel 指令取消正在执行的会话/执行记录
+- 连接空闲超过 WS_TRIGGER_IDLE_TIMEOUT 秒未收到任何消息（含 ping）
+  时服务端主动断开（关闭码 4408），客户端必须周期性发送 ping
 
 认证方式：token 在 URL 路径中（与原 HTTP 网关的 token 机制一致）。
 """
@@ -137,10 +141,29 @@ async def _message_receiver(conn: WSConnection):
     """持续接收消息并分发
 
     快速指令（register_tools/tool_result/session 管理）同步处理；
-    execute 指令分发为独立 task（不阻塞接收）。
+    execute/resume/cancel 指令分发为独立 task（不阻塞接收）。
+    空闲超过 idle_timeout 未收到任何消息（含 ping）时主动断开，
+    防止半开连接永久占用 Agent 网关唯一连接槽。
     """
+    from app.config.settings import settings
+
+    idle_timeout = getattr(settings, "ws_trigger_idle_timeout", 0) or 0
     while True:
-        raw = await conn.websocket.receive_text()
+        if idle_timeout > 0:
+            try:
+                raw = await asyncio.wait_for(
+                    conn.websocket.receive_text(), timeout=idle_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"WS trigger 空闲超时断开: gateway_id={conn.gateway_id}")
+                try:
+                    await _send_error(conn, f"连接空闲超过 {idle_timeout} 秒，已断开")
+                except Exception:
+                    pass
+                await conn.websocket.close(code=4408)
+                return
+        else:
+            raw = await conn.websocket.receive_text()
 
         if raw == "ping":
             await conn.websocket.send_text("pong")
@@ -170,6 +193,12 @@ async def _message_receiver(conn: WSConnection):
             task.add_done_callback(conn._execute_tasks.discard)
         elif action == "resume":
             task = asyncio.create_task(_handle_resume(conn, data))
+            conn._execute_tasks.add(task)
+            task.add_done_callback(conn._execute_tasks.discard)
+        elif action == "tool_approval":
+            await _handle_tool_approval(conn, data)
+        elif action == "cancel":
+            task = asyncio.create_task(_handle_cancel(conn, data))
             conn._execute_tasks.add(task)
             task.add_done_callback(conn._execute_tasks.discard)
         elif action == "create_session":
@@ -338,6 +367,127 @@ async def _handle_resume(conn: WSConnection, data: dict):
     finally:
         if lock_session is not None:
             conn.executing_sessions.discard(lock_session)
+
+
+async def _handle_tool_approval(conn: WSConnection, data: dict):
+    """处理 tool_approval 指令：确认/拒绝待审批的工具调用（仅 Agent 类型）
+
+    WS 触发的执行中 LLM 调用需审批工具时，事件流下发
+    tool_approval_required，客户端征询用户后通过本指令恢复；
+    前端 SSE 路径的确认入口在 agent_api，两者共用 tool_approval_service。
+    """
+    if conn.flow_type != FlowType.AGENT.value:
+        await _send_error(conn, "仅 Agent 类型支持工具审批")
+        return
+
+    result = data.get("result")
+    if result not in ("approved", "rejected"):
+        await _send_error(conn, "result 必须为 approved 或 rejected")
+        return
+
+    session_id = data.get("session_id")
+    try:
+        session_id = int(session_id)
+    except (TypeError, ValueError):
+        await _send_error(conn, "缺少 session_id 或格式错误（需要整数）")
+        return
+
+    # 归属校验：会话必须由该网关创建
+    async with AsyncSessionLocal() as db:
+        _, session = await ws_gateway_service.get_session_by_token(
+            db, conn.token, session_id
+        )
+    if not session:
+        await _send_error(conn, f"会话 {session_id} 不存在或不属于该网关")
+        return
+
+    from app.services.tool_approval_service import tool_approval_service
+
+    resolved = tool_approval_service.resolve(session_id, result)
+    await conn.websocket.send_json(
+        {
+            "type": "tool_approval_result",
+            "data": {"session_id": session_id, "resolved": resolved},
+        }
+    )
+
+
+async def _handle_cancel(conn: WSConnection, data: dict):
+    """处理 cancel 指令：取消正在执行的会话（Agent）或执行记录（Flow）
+
+    Agent：设置 interrupt 标志（chat_stream 循环检测点自行停止，finally
+    负责 checkpoint 清理）+ 取消挂起的工具审批；WS 执行任务不在 SSE 的
+    _streaming_tasks 中，不依赖 task.cancel。
+    Flow：interrupt 标志 + cancel_execution（状态落库 CANCELLED 并取消运行节点）。
+    """
+    from app.services.interrupt_service import interrupt_service
+
+    key = "session_id" if conn.flow_type == FlowType.AGENT.value else "execution_id"
+    target_id = data.get(key)
+    if target_id is None:
+        await _send_error(conn, f"缺少 {key} 字段")
+        return
+    try:
+        target_id = int(target_id)
+    except (TypeError, ValueError):
+        await _send_error(conn, f"{key} 必须是整数")
+        return
+
+    # 归属校验（与 resume 相同规则）
+    async with AsyncSessionLocal() as db:
+        gateway = await ws_gateway_service.get_by_token(db, conn.token)
+        if not gateway:
+            await _send_error(conn, "网关不存在")
+            return
+        valid = await _validate_ws_target(db, gateway, conn.flow_type, target_id)
+    if not valid:
+        target_desc = "会话" if conn.flow_type == FlowType.AGENT.value else "执行记录"
+        await _send_error(conn, f"{target_desc} {target_id} 不存在或不属于该网关")
+        return
+
+    if conn.flow_type == FlowType.AGENT.value:
+        from app.services.tool_approval_service import tool_approval_service
+
+        interrupt_service.set_agent_interrupted(target_id)
+        tool_approval_service.cancel(target_id)
+        await conn.websocket.send_json(
+            {"type": "cancel_accepted", "data": {"session_id": target_id}}
+        )
+    else:
+        interrupt_service.set_flow_interrupted(target_id)
+        from app.services.flow_executor_service import flow_executor_service
+
+        async with AsyncSessionLocal() as db:
+            execution = await flow_executor_service.cancel_execution(db, target_id)
+        if not execution:
+            await _send_error(conn, f"执行记录 {target_id} 不存在或不可取消")
+            return
+        await conn.websocket.send_json(
+            {"type": "cancel_accepted", "data": {"execution_id": target_id}}
+        )
+
+
+async def _validate_ws_target(db, gateway, flow_type: Optional[str], target_id: int):
+    """校验目标（Agent 会话 / Flow 执行记录）归属于该网关
+
+    Returns:
+        True 归属有效；False 不存在或不属于该网关。
+    """
+    if flow_type == FlowType.AGENT.value:
+        from app.models.agent_session import AgentSession
+        from sqlalchemy import select
+
+        stmt = select(AgentSession.id).where(
+            AgentSession.id == target_id,
+            AgentSession.gateway_id == gateway.id,
+            AgentSession.is_delete == 0,
+        )
+        return (await db.execute(stmt)).scalar_one_or_none() is not None
+
+    from app.services.flow_executor_service import flow_executor_service
+
+    execution = await flow_executor_service.get_execution(db, target_id)
+    return bool(execution and execution.flow_id == gateway.flow_id)
 
 
 # ---- 会话管理 ----
