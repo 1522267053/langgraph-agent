@@ -5,6 +5,14 @@
 
 支持远程工具注册：客户端注册的函数可被 Agent 在执行中反向调用。
 
+并发模型：
+- execute 指令按会话级并发控制：Agent 类型同一会话串行（正在执行时拒绝
+  新请求），不同会话/新建会话/Flow 类型并发执行
+- 并发执行的事件流会交错，每个事件顶层统一携带 call_id（调用记录ID），
+  客户端按 call_id 路由事件
+- resume 指令恢复等待人工输入的执行：Agent 传 session_id，Flow 传
+  execution_id，input 为人工输入内容
+
 认证方式：token 在 URL 路径中（与原 HTTP 网关的 token 机制一致）。
 """
 
@@ -44,7 +52,8 @@ class WSConnection:
     registered_tools: list[dict] = field(default_factory=list)
     pending_calls: dict[str, asyncio.Future] = field(default_factory=dict)
     current_session_id: Optional[int] = None
-    executing: bool = False
+    # 正在执行的 Agent 会话集合（会话级并发控制，check-then-act 无 await 原子）
+    executing_sessions: set[int] = field(default_factory=set)
     tool_timeout: int = 120
     _execute_tasks: set = field(default_factory=set)
 
@@ -159,6 +168,10 @@ async def _message_receiver(conn: WSConnection):
             task = asyncio.create_task(_handle_execute(conn, data))
             conn._execute_tasks.add(task)
             task.add_done_callback(conn._execute_tasks.discard)
+        elif action == "resume":
+            task = asyncio.create_task(_handle_resume(conn, data))
+            conn._execute_tasks.add(task)
+            task.add_done_callback(conn._execute_tasks.discard)
         elif action == "create_session":
             await _handle_create_session(conn, data)
         elif action == "switch_session":
@@ -216,28 +229,56 @@ async def _handle_register_tools(conn: WSConnection, data: dict):
 
 
 async def _handle_execute(conn: WSConnection, data: dict):
-    """处理 execute 指令：流式执行 + 推送事件"""
-    if conn.executing:
-        await _send_error(conn, "正在执行中，请等待完成")
-        return
-    conn.executing = True
+    """处理 execute 指令：流式执行 + 推送事件（会话级并发控制）
+
+    - Agent + 显式 session_id：同一会话正在执行时拒绝，不同会话并发执行
+    - Agent 未指定 session_id（新建会话）：全新会话无冲突，不加锁
+    - Flow：每次执行独立 execution/thread_id，无共享状态，不加锁
+    """
+    explicit_session = data.get("session_id")
+    if explicit_session is not None:
+        try:
+            explicit_session = int(explicit_session)
+        except (TypeError, ValueError):
+            await _send_error(conn, "session_id 必须是整数")
+            return
+
+    lock_session: Optional[int] = None
+    if conn.flow_type == FlowType.AGENT.value and explicit_session is not None:
+        # check-then-act 中间无 await，asyncio 原子
+        if explicit_session in conn.executing_sessions:
+            await _send_error(conn, f"会话 {explicit_session} 正在执行中，请等待完成")
+            return
+        conn.executing_sessions.add(explicit_session)
+        lock_session = explicit_session
     try:
         if conn.flow_type == FlowType.AGENT.value and conn.registered_tools:
             _current_ws_conn.set(conn)
 
-        session_id = data.get("session_id") or conn.current_session_id
+        session_id = (
+            explicit_session
+            if explicit_session is not None
+            else conn.current_session_id
+        )
         input_data = {**(conn.input_config or {})}
         for k, v in data.items():
             if k not in ("action", "session_id"):
                 input_data[k] = v
 
+        record_id: Optional[int] = None
         async for event in ws_gateway_service.stream_execute(
             conn.gateway_id, input_data, session_id=session_id
         ):
+            # 并发执行时事件流交错，统一打 call_id 标供客户端路由
+            if record_id is None and event.get("type") == "call_started":
+                record_id = event.get("data", {}).get("call_id")
+            if record_id is not None:
+                event.setdefault("call_id", record_id)
             await conn.websocket.send_json(event)
             if event.get("type") == "call_started":
                 sid = event.get("data", {}).get("session_id")
-                if sid:
+                # 并发下 last-writer-wins 有歧义：仅未显式指定会话时记录当前会话
+                if sid and explicit_session is None:
                     conn.current_session_id = sid
     except WebSocketDisconnect:
         raise
@@ -245,8 +286,58 @@ async def _handle_execute(conn: WSConnection, data: dict):
         logger.exception(f"WS execute 异常: {e}")
         await _send_error(conn, str(e))
     finally:
-        conn.executing = False
+        if lock_session is not None:
+            conn.executing_sessions.discard(lock_session)
         _current_ws_conn.set(None)
+
+
+async def _handle_resume(conn: WSConnection, data: dict):
+    """处理 resume 指令：恢复等待人工输入的执行（Agent 传 session_id，Flow 传 execution_id）
+
+    Agent 会话与 execute 共用会话级锁；Flow 由 resume_execution 的 CAS 乐观锁保证并发安全。
+    """
+    human_input = data.get("input")
+    if human_input is None or not str(human_input).strip():
+        await _send_error(conn, "缺少 input 字段（人工输入内容）")
+        return
+    human_input = str(human_input)
+
+    key = "session_id" if conn.flow_type == FlowType.AGENT.value else "execution_id"
+    target_id = data.get(key)
+    if target_id is None:
+        await _send_error(conn, f"缺少 {key} 字段")
+        return
+    try:
+        target_id = int(target_id)
+    except (TypeError, ValueError):
+        await _send_error(conn, f"{key} 必须是整数")
+        return
+
+    lock_session: Optional[int] = None
+    if conn.flow_type == FlowType.AGENT.value:
+        if target_id in conn.executing_sessions:
+            await _send_error(conn, f"会话 {target_id} 正在执行中，请等待完成")
+            return
+        conn.executing_sessions.add(target_id)
+        lock_session = target_id
+    try:
+        record_id: Optional[int] = None
+        async for event in ws_gateway_service.stream_resume(
+            conn.gateway_id, target_id, human_input
+        ):
+            if record_id is None and event.get("type") == "call_started":
+                record_id = event.get("data", {}).get("call_id")
+            if record_id is not None:
+                event.setdefault("call_id", record_id)
+            await conn.websocket.send_json(event)
+    except WebSocketDisconnect:
+        raise
+    except Exception as e:
+        logger.exception(f"WS resume 异常: {e}")
+        await _send_error(conn, str(e))
+    finally:
+        if lock_session is not None:
+            conn.executing_sessions.discard(lock_session)
 
 
 # ---- 会话管理 ----

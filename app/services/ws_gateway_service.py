@@ -607,6 +607,115 @@ class WsGatewayService(
 
         await self.finish_call_record(record_id, status, output_data, error_message)
 
+    async def stream_resume(
+        self,
+        gateway_id: int,
+        target_id: int,
+        human_input: str,
+    ):
+        """WebSocket 恢复执行 — async generator，转发恢复事件流
+
+        校验目标（Agent 会话 / Flow 执行记录）归属于该网关后，
+        创建调用记录并转发恢复执行事件（与 stream_execute 同构）。
+        """
+        from app.config.database import AsyncSessionLocal
+        from app.services.flow_service import flow_service
+
+        async with AsyncSessionLocal() as db:
+            gateway = await self.get_by_id(db, gateway_id)
+            if not gateway:
+                yield {"type": "error", "data": {"message": "网关不存在"}}
+                return
+
+            flow = await flow_service.get_by_id(
+                db, gateway.flow_id, raise_not_found=False
+            )
+            flow_type = flow.flow_type if flow else None
+
+            if flow_type == FlowType.AGENT.value:
+                from app.models.agent_session import AgentSession
+
+                stmt = select(AgentSession).where(
+                    AgentSession.id == target_id,
+                    AgentSession.gateway_id == gateway.id,
+                    AgentSession.is_delete == 0,
+                )
+                session = (await db.execute(stmt)).scalar_one_or_none()
+                if not session:
+                    yield {
+                        "type": "error",
+                        "data": {"message": f"会话 {target_id} 不存在或不属于该网关"},
+                    }
+                    return
+                ref_type = "session"
+            else:
+                from app.services.flow_executor_service import flow_executor_service
+
+                execution = await flow_executor_service.get_execution(db, target_id)
+                if not execution or execution.flow_id != gateway.flow_id:
+                    yield {
+                        "type": "error",
+                        "data": {
+                            "message": f"执行记录 {target_id} 不存在或不属于该网关流程"
+                        },
+                    }
+                    return
+                ref_type = "execution"
+
+            record = await self.create_call_record(
+                db, gateway, {"resume_target": target_id, "input": human_input}
+            )
+            record_id = record.id
+            await self.update_call_record_ref(db, record_id, ref_type, target_id)
+
+        started_data: dict = {"call_id": record_id, "resumed": True}
+        started_data[f"{ref_type}_id"] = target_id
+        yield {"type": "call_started", "data": started_data}
+
+        # 执行并转发事件
+        output_data = None
+        error_message = None
+        status = "unknown"
+
+        try:
+            if ref_type == "session":
+                from app.services.agent_executor_service import (
+                    agent_executor_service,
+                )
+
+                event_stream = agent_executor_service.resume_stream(
+                    target_id, human_input
+                )
+            else:
+                from app.services.flow_executor_service import (
+                    flow_executor_service,
+                )
+
+                event_stream = flow_executor_service.resume_execution(
+                    target_id, human_input
+                )
+
+            async for event in event_stream:
+                event_type = event.get("type")
+                event_data = event.get("data", {})
+
+                if event_type == "flow_done":
+                    status = event_data.get("status", "success")
+                    output_data = event_data.get("output_data")
+                elif event_type == "error":
+                    status = "failed"
+                    error_message = event_data.get("message")
+
+                yield event
+
+        except Exception as e:
+            logger.exception(f"WS 恢复执行异常: {e}")
+            status = "failed"
+            error_message = str(e)
+            yield {"type": "error", "data": {"message": str(e)}}
+
+        await self.finish_call_record(record_id, status, output_data, error_message)
+
     async def create_session_for_ws(
         self, token: str, title: Optional[str] = None
     ) -> tuple[int, str]:
