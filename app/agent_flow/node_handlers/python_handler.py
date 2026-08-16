@@ -7,6 +7,7 @@ Python代码执行节点处理器
 import asyncio
 import inspect
 import io
+import re
 import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
@@ -35,11 +36,26 @@ from app.agent_flow.node_handlers.base_handler import (
 from app.models.flow_node import FlowNode
 
 
+class PythonParam(NodeVariable):
+    """Python 节点输入参数：在通用变量上扩展参数描述/必填/默认值"""
+
+    description: Optional[str] = Field(
+        default=None, description="参数说明，工具模式下对 LLM 可见"
+    )
+    required: bool = Field(default=False, description="是否必填（工具参数无默认值）")
+    default_value: Any = Field(
+        default=None,
+        description="默认值：流程模式未绑定变量时兜底，工具模式作为参数默认值",
+    )
+
+
 class PythonNodeConfig(BaseNodeConfig):
     code: str = ""
     timeout: int = 30
     description: Optional[str] = None
     use_preset_for_tool: bool = False
+    tool_name: Optional[str] = None
+    input_variables: list[PythonParam] = []  # type: ignore
     output_variables: list[NodeVariable] = [
         NodeVariable(name="result", type="python_result"),
     ]
@@ -200,6 +216,46 @@ def _build_restricted_globals():
     }
 
 
+_TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
+
+
+def _resolve_tool_name(cfg: PythonNodeConfig, node_key: str) -> str:
+    """解析自定义工具名，空或非法格式时回退 python_{node_key}"""
+    name = (cfg.tool_name or "").strip()
+    if name and _TOOL_NAME_PATTERN.match(name):
+        return name
+    return f"python_{node_key}"
+
+
+def _coerce_default_value(var: PythonParam) -> Any:
+    """将默认值原始值（通常为前端字符串）转为参数类型对应值，不可转换时返回 None"""
+    value = var.default_value
+    if value is None:
+        return None
+    var_type = var.type or "string"
+    if var_type == "number":
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    if var_type == "boolean":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in ("true", "1", "yes"):
+                return True
+            if lowered in ("false", "0", "no", ""):
+                return False
+            return None
+        return bool(value)
+    return value
+
+
 @NodeHandlerRegistry.register("python")
 class PythonNodeHandler(BaseNodeHandler):
     """
@@ -236,6 +292,13 @@ class PythonNodeHandler(BaseNodeHandler):
             return state
 
         context = self._resolve_input_variables(cfg.input_variables, state)
+        # 未绑定来源或解析值为 None 的参数，回退默认值
+        for var in cfg.input_variables:
+            if var.name and var.default_value is not None:
+                if not var.source or context.get(var.name) is None:
+                    fallback = _coerce_default_value(var)
+                    if fallback is not None:
+                        context[var.name] = fallback
 
         try:
             result = await self._execute_python(code, context, timeout)
@@ -287,14 +350,14 @@ class PythonNodeHandler(BaseNodeHandler):
             restricted_globals.update(input_vars)
 
             with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                loc = {}
-                exec(compile_result.code, restricted_globals, loc)
+                # globals/locals 使用同一命名空间，保证顶层定义的函数/导入对 main 可见
+                exec(compile_result.code, restricted_globals)
 
                 # 检查 main 函数是否存在
-                if "main" not in loc:
+                if "main" not in restricted_globals:
                     raise RuntimeError("必须定义 main 函数")
 
-                main_func = loc["main"]
+                main_func = restricted_globals["main"]
                 sig = inspect.signature(main_func)
                 params = sig.parameters
 
@@ -420,21 +483,20 @@ class PythonNodeHandler(BaseNodeHandler):
         input_variables = cfg.input_variables
 
         param_desc_list = []
+        param_lines = []
         for v in input_variables:
-            name = v.name
+            if not v.name:
+                continue
             var_type = v.type or "string"
-            if name:
-                param_desc_list.append(f"{name}: {var_type}")
+            param_desc_list.append(f"{v.name}: {var_type}")
+            line = f"  - {v.name}: {var_type}"
+            if v.description:
+                line += f" ({v.description})"
+            param_lines.append(line)
 
         if param_desc_list:
             params_desc = ", ".join(param_desc_list)
-            param_list = "\n".join(
-                [
-                    f"  - {v.name}: {v.type or 'string'}"
-                    for v in input_variables
-                    if v.name
-                ]
-            )
+            param_list = "\n".join(param_lines)
         else:
             params_desc = "无"
             param_list = "  无"
@@ -495,7 +557,7 @@ class PythonNodeHandler(BaseNodeHandler):
         code = cfg.code
         input_variables = cfg.input_variables
 
-        # ---- 动态构建 args_schema ----
+        # ---- 动态构建 args_schema（参数描述/必填/默认值生效） ----
         fields: dict[str, tuple[type, Any]] = {}
         for var in input_variables:
             name = var.name
@@ -503,15 +565,18 @@ class PythonNodeHandler(BaseNodeHandler):
                 continue
             var_type = var.type or "string"
             if var_type == "number":
-                py_type = float
-                default = Field(default=0.0, description=name)
+                py_type, type_default = float, 0.0
             elif var_type == "boolean":
-                py_type = bool
-                default = Field(default=False, description=name)
+                py_type, type_default = bool, False
             else:
-                py_type = str
-                default = Field(default="", description=name)
-            fields[name] = (py_type, default)
+                py_type, type_default = str, ""
+            desc = var.description or name
+            coerced = _coerce_default_value(var)
+            if var.required:
+                fields[name] = (py_type, Field(..., description=desc))
+            else:
+                default = coerced if coerced is not None else type_default
+                fields[name] = (py_type, Field(default=default, description=desc))
 
         if not fields:
             fields["_dummy"] = (str, Field(default="", description="忽略"))
@@ -520,7 +585,7 @@ class PythonNodeHandler(BaseNodeHandler):
             f"{node.node_key}_python_input", __base__=BaseModel, **fields
         )
 
-        tool_name = f"python_{node.node_key}"
+        tool_name = _resolve_tool_name(cfg, node.node_key)
         description = (
             cfg.description or f"执行 {node.node_name or node.node_key} Python代码"
         )
@@ -548,7 +613,11 @@ class PythonNodeHandler(BaseNodeHandler):
         node_key = node.node_key
         cfg = node.base_config or {}
         if cfg.get("use_preset_for_tool"):
-            tool_name = f"python_{node_key}"
+            custom_name = (cfg.get("tool_name") or "").strip()
+            if custom_name and _TOOL_NAME_PATTERN.match(custom_name):
+                tool_name = custom_name
+            else:
+                tool_name = f"python_{node_key}"
             desc = (
                 cfg.get("description")
                 or f"执行 {node.node_name or node_key} Python代码"

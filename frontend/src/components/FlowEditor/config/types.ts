@@ -178,14 +178,22 @@ export interface KnowledgeConfig {
   output_variables: NodeVariable[]
 }
 
+/** Python节点输入参数（扩展节点变量：工具模式下生效的描述/必填/默认值） */
+export interface PythonParam extends NodeVariable {
+  description?: string
+  required?: boolean
+  default_value?: string | number | boolean | null
+}
+
 /** Python节点配置 */
 export interface PythonConfig {
   code: string
   timeout: number
-  input_variables: NodeVariable[]
+  input_variables: PythonParam[]
   output_variables: NodeVariable[]
   description?: string
   use_preset_for_tool?: boolean
+  tool_name?: string
 }
 
 /** Shell节点配置 */
