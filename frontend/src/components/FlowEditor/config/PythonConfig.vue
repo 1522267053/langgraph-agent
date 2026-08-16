@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { PythonConfig } from './types'
 import { fieldTypeOptions } from './types'
+import { ElMessage } from 'element-plus'
 import { useConfigBase } from '@/composables/useConfigBase'
 import { useInputVariables } from '@/composables/useInputVariables'
 import VariableSelector from '../components/VariableSelector.vue'
@@ -24,6 +25,32 @@ const { addInputVariable, removeInputVariable, handleSourceTypeChange } = useInp
 function updateVariableSource(index: number, source: string): void {
   if (localConfig.value.input_variables[index])
     localConfig.value.input_variables[index].source = source
+  updateConfig()
+}
+
+/** 按参数类型规范化默认值（number 转数字、boolean 转 true/false，清空为 null） */
+function updateDefaultValue(index: number, val: unknown): void {
+  const variable = localConfig.value.input_variables[index]
+  if (!variable) return
+  if (val === '' || val === undefined || val === null) {
+    variable.default_value = null
+  } else if (variable.type === 'boolean') {
+    variable.default_value = val === 'true' || val === true
+  } else if (variable.type === 'number') {
+    const num = Number(val)
+    variable.default_value = Number.isNaN(num) ? null : num
+  } else {
+    variable.default_value = String(val)
+  }
+  updateConfig()
+}
+
+/** 工具名校验：字母开头，仅含字母/数字/下划线，非法名称后端回退默认名 */
+function validateToolName(): void {
+  const name = (localConfig.value.tool_name || '').trim()
+  if (name && !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name)) {
+    ElMessage.warning('工具名需以字母开头，仅含字母、数字、下划线；非法名称将回退默认名')
+  }
   updateConfig()
 }
 </script>
@@ -79,12 +106,55 @@ function updateVariableSource(index: number, source: string): void {
                 @update:type="t => handleSourceTypeChange(index, t)"
               />
             </el-form-item>
+            <el-form-item label="描述">
+              <el-input
+                v-model="variable.description"
+                placeholder="参数说明（工具模式下 LLM 可见）"
+                @blur="updateConfig"
+              />
+            </el-form-item>
+            <el-form-item label="必填">
+              <el-switch
+                :model-value="!!variable.required"
+                active-text="是"
+                inactive-text="否"
+                @change="(val: boolean | string) => { variable.required = !!val; updateConfig() }"
+              />
+            </el-form-item>
+            <!-- 默认值：按参数类型切换输入控件，未绑定来源或值为空时兜底 -->
+            <el-form-item label="默认值">
+              <el-input-number
+                v-if="variable.type === 'number'"
+                :model-value="typeof variable.default_value === 'number' ? variable.default_value : undefined"
+                placeholder="未设置"
+                style="width: 100%"
+                @change="(val: number | undefined) => updateDefaultValue(index, val)"
+              />
+              <el-select
+                v-else-if="variable.type === 'boolean'"
+                :model-value="variable.default_value == null ? '' : String(variable.default_value)"
+                clearable
+                placeholder="未设置"
+                @change="(val: string) => updateDefaultValue(index, val)"
+              >
+                <el-option label="true" value="true" />
+                <el-option label="false" value="false" />
+              </el-select>
+              <el-input
+                v-else
+                :model-value="variable.default_value == null ? '' : String(variable.default_value)"
+                placeholder="未绑定来源或值为空时使用"
+                @blur="(e: FocusEvent) => updateDefaultValue(index, (e.target as HTMLInputElement).value)"
+              />
+            </el-form-item>
           </el-form>
         </div>
       </div>
       <div class="config-hint">
         <el-text size="small" type="info">
           变量名称需与 main 函数参数名一致，如 main(query, data) 对应名称 query、data
+          <br />
+          工具模式下：必填参数 LLM 必须提供，参数描述作为 LLM 填参依据，默认值作为参数缺省值
         </el-text>
       </div>
     </div>
@@ -94,7 +164,7 @@ function updateVariableSource(index: number, source: string): void {
         <el-form-item label="代码">
           <CodeEditor
             v-model="localConfig.code"
-            placeholder="# 定义 main 函数，输入变量作为参数&#10;def main(query, data):&#10;    result = query + data&#10;    print(f'处理中...')&#10;    return result"
+            placeholder="# 定义 main 函数，输入变量作为参数&#10;# 可在顶层 import 模块、定义辅助函数供 main 调用&#10;import math&#10;def helper(x):&#10;    return math.sqrt(x)&#10;def main(query, data):&#10;    result = helper(query) + data&#10;    print(f'处理中...')&#10;    return result"
             @blur="updateConfig"
           />
         </el-form-item>
@@ -110,7 +180,7 @@ function updateVariableSource(index: number, source: string): void {
       </el-form>
       <div class="config-hint">
         <el-text size="small" type="info">
-          定义 main 函数，参数名与输入变量名称一致，return 返回结果
+          定义 main 函数，参数名与输入变量名称一致，return 返回结果；可在顶层导入模块、定义辅助函数供 main 调用
           <br />
           输出: {stdout: str, stderr: str, result: 函数返回的结果, success: true / false}
           <br />
@@ -138,6 +208,13 @@ function updateVariableSource(index: number, source: string): void {
           <el-text size="small" type="info" style="margin-left: 12px">
             开启后作为工具时使用已配置的代码，LLM 只提供输入变量值
           </el-text>
+        </el-form-item>
+        <el-form-item v-if="localConfig.use_preset_for_tool" label="工具名">
+          <el-input
+            v-model="localConfig.tool_name"
+            placeholder="可选，字母开头、仅含字母/数字/下划线，留空默认 python_节点key"
+            @blur="validateToolName"
+          />
         </el-form-item>
         <el-form-item v-if="localConfig.use_preset_for_tool" label="工具描述">
           <el-input
