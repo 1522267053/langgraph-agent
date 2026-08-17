@@ -370,7 +370,7 @@ watch(searchKeyword, val => {
 
 const isSearchMode = computed(() => searchKeyword.value.trim().length > 0)
 
-async function handleSearchResultClick(sessionId: number) {
+async function switchToSession(sessionId: number) {
   if (!chatAgentId.value) return
   const session = store.sessions.find(s => s.id === sessionId)
   if (session) {
@@ -385,6 +385,18 @@ async function handleSearchResultClick(sessionId: number) {
     await store.selectSession(chatAgentId.value, fakeSession)
     sidebarVisible.value = false
   }
+}
+
+async function handleSearchResultClick(sessionId: number) {
+  await switchToSession(sessionId)
+  searchKeyword.value = ''
+}
+
+/** 点击消息搜索结果：切换会话后跳转滚动到对应消息 */
+async function handleSearchMessageClick(m: SearchResultMessage) {
+  await switchToSession(m.session_id)
+  // selectSession 完成后设置跳转目标，AgentChat 消费后自动清空
+  store.messageScrollTarget = m.id
   searchKeyword.value = ''
 }
 
@@ -585,7 +597,7 @@ function handleSessionPageChange(page: number): void {
                       v-for="m in searchResults.messages"
                       :key="'m' + m.id"
                       class="message-result-item"
-                      @click="handleSearchResultClick(m.session_id)"
+                      @click="handleSearchMessageClick(m)"
                     >
                       <el-icon class="message-result-icon"><ChatLineSquare /></el-icon>
                       <div class="message-result-info">

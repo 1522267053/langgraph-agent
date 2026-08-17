@@ -59,6 +59,7 @@ function isLastMessage(idx: number): boolean {
       <MessageBubble
         v-else
         :msg="msg"
+        :data-msg-id="msg.id"
         :show-thinking="showThinking"
         :show-tool-calls="showToolCalls"
         :is-streaming="isStreaming"

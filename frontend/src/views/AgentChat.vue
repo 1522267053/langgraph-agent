@@ -256,6 +256,7 @@ onUnmounted(() => {
   store.stopCompressPolling()
   store.stopSavePolling()
   store.stopRunningPolling()
+  store.messageScrollTarget = null
   toolOutputStore.stopPolling()
   toolOutputStore.unregisterWsHandler()
   loadMoreObserver?.disconnect()
@@ -348,6 +349,50 @@ async function handleLoadMore() {
     }
   }
 }
+
+/** 跳转高亮定时器（模块级，避免挂到 window） */
+let msgHighlightTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 跳转滚动到搜索目标消息
+ * 目标可能早于已加载的最新一页，未找到时逐页向上加载更旧消息直至命中或加载完
+ */
+async function scrollToTargetMessage() {
+  const target = store.messageScrollTarget
+  if (target == null || !agentId.value) return
+  const key = `msg-${target}`
+  try {
+    // 上限 30 页（约 600 条），限制跳转极端场景的 DOM 渲染规模
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const el = messagesContainer.value?.querySelector<HTMLElement>(
+        `[data-msg-id="${key}"]`
+      )
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        // 高亮闪色，2s 后移除
+        el.classList.add('msg-highlight')
+        if (msgHighlightTimer) clearTimeout(msgHighlightTimer)
+        msgHighlightTimer = setTimeout(() => {
+          el.classList.remove('msg-highlight')
+        }, 2000)
+        return
+      }
+      if (!store.hasMoreMessages || store.loadingMoreMessages) break
+      const loaded = await store.loadMoreMessages(agentId.value)
+      await nextTick()
+      if (loaded === 0) break
+    }
+  } finally {
+    store.messageScrollTarget = null
+  }
+}
+
+watch(
+  () => store.messageScrollTarget,
+  target => {
+    if (target != null) scrollToTargetMessage()
+  }
+)
 
 async function handleChatSend(
   params: Record<string, unknown>,
@@ -1104,6 +1149,26 @@ export default {
 
   .welcome-input {
     padding: 8px 16px 16px;
+  }
+}
+</style>
+
+<style>
+/* 搜索结果跳转高亮（作用于子组件根元素，需非 scoped 样式） */
+.message.msg-highlight {
+  animation: msg-highlight-flash 2s ease-out;
+  border-radius: 12px;
+}
+
+@keyframes msg-highlight-flash {
+  0% {
+    background-color: rgba(64, 158, 255, 0.25);
+    box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.35);
+  }
+
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 3px transparent;
   }
 }
 </style>
