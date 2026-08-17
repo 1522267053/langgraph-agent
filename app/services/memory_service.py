@@ -736,13 +736,18 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
 
         emb_svc = await get_embedding_service_async()
         if emb_svc.is_available():
-            return await self._vector_search_memories(
+            results = await self._vector_search_memories(
                 db, agent_id, query, tier, categories, max_results, min_score
             )
-        else:
-            return await self._keyword_search_memories(
-                db, agent_id, query, tier, categories, max_results
+            if results:
+                return results
+            logger.info(
+                f"记忆向量检索无结果，回退 SQL 关键词匹配: "
+                f"agent_id={agent_id}, query={query!r}"
             )
+        return await self._keyword_search_memories(
+            db, agent_id, query, tier, categories, max_results
+        )
 
     async def _vector_search_memories(
         self,
