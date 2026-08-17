@@ -395,11 +395,9 @@ const selectedAgentId = computed({
   set: (val: number | null) => {
     if (!val) return
     store.sessionsLoading = true
-    if (val === builtinAgentId.value && !defaultAgentId.value) {
-      router.push('/chat')
-    } else {
-      router.push(`/chat/${val}`)
-    }
+    // 显式选择任何 agent（含内置）都带 id 导航，确保 AgentChat 的路由 watcher 精确切换；
+    // 无 id 的 /chat 仍保留"上次使用 > 默认 > 内置"回退（服务菜单进入/刷新恢复场景）
+    router.push(`/chat/${val}`)
   }
 })
 
