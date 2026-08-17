@@ -96,6 +96,8 @@ class UpdateService:
 
         self._latest_info: dict = _no_update_result()
         self._last_result: Optional[dict] = None
+        self._pending_result: bool = False
+        self._resolve_task: Optional[asyncio.Task] = None
 
         self._restore_from_disk()
 
@@ -390,29 +392,21 @@ class UpdateService:
 
     def _restore_from_disk(self) -> None:
         """启动时从磁盘恢复状态"""
-        try:
-            if self._result_file.exists():
-                self._last_result = json.loads(
-                    self._result_file.read_text(encoding="utf-8")
-                )
-                self._result_file.unlink(missing_ok=True)
-                self._cleanup_download_files()
-                self._status_file.unlink(missing_ok=True)
-                return
-        except Exception:
-            logger.debug("读取 result.json 失败", exc_info=True)
+        result = self._consume_result_file()
+        if result is not None:
+            self._last_result = result
+            return
 
         try:
             if self._status_file.exists():
                 data = json.loads(self._status_file.read_text(encoding="utf-8"))
                 if data.get("state") == UpdateState.APPLYING.value:
-                    self._state = UpdateState.FAILED.value
-                    self._error = "上次更新被中断，请重新检查更新"
-                    self._last_result = {
-                        "result": "interrupted",
-                        "error": "更新过程被中断",
-                    }
-                    self._persist_status()
+                    # 更新正在进行：正常流程中新版主进程先于 updater 的健康检查
+                    # 启动（result.json 在健康检查通过后才写入），此处不能立即判定
+                    # 中断，保持 applying 态，由 lifespan 拉起后台轮询等待最终结果
+                    self._state = UpdateState.APPLYING.value
+                    self._version = data.get("version", "")
+                    self._pending_result = True
                 else:
                     self._state = data.get("state", UpdateState.IDLE.value)
                     self._version = data.get("version", "")
@@ -420,6 +414,50 @@ class UpdateService:
                     self._error = data.get("error", "")
         except Exception:
             logger.debug("读取 status.json 失败", exc_info=True)
+
+    def _consume_result_file(self) -> Optional[dict]:
+        """读取并清理 updater 写入的 result.json，无文件或读取失败返回 None"""
+        try:
+            if self._result_file.exists():
+                data = json.loads(self._result_file.read_text(encoding="utf-8"))
+                self._result_file.unlink(missing_ok=True)
+                self._cleanup_download_files()
+                self._status_file.unlink(missing_ok=True)
+                return data
+        except Exception:
+            logger.debug("读取 result.json 失败", exc_info=True)
+        return None
+
+    def start_pending_result_resolver(self) -> None:
+        """由 lifespan 在事件循环就绪后调用，拉起更新结果轮询（持有强引用防 GC）"""
+        if not self._pending_result or self._resolve_task:
+            return
+        self._resolve_task = asyncio.create_task(self.resolve_pending_result())
+
+    async def resolve_pending_result(self) -> None:
+        """后台轮询 updater 的最终更新结果
+
+        新版主进程先于 updater 完成（result.json 在健康检查通过后才写入），
+        启动时无法同步读取。轮询超时（健康检查超时 + 30s 余量）仍无结果才
+        判定更新被中断，覆盖 updater 异常死亡的场景。
+        """
+        deadline = time.monotonic() + settings.update_health_check_timeout + 30
+        while time.monotonic() < deadline:
+            result = self._consume_result_file()
+            if result is not None:
+                self._last_result = result
+                if result.get("result") == "success":
+                    self._error = ""
+                    self._progress = 0
+                    self._set_state(UpdateState.IDLE)
+                else:
+                    self._error = result.get("error", "")
+                    self._set_state(UpdateState.FAILED)
+                return
+            await asyncio.sleep(2)
+        self._error = "上次更新被中断，请重新检查更新"
+        self._last_result = {"result": "interrupted", "error": "更新过程被中断"}
+        self._set_state(UpdateState.FAILED)
 
     def _cleanup_download_files(self) -> None:
         """清理下载的 zip 包（更新完成后调用）"""

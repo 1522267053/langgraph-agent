@@ -187,7 +187,7 @@ async function loadUpdateStatus(): Promise<void> {
       if (updateStatus.value.last_result) {
         updateApi.ack().catch(() => {})
       }
-      if (updateStatus.value.state === 'downloading') {
+      if (updateStatus.value.state === 'downloading' || updateStatus.value.state === 'applying') {
         startStatusPolling()
       }
     }
@@ -273,7 +273,7 @@ function startStatusPolling(): void {
     try {
       const res = await updateApi.getStatus()
       updateStatus.value = res.data.data
-      if (updateStatus.value && updateStatus.value.state !== 'downloading') {
+      if (updateStatus.value && !['downloading', 'applying'].includes(updateStatus.value.state)) {
         stopStatusPolling()
       }
     } catch {
@@ -617,6 +617,15 @@ function openDownloadUrl(): void {
             <div class="update-download-row">
               <el-button size="small" @click="cancelDownload">取消下载</el-button>
             </div>
+          </div>
+        </template>
+
+        <!-- 更新应用中：新版已启动，等待 updater 写入最终结果 -->
+        <template v-else-if="updateStatus?.state === 'applying'">
+          <div class="update-progress">
+            <div class="update-progress-info">正在完成更新 v{{ updateStatus.version }}...</div>
+            <el-progress indeterminate :percentage="50" :stroke-width="8" :show-text="false" />
+            <div class="update-notice-desc">服务已重启，正在确认更新结果，请稍候</div>
           </div>
         </template>
 

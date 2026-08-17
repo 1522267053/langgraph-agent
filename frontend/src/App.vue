@@ -111,7 +111,7 @@ function startStatusPolling(): void {
   if (statusTimer) return
   statusTimer = setInterval(async () => {
     await refreshUpdateStatus()
-    if (updateStatus.value && updateStatus.value.state !== 'downloading') {
+    if (updateStatus.value && !['downloading', 'applying'].includes(updateStatus.value.state)) {
       stopStatusPolling()
     }
   }, 3000)
@@ -493,9 +493,7 @@ function handleSessionPageChange(page: number): void {
       >
         <span class="banner-text">新版本 v{{ updateStatus.version }} 已就绪，建议重启更新</span>
         <el-button type="warning" size="small" @click="applyUpdate">重启更新</el-button>
-        <el-button size="small" type="success" @click="openDownloadUrl">
-          前往下载
-        </el-button>
+        <el-button size="small" type="success" @click="openDownloadUrl">前往下载</el-button>
       </div>
       <div class="app-body">
         <template v-if="!isEditorPage">

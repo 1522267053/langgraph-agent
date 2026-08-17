@@ -110,6 +110,11 @@ async def startup() -> None:
     await init_db()
     logger.info("[OK] Database initialized")
 
+    # ---- 更新收尾：若由 updater 拉起且最终结果未写入，后台轮询判定成功/中断 ----
+    from app.services.update_service import update_service
+
+    update_service.start_pending_result_resolver()
+
     # ---- 加载通知配置 ----
     await _load_notification_config()
 
