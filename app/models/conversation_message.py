@@ -24,7 +24,7 @@ class ConversationMessage(DbBaseModel):
     node_key: Mapped[str] = mapped_column(Text, nullable=False, comment="节点标识")
 
     role: Mapped[str] = mapped_column(
-        String(20), nullable=False, comment="消息角色：system/user/assistant/tool"
+        String(20), nullable=False, comment="消息角色：human/ai/tool"
     )
     thinking: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, comment="思考内容"

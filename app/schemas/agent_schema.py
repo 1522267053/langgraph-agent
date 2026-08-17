@@ -41,7 +41,7 @@ class AgentSessionResponse(AgentSessionBase):
 class AgentMessageBase(BaseModel):
     """Agent消息基础Schema"""
 
-    role: str = Field(..., description="system/user/assistant/tool")
+    role: str = Field(..., description="human/ai/tool")
     content: str = Field(..., description="消息内容")
     original_content: Optional[str] = Field(
         default=None, description="原始用户消息（未渲染模板）"
