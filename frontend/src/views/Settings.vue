@@ -19,6 +19,7 @@ const router = useRouter()
 const marketplaceStore = useMarketplaceStore()
 const loading = ref(true)
 const saving = ref(false)
+const activeTab = ref('llm')
 
 const config = ref<GlobalConfigData>({})
 const selectedProvider = ref('')
@@ -319,391 +320,381 @@ function openDownloadUrl(): void {
     </div>
 
     <div class="settings-content">
-      <el-card shadow="never" class="settings-card">
-        <template #header>
-          <span class="card-title">AI 模型配置</span>
-        </template>
-
-        <el-form label-position="top">
-          <AiProviderConfig
-            v-model:provider="selectedProvider"
-            v-model:model="model"
-            v-model:api-key="apiKey"
-            v-model:base-url="baseUrl"
-            v-model:context-length="contextLength"
-            show-context-length
-            :reset-on-provider-change="false"
-            label-position="top"
-            :api-key-placeholder="
-              config.api_key_masked ? `当前: ${config.api_key_masked}` : '请输入 API Key'
-            "
-          />
-
-          <el-button type="primary" :loading="saving" style="margin-top: 16px" @click="handleSave">
-            保存配置
-          </el-button>
-        </el-form>
-      </el-card>
-
-      <el-card shadow="never" class="settings-card" style="margin-top: 16px">
-        <template #header>
-          <span class="card-title">向量模型配置</span>
-        </template>
-
-        <el-alert
-          title="如不配置，记忆和知识库的向量检索功能将不可用"
-          type="warning"
-          :closable="false"
-          show-icon
-          style="margin-bottom: 16px"
-        />
-
-        <el-form label-position="top">
-          <el-form-item label="API Key">
-            <el-input
-              v-model="embeddingApiKey"
-              type="password"
-              :placeholder="
-                config.embedding_api_key_masked
-                  ? `当前: ${config.embedding_api_key_masked}`
-                  : '请输入向量模型 API Key'
-              "
-              show-password
-              clearable
-            />
-          </el-form-item>
-
-          <el-form-item label="模型名称">
-            <el-input v-model="embeddingModel" placeholder="如 BAAI/bge-m3" clearable />
-          </el-form-item>
-
-          <el-form-item label="Base URL">
-            <el-input
-              v-model="embeddingBaseUrl"
-              placeholder="如 https://api.siliconflow.cn/v1"
-              clearable
-            />
-          </el-form-item>
-
-          <el-button type="primary" :loading="saving" @click="handleSave">保存配置</el-button>
-        </el-form>
-      </el-card>
-
-      <el-card shadow="never" class="settings-card" style="margin-top: 16px">
-        <template #header>
-          <span class="card-title">登录安全</span>
-        </template>
-
-        <div>
-          <el-alert
-            title="登录保护已启用"
-            type="success"
-            :closable="false"
-            show-icon
-            style="margin-bottom: 16px"
-          />
-          <el-form label-position="top">
-            <el-form-item label="用户名">
-              <el-input
-                v-model="loginUsername"
-                :placeholder="
-                  config.username
-                    ? `当前: ${config.username}，输入新值可修改`
-                    : hasUsername
-                      ? '当前已设置，输入新值可修改'
-                      : '请输入用户名'
+      <el-tabs v-model="activeTab" class="settings-tabs">
+        <el-tab-pane label="AI 模型配置" name="llm">
+          <div class="settings-card">
+            <el-form label-position="top">
+              <AiProviderConfig
+                v-model:provider="selectedProvider"
+                v-model:model="model"
+                v-model:api-key="apiKey"
+                v-model:base-url="baseUrl"
+                v-model:context-length="contextLength"
+                show-context-length
+                :reset-on-provider-change="false"
+                label-position="top"
+                :api-key-placeholder="
+                  config.api_key_masked ? `当前: ${config.api_key_masked}` : '请输入 API Key'
                 "
-                clearable
               />
-            </el-form-item>
-            <el-form-item label="当前密码">
-              <el-input
-                v-model="currentPassword"
-                type="password"
-                placeholder="请输入当前密码"
-                show-password
-                clearable
-              />
-            </el-form-item>
-            <el-form-item label="新密码">
-              <el-input
-                v-model="loginPassword"
-                type="password"
-                placeholder="请输入新密码"
-                show-password
-                clearable
-              />
-            </el-form-item>
-            <el-form-item v-if="loginPassword" label="确认新密码">
-              <el-input
-                v-model="loginPasswordConfirm"
-                type="password"
-                placeholder="请再次输入新密码"
-                show-password
-                clearable
-              />
-            </el-form-item>
-            <el-button
-              type="primary"
-              :disabled="
-                !currentPassword ||
-                !loginPassword ||
-                loginPassword !== loginPasswordConfirm ||
-                (!hasUsername && !loginUsername.trim())
-              "
-              :loading="saving"
-              @click="handleSave"
-            >
-              修改
-            </el-button>
-          </el-form>
-        </div>
-      </el-card>
 
-      <el-card shadow="never" class="settings-card" style="margin-top: 16px">
-        <template #header>
-          <div class="card-title" style="display: flex; align-items: center; gap: 8px">
-            <el-icon><Bell /></el-icon>
-            <span>通知设置</span>
+              <el-button type="primary" :loading="saving" style="margin-top: 16px" @click="handleSave">
+                保存配置
+              </el-button>
+            </el-form>
           </div>
-        </template>
-        <el-form label-position="top">
-          <el-form-item>
-            <div
-              style="
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                width: 100%;
-              "
-            >
-              <div>
-                <div style="font-size: 14px; font-weight: 500">执行完成通知</div>
-                <div style="font-size: 12px; color: #64748b; margin-top: 4px">
-                  流程或智能体执行完成时，通过 WebSocket 推送桌面通知（右上角弹窗）
+        </el-tab-pane>
+
+        <el-tab-pane label="向量模型配置" name="embedding">
+          <div class="settings-card">
+            <el-alert
+              title="如不配置，记忆和知识库的向量检索功能将不可用，会退化成sql的模糊搜索"
+              type="warning"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 16px"
+            />
+
+            <el-form label-position="top">
+              <el-form-item label="API Key">
+                <el-input
+                  v-model="embeddingApiKey"
+                  type="password"
+                  :placeholder="
+                    config.embedding_api_key_masked
+                      ? `当前: ${config.embedding_api_key_masked}`
+                      : '请输入向量模型 API Key'
+                  "
+                  show-password
+                  clearable
+                />
+              </el-form-item>
+
+              <el-form-item label="模型名称">
+                <el-input v-model="embeddingModel" placeholder="如 BAAI/bge-m3" clearable />
+              </el-form-item>
+
+              <el-form-item label="Base URL">
+                <el-input
+                  v-model="embeddingBaseUrl"
+                  placeholder="如 https://api.siliconflow.cn/v1"
+                  clearable
+                />
+              </el-form-item>
+
+              <el-button type="primary" :loading="saving" @click="handleSave">保存配置</el-button>
+            </el-form>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="登录安全" name="security">
+          <div class="settings-card">
+            <el-alert
+              title="登录保护已启用"
+              type="success"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 16px"
+            />
+            <el-form label-position="top">
+              <el-form-item label="用户名">
+                <el-input
+                  v-model="loginUsername"
+                  :placeholder="
+                    config.username
+                      ? `当前: ${config.username}，输入新值可修改`
+                      : hasUsername
+                        ? '当前已设置，输入新值可修改'
+                        : '请输入用户名'
+                  "
+                  clearable
+                />
+              </el-form-item>
+              <el-form-item label="当前密码">
+                <el-input
+                  v-model="currentPassword"
+                  type="password"
+                  placeholder="请输入当前密码"
+                  show-password
+                  clearable
+                />
+              </el-form-item>
+              <el-form-item label="新密码">
+                <el-input
+                  v-model="loginPassword"
+                  type="password"
+                  placeholder="请输入新密码"
+                  show-password
+                  clearable
+                />
+              </el-form-item>
+              <el-form-item v-if="loginPassword" label="确认新密码">
+                <el-input
+                  v-model="loginPasswordConfirm"
+                  type="password"
+                  placeholder="请再次输入新密码"
+                  show-password
+                  clearable
+                />
+              </el-form-item>
+              <el-button
+                type="primary"
+                :disabled="
+                  !currentPassword ||
+                  !loginPassword ||
+                  loginPassword !== loginPasswordConfirm ||
+                  (!hasUsername && !loginUsername.trim())
+                "
+                :loading="saving"
+                @click="handleSave"
+              >
+                修改
+              </el-button>
+            </el-form>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="通知设置" name="notification">
+          <div class="settings-card">
+            <el-form label-position="top">
+              <el-form-item>
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    width: 100%;
+                  "
+                >
+                  <div>
+                    <div style="font-size: 14px; font-weight: 500">执行完成通知</div>
+                    <div style="font-size: 12px; color: #64748b; margin-top: 4px">
+                      流程或智能体执行完成时，通过 WebSocket 推送桌面通知（右上角弹窗）
+                    </div>
+                  </div>
+                  <el-switch v-model="executionNotificationEnabled" />
                 </div>
-              </div>
-              <el-switch v-model="executionNotificationEnabled" />
+              </el-form-item>
+              <el-form-item>
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    width: 100%;
+                  "
+                >
+                  <div>
+                    <div style="font-size: 14px; font-weight: 500">浏览器桌面通知</div>
+                    <div style="font-size: 12px; color: #64748b; margin-top: 4px">
+                      流程/对话完成或日程提醒时，弹出系统级桌面通知（浏览器后台也能收到）
+                    </div>
+                  </div>
+                  <el-button size="small" @click="handleRequestNotifyPermission">
+                    {{ notifyPermission === 'granted' ? '已授权' : '请求通知权限' }}
+                  </el-button>
+                </div>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+              </el-form-item>
+            </el-form>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="资源市场" name="marketplace">
+          <div class="settings-card">
+            <div class="card-title" style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px">
+              <el-icon><Link /></el-icon>
+              <span>资源市场</span>
+              <el-tag
+                v-if="marketplaceStore.connected"
+                type="success"
+                size="small"
+                style="margin-left: auto"
+              >
+                已连接
+              </el-tag>
+              <el-tag v-else type="info" size="small" style="margin-left: auto">未连接</el-tag>
             </div>
-          </el-form-item>
-          <el-form-item>
+            <el-form label-position="top">
+              <el-form-item label="服务器地址">
+                <el-input
+                  v-model="marketplaceStore.serverUrl"
+                  placeholder="例如: https://market.example.com"
+                  clearable
+                />
+              </el-form-item>
+              <el-form-item>
+                <el-button
+                  type="primary"
+                  :loading="marketplaceStore.loading"
+                  :disabled="!marketplaceStore.serverUrl.trim()"
+                  @click="handleSaveMarketplace"
+                >
+                  保存并连接
+                </el-button>
+                <el-button v-if="marketplaceStore.connected" @click="handleDisconnectMarketplace">
+                  断开连接
+                </el-button>
+              </el-form-item>
+            </el-form>
+            <div v-if="marketplaceStore.connected" class="marketplace-tip">
+              已连接，前往
+              <el-link type="primary" underline="never" @click="router.push('/marketplace')">
+                资源市场
+              </el-link>
+              浏览和导入资源
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="版本更新" name="update">
+          <div class="settings-card">
             <div
-              style="
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                width: 100%;
-              "
+              class="card-title"
+              style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px"
             >
-              <div>
-                <div style="font-size: 14px; font-weight: 500">浏览器桌面通知</div>
-                <div style="font-size: 12px; color: #64748b; margin-top: 4px">
-                  流程/对话完成或日程提醒时，弹出系统级桌面通知（浏览器后台也能收到）
-                </div>
-              </div>
-              <el-button size="small" @click="handleRequestNotifyPermission">
-                {{ notifyPermission === 'granted' ? '已授权' : '请求通知权限' }}
+              <span>版本更新</span>
+              <el-tag size="small" type="info">v{{ currentVersion }}</el-tag>
+            </div>
+
+            <div class="update-actions">
+              <el-button type="primary" plain :loading="updateChecking" @click="checkForUpdates">
+                检查更新
               </el-button>
             </div>
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
-          </el-form-item>
-        </el-form>
-      </el-card>
 
-      <el-card shadow="never" class="settings-card" style="margin-top: 16px">
-        <template #header>
-          <div class="card-title" style="display: flex; align-items: center; gap: 8px">
-            <el-icon><Link /></el-icon>
-            <span>资源市场</span>
-            <el-tag
-              v-if="marketplaceStore.connected"
-              type="success"
-              size="small"
-              style="margin-left: auto"
+            <!-- 上次更新结果 -->
+            <div
+              v-if="updateStatus?.last_result"
+              class="update-result-notice"
+              :class="{
+                'update-result--success': updateStatus.last_result.result === 'success',
+                'update-result--fail': ['failed', 'rolled_back', 'interrupted'].includes(
+                  updateStatus.last_result.result
+                )
+              }"
             >
-              已连接
-            </el-tag>
-            <el-tag v-else type="info" size="small" style="margin-left: auto">未连接</el-tag>
-          </div>
-        </template>
-        <el-form label-position="top">
-          <el-form-item label="服务器地址">
-            <el-input
-              v-model="marketplaceStore.serverUrl"
-              placeholder="例如: https://market.example.com"
-              clearable
-            />
-          </el-form-item>
-          <el-form-item>
-            <el-button
-              type="primary"
-              :loading="marketplaceStore.loading"
-              :disabled="!marketplaceStore.serverUrl.trim()"
-              @click="handleSaveMarketplace"
-            >
-              保存并连接
-            </el-button>
-            <el-button v-if="marketplaceStore.connected" @click="handleDisconnectMarketplace">
-              断开连接
-            </el-button>
-          </el-form-item>
-        </el-form>
-        <div v-if="marketplaceStore.connected" class="marketplace-tip">
-          已连接，前往
-          <el-link type="primary" underline="never" @click="router.push('/marketplace')">
-            资源市场
-          </el-link>
-          浏览和导入资源
-        </div>
-      </el-card>
-
-      <el-card shadow="never" class="settings-card" style="margin-top: 16px">
-        <template #header>
-          <div
-            class="card-title"
-            style="display: flex; align-items: center; justify-content: space-between"
-          >
-            <span>版本更新</span>
-            <el-tag size="small" type="info">v{{ currentVersion }}</el-tag>
-          </div>
-        </template>
-
-        <div class="update-actions">
-          <el-button type="primary" plain :loading="updateChecking" @click="checkForUpdates">
-            检查更新
-          </el-button>
-        </div>
-
-        <!-- 上次更新结果 -->
-        <div
-          v-if="updateStatus?.last_result"
-          class="update-result-notice"
-          :class="{
-            'update-result--success': updateStatus.last_result.result === 'success',
-            'update-result--fail': ['failed', 'rolled_back', 'interrupted'].includes(
-              updateStatus.last_result.result
-            )
-          }"
-        >
-          <el-icon :size="16">
-            <CircleCheck v-if="updateStatus.last_result.result === 'success'" />
-            <Warning v-else />
-          </el-icon>
-          <span>
-            {{
-              updateStatus.last_result.result === 'success'
-                ? '上次更新成功'
-                : updateStatus.last_result.result === 'rolled_back'
-                  ? '上次更新失败，已自动回滚'
-                  : updateStatus.last_result.result === 'interrupted'
-                    ? '上次更新被中断'
-                    : '上次更新失败'
-            }}
-            <span v-if="updateStatus.last_result.error" class="update-result-error">
-              （{{ updateStatus.last_result.error }}）
-            </span>
-          </span>
-        </div>
-
-        <!-- 下载中 -->
-        <template v-if="updateStatus?.state === 'downloading'">
-          <div class="update-progress">
-            <div class="update-progress-info">
-              正在下载 v{{ updateStatus.version }}... {{ updateStatus.progress }}%
+              <el-icon :size="16">
+                <CircleCheck v-if="updateStatus.last_result.result === 'success'" />
+                <Warning v-else />
+              </el-icon>
+              <span>
+                {{
+                  updateStatus.last_result.result === 'success'
+                    ? '上次更新成功'
+                    : updateStatus.last_result.result === 'rolled_back'
+                      ? '上次更新失败，已自动回滚'
+                      : updateStatus.last_result.result === 'interrupted'
+                        ? '上次更新被中断'
+                        : '上次更新失败'
+                }}
+                <span v-if="updateStatus.last_result.error" class="update-result-error">
+                  （{{ updateStatus.last_result.error }}）
+                </span>
+              </span>
             </div>
-            <el-progress :percentage="updateStatus.progress" :stroke-width="8" :show-text="false" />
-            <div class="update-download-row">
-              <el-button size="small" @click="cancelDownload">取消下载</el-button>
-            </div>
-          </div>
-        </template>
 
-        <!-- 更新应用中：新版已启动，等待 updater 写入最终结果 -->
-        <template v-else-if="updateStatus?.state === 'applying'">
-          <div class="update-progress">
-            <div class="update-progress-info">正在完成更新 v{{ updateStatus.version }}...</div>
-            <el-progress indeterminate :percentage="50" :stroke-width="8" :show-text="false" />
-            <div class="update-notice-desc">服务已重启，正在确认更新结果，请稍候</div>
-          </div>
-        </template>
-
-        <!-- 就绪，待重启 -->
-        <template v-else-if="updateStatus?.state === 'ready'">
-          <div
-            class="update-notice"
-            :class="{ 'update-notice--force': updateStatus.force_upgrade }"
-          >
-            <div class="update-notice-icon">
-              <el-icon :size="20"><Warning /></el-icon>
-            </div>
-            <div class="update-notice-body">
-              <div class="update-notice-title">
-                {{ updateStatus.force_upgrade ? '请尽快重启升级' : '新版本已就绪' }}
-                <span class="update-version-tag">v{{ updateStatus.version }}</span>
+            <!-- 下载中 -->
+            <template v-if="updateStatus?.state === 'downloading'">
+              <div class="update-progress">
+                <div class="update-progress-info">
+                  正在下载 v{{ updateStatus.version }}... {{ updateStatus.progress }}%
+                </div>
+                <el-progress :percentage="updateStatus.progress" :stroke-width="8" :show-text="false" />
+                <div class="update-download-row">
+                  <el-button size="small" @click="cancelDownload">取消下载</el-button>
+                </div>
               </div>
-              <div v-if="updateStatus.release_notes" class="update-notice-desc">
-                {{ updateStatus.release_notes }}
-              </div>
-            </div>
-          </div>
-          <div class="update-download-row">
-            <el-button type="primary" @click="applyUpdate">重启更新</el-button>
-            <el-button @click="openDownloadUrl">前往下载</el-button>
-          </div>
-        </template>
+            </template>
 
-        <!-- 下载失败 -->
-        <template v-else-if="updateStatus?.state === 'failed'">
-          <div class="update-notice update-notice--force">
-            <div class="update-notice-body">
-              <div class="update-notice-title">下载失败</div>
-              <div v-if="updateStatus.error" class="update-notice-desc">
-                {{ updateStatus.error }}
+            <!-- 更新应用中：新版已启动，等待 updater 写入最终结果 -->
+            <template v-else-if="updateStatus?.state === 'applying'">
+              <div class="update-progress">
+                <div class="update-progress-info">正在完成更新 v{{ updateStatus.version }}...</div>
+                <el-progress indeterminate :percentage="50" :stroke-width="8" :show-text="false" />
+                <div class="update-notice-desc">服务已重启，正在确认更新结果，请稍候</div>
               </div>
-            </div>
-          </div>
-          <div class="update-download-row">
-            <el-button type="primary" @click="triggerDownload">重试下载</el-button>
-            <el-button @click="openDownloadUrl">前往下载</el-button>
-          </div>
-        </template>
+            </template>
 
-        <!-- 发现新版本（待下载） -->
-        <template v-else-if="updateStatus?.has_update">
-          <div
-            class="update-notice"
-            :class="{ 'update-notice--force': updateStatus.force_upgrade }"
-          >
-            <div class="update-notice-icon">
-              <el-icon :size="20"><Warning /></el-icon>
-            </div>
-            <div class="update-notice-body">
-              <div class="update-notice-title">
-                {{ updateStatus.force_upgrade ? '需要强制升级' : '发现新版本' }}
-                <span class="update-version-tag">v{{ updateStatus.latest_version }}</span>
+            <!-- 就绪，待重启 -->
+            <template v-else-if="updateStatus?.state === 'ready'">
+              <div
+                class="update-notice"
+                :class="{ 'update-notice--force': updateStatus.force_upgrade }"
+              >
+                <div class="update-notice-icon">
+                  <el-icon :size="20"><Warning /></el-icon>
+                </div>
+                <div class="update-notice-body">
+                  <div class="update-notice-title">
+                    {{ updateStatus.force_upgrade ? '请尽快重启升级' : '新版本已就绪' }}
+                    <span class="update-version-tag">v{{ updateStatus.version }}</span>
+                  </div>
+                  <div v-if="updateStatus.release_notes" class="update-notice-desc">
+                    {{ updateStatus.release_notes }}
+                  </div>
+                </div>
               </div>
-              <div v-if="updateStatus.release_notes" class="update-notice-desc">
-                {{ updateStatus.release_notes }}
+              <div class="update-download-row">
+                <el-button type="primary" @click="applyUpdate">重启更新</el-button>
+                <el-button @click="openDownloadUrl">前往下载</el-button>
               </div>
-            </div>
-          </div>
-          <div class="update-download-row">
-            <span v-if="updateStatus.published_at" class="update-pub-time">
-              发布于 {{ updateStatus.published_at }}
-            </span>
-            <el-button type="primary" @click="triggerDownload">下载更新</el-button>
-            <el-button @click="openDownloadUrl">前往下载</el-button>
-          </div>
-        </template>
+            </template>
 
-        <!-- 已是最新 -->
-        <div v-else-if="updateStatus" class="update-up-to-date">
-          <el-icon :size="16"><CircleCheck /></el-icon>
-          <span>已是最新版本</span>
-        </div>
-      </el-card>
+            <!-- 下载失败 -->
+            <template v-else-if="updateStatus?.state === 'failed'">
+              <div class="update-notice update-notice--force">
+                <div class="update-notice-body">
+                  <div class="update-notice-title">下载失败</div>
+                  <div v-if="updateStatus.error" class="update-notice-desc">
+                    {{ updateStatus.error }}
+                  </div>
+                </div>
+              </div>
+              <div class="update-download-row">
+                <el-button type="primary" @click="triggerDownload">重试下载</el-button>
+                <el-button @click="openDownloadUrl">前往下载</el-button>
+              </div>
+            </template>
+
+            <!-- 发现新版本（待下载） -->
+            <template v-else-if="updateStatus?.has_update">
+              <div
+                class="update-notice"
+                :class="{ 'update-notice--force': updateStatus.force_upgrade }"
+              >
+                <div class="update-notice-icon">
+                  <el-icon :size="20"><Warning /></el-icon>
+                </div>
+                <div class="update-notice-body">
+                  <div class="update-notice-title">
+                    {{ updateStatus.force_upgrade ? '需要强制升级' : '发现新版本' }}
+                    <span class="update-version-tag">v{{ updateStatus.latest_version }}</span>
+                  </div>
+                  <div v-if="updateStatus.release_notes" class="update-notice-desc">
+                    {{ updateStatus.release_notes }}
+                  </div>
+                </div>
+              </div>
+              <div class="update-download-row">
+                <span v-if="updateStatus.published_at" class="update-pub-time">
+                  发布于 {{ updateStatus.published_at }}
+                </span>
+                <el-button type="primary" @click="triggerDownload">下载更新</el-button>
+                <el-button @click="openDownloadUrl">前往下载</el-button>
+              </div>
+            </template>
+
+            <!-- 已是最新 -->
+            <div v-else-if="updateStatus" class="update-up-to-date">
+              <el-icon :size="16"><CircleCheck /></el-icon>
+              <span>已是最新版本</span>
+            </div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </div>
   </div>
 </template>
@@ -755,6 +746,18 @@ function openDownloadUrl(): void {
 .settings-card :deep(.el-card__header) {
   padding: 16px 20px;
   border-bottom: 1px solid #f1f5f9;
+}
+
+.settings-card {
+  max-width: 640px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.settings-tabs :deep(.el-tabs__header) {
+  margin-bottom: 20px;
 }
 
 .card-title {

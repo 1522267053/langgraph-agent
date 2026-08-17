@@ -10,6 +10,7 @@ const router = useRouter()
 
 const loading = ref(false)
 const submitting = ref(false)
+const currentStep = ref(1)
 
 const selectedProvider = ref('')
 const apiKey = ref('')
@@ -25,15 +26,17 @@ const loginPassword = ref('')
 const loginPasswordConfirm = ref('')
 const loginUsername = ref('')
 
+const canGoNextStep1 = computed(
+  () =>
+    !!(
+      selectedProvider.value &&
+      apiKey.value.trim() &&
+      model.value.trim() &&
+      baseUrl.value.trim()
+    )
+)
+
 const canSubmit = computed(() => {
-  if (!(
-    selectedProvider.value &&
-    apiKey.value.trim() &&
-    model.value.trim() &&
-    baseUrl.value.trim()
-  )) {
-    return false
-  }
   if (!loginPassword.value || !loginUsername.value.trim()) return false
   if (loginPassword.value !== loginPasswordConfirm.value) return false
   return true
@@ -43,14 +46,37 @@ onMounted(() => {
   loading.value = false
 })
 
+function isContextLengthValid() {
+  return (
+    contextLength.value === undefined ||
+    contextLength.value === '' ||
+    parseContextLength(contextLength.value) !== undefined
+  )
+}
+
+function nextStep() {
+  if (currentStep.value === 1) {
+    if (!canGoNextStep1.value) return
+    if (!isContextLengthValid()) {
+      ElMessage.error('上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）')
+      return
+    }
+  }
+  if (currentStep.value === 3) {
+    handleSubmit()
+    return
+  }
+  currentStep.value++
+}
+
+function prevStep() {
+  if (currentStep.value > 1) currentStep.value--
+}
+
 async function handleSubmit() {
   if (!canSubmit.value) return
 
-  if (
-    contextLength.value !== undefined &&
-    contextLength.value !== '' &&
-    parseContextLength(contextLength.value) === undefined
-  ) {
+  if (!isContextLengthValid()) {
     ElMessage.error('上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）')
     return
   }
@@ -94,102 +120,134 @@ async function handleSubmit() {
         <p class="setup-subtitle">请先配置 AI 模型，即可开始使用</p>
       </div>
 
+      <el-steps :active="currentStep" align-center finish-status="success" class="setup-steps">
+        <el-step title="LLM 配置" />
+        <el-step title="向量模型配置" />
+        <el-step title="登录安全" />
+      </el-steps>
+
       <div v-loading="loading" class="setup-form">
-        <el-form label-position="top" @submit.prevent="handleSubmit">
-          <AiProviderConfig
-            v-model:provider="selectedProvider"
-            v-model:model="model"
-            v-model:api-key="apiKey"
-            v-model:base-url="baseUrl"
-            v-model:context-length="contextLength"
-            show-context-length
-            auto-select-first
-            label-position="top"
-            api-key-placeholder="请输入 API Key"
-          />
-
-          <el-divider />
-          <p class="section-label">向量模型配置（可选）</p>
-
-          <el-alert
-            title="如不配置，记忆和知识库的向量检索功能将不可用"
-            type="warning"
-            :closable="false"
-            show-icon
-            style="margin-bottom: 16px"
-          />
-
-          <el-form-item label="API Key">
-            <el-input
-              v-model="embeddingApiKey"
-              type="password"
-              placeholder="请输入向量模型 API Key"
-              show-password
-              clearable
+        <el-form label-position="top" @submit.prevent="nextStep">
+          <div v-show="currentStep === 1">
+            <p class="section-label">大语言模型配置</p>
+            <AiProviderConfig
+              v-model:provider="selectedProvider"
+              v-model:model="model"
+              v-model:api-key="apiKey"
+              v-model:base-url="baseUrl"
+              v-model:context-length="contextLength"
+              show-context-length
+              auto-select-first
+              label-position="top"
+              api-key-placeholder="请输入 API Key"
             />
-          </el-form-item>
+          </div>
 
-          <el-form-item label="模型名称">
-            <el-input
-              v-model="embeddingModel"
-              placeholder="如 BAAI/bge-m3、text-embedding-v3"
-              clearable
+          <div v-show="currentStep === 2">
+            <p class="section-label">向量模型配置（可选）</p>
+
+            <el-alert
+              title="如不配置，记忆和知识库的向量检索功能将不可用，会退化成sql的模糊搜索"
+              type="warning"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 16px"
             />
-          </el-form-item>
 
-          <el-form-item label="Base URL">
-            <el-input
-              v-model="embeddingBaseUrl"
-              placeholder="如 https://api.siliconflow.cn/v1"
-              clearable
+            <el-form-item label="API Key">
+              <el-input
+                v-model="embeddingApiKey"
+                type="password"
+                placeholder="请输入向量模型 API Key"
+                show-password
+                clearable
+              />
+            </el-form-item>
+
+            <el-form-item label="模型名称">
+              <el-input
+                v-model="embeddingModel"
+                placeholder="如 BAAI/bge-m3、text-embedding-v3"
+                clearable
+              />
+            </el-form-item>
+
+            <el-form-item label="Base URL">
+              <el-input
+                v-model="embeddingBaseUrl"
+                placeholder="如 https://api.siliconflow.cn/v1"
+                clearable
+              />
+            </el-form-item>
+          </div>
+
+          <div v-show="currentStep === 3">
+            <p class="section-label">登录安全</p>
+
+            <el-alert
+              title="请设置登录用户名和密码，用于保护系统访问。"
+              type="info"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 16px"
             />
-          </el-form-item>
 
-          <el-divider />
-          <p class="section-label">登录安全</p>
+            <el-form-item label="用户名">
+              <el-input v-model="loginUsername" placeholder="请输入登录用户名" clearable />
+            </el-form-item>
 
-          <el-alert
-            title="请设置登录用户名和密码，用于保护系统访问。"
-            type="info"
-            :closable="false"
-            show-icon
-            style="margin-bottom: 16px"
-          />
+            <el-form-item label="登录密码">
+              <el-input
+                v-model="loginPassword"
+                type="password"
+                placeholder="请输入登录密码"
+                show-password
+                clearable
+              />
+            </el-form-item>
 
-          <el-form-item label="用户名">
-            <el-input v-model="loginUsername" placeholder="请输入登录用户名" clearable />
-          </el-form-item>
+            <el-form-item label="确认密码">
+              <el-input
+                v-model="loginPasswordConfirm"
+                type="password"
+                placeholder="请再次输入密码"
+                show-password
+                clearable
+              />
+            </el-form-item>
+          </div>
 
-          <el-form-item label="登录密码">
-            <el-input
-              v-model="loginPassword"
-              type="password"
-              placeholder="请输入登录密码"
-              show-password
-              clearable
-            />
-          </el-form-item>
-
-          <el-form-item label="确认密码">
-            <el-input
-              v-model="loginPasswordConfirm"
-              type="password"
-              placeholder="请再次输入密码"
-              show-password
-              clearable
-            />
-          </el-form-item>
-
-          <el-button
-            type="primary"
-            size="large"
-            class="full-width submit-btn"
-            :loading="submitting"
-            :disabled="!canSubmit"
-            @click="handleSubmit"
-          >
-            开始使用
-          </el-button>
+          <div class="setup-actions">
+            <el-button
+              v-if="currentStep > 1"
+              size="large"
+              class="action-btn"
+              @click="prevStep"
+            >
+              上一步
+            </el-button>
+            <el-button
+              v-if="currentStep < 3"
+              type="primary"
+              size="large"
+              class="action-btn"
+              :disabled="currentStep === 1 && !canGoNextStep1"
+              @click="nextStep"
+            >
+              下一步
+            </el-button>
+            <el-button
+              v-else
+              type="primary"
+              size="large"
+              class="action-btn"
+              :loading="submitting"
+              :disabled="!canSubmit"
+              @click="handleSubmit"
+            >
+              开始使用
+            </el-button>
+          </div>
         </el-form>
       </div>
     </div>
@@ -262,6 +320,10 @@ async function handleSubmit() {
   width: 100%;
 }
 
+.setup-steps {
+  margin-bottom: 32px;
+}
+
 .section-label {
   font-size: 14px;
   font-weight: 600;
@@ -269,12 +331,20 @@ async function handleSubmit() {
   margin-bottom: 12px;
 }
 
-.submit-btn {
+.setup-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
   margin-top: 8px;
+}
+
+.action-btn {
+  flex: 1;
   height: 44px;
   font-size: 15px;
   font-weight: 600;
   border-radius: 10px;
+  margin-left: 0 !important;
 }
 .context-length-display {
   display: flex;
