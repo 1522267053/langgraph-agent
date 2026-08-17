@@ -35,7 +35,7 @@ let _fetchEmbeddingDone = false
 
 const searchQuery = ref('')
 const searchResults = ref<MemorySearchHit[]>([])
-const isSearchMode = computed(() => searchQuery.value.trim().length > 0)
+const searchActive = ref(false)
 const expandedIds = ref<Set<number>>(new Set())
 
 async function checkEmbeddingConfig(): Promise<void> {
@@ -76,7 +76,7 @@ const categoryLabels: Record<string, string> = {
 const tierStats = ref({ hot: 0, warm: 0, cold: 0 })
 
 const displayList = computed(() => {
-  if (isSearchMode.value) {
+  if (searchActive.value) {
     return searchResults.value.map(hit => ({ memory: hit.memory, score: hit.score }))
   }
   return memories.value.map(m => ({ memory: m, score: 0 }))
@@ -144,7 +144,7 @@ async function loadMemories(): Promise<void> {
 function handleTypeChange(type: string): void {
   activeType.value = type
   currentPage.value = 1
-  if (isSearchMode.value) {
+  if (searchActive.value) {
     doSearch()
   } else {
     loadMemories()
@@ -176,12 +176,14 @@ async function doSearch(): Promise<void> {
 }
 
 function handleSearch(): void {
-  if (isSearchMode.value) {
+  if (searchQuery.value.trim()) {
+    searchActive.value = true
     doSearch()
   }
 }
 
 function handleSearchClear(): void {
+  searchActive.value = false
   searchQuery.value = ''
   searchResults.value = []
   loadMemories()
@@ -226,7 +228,7 @@ async function handleDeleteSelected(): Promise<void> {
     })
     await memoryApi.deleteBatch(selectedIds.value)
     ElMessage.success(`已删除 ${selectedIds.value.length} 条记忆`)
-    if (isSearchMode.value) {
+    if (searchActive.value) {
       doSearch()
     } else {
       loadMemories()
@@ -344,7 +346,7 @@ async function handleDelete(memory: Memory): Promise<void> {
     await ElMessageBox.confirm(`确定删除记忆「${memory.title}」？`, '提示', { type: 'warning' })
     await memoryApi.delete(memory.id)
     ElMessage.success('已删除')
-    if (isSearchMode.value) {
+    if (searchActive.value) {
       doSearch()
     } else {
       loadMemories()
@@ -377,7 +379,7 @@ watch(
   () => props.agentId,
   () => {
     if (props.visible) {
-      if (isSearchMode.value) {
+      if (searchActive.value) {
         doSearch()
       } else {
         loadMemories()
@@ -478,7 +480,7 @@ watch(
 
       <div v-loading="loading" class="memory-list">
         <div v-if="displayList.length === 0 && !loading" class="empty-state">
-          <span>{{ isSearchMode ? '未找到匹配的记忆' : '暂无记忆' }}</span>
+          <span>{{ searchActive ? '未找到匹配的记忆' : '暂无记忆' }}</span>
         </div>
         <div
           v-for="item in displayList"
@@ -528,7 +530,7 @@ watch(
         </div>
       </div>
 
-      <div v-if="!isSearchMode && total > pageSize" class="memory-pagination">
+      <div v-if="!searchActive && total > pageSize" class="memory-pagination">
         <el-pagination
           v-model:current-page="currentPage"
           :page-size="pageSize"
