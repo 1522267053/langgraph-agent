@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Link, Warning, CircleCheck, Bell } from '@element-plus/icons-vue'
+import { Link, Warning, CircleCheck } from '@element-plus/icons-vue'
 import { requestPermission as requestBrowserNotifyPermission } from '@/composables/useBrowserNotification'
 import {
   configApi,
@@ -16,10 +16,11 @@ import { useMarketplaceStore } from '@/stores/marketplaceStore'
 import { parseContextLength } from '@/components/FlowEditor/config/types'
 import AiProviderConfig from '@/components/common/AiProviderConfig.vue'
 const router = useRouter()
+const route = useRoute()
 const marketplaceStore = useMarketplaceStore()
 const loading = ref(true)
 const saving = ref(false)
-const activeTab = ref('llm')
+const activeTab = ref((route.query.tab as string) || 'llm')
 
 const config = ref<GlobalConfigData>({})
 const selectedProvider = ref('')
@@ -54,6 +55,13 @@ const currentVersion = ref('0.1.0')
 const updateStatus = ref<UpdateStatus | null>(null)
 const updateChecking = ref(false)
 let statusTimer: ReturnType<typeof setInterval> | null = null
+
+const hasUpdate = computed(() => {
+  const s = updateStatus.value
+  if (!s) return false
+  if (s.has_update) return true
+  return ['downloading', 'ready', 'applying', 'failed'].includes(s.state)
+})
 
 function clearAutoLoginData() {
   localStorage.removeItem('auto_login')
@@ -549,7 +557,12 @@ function openDownloadUrl(): void {
           </div>
         </el-tab-pane>
 
-        <el-tab-pane label="版本更新" name="update">
+        <el-tab-pane name="update">
+          <template #label>
+            <el-badge :is-dot="hasUpdate" class="update-tab-badge">
+              <span>版本更新</span>
+            </el-badge>
+          </template>
           <div class="settings-card">
             <div
               class="card-title"
@@ -749,15 +762,20 @@ function openDownloadUrl(): void {
 }
 
 .settings-card {
-  max-width: 640px;
+  width: 100%;
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   padding: 24px;
+  box-sizing: border-box;
 }
 
 .settings-tabs :deep(.el-tabs__header) {
   margin-bottom: 20px;
+}
+
+.update-tab-badge :deep(.el-badge__content.is-dot) {
+  top: 8px;
 }
 
 .card-title {
