@@ -37,6 +37,8 @@ export const useAgentStore = defineStore('agent', () => {
   const messageTotal = ref(0)
   const hasMoreMessages = computed(() => messages.value.length < messageTotal.value)
   const loadingMoreMessages = ref(false)
+  // 搜索结果跳转目标（DB 消息 ID），由侧栏搜索点击设置，AgentChat 消费后清空
+  const messageScrollTarget = ref<number | null>(null)
 
   // ========== 会话分页状态 ==========
   const sessionPage = ref(1)
@@ -1075,6 +1077,7 @@ export const useAgentStore = defineStore('agent', () => {
     // 消息分页
     hasMoreMessages,
     loadingMoreMessages,
+    messageScrollTarget,
     // 方法
     loadAgents,
     loadAgent,
