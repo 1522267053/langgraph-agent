@@ -170,7 +170,11 @@ async function handleCopy(text: string): Promise<void> {
           />
         </el-tooltip>
       </div>
-      <MarkdownRenderer :content="segment.content || ''" />
+      <!-- 仅流式中的最后一个分段走节流渲染路径，历史分段正常渲染 -->
+      <MarkdownRenderer
+        :content="segment.content || ''"
+        :streaming="isStreaming && isLastSegment(idx)"
+      />
     </div>
 
     <div v-else-if="segment.type === 'todo' && segment.todo" class="todo-block">

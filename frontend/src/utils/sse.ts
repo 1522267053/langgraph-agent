@@ -182,8 +182,6 @@ export function createSSEConnection<T extends string = string>(
         resetDisconnectTimer()
 
         parser.processChunk(value, (type, data) => {
-          console.log(`${logPrefix} Received event:`, type, data)
-
           const handler = handlers[type]
           if (handler) {
             const event = { type, data } as SSEEvent<T>
