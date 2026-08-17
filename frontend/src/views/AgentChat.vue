@@ -38,13 +38,12 @@ const {
   () => store.chatMessages.length,
   () => store.textContent,
   () => store.thinkingContent,
-  () => store.chatMessages.reduce((n, m) => n + m.segments.length, 0),
+  // 只观察最后一条消息的分段变化（流式增长只发生在末尾），避免每 token 全列表 reduce
+  () => store.chatMessages.at(-1)?.segments.length || 0,
   () =>
-    store.chatMessages.reduce(
-      (n, m) =>
-        n + m.segments.filter(s => s.type === 'tool' && s.tool?.status !== 'running').length,
-      0
-    ),
+    (store.chatMessages.at(-1)?.segments || []).filter(
+      s => s.type === 'tool' && s.tool?.status !== 'running'
+    ).length,
   () => store.isStreaming,
   () => store.todos.length
 ])

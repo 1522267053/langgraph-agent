@@ -2,17 +2,30 @@
 import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import VueMarkdown from 'vue-markdown-render'
 
-const props = defineProps<{
-  content: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    content: string
+    /** 是否处于流式输出中：节流渲染 markdown，且跳过 hljs/复制按钮/mermaid 后处理 */
+    streaming?: boolean
+  }>(),
+  { streaming: false }
+)
 
 const md = computed(() => props.content || '')
+/** 实际传给 VueMarkdown 的源文本：流式期间按 STREAM_RENDER_INTERVAL 节流更新 */
+const renderedSource = ref(md.value)
 const containerRef = ref<HTMLDivElement>()
 let mermaidModule: (typeof import('mermaid'))['default'] | null = null
 let hljsModule: (typeof import('highlight.js'))['default'] | null = null
 let mermaidInitialized = false
 let renderCount = 0
 let mermaidTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 流式期间 markdown 重渲染的最小间隔（ms），将 O(n²) 全量重渲频率从 token 级降到 ~7次/秒 */
+const STREAM_RENDER_INTERVAL = 150
+let streamRenderTimer: ReturnType<typeof setTimeout> | null = null
+let lastStreamRenderAt = 0
+let hasPendingStreamRender = false
 
 async function loadMermaid() {
   if (!mermaidModule) {
@@ -213,16 +226,64 @@ onMounted(async () => {
   onMarkdownRendered(true)
 })
 
-watch(md, () => {
+/** 立即应用当前源文本并执行完整后处理（hljs/复制按钮/mermaid） */
+function applyRenderNow(): void {
+  renderedSource.value = md.value
   nextTick(() => {
     onMarkdownRendered(false)
   })
+}
+
+/** 流式期间节流应用源文本，跳过所有后处理 */
+function scheduleStreamRender(): void {
+  hasPendingStreamRender = true
+  if (streamRenderTimer) return
+  const elapsed = Date.now() - lastStreamRenderAt
+  const wait = Math.max(0, STREAM_RENDER_INTERVAL - elapsed)
+  streamRenderTimer = setTimeout(() => {
+    streamRenderTimer = null
+    if (!hasPendingStreamRender) return
+    hasPendingStreamRender = false
+    lastStreamRenderAt = Date.now()
+    renderedSource.value = md.value
+  }, wait)
+}
+
+/** 流式结束：取消节流定时器，立即应用最终内容 + 完整后处理 */
+function finishStreamRender(): void {
+  if (streamRenderTimer) {
+    clearTimeout(streamRenderTimer)
+    streamRenderTimer = null
+  }
+  hasPendingStreamRender = false
+  applyRenderNow()
+}
+
+watch(md, () => {
+  if (props.streaming) {
+    scheduleStreamRender()
+  } else {
+    applyRenderNow()
+  }
 })
+
+watch(
+  () => props.streaming,
+  streaming => {
+    if (!streaming) {
+      finishStreamRender()
+    }
+  }
+)
 
 onUnmounted(() => {
   if (mermaidTimer) {
     clearTimeout(mermaidTimer)
     mermaidTimer = null
+  }
+  if (streamRenderTimer) {
+    clearTimeout(streamRenderTimer)
+    streamRenderTimer = null
   }
   if (containerRef.value) {
     containerRef.value.querySelectorAll('.mermaid-rendered').forEach(el => {
@@ -234,7 +295,7 @@ onUnmounted(() => {
 
 <template>
   <div ref="containerRef" class="markdown-body">
-    <VueMarkdown :source="md" />
+    <VueMarkdown :source="renderedSource" />
   </div>
 </template>
 

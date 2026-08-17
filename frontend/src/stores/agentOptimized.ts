@@ -15,6 +15,7 @@ import type {
   StreamingMessage,
   ToolCall,
   MessageFile,
+  MessageSegment,
   TodoItem
 } from '@/composables/useStreamingMessage'
 import { agentApi } from '@/api/agent'
@@ -430,6 +431,61 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   /**
+   * 浅比较两个分段是否等价（避免引用比较导致的无谓重渲）
+   */
+  function isSameSegment(a: MessageSegment, b: MessageSegment): boolean {
+    if (a.type !== b.type) return false
+    if (a.type === 'content' && b.type === 'content') {
+      return a.content === b.content && a.dbMsgId === b.dbMsgId
+    }
+    if (a.type === 'thinking' && b.type === 'thinking') {
+      return a.thinking === b.thinking && a.dbMsgId === b.dbMsgId
+    }
+    if (a.type === 'tool' && b.type === 'tool') {
+      const ta = a.tool
+      const tb = b.tool
+      if (ta === tb) return true
+      if (!ta || !tb) return false
+      return (
+        ta.id === tb.id &&
+        ta.name === tb.name &&
+        ta.status === tb.status &&
+        ta.args === tb.args &&
+        ta.result === tb.result
+      )
+    }
+    if (a.type === 'todo' && b.type === 'todo') {
+      return JSON.stringify(a.todo) === JSON.stringify(b.todo)
+    }
+    return true
+  }
+
+  /**
+   * 比较两条聊天消息是否等价：等价则跳过 Object.assign，
+   * 保留旧 segments 引用使 Vue 跳过该消息的重渲染（避免回合结束全量 markdown 重渲尖峰）
+   */
+  function isSameMessage(a: StreamingMessage, b: StreamingMessage): boolean {
+    if (a.id !== b.id) return false
+    if (
+      a.role !== b.role ||
+      a.content !== b.content ||
+      a.thinking !== b.thinking ||
+      a.prompt_tokens !== b.prompt_tokens ||
+      a.completion_tokens !== b.completion_tokens ||
+      a.total_tokens !== b.total_tokens
+    ) {
+      return false
+    }
+    if (a.createdAt.getTime() !== b.createdAt.getTime()) return false
+    if (JSON.stringify(a.files) !== JSON.stringify(b.files)) return false
+    if (a.segments.length !== b.segments.length) return false
+    for (let i = 0; i < a.segments.length; i++) {
+      if (!isSameSegment(a.segments[i], b.segments[i])) return false
+    }
+    return true
+  }
+
+  /**
    * 从历史消息就地 diff 更新聊天消息列表（不 clearMessages，保留 Vue DOM 稳定性）
    * 用于 selectSession、onFlowDone、loadMoreMessages 等场景
    */
@@ -438,7 +494,9 @@ export const useAgentStore = defineStore('agent', () => {
 
     for (let i = 0; i < rebuilt.length; i++) {
       if (i < chatMessages.value.length) {
-        Object.assign(chatMessages.value[i], rebuilt[i])
+        if (!isSameMessage(chatMessages.value[i], rebuilt[i])) {
+          Object.assign(chatMessages.value[i], rebuilt[i])
+        }
       } else {
         chatMessages.value.push(rebuilt[i])
       }
