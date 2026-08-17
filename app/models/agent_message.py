@@ -19,7 +19,7 @@ class AgentMessage(DbBaseModel):
 
     session_id: Mapped[int] = mapped_column(Integer, nullable=False, comment="会话ID")
     role: Mapped[str] = mapped_column(
-        String(20), nullable=False, comment="system/user/assistant/tool"
+        String(20), nullable=False, comment="human/ai/tool"
     )
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="消息内容")
     original_content: Mapped[Optional[str]] = mapped_column(
