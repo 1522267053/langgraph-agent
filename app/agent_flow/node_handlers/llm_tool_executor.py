@@ -49,12 +49,9 @@ _APPROVAL_REQUIRED_TOOLS: frozenset[str] = frozenset(
 # 计划模式下禁用的工具名（写操作 / 有副作用）
 _PLAN_DISABLED_TOOLS: frozenset[str] = frozenset(
     {
-        "shell_executor",
         "python_executor",
         "file_write",
         "text_editor",
-        "shell_task_input",
-        "shell_task_cancel",
     }
 )
 
