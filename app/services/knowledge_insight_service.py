@@ -186,6 +186,10 @@ class KnowledgeInsightService(
         """
         # ---- 向量搜索 ----
         try:
+            from app.config.settings import settings
+
+            min_score = settings.knowledge_search_min_score
+
             embedding_service = await get_embedding_service_async()
             vector_store = _get_vector_store()
 
@@ -197,6 +201,11 @@ class KnowledgeInsightService(
                     k=top_k,
                     filter={"knowledge_base_id": knowledge_base_id},
                 )
+
+                # 相关度阈值过滤，过滤后为空回退 LIKE 模糊搜索
+                vector_results = [
+                    r for r in vector_results if 1 - r.get("distance", 1.0) >= min_score
+                ]
 
                 if vector_results:
                     return await self._enrich_vector_results(db, vector_results, top_k)

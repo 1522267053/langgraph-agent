@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default="text-embedding-v3", alias="EMBEDDING_MODEL")
     embedding_batch_size: int = Field(default=10, alias="EMBEDDING_BATCH_SIZE")
 
+    # 向量检索相关度阈值（score = 1 - cosine distance，低于阈值的结果被过滤）
+    memory_search_min_score: float = Field(
+        default=0.6, alias="MEMORY_SEARCH_MIN_SCORE"
+    )  # 记忆检索阈值（多关键词逐词检索语义较泛，阈值略低）
+    knowledge_search_min_score: float = Field(
+        default=0.75, alias="KNOWLEDGE_SEARCH_MIN_SCORE"
+    )  # 知识库检索阈值（过滤后为空时回退 LIKE 模糊搜索）
+
     # 文档处理定时任务配置
     doc_process_interval: int = Field(
         default=60, alias="DOC_PROCESS_INTERVAL"

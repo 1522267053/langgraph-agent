@@ -498,11 +498,17 @@ class MemoryNodeHandler(BaseNodeHandler):
             tier: Optional[list[str]] = None,
             categories: Optional[list[str]] = None,
             max_results: int = max_results,
-            min_score: float = 0.0,
+            min_score: Optional[float] = None,
         ) -> dict:
             agent_id = handler._get_agent_id()
             if not agent_id:
                 return {"error": "无法获取Agent ID"}
+
+            # 未显式指定时使用全局阈值配置（MEMORY_SEARCH_MIN_SCORE）
+            if min_score is None:
+                from app.config.settings import settings
+
+                min_score = settings.memory_search_min_score
 
             cat_list = categories
 
@@ -620,7 +626,10 @@ class MemoryNodeHandler(BaseNodeHandler):
             ),
             StructuredTool(
                 name="memory_search",
-                description="语义搜索记忆。默认搜warm+cold，tier='hot'搜热记忆。命中自动升温。",
+                description=(
+                    "语义搜索记忆。默认搜warm+cold，tier='hot'搜热记忆。命中自动升温。"
+                    "query支持空格分隔多个关键词，任一命中即召回。"
+                ),
                 func=None,
                 coroutine=search_memory,
                 args_schema=MemorySearchInput,
@@ -680,7 +689,9 @@ class MemorySaveInput(BaseModel):
 
 
 class MemorySearchInput(BaseModel):
-    query: str = Field(..., description="搜索关键词或自然语言")
+    query: str = Field(
+        ..., description="搜索关键词或自然语言，多个关键词用空格分隔（任一命中即召回）"
+    )
     tier: Optional[list[str]] = Field(
         default=None, description="hot/warm/cold，不传默认warm,cold，可传多个"
     )
@@ -688,7 +699,12 @@ class MemorySearchInput(BaseModel):
         default=None, description="分类过滤，可传多个"
     )
     max_results: int = Field(default=5, ge=1, le=20, description="最大返回数")
-    min_score: float = Field(default=0.0, ge=0.0, le=1.0, description="最低相关度")
+    min_score: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="最低相关度(0-1)，不传使用系统默认阈值",
+    )
 
 
 class MemoryListInput(BaseModel):

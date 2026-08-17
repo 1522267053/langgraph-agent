@@ -339,6 +339,10 @@ class KnowledgeTitleService:
         Returns:
             搜索结果列表 [{document_id, document_title, title_id, title_text, segment_id, content, score}, ...]
         """
+        from app.config.settings import settings
+
+        min_score = settings.knowledge_search_min_score
+
         # ---- 向量搜索 ----
         from app.services.embedding_service import get_embedding_service_async
         from app.services.vector_store_service import get_vector_store_service
@@ -357,6 +361,11 @@ class KnowledgeTitleService:
                 )
             else:
                 vector_results = []
+
+            # 相关度阈值过滤，过滤后为空回退 LIKE 模糊搜索
+            vector_results = [
+                r for r in vector_results if 1 - r.get("distance", 1.0) >= min_score
+            ]
 
             if vector_results:
                 return await self._enrich_vector_results(db, vector_results)

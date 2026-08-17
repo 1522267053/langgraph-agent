@@ -12,6 +12,7 @@
 """
 
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -716,11 +717,19 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         tier: Optional[str] = None,
         categories: Optional[List[str]] = None,
         max_results: int = 5,
-        min_score: float = 0.0,
+        min_score: Optional[float] = None,
         hot_decay_days: int = 30,
         warm_decay_days: int = 60,
     ) -> List[Tuple[Memory, float]]:
-        """搜索记忆：向量可用时用向量搜索，否则降级为 SQL 关键词匹配"""
+        """搜索记忆：向量可用时用向量搜索，否则降级为 SQL 关键词匹配
+
+        多关键词（空格分隔）支持：任一关键词命中即召回，命中越多排序越前。
+        min_score 默认取 settings.memory_search_min_score。
+        """
+        if min_score is None:
+            from app.config.settings import settings
+
+            min_score = settings.memory_search_min_score
         await self.decay_stale_memories(
             db, agent_id, hot_decay_days=hot_decay_days, warm_decay_days=warm_decay_days
         )
@@ -745,12 +754,29 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         max_results: int,
         min_score: float,
     ) -> List[Tuple[Memory, float]]:
-        """向量语义搜索"""
-        scored_ids = await self._vector_search(
-            agent_id, query, max_results * 2, min_score
+        """向量语义搜索（多关键词时整体+逐词检索合并，任一命中即召回）"""
+        keywords = list(
+            dict.fromkeys(kw for kw in re.split(r"\s+", query.strip()) if kw)
         )
-        if not scored_ids:
+        queries = [query] if len(keywords) <= 1 else [query, *keywords[:5]]
+
+        merged_scores: dict[int, float] = {}
+        hit_counts: dict[int, int] = {}
+        per_query_k = max(max_results * 2, 10)
+        for q in queries:
+            for mid, score in await self._vector_search(
+                agent_id, q, per_query_k, min_score
+            ):
+                merged_scores[mid] = max(merged_scores.get(mid, 0.0), score)
+                hit_counts[mid] = hit_counts.get(mid, 0) + 1
+
+        if not merged_scores:
             return []
+        scored_ids = sorted(
+            merged_scores.items(),
+            key=lambda x: (x[1], hit_counts[x[0]]),
+            reverse=True,
+        )
         ids = [mid for mid, _ in scored_ids]
         stmt = select(Memory).where(Memory.id.in_(ids))
         if tier:
@@ -777,7 +803,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         categories: Optional[List[str]],
         max_results: int,
     ) -> List[Tuple[Memory, float]]:
-        """SQL 关键词 fallback 搜索"""
+        """SQL 关键词 fallback 搜索（多关键词 OR 召回，命中越多排序越前）"""
         from sqlalchemy import or_
 
         conditions = [Memory.agent_id == agent_id]
@@ -786,12 +812,18 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         if categories:
             conditions.append(Memory.category.in_(categories))
 
-        keywords = query.strip().split()
-        for kw in keywords[:5]:
+        keywords = list(dict.fromkeys(kw for kw in query.strip().split() if kw))[:5]
+        if keywords:
             conditions.append(
                 or_(
-                    Memory.title.contains(kw),
-                    Memory.content.contains(kw),
+                    *(
+                        or_(
+                            Memory.title.contains(kw),
+                            Memory.content.contains(kw),
+                            Memory.keywords.contains(kw),
+                        )
+                        for kw in keywords
+                    )
                 )
             )
 
@@ -799,11 +831,21 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
             select(Memory)
             .where(and_(*conditions))
             .order_by(Memory.importance.desc(), Memory.create_time.desc())
-            .limit(max_results)
+            .limit(max_results * 5)
         )
-        result = await db.execute(stmt)
+        result = await db.execute(stmt, execution_options={"include_deleted": False})
         memories = list(result.scalars().all())
-        return [(m, 0.5) for m in memories]
+
+        def _hit_count(m: Memory) -> int:
+            text = f"{m.title or ''} {m.content or ''} {m.keywords or ''}".lower()
+            return sum(1 for kw in keywords if kw.lower() in text)
+
+        # 稳定排序：命中数优先，其次 importance（原序 create_time 降序保持为兜底）
+        memories.sort(key=lambda m: (_hit_count(m), m.importance), reverse=True)
+        return [
+            (m, round(min(0.3 + 0.15 * _hit_count(m), 0.95), 4))
+            for m in memories[:max_results]
+        ]
 
     async def _vector_search(
         self, agent_id: int, query: str, top_k: int, min_score: float = 0.0
