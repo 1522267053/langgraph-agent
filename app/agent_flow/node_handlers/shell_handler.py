@@ -32,6 +32,7 @@ from app.agent_flow.node_handlers.base_handler import (
 )
 from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.config.build_utils import BASE_DIR, get_agent_work_dir, get_temp_dir
+from app.config.settings import settings
 from app.models.flow_node import FlowNode
 
 
@@ -297,6 +298,26 @@ class ShellToolInput(BaseModel):
     command: str = Field(..., description="要执行的Shell命令")
 
 
+def _file_read_caps() -> tuple[int, int]:
+    """file_read 单次返回封顶值（字节预留 1024 余量给行号前缀/JSON 转义，避免下游二次截断）
+
+    Returns:
+        (字节上限, 行数上限)
+    """
+    return (
+        max(1024, settings.tool_output_max_bytes - 1024),
+        settings.tool_output_max_lines,
+    )
+
+
+def _shrink_end_to_bytes(text: str, start: int, end: int, max_bytes: int) -> int:
+    """收缩 end 直到 text[start:end] 的 UTF-8 字节数不超过 max_bytes"""
+    while end > start and len(text[start:end].encode("utf-8")) > max_bytes:
+        over = len(text[start:end].encode("utf-8")) - max_bytes
+        end = max(start, end - max(1, over // 3 + 1))
+    return end
+
+
 class FileReadInput(BaseModel):
     """文件读取工具输入参数"""
 
@@ -314,7 +335,10 @@ class FileReadInput(BaseModel):
     )
     end_char: Optional[int] = Field(
         None,
-        description="结束字符位置（0-indexed，不包含），与limit互斥，不传则读取到文件末尾",
+        description=(
+            "结束字符位置（0-indexed，不包含），与limit互斥，不传则读取到文件末尾。"
+            "单次读取有字节/行数封顶，超出会被截断并返回 truncated_hint 提示续读位置"
+        ),
     )
 
 
@@ -1191,7 +1215,16 @@ class ShellNodeHandler(BaseNodeHandler):
                     }
                 s = max(0, start_char)
                 e = min(end_char, total_chars) if end_char is not None else total_chars
+
+                # 单次读取双维度封顶（字节预留余量 + 行数），避免下游二次截断
+                cap_bytes, cap_lines = _file_read_caps()
+                requested_e = e
+                e = _shrink_end_to_bytes(raw, s, e, cap_bytes)
                 content = raw[s:e]
+                if content.count("\n") >= cap_lines:
+                    content = "\n".join(content.split("\n")[:cap_lines])
+                    e = s + len(content)
+                truncated_by_limit = e < requested_e
                 result: dict = {
                     "success": True,
                     "file_path": str(path),
@@ -1200,6 +1233,11 @@ class ShellNodeHandler(BaseNodeHandler):
                     "end_char": e,
                     "content": content,
                 }
+                if truncated_by_limit:
+                    result["truncated_hint"] = (
+                        f"本次读取因超过单次上限（{cap_bytes} 字节 / {cap_lines} 行）被截断，"
+                        f"如需继续请用 start_char={e} 接着读取"
+                    )
                 if e < total_chars:
                     result["has_more"] = True
                 return result
@@ -1214,20 +1252,61 @@ class ShellNodeHandler(BaseNodeHandler):
             end = min(start + actual_limit, len(lines))
             selected = lines[start:end]
 
-            content = "\n".join(
-                f"{start + i + 1}: {line}" for i, line in enumerate(selected)
-            )
+            cap_bytes, _cap_lines = _file_read_caps()
+
+            # 单行大文件：截断该行并提示改用字符模式分段读取
+            if total_lines == 1 and len(raw.encode("utf-8")) > cap_bytes:
+                line_end = _shrink_end_to_bytes(raw, 0, total_chars, cap_bytes)
+                content = f"1: {raw[:line_end]}"
+                result: dict = {
+                    "success": True,
+                    "file_path": str(path),
+                    "total_lines": total_lines,
+                    "total_chars": total_chars,
+                    "offset": 1,
+                    "limit": 1,
+                    "content": content,
+                    "truncated_hint": (
+                        f"目前文件只有单行（共 {total_chars} 字符），"
+                        "行模式无法分段读取，请使用 start_char 和 end_char 参数来读取"
+                    ),
+                }
+                return result
+
+            # 逐行累加字节封顶（含行号前缀），超限提前停止
+            content_lines: list[str] = []
+            byte_count = 0
+            for i, line in enumerate(selected):
+                formatted = f"{start + i + 1}: {line}"
+                line_size = len(formatted.encode("utf-8")) + (1 if content_lines else 0)
+                if byte_count + line_size > cap_bytes:
+                    break
+                content_lines.append(formatted)
+                byte_count += line_size
+            returned = len(content_lines)
+            content = "\n".join(content_lines)
             result: dict = {
                 "success": True,
                 "file_path": str(path),
                 "total_lines": total_lines,
                 "total_chars": total_chars,
                 "offset": start + 1,
-                "limit": len(selected),
+                "limit": returned,
                 "content": content,
             }
-            if end < total_lines:
+            if start + returned < total_lines:
                 result["has_more"] = True
+                if returned < len(selected):
+                    if returned == 0:
+                        result["truncated_hint"] = (
+                            f"第 {start + 1} 行过大（超过单次上限 {cap_bytes} 字节），"
+                            "请使用 start_char 和 end_char 参数读取该行片段"
+                        )
+                    else:
+                        result["truncated_hint"] = (
+                            f"本次读取因超过单次上限（{cap_bytes} 字节）提前停止，"
+                            f"如需继续请用 offset={start + returned + 1} 接着读取"
+                        )
             return result
 
         file_read_tool = StructuredTool(
@@ -1235,9 +1314,11 @@ class ShellNodeHandler(BaseNodeHandler):
             description=(
                 "读取文件内容。支持两种模式：\n"
                 "1. 行模式（默认）：返回带行号的文本(格式如 ```12: 文件内容的一行```)，"
-                "单次最多读取 100 行，大文件请多次调用并指定 offset 分段读取。\n"
+                "单次最多读取 100 行且总字节超限（默认约 9KB）会提前停止，"
+                "大文件请多次调用并指定 offset 分段读取。\n"
                 "2. 字符模式：传 start_char/end_char 按字符位置读取（0-indexed），"
-                "适合读取单行大文件的特定片段，不传 end_char 则读取到文件末尾。\n"
+                "适合读取单行大文件的特定片段，不传 end_char 则读取到文件末尾。"
+                "单次读取有字节/行数封顶（默认约 9KB / 500 行），超出会截断并在 truncated_hint 中提示续读的 start_char。\n"
                 "两种模式互斥（offset 与 start_char 不能同时传）。"
                 "读取前无需校验文件是否存在，工具会自动处理。"
             ),
