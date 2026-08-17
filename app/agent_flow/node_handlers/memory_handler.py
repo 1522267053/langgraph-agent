@@ -628,7 +628,10 @@ class MemoryNodeHandler(BaseNodeHandler):
                 name="memory_search",
                 description=(
                     "语义搜索记忆。默认搜warm+cold，tier='hot'搜热记忆。命中自动升温。"
-                    "query支持空格分隔多个关键词，任一命中即召回。"
+                    "向量检索query越完整（句子/描述）越精准，短关键词精度较低；"
+                    "也支持空格分隔多个关键词，任一命中即召回。"
+                    "实现说明：已配置向量模型时向量检索优先、无结果自动SQL兜底；"
+                    "未配置向量模型时直接SQL模糊搜索。"
                 ),
                 func=None,
                 coroutine=search_memory,
@@ -690,7 +693,9 @@ class MemorySaveInput(BaseModel):
 
 class MemorySearchInput(BaseModel):
     query: str = Field(
-        ..., description="搜索关键词或自然语言，多个关键词用空格分隔（任一命中即召回）"
+        ...,
+        description="搜索文本。建议用完整的句子或描述（向量检索句子越长越精准），"
+        "也支持空格分隔多个关键词（任一命中即召回）",
     )
     tier: Optional[list[str]] = Field(
         default=None, description="hot/warm/cold，不传默认warm,cold，可传多个"
