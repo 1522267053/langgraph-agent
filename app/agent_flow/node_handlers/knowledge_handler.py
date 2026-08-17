@@ -84,7 +84,10 @@ class TitleLookupInput(BaseModel):
 class VectorSearchInput(BaseModel):
     """全局向量搜索工具输入参数"""
 
-    query: str = Field(..., description="语义搜索文本")
+    query: str = Field(
+        ...,
+        description="语义搜索文本，建议用完整的句子或描述（向量检索句子越长越精准）",
+    )
     top_k: int = Field(5, description="返回结果数量，默认5")
 
 
@@ -457,7 +460,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
         return [
             StructuredTool(
                 name=f"{tool_prefix}_search",
-                description=f"全局语义搜索知识库「{node_name}」中的段落内容（优先匹配AI沉淀的知识，未命中时检索原始文档），返回匹配的文件名、标题和段落",
+                description=f"全局语义搜索知识库「{node_name}」中的段落内容（优先匹配AI沉淀的知识，未命中时检索原始文档），返回匹配的文件名、标题和段落。query越完整（句子/描述）越精准，短关键词精度较低。实现说明：已配置向量模型时向量检索优先、无结果自动SQL兜底；未配置向量模型时直接SQL模糊搜索",
                 func=None,
                 coroutine=vector_search,
                 args_schema=VectorSearchInput,
