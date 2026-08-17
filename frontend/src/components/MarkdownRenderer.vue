@@ -11,6 +11,9 @@ const props = withDefaults(
   { streaming: false }
 )
 
+/** 组件是否已卸载：异步后处理（hljs/mermaid）在 await 间隙后需重新校验 */
+let isUnmounted = false
+
 const md = computed(() => props.content || '')
 /** 实际传给 VueMarkdown 的源文本：流式期间按 STREAM_RENDER_INTERVAL 节流更新 */
 const renderedSource = ref(md.value)
@@ -54,8 +57,10 @@ async function initMermaid(): Promise<void> {
 }
 
 async function renderMermaidBlocks(): Promise<void> {
-  if (!containerRef.value) return
+  if (!containerRef.value || isUnmounted) return
   await initMermaid()
+  // initMermaid 动态导入期间组件可能已卸载
+  if (!containerRef.value || isUnmounted) return
   const m = mermaidModule!
   const placeholders = containerRef.value.querySelectorAll<HTMLPreElement>('.mermaid-block')
   for (const el of placeholders) {
@@ -180,8 +185,10 @@ function attachCodeCopyBtns(): void {
 }
 
 async function onMarkdownRendered(immediate = false): Promise<void> {
-  if (!containerRef.value) return
+  if (!containerRef.value || isUnmounted) return
   await loadHljs()
+  // loadHljs 动态导入期间组件可能已卸载
+  if (!containerRef.value || isUnmounted) return
   const codeBlocks = containerRef.value.querySelectorAll<HTMLElement>('pre code')
   for (const block of codeBlocks) {
     if (hljsModule && !block.dataset.highlighted) {
@@ -277,6 +284,7 @@ watch(
 )
 
 onUnmounted(() => {
+  isUnmounted = true
   if (mermaidTimer) {
     clearTimeout(mermaidTimer)
     mermaidTimer = null
