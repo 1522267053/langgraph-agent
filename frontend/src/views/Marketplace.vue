@@ -121,7 +121,7 @@ const isImporting = (id: number) => importing.value === id
         <el-icon :size="48" color="#94a3b8"><Shop /></el-icon>
         <h2>资源市场未连接</h2>
         <p>请先在系统设置中配置市场服务器地址</p>
-        <el-button type="primary" size="large" @click="$router.push('/settings')">
+        <el-button type="primary" size="large" @click="$router.push({ path: '/settings', query: { tab: 'marketplace' } })">
           前往设置
         </el-button>
       </div>
