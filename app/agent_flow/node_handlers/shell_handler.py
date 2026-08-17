@@ -655,18 +655,21 @@ def _cleanup_expired_tasks() -> None:
 
 
 def get_running_tasks() -> list[dict]:
-    """获取所有运行中和最近完成的后台任务（供 REST API 调用）"""
+    """获取所有运行中和最近完成的后台任务（供 REST API 调用）
+
+    返回全部未过期任务（含终态），供前端轮询将本地 running 任务更新为终态；
+    已结束超过 _task_expire_seconds 的任务由 _cleanup_expired_tasks 清理后不再返回。
+    """
     _cleanup_expired_tasks()
     result = []
     for task in _background_tasks.values():
-        if task.status == "running":
-            result.append(
-                {
-                    **task.to_dict(),
-                    "stdout": _decode_output(bytes(task._stdout_bytes)),
-                    "stderr": _decode_output(bytes(task._stderr_bytes)),
-                }
-            )
+        result.append(
+            {
+                **task.to_dict(),
+                "stdout": _decode_output(bytes(task._stdout_bytes)),
+                "stderr": _decode_output(bytes(task._stderr_bytes)),
+            }
+        )
     return result
 
 

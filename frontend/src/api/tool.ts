@@ -19,6 +19,7 @@ export const toolApi = {
     return get<ApiResponse<BackgroundTask>>(`/agent/tools/${taskId}/status`)
   },
   cancel(taskId: string) {
-    return post<ApiResponse>(`/agent/tools/${taskId}/cancel`)
+    // showError=false：任务已结束/不存在时由 store 静默落地终态，不弹错误提示
+    return post<ApiResponse>(`/agent/tools/${taskId}/cancel`, undefined, { showError: false })
   }
 }

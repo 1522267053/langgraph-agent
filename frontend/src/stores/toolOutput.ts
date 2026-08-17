@@ -95,8 +95,14 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
         }
         const serverTaskIds = new Set(res.data.data.map(t => t.task_id))
         for (const [localId, local] of tools.value) {
-          if (!serverTaskIds.has(localId) && local.status !== 'running') {
+          if (serverTaskIds.has(localId)) continue
+          if (local.status !== 'running') {
+            // 服务端已过期清理的非 running 任务，本地同步删除
             tools.value.delete(localId)
+          } else {
+            // 本地 running 但服务端列表缺失：查单个任务状态兜底，
+            // 仍查不到（服务重启/过期清理）则标记结束，避免 UI 永远显示运行中
+            await finalizeVanishedTask(localId)
           }
         }
         triggerReactivity()
@@ -107,6 +113,25 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
     } catch {
       // ignore poll errors
     }
+  }
+
+  /**
+   * 结束服务端已不存在的本地 running 任务：
+   * 优先查询单任务状态拿真实终态（completed/failed/timeout），
+   * 查询失败说明任务已彻底消失（服务重启或过期清理），标记为 cancelled
+   */
+  async function finalizeVanishedTask(taskId: string) {
+    try {
+      const res = await toolApi.getStatus(taskId)
+      if (res.data.code === 1 && res.data.data) {
+        const t = res.data.data
+        endTask(taskId, t.status, t.return_code, t.elapsed_seconds)
+        return
+      }
+    } catch {
+      // 任务不存在（ApiResponse.error 被 axios 拦截器 reject），走下方兜底
+    }
+    endTask(taskId, 'cancelled', null, null)
   }
 
   async function loadRunning() {
@@ -129,14 +154,16 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
   async function cancelTask(taskId: string) {
     try {
       await toolApi.cancel(taskId)
-      const task = tools.value.get(taskId)
-      if (task) {
-        task.status = 'cancelled'
-        triggerReactivity()
-      }
     } catch {
-      // ignore
+      // 取消失败（如任务已结束/不存在）：后端返回 code=0 被 axios 拦截器 reject，
+      // 任务在服务端已不存在，本地同样落地为 cancelled，避免停止按钮点击无效
     }
+    const task = tools.value.get(taskId)
+    if (task && task.status === 'running') {
+      task.status = 'cancelled'
+      triggerReactivity()
+    }
+    stopPollIfDone()
   }
 
   function removeTask(taskId: string) {
