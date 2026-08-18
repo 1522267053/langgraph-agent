@@ -392,11 +392,9 @@ async function handleSearchResultClick(sessionId: number) {
   searchKeyword.value = ''
 }
 
-/** 点击消息搜索结果：切换会话后跳转滚动到对应消息 */
+/** 点击消息搜索结果：切换到对应会话 */
 async function handleSearchMessageClick(m: SearchResultMessage) {
   await switchToSession(m.session_id)
-  // selectSession 完成后设置跳转目标，AgentChat 消费后自动清空
-  store.messageScrollTarget = m.id
   searchKeyword.value = ''
 }
 
