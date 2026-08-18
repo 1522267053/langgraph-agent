@@ -551,7 +551,12 @@ function handleRejectTools() {
       <header class="chat-header glass-blur">
         <div class="header-center">
           <div class="status-dot"></div>
-          <h1>{{ store.currentAgent?.name || 'AI 助手' }}</h1>
+          <div class="header-title">
+            <h1>{{ store.currentAgent?.name || 'AI 助手' }}</h1>
+            <span v-if="store.currentSession" class="session-name" :title="store.currentSession.title">
+              {{ store.currentSession.title || '新会话' }}
+            </span>
+          </div>
           <el-tag v-if="store.planMode" size="small" type="warning" effect="light" round>
             计划模式
           </el-tag>
@@ -788,12 +793,30 @@ export default {
   gap: 8px;
 }
 
+.header-title {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
 .header-center h1 {
   margin: 0;
   font-size: 16px;
   font-weight: 700;
   color: #1e293b;
   letter-spacing: -0.01em;
+}
+
+.session-name {
+  min-width: 0;
+  max-width: min(32vw, 320px);
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-dot {
@@ -1122,6 +1145,11 @@ export default {
 
   .header-center h1 {
     font-size: 14px;
+  }
+
+  .session-name {
+    max-width: 35vw;
+    font-size: 11px;
   }
 
   .welcome-input {
