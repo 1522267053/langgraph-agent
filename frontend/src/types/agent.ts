@@ -75,11 +75,22 @@ export interface AgentMessage extends BaseEntity {
   /** 总token数 */
   total_tokens?: number
   /** 附件文件列表 */
-  files?: Array<{ id: number; original_name: string; mime_type: string }>
+  files?: AgentFileInfo[]
   /** 用户输入参数（回退恢复用） */
   input_data?: Record<string, unknown>
   /** 创建时间 */
   created_at?: string
+}
+
+/** Agent消息附件信息 */
+export interface AgentFileInfo {
+  id: number
+  original_name: string
+  mime_type: string
+  file_path?: string
+  file_type?: string
+  file_size?: number
+  preview_url?: string
 }
 
 /** 删除消息及之后内容的返回结果（回退恢复用） */
@@ -87,7 +98,7 @@ export interface AgentDeleteMessagesResult {
   /** 被删除用户消息的文本内容 */
   content: string
   /** 附件文件列表 */
-  files?: Array<{ id: number; original_name: string; mime_type: string }>
+  files?: AgentFileInfo[]
   /** 用户输入参数 */
   input_data?: Record<string, unknown>
 }
