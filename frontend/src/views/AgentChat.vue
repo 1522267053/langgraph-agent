@@ -451,10 +451,32 @@ function handleRevertFrom(dbMsgId: number) {
  */
 function restoreInputParams(deleted: {
   content: string
-  files?: Array<{ id: number; original_name: string; mime_type: string }>
+  files?: Array<{
+    id: number
+    original_name: string
+    mime_type: string
+    file_path?: string
+    file_type?: string
+    file_size?: number
+    preview_url?: string
+  }>
   input_data?: Record<string, unknown>
 }) {
   const params: Record<string, unknown> = deleted.input_data ? { ...deleted.input_data } : {}
+
+  // 历史 input_data 只保存文件 ID 和基础元信息，优先用撤回接口补全的文件信息。
+  if (deleted.files && deleted.files.length > 0) {
+    const filesById = new Map(deleted.files.map(file => [file.id, file]))
+    for (const field of dynamicFields.value) {
+      if (field.type !== 'file_list' || !Array.isArray(params[field.name])) continue
+      params[field.name] = (params[field.name] as Array<Record<string, unknown>>).map(file => {
+        const fileId = typeof file?.id === 'number' ? file.id : null
+        const enriched = fileId == null ? undefined : filesById.get(fileId)
+        return enriched ? { ...file, ...enriched } : file
+      })
+    }
+  }
+
   // 旧消息无 input_data 时回退：把附件放入第一个 file_list 字段
   if (deleted.files && deleted.files.length > 0) {
     const firstFileField = dynamicFields.value.find(f => f.type === 'file_list')

@@ -325,6 +325,32 @@ class AgentExecutorService(BaseExecutorService):
                 )
                 break
 
+        if user_files:
+            enriched_files = []
+            for item in user_files:
+                if not isinstance(item, dict) or not item.get("id"):
+                    continue
+                file_obj = await file_service.get_by_id(
+                    db, int(item["id"]), raise_not_found=False
+                )
+                if file_obj:
+                    enriched_files.append(
+                        {
+                            **item,
+                            "id": file_obj.id,
+                            "original_name": file_obj.original_name,
+                            "file_path": file_obj.file_path,
+                            "file_type": file_obj.file_type,
+                            "file_size": file_obj.file_size,
+                            "mime_type": file_obj.mime_type,
+                            "preview_url": file_obj.preview_url
+                            or f"/{file_obj.file_path}",
+                        }
+                    )
+                else:
+                    enriched_files.append(item)
+            user_files = enriched_files
+
         message_ids = [msg.id for msg in messages_to_delete]
         await db.execute(
             update(AgentMessage)
