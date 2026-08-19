@@ -15,7 +15,7 @@ from app.config.database import get_db
 from app.schemas.base_schema import ApiResponse
 from app.schemas.flow_node_schema import FlowNodeBase
 from app.schemas.flow_edge_schema import FlowEdgeBase
-from app.schemas.flow_schema import FlowCreate
+from app.schemas.flow_schema import FlowCreate, FlowIOSchema
 from app.schemas.flow_edge_schema import FlowEdgeCreate
 from app.schemas.ai_flow_schema import (
     AiFlowCreateReq,
@@ -126,12 +126,18 @@ class AiFlowApi:
         db: AsyncSession = Depends(get_db),
     ):
         """创建空流程，返回 id、名称、描述、类型。支持同时设置 input_schema/output_schema。"""
+        input_schema = None
+        if data.input_schema:
+            input_schema = FlowIOSchema.model_validate(data.input_schema)
+        output_schema = None
+        if data.output_schema:
+            output_schema = FlowIOSchema.model_validate(data.output_schema)
         flow_data = FlowCreate(
             name=data.name,
             description=data.description,
             flow_type=data.flow_type,
-            input_schema=data.input_schema,
-            output_schema=data.output_schema,
+            input_schema=input_schema,
+            output_schema=output_schema,
         )
         flow = await flow_service.create(db, flow_data)
         await db.commit()

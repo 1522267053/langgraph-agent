@@ -6,7 +6,7 @@ MySQL Checkpointer for LangGraph
 """
 
 from collections.abc import AsyncIterator, Sequence
-from typing import Any
+from typing import Any, Mapping, Optional
 import random
 import gzip
 
@@ -174,7 +174,7 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
             ]
 
             # 构建 parent_config
-            parent_config = None
+            parent_config: Optional[RunnableConfig] = None
             if checkpoint_row.parent_checkpoint_id:
                 parent_config = {
                     "configurable": {
@@ -183,7 +183,8 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
                         "checkpoint_id": checkpoint_row.parent_checkpoint_id,
                     }
                 }
-
+            checkpoint = Checkpoint(**checkpoint_data)
+            checkpoint["channel_values"] = channel_values
             return CheckpointTuple(
                 config={
                     "configurable": {
@@ -192,10 +193,7 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
                         "checkpoint_id": checkpoint_id,
                     }
                 },
-                checkpoint={
-                    **checkpoint_data,
-                    "channel_values": channel_values,
-                },
+                checkpoint=checkpoint,
                 metadata=metadata or {},
                 parent_config=parent_config,
                 pending_writes=pending_writes if pending_writes else None,
@@ -212,10 +210,13 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
         """
         异步列出匹配条件的 checkpoints
         """
+        configurable = {}
+        if config:
+            configurable = config.get("configurable", {})
         async with AsyncSessionLocal() as db:
             thread_ids = (
-                (config["configurable"]["thread_id"],)
-                if config and "thread_id" in config.get("configurable", {})
+                (configurable["thread_id"],)
+                if config and "thread_id" in configurable
                 else None
             )
 
@@ -229,9 +230,7 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
                 result = await db.execute(query)
                 thread_ids = tuple(row[0] for row in result.fetchall())
 
-            config_checkpoint_ns = (
-                config["configurable"].get("checkpoint_ns") if config else None
-            )
+            config_checkpoint_ns = configurable.get("checkpoint_ns") if config else None
             config_checkpoint_id = get_checkpoint_id(config) if config else None
             before_checkpoint_id = get_checkpoint_id(before) if before else None
 
@@ -317,7 +316,7 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
                     ]
 
                     # 构建 parent_config
-                    parent_config = None
+                    parent_config: Optional[RunnableConfig] = None
                     if checkpoint_row.parent_checkpoint_id:
                         parent_config = {
                             "configurable": {
@@ -326,7 +325,8 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
                                 "checkpoint_id": checkpoint_row.parent_checkpoint_id,
                             }
                         }
-
+                    checkpoint = Checkpoint(**checkpoint_data)
+                    checkpoint["channel_values"] = channel_values
                     yield CheckpointTuple(
                         config={
                             "configurable": {
@@ -335,10 +335,7 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
                                 "checkpoint_id": checkpoint_row.checkpoint_id,
                             }
                         },
-                        checkpoint={
-                            **checkpoint_data,
-                            "channel_values": channel_values,
-                        },
+                        checkpoint=checkpoint,
                         metadata=metadata,
                         parent_config=parent_config,
                         pending_writes=pending_writes if pending_writes else None,
@@ -364,7 +361,7 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
 
             # 保存 blobs
             for channel, version in new_versions.items():
-                if channel in channel_values:
+                if isinstance(channel_values, Mapping) and channel in channel_values:
                     blob_record = CheckpointBlob(
                         thread_id=thread_id,
                         checkpoint_ns=checkpoint_ns,

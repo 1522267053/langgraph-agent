@@ -248,17 +248,19 @@ class MemoryNodeHandler(BaseNodeHandler):
                 '返回纯 JSON 数组，每个元素: {"title":"...","content":"...","category":"...","importance":5,"keywords":"..."}\n'
                 "不要输出任何其他内容，不要用 markdown 代码块包裹。"
             )
-
-            provider_name = handler._llm_config.get("provider", "")
+            llm_config = handler._llm_config
+            if not llm_config:
+                raise Exception("llm配置为空，记忆压缩失败")
+            provider_name = llm_config.get("provider", "")
             from app.agent_flow.ai_provider import create_provider
 
             provider = create_provider(
                 provider_name,
-                handler._llm_config.get("api_key", ""),
-                handler._llm_config.get("base_url", ""),
+                llm_config.get("api_key", ""),
+                llm_config.get("base_url", ""),
             )
             llm = provider.create_chat_model(
-                model=handler._llm_config.get("model", ""),
+                model=llm_config.get("model", ""),
                 temperature=0.3,
                 streaming=False,
             )
@@ -557,7 +559,7 @@ class MemoryNodeHandler(BaseNodeHandler):
             limit: int = max_results,
             tier: Optional[str] = None,
             category: Optional[str] = None,
-        ) -> str:
+        ) -> str | dict:
             agent_id = handler._get_agent_id()
             if not agent_id:
                 return {"error": "无法获取Agent ID"}

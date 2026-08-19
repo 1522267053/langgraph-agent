@@ -574,12 +574,14 @@ async def _notify_tool_end(task: BackgroundShellTask) -> None:
 
 
 async def _read_stream(
-    stream: asyncio.StreamReader,
+    stream: asyncio.StreamReader | None,
     task: BackgroundShellTask,
     stream_name: str,
 ) -> None:
     """持续读取子进程的 stdout/stderr，累积原始字节到 task 中（最后统一解码避免 UTF-8 截断）"""
     try:
+        if not stream:
+            return
         while True:
             chunk = await stream.read(4096)
             if not chunk:
