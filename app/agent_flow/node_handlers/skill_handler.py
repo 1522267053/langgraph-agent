@@ -53,7 +53,7 @@ class SkillNodeHandler(BaseNodeHandler):
 
     ConfigClass = SkillNodeConfig
 
-    def __init__(self, db_session: AsyncSession = None):
+    def __init__(self, db_session: Optional[AsyncSession] = None):
         super().__init__()
         self.db_session = db_session
         self._skill_cache: dict[int, Skill] = {}
@@ -190,7 +190,11 @@ class SkillNodeHandler(BaseNodeHandler):
             )
 
         if writer:
-            writer(NodeDoneEvent(node_key=node.node_key, output={}))
+            writer(
+                NodeDoneEvent(
+                    node_key=node.node_key, node_type=node.node_type, output_data={}
+                )
+            )
 
         return state
 
