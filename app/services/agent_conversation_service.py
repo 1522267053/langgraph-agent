@@ -6,16 +6,18 @@ Agent 对话历史服务（适配器模式）
 """
 
 import logging
-from typing import Optional
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional, cast
+
 from langchain_core.messages import (
-    BaseMessage,
-    SystemMessage,
-    HumanMessage,
     AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolCall,
     ToolMessage,
 )
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_message import AgentMessage
 
@@ -30,6 +32,7 @@ from app.utils.message_utils import (
     extract_tool_info,
     extract_tool_status,
     normalize_role,
+    remove_unmatched_tool_calls,
     serialize_content,
 )
 
@@ -140,21 +143,12 @@ class AgentConversationService:
         """
         result: list[BaseMessage] = []
         pending_ai_index: int = -1
-        pending_ids: set[str] = set()
+        pending_ids: set[str | None] = set()
 
         def flush_pending():
             nonlocal pending_ai_index, pending_ids
             if pending_ids and 0 <= pending_ai_index < len(result):
-                ai = result[pending_ai_index]
-                if ai.tool_calls:
-                    ai.tool_calls = [
-                        tc
-                        for tc in ai.tool_calls
-                        if (tc.get("id", "") if isinstance(tc, dict) else tc.id)
-                        not in pending_ids
-                    ]
-                    if not ai.tool_calls:
-                        ai.tool_calls = None
+                remove_unmatched_tool_calls(result[pending_ai_index], pending_ids)
             pending_ai_index = -1
             pending_ids.clear()
 
@@ -188,10 +182,16 @@ class AgentConversationService:
         return result
 
     async def get_full_history(
-        self, db: AsyncSession, session_id: int, capabilities: Optional[dict] = None
+        self,
+        db: AsyncSession,
+        session_id: int,
+        limit: int = 0,
+        capabilities: Optional[dict] = None,
     ) -> list[BaseMessage]:
         """获取全流程对话历史"""
-        return await self.get_history(db, session_id, None, capabilities=capabilities)
+        return await self.get_history(
+            db, session_id, limit=limit, capabilities=capabilities
+        )
 
     async def get_max_sequence(
         self, db: AsyncSession, session_id: int, node_key: str = ""
@@ -226,7 +226,7 @@ class AgentConversationService:
         elif msg.role == "ai":
             ai_msg = AIMessage(content=msg.content or "")
             if msg.tool_calls:
-                ai_msg.tool_calls = msg.tool_calls
+                ai_msg.tool_calls = cast(list[ToolCall], msg.tool_calls)
             if msg.thinking:
                 ai_msg.additional_kwargs["reasoning_content"] = msg.thinking
             return ai_msg

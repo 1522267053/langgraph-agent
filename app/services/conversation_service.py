@@ -3,13 +3,14 @@
 """
 
 import logging
-from typing import Optional
+from typing import Optional, cast
 
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
     HumanMessage,
     SystemMessage,
+    ToolCall,
     ToolMessage,
 )
 from sqlalchemy import select
@@ -162,7 +163,7 @@ class ConversationService:
         elif msg.role == "ai":
             ai_msg = AIMessage(content=msg.content or "")
             if msg.tool_calls:
-                ai_msg.tool_calls = msg.tool_calls
+                ai_msg.tool_calls = cast(list[ToolCall], msg.tool_calls)
             if msg.thinking:
                 ai_msg.additional_kwargs["reasoning_content"] = msg.thinking
             return ai_msg

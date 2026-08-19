@@ -9,6 +9,8 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 
+from langchain_core.messages import ToolCall
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,7 +20,7 @@ class ToolApprovalFuture:
 
     event: asyncio.Event = field(default_factory=asyncio.Event)
     result: str | None = None
-    tool_calls: list[dict] = field(default_factory=list)
+    tool_calls: list[ToolCall] = field(default_factory=list)
     approval_needed: list[str] = field(default_factory=list)
 
 
@@ -31,7 +33,7 @@ class ToolApprovalService:
     def register(
         self,
         session_id: int,
-        tool_calls: list[dict],
+        tool_calls: list[ToolCall],
         approval_needed: list[str],
     ) -> ToolApprovalFuture:
         """注册一个待确认的工具调用，返回 Future 供 await"""

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Optional, Any, TYPE_CHECKING
+from typing import Optional, Any, TYPE_CHECKING, Sequence
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
@@ -424,9 +424,7 @@ class BaseNodeHandler(ABC):
 
     # ---- 工具与提示词 ----
 
-    async def get_tool(
-        self, node: FlowNode
-    ) -> Optional[BaseTool] | list[BaseTool] | None:
+    async def get_tool(self, node: FlowNode) -> Optional[BaseTool] | Sequence[BaseTool]:
         """
         返回该节点作为工具时的定义
 

@@ -8,7 +8,7 @@ PDF 文档解析器
 
 import re
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional, cast
 from collections import Counter
 
 logger = logging.getLogger(__name__)
@@ -69,10 +69,11 @@ class PdfParser:
         try:
             # 统计所有文本块的字号分布，确定正文基准字号
             font_size_counter: Counter[float] = Counter()
-            for page in doc:
-                blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)[
-                    "blocks"
-                ]
+            for page in doc.pages():
+                blocks = cast(
+                    Dict[str, Any],
+                    page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE),
+                )["blocks"]
                 for block in blocks:
                     if block["type"] != 0:
                         continue
@@ -86,7 +87,7 @@ class PdfParser:
             body_font_size = self._get_body_font_size(font_size_counter)
 
             # ---- 阶段3: 逐页提取文本并插入表格 ----
-            for page_idx, page in enumerate(doc):
+            for page_idx, page in enumerate(doc.pages()):
                 # 插入当前页的表格
                 if page_idx in page_tables:
                     for table_md in page_tables[page_idx]:
@@ -95,9 +96,10 @@ class PdfParser:
                         md_lines.append("")
 
                 # 提取文本块
-                blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)[
-                    "blocks"
-                ]
+                blocks = cast(
+                    Dict[str, Any],
+                    page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE),
+                )["blocks"]
                 for block in blocks:
                     if block["type"] != 0:
                         continue

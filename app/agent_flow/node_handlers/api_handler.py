@@ -589,7 +589,7 @@ class ApiNodeHandler(BaseNodeHandler):
         input_variables = cfg.input_variables
 
         # ---- 动态构建 args_schema ----
-        fields: dict[str, tuple[type, Any]] = {}
+        fields: dict[str, Any] = {}
         for var in input_variables:
             name = var.name
             if not name:

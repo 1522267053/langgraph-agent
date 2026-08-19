@@ -6,6 +6,7 @@
 
 from enum import Enum
 from typing import Any, Optional, Union
+from langchain_core.messages import ToolCall
 from pydantic import BaseModel, Field
 
 
@@ -152,7 +153,7 @@ class ToolApprovalEvent(FlowEvent):
     """工具确认事件（SSE 流内等待前端确认）"""
 
     node_key: str = Field(..., description="节点Key")
-    tool_calls: list[dict] = Field(
+    tool_calls: list[ToolCall] = Field(
         default_factory=list, description="待确认的工具调用列表"
     )
     approval_needed: list[str] = Field(
@@ -440,7 +441,7 @@ class FlowEventFactory:
 
     @staticmethod
     def tool_approval(
-        node_key: str, tool_calls: list[dict], approval_needed: list[str]
+        node_key: str, tool_calls: list[ToolCall], approval_needed: list[str]
     ) -> dict:
         """创建工具确认事件"""
         return ToolApprovalEvent(

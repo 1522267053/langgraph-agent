@@ -9,7 +9,7 @@
 3. variables（state.variables，flat dict，key 用 . 分隔）
 """
 
-from typing import Any, Optional
+from typing import Any, Optional, cast
 import re
 import json
 
@@ -253,7 +253,7 @@ class VariableResolver:
             if any(isinstance(t, int) for t in key_tokens):
                 continue
 
-            flat_key = ".".join(key_tokens)
+            flat_key = ".".join(cast(list[str], key_tokens))
             flat_val = variables.get(flat_key)
             if flat_val is not None and isinstance(flat_val, dict | list):
                 remaining = self._tokens_to_path(remaining_tokens)

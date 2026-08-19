@@ -21,7 +21,7 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
-
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent_flow.flow_context import FlowState
 from app.models.flow_node import FlowNode
 from app.services.agent_conversation_service import AgentConversationService
@@ -32,6 +32,7 @@ from app.utils.media_resolver import (
     filter_capabilities_by_adapter,
     normalize_file_value,
 )
+from app.utils.message_utils import remove_unmatched_tool_calls
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ async def build_initial_messages(
     conversation_service: Optional[
         Union[ConversationService, AgentConversationService]
     ],
-    db_session_factory: Optional[object],
+    db_session_factory: Optional[Callable[[], AsyncSession]],
     config: Optional[RunnableConfig] = None,
     writer: Optional[StreamWriter] = None,
     emit_fn: Optional[Callable] = None,
@@ -122,7 +123,7 @@ async def load_base_messages(
     conversation_service: Optional[
         Union[ConversationService, AgentConversationService]
     ],
-    db_session_factory: Optional[object],
+    db_session_factory: Optional[Callable[[], AsyncSession]],
 ) -> list[BaseMessage]:
     """加载历史消息：优先 checkpoint（state），其次数据库
 
@@ -179,22 +180,13 @@ def validate_tool_pairs(messages: list[BaseMessage]) -> list[BaseMessage]:
     result: list[BaseMessage] = []
     # pending_* 跟踪最后一个含 tool_calls 的 AIMessage 中尚未匹配的 call id
     pending_ai_index: int = -1
-    pending_ids: set[str] = set()
+    pending_ids: set[str | None] = set()
 
     def flush_pending():
         """清除未匹配的 tool_calls（AIMessage 中缺少对应 ToolMessage 的调用）"""
         nonlocal pending_ai_index, pending_ids
         if pending_ids and 0 <= pending_ai_index < len(result):
-            ai = result[pending_ai_index]
-            if ai.tool_calls:
-                ai.tool_calls = [
-                    tc
-                    for tc in ai.tool_calls
-                    if (tc.get("id", "") if isinstance(tc, dict) else tc.id)
-                    not in pending_ids
-                ]
-                if not ai.tool_calls:
-                    ai.tool_calls = None
+            remove_unmatched_tool_calls(result[pending_ai_index], pending_ids)
         pending_ai_index = -1
         pending_ids.clear()
 
@@ -401,7 +393,7 @@ async def load_history_from_db(
     conversation_service: Optional[
         Union[ConversationService, AgentConversationService]
     ],
-    db_session_factory: Optional[object],
+    db_session_factory: Optional[Callable[[], AsyncSession]],
 ) -> list[BaseMessage]:
     """从数据库加载对话历史（仅首次执行时调用）
 
@@ -466,7 +458,7 @@ async def load_history_from_db(
 
 async def should_auto_compress(
     session_id: int,
-    db_session_factory: Optional[object],
+    db_session_factory: Optional[Callable[[], AsyncSession]],
     context_length: int,
 ) -> int:
     """查 DB 最后一条 AI 消息的 prompt_tokens，返回已用 token 数

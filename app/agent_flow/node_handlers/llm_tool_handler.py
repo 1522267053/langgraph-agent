@@ -20,7 +20,7 @@ LLM 节点处理器主入口
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Callable, Optional, Union
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
@@ -29,6 +29,7 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from pydantic import Field
 
@@ -69,7 +70,7 @@ from app.agent_flow.node_handlers.llm_tool_executor import (
 )
 
 if TYPE_CHECKING:
-    pass
+    from app.agent_flow.tool_resolver import FlowLike
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +189,8 @@ class LlmToolNodeHandler(BaseNodeHandler):
 
     def __init__(
         self,
-        flow=None,
-        db_session_factory=None,
+        flow: Optional["FlowLike"] = None,
+        db_session_factory: Optional[Callable[[], AsyncSession]] = None,
         execution_id: int = 0,
         conversation_service: Optional[
             Union[ConversationService, AgentConversationService]
@@ -773,14 +774,14 @@ class LlmToolNodeHandler(BaseNodeHandler):
                     PythonNodeHandler,
                 )
 
-                handler = PythonNodeHandler()
-                result = await handler._execute_python(
+                handler: PythonNodeHandler = PythonNodeHandler()
+                result = await handler._execute_python(  # type: ignore
                     tool_check_script,
                     {
                         "called_tools": list(called_tools),
                         "last_result": last_result,
                     },
-                    timeout=10,
+                    timeout=30,
                 )
                 if result.get("success"):
                     ret = result.get("result")
@@ -865,10 +866,12 @@ class LlmToolNodeHandler(BaseNodeHandler):
 # LLM 节点处理器工厂函数
 @NodeHandlerRegistry.register_factory("llm")
 def create_llm_handler(
-    flow,
-    db_session_factory,
+    flow: Optional["FlowLike"],
+    db_session_factory: Optional[Callable[[], AsyncSession]],
     execution_id: int,
-    conversation_service,
+    conversation_service: Optional[
+        Union[ConversationService, AgentConversationService]
+    ],
     handler_registry: Optional[dict] = None,
     session_id: int = 0,
 ):
