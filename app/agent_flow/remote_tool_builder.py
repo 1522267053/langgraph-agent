@@ -39,7 +39,7 @@ def _json_schema_to_pydantic(tool_name: str, schema: dict) -> type[BaseModel]:
     properties = schema.get("properties", {})
     required = set(schema.get("required", []))
 
-    fields: dict[str, tuple[type, Any]] = {}
+    fields: dict[str, Any] = {}
     for prop_name, prop_schema in properties.items():
         prop_type = prop_schema.get("type", "string")
         py_type = _JSON_TYPE_MAP.get(prop_type, str)

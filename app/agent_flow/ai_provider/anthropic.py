@@ -1,6 +1,7 @@
 """Anthropic (Claude) 提供商"""
 
 import logging
+from typing import Any
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -29,9 +30,7 @@ class AnthropicProvider(BaseAIProvider):
         return base_url.rstrip("/").removesuffix("/v1").rstrip("/")
 
     def create_chat_model(self, model: str, **kwargs) -> BaseChatModel:
-        llm_kwargs = {
-            "model_provider": "anthropic",
-            "model": model,
+        llm_kwargs: dict[str, Any] = {
             "api_key": self.api_key,
         }
         if self.base_url:
@@ -46,4 +45,11 @@ class AnthropicProvider(BaseAIProvider):
                 dropped,
             )
         llm_kwargs.update(kwargs)
-        return init_chat_model(**llm_kwargs)
+        # model/model_provider 必须作为显式 kwargs 传入：
+        # init_chat_model 是 @overload 函数，靠 model_provider 字面量分发重载，
+        # 塞进 **dict 会导致重载解析失败
+        return init_chat_model(
+            model=model,
+            model_provider="anthropic",
+            **llm_kwargs,
+        )

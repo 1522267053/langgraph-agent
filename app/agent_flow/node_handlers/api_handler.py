@@ -549,9 +549,9 @@ class ApiNodeHandler(BaseNodeHandler):
         async def call_api(
             api_url: str,
             method: str = "GET",
-            headers: dict[str, str] = None,
+            headers: dict[str, str] | None = None,
             body: str | dict[str, Any] = "",
-            upload_fields: list[UploadFieldItem] = None,
+            upload_fields: list[UploadFieldItem] | None = None,
             download_file: bool = False,
         ) -> dict:
             if headers is None:
@@ -668,7 +668,7 @@ class ApiNodeHandler(BaseNodeHandler):
         method: str,
         headers: dict[str, str],
         body: str | dict[str, Any],
-        upload_fields: list[UploadFieldItem] = None,
+        upload_fields: list[UploadFieldItem] | None = None,
         download_file: bool = False,
     ) -> dict:
         request_headers = dict(headers) if headers else {}
@@ -725,17 +725,17 @@ class ApiNodeHandler(BaseNodeHandler):
                 context[name] = resolver.resolve_safe(source, state)
 
         if config.get("api_url"):
-            raw_url = config.get("api_url")
+            raw_url = config.get("api_url", "")
             input_data["api_url"] = resolver.render_template(raw_url, state, context)
         if config.get("method"):
             input_data["method"] = config.get("method")
         if config.get("headers"):
             input_data["headers"] = resolver.render_template(
-                config.get("headers"), state, context
+                config.get("headers", ""), state, context
             )
         if config.get("body"):
             input_data["body"] = resolver.render_template(
-                config.get("body"), state, context
+                config.get("body", ""), state, context
             )
 
         return input_data if input_data else None
