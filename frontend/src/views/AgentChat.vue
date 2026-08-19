@@ -552,14 +552,16 @@ function handleRejectTools() {
         <div class="header-center">
           <div class="status-dot"></div>
           <div class="header-title">
-            <h1>{{ store.currentAgent?.name || 'AI 助手' }}</h1>
+            <div class="agent-name-row">
+              <h1>{{ store.currentAgent?.name || 'AI 助手' }}</h1>
+              <el-tag v-if="store.planMode" size="small" type="warning" effect="light" round>
+                计划模式
+              </el-tag>
+            </div>
             <span v-if="store.currentSession" class="session-name" :title="store.currentSession.title">
               {{ store.currentSession.title || '新会话' }}
             </span>
           </div>
-          <el-tag v-if="store.planMode" size="small" type="warning" effect="light" round>
-            计划模式
-          </el-tag>
         </div>
         <div class="header-right">
           <DisplayToggle
@@ -800,12 +802,23 @@ export default {
   gap: 1px;
 }
 
+.agent-name-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
 .header-center h1 {
   margin: 0;
+  min-width: 0;
   font-size: 16px;
   font-weight: 700;
   color: #1e293b;
   letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-name {
