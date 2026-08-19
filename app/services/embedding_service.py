@@ -5,6 +5,7 @@ Embedding 服务
 配置优先级：global_config DB > .env 环境变量 > 降级（noop）
 """
 
+import asyncio
 import logging
 import threading
 from typing import TYPE_CHECKING, Callable, List, Optional
@@ -135,6 +136,7 @@ class EmbeddingService:
 
 embedding_service: Optional[EmbeddingService] = None
 _init_lock = threading.Lock()
+_async_init_lock = asyncio.Lock()
 _initialized = False
 
 
@@ -149,11 +151,15 @@ def get_embedding_service() -> EmbeddingService:
 
 
 async def get_embedding_service_async() -> EmbeddingService:
-    """获取 Embedding 服务单例（异步，从 DB 加载配置）"""
-    global embedding_service, _initialized
+    """获取 Embedding 服务单例（异步，从 DB 加载配置）
+
+    使用 asyncio.Lock 而非 threading.Lock：锁内包含 await，
+    threading.Lock 会同步阻塞事件循环线程，并发初始化时死锁。
+    """
+    global _initialized
     svc = get_embedding_service()
     if not _initialized:
-        with _init_lock:
+        async with _async_init_lock:
             if not _initialized:
                 await svc._init_from_db()
                 _initialized = True
