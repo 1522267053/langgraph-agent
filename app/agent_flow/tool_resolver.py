@@ -8,16 +8,11 @@ import logging
 import re
 
 from app.agent_flow.flow_context import FlowState
+from app.agent_flow.graph_builder import FlowLike
+from app.models.flow_edge import FlowEdge
 from app.models.flow_node import FlowNode, NodeType
 
 logger = logging.getLogger(__name__)
-
-
-class FlowLike:
-    """流程对象协议"""
-
-    nodes: list[FlowNode]
-    edges: list
 
 
 class LlmToolConfig:
@@ -56,7 +51,7 @@ def get_connected_tool_nodes(flow: FlowLike, llm_node_key: str) -> list[FlowNode
 
 def get_connected_tool_edges(
     flow: FlowLike, llm_node_key: str
-) -> list[tuple[FlowNode, object]]:
+) -> list[tuple[FlowNode, FlowEdge]]:
     """
     获取连接到LLM节点的所有工具节点及其边
 
@@ -69,7 +64,7 @@ def get_connected_tool_edges(
     Returns:
         (工具节点, 边对象) 列表，已按意图条件过滤
     """
-    tool_edge_pairs: list[tuple[FlowNode, object]] = []
+    tool_edge_pairs: list[tuple[FlowNode, FlowEdge]] = []
     node_map = {n.node_key: n for n in flow.nodes}
 
     base_key = re.sub(r"_iter_\d+$", "", llm_node_key)
@@ -93,9 +88,9 @@ def get_connected_tool_edges(
 
 
 def filter_tools_by_intent(
-    tool_edge_pairs: list[tuple[FlowNode, object]],
+    tool_edge_pairs: list[tuple[FlowNode, FlowEdge]],
     state: FlowState,
-) -> list[tuple[FlowNode, object]]:
+) -> list[tuple[FlowNode, FlowEdge]]:
     """
     根据边上的 intent_filters 条件过滤工具节点
 
@@ -119,7 +114,7 @@ def filter_tools_by_intent(
     Returns:
         过滤后的 (工具节点, 边) 列表
     """
-    result: list[tuple[FlowNode, object]] = []
+    result: list[tuple[FlowNode, FlowEdge]] = []
 
     for tool_node, edge in tool_edge_pairs:
         condition = edge.condition

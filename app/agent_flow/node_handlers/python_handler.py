@@ -121,7 +121,7 @@ class _StdoutPrintCollector:
     def _call_print(self, *objects, **kwargs):
         if kwargs.get("file", None) is None:
             kwargs["file"] = sys.stdout
-        else:
+        elif self._getattr_:
             self._getattr_(kwargs["file"], "write")
         print(*objects, **kwargs)
 
@@ -351,7 +351,8 @@ class PythonNodeHandler(BaseNodeHandler):
 
             with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
                 # globals/locals 使用同一命名空间，保证顶层定义的函数/导入对 main 可见
-                exec(compile_result.code, restricted_globals)
+                if compile_result.code:
+                    exec(compile_result.code, restricted_globals)
 
                 # 检查 main 函数是否存在
                 if "main" not in restricted_globals:
@@ -527,7 +528,9 @@ class PythonNodeHandler(BaseNodeHandler):
     {{"__save_file__": True, "content_base64": "<base64编码的字节>", "mime_type": "image/png", "filename": "xxx.png"}}
 可用于生成图片/音频/视频后保存展示。base64 不会出现在对话里，只返回预览链接。"""
 
-        async def execute_python(code: str, input_data: dict[str, Any] = None) -> dict:
+        async def execute_python(
+            code: str, input_data: Optional[dict[str, Any]] = None
+        ) -> dict:
             input_vars = input_data if input_data else {}
 
             try:
@@ -558,7 +561,7 @@ class PythonNodeHandler(BaseNodeHandler):
         input_variables = cfg.input_variables
 
         # ---- 动态构建 args_schema（参数描述/必填/默认值生效） ----
-        fields: dict[str, tuple[type, Any]] = {}
+        fields: dict[str, Any] = {}
         for var in input_variables:
             name = var.name
             if not name:

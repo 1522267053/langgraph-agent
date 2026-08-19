@@ -7,14 +7,14 @@
 3. 流程节点验证
 """
 
-from typing import Any, List, Optional, Set
+from typing import Any, List, Optional, Set, cast
 
 from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent_flow.execution_context import ExecutionContext, set_execution_context
-from app.agent_flow.graph_builder import GraphBuilder
+from app.agent_flow.graph_builder import FlowLike, GraphBuilder
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.agent_flow.mysql_checkpointer import AsyncMySQLSaver
 from app.config.database import AsyncSessionLocal
@@ -77,7 +77,7 @@ class BaseExecutorService:
 
     def _build_graph(
         self,
-        flow: Any,
+        flow: Flow | ExpandedFlow,
         execution_id: int,
         conversation_service: Any,
         session_id: Optional[int] = None,
@@ -94,7 +94,7 @@ class BaseExecutorService:
         Returns:
             CompiledStateGraph: 编译后的图
         """
-        builder = GraphBuilder(flow)
+        builder = GraphBuilder(cast(FlowLike, flow))
         # 注册非llm节点
         for node_type in BASIC_NODE_TYPES:
             handler = NodeHandlerRegistry.create(node_type.value)

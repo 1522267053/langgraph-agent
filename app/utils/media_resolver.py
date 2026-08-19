@@ -9,7 +9,7 @@ import asyncio
 import base64
 import logging
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 from app.config.settings import settings
@@ -408,11 +408,13 @@ async def collect_media_blocks(
     return blocks, index_text
 
 
-def build_multimodal_content(text: str, media_blocks: list[dict]) -> str | list[dict]:
+def build_multimodal_content(
+    text: str, media_blocks: list[dict]
+) -> str | list[str | dict[Any, Any]]:
     if not media_blocks:
         return text
 
-    content: list[dict] = [{"type": "text", "text": text}]
+    content: list[str | dict] = [{"type": "text", "text": text}]
     content.extend(media_blocks)
     return content
 
@@ -438,7 +440,8 @@ def normalize_file_value(value) -> dict | list[dict] | None:
     """
     if isinstance(value, list):
         items = [normalize_file_value(v) for v in value]
-        return [item for item in items if item] or None
+        filtered = [item for item in items if item]
+        return filtered or None
     if not isinstance(value, dict):
         return None
 
@@ -481,7 +484,7 @@ async def build_content_from_db_files(
     text: str,
     files: list[dict],
     capabilities: dict | None = None,
-) -> str | list[dict]:
+) -> str | list[str | dict[Any, Any]]:
     """从 DB 文件列表构建多模态 content（路径通过 file_service 查询）"""
     from app.services.file_service import file_service
 
