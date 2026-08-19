@@ -12,9 +12,11 @@ import hashlib
 import json
 import logging
 import time
-from typing import Any, Callable, Optional
+import uuid
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from langchain_core.messages import ToolMessage
+from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_core.messages import ToolCall, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.types import StreamWriter, interrupt
@@ -26,15 +28,18 @@ from app.agent_flow.flow_event import (
     ToolCallLimitEvent,
 )
 from app.agent_flow.message_buffer import MessageBuffer
-from app.agent_flow.node_handlers.base_handler import BaseNodeConfig
 from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.agent_flow.tool_resolver import (
+    FlowLike,
     filter_tools_by_intent,
     get_connected_tool_edges,
 )
 from app.config.build_utils import get_agent_work_dir
 from app.models.flow import FlowType
 from app.models.flow_node import FlowNode
+
+if TYPE_CHECKING:
+    from app.agent_flow.node_handlers.llm_tool_handler import LlmNodeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +74,7 @@ _HINT_PRIORITY: dict[str, int] = {
 _DOOM_LOOP_THRESHOLD = 3
 
 
-def _tool_call_fingerprint(tool_call: dict) -> str:
+def _tool_call_fingerprint(tool_call: ToolCall) -> str:
     """生成工具调用指纹（工具名 + 参数哈希），用于 doom loop 重复检测"""
     name = tool_call.get("name", "")
     args = tool_call.get("args", "")
@@ -85,10 +90,10 @@ async def setup_tool_handlers(
     state: FlowState,
     writer: Optional[StreamWriter],
     config: Optional[RunnableConfig],
-    cfg: BaseNodeConfig,
+    cfg: "LlmNodeConfig",
     *,
-    flow: Optional[object],
-    db_session_factory: Optional[object],
+    flow: Optional[FlowLike],
+    db_session_factory: Optional[Callable[[], AsyncSession]],
     handler_registry: dict,
     emit_fn: Optional[Callable] = None,
 ) -> tuple[list[BaseTool], list[str]]:
@@ -130,23 +135,24 @@ async def setup_tool_handlers(
         "provider": cfg.provider,
         "context_length": cfg.context_length,
     }
-
+    flow_id = getattr(flow, "id", None)
+    flow_type = getattr(flow, "flow_type", "")
     for idx, (tool_node, _edge) in enumerate(tool_edge_pairs):
         handler = handler_registry.get(tool_node.node_type)
         if not handler:
             continue
 
         # 注入 _agent_id（记忆节点等需要知道当前 Agent 的 ID）
-        if hasattr(handler, "_agent_id") and hasattr(flow, "id"):
-            handler._agent_id = flow.id
+        if hasattr(handler, "_agent_id") and flow_id is not None:
+            handler._agent_id = flow_id
 
         # 注入 _working_dir（仅 Agent 类型，Shell 节点用作 cwd）
         if (
             hasattr(handler, "_working_dir")
-            and flow.flow_type == "agent"
-            and hasattr(flow, "id")
+            and flow_type == "agent"
+            and flow_id is not None
         ):
-            handler._working_dir = get_agent_work_dir(flow.id)
+            handler._working_dir = get_agent_work_dir(flow_id)
 
         # 注入 writer、resolve_context、llm_config
         if hasattr(handler, "_writer"):
@@ -184,13 +190,13 @@ async def setup_tool_handlers(
 
     # 注入 WS 远程工具（仅智能体类型，远程工具仅 Agent 支持）
     # contextvar（WS execute 路径）优先；前端 SSE 路径 fallback 全局注册表
-    if flow.flow_type == FlowType.AGENT.value:
+    if flow_type == FlowType.AGENT.value and flow_id is not None:
         from app.agent_flow.ws_tool_context import (
             _current_ws_conn,
             get_active_ws_conn,
         )
 
-        ws_conn = _current_ws_conn.get() or get_active_ws_conn(flow.id)
+        ws_conn = _current_ws_conn.get() or get_active_ws_conn(flow_id)
         if ws_conn and ws_conn.registered_tools:
             from app.agent_flow.remote_tool_builder import create_remote_tool
 
@@ -210,7 +216,7 @@ async def setup_tool_handlers(
 
 
 async def handle_tool_calls(
-    tool_calls: list[dict],
+    tool_calls: list[ToolCall],
     tools: list[BaseTool],
     msg_buf: MessageBuffer,
     node: FlowNode,
@@ -254,6 +260,12 @@ async def handle_tool_calls(
     Returns:
         (是否应继续循环, 工具调用总次数)
     """
+    # 个别 OpenAI 兼容端点不返回 tool_call id，统一生成兜底 id
+    # 写回原 dict（与 AIMessage.tool_calls 中条目同引用），保证 ToolMessage 可配对
+    for tc in tool_calls:
+        if not tc.get("id"):
+            tc["id"] = f"call_{uuid.uuid4().hex[:24]}"
+
     # ---- 人工协助工具：跳过所有其他工具（避免有副作用的工具先执行） ----
     human_help_idx = next(
         (i for i, tc in enumerate(tool_calls) if tc.get("name") == _REQUEST_HUMAN_HELP),
@@ -294,7 +306,6 @@ async def handle_tool_calls(
             emit_tool_start_fn(
                 writer, node.node_key, tool_name, tool_args, tool_call_id=tool_id
             )
-
         result = await handle_human_interaction(
             tool_args, tool_id, msg_buf.messages, node, state
         )
@@ -420,7 +431,7 @@ async def handle_tool_calls(
 
     # ---- doom loop 检测：相同工具+相同参数重复调用超过阈值则跳过 ----
     if tool_fp_count is not None and doom_loop_threshold > 0:
-        safe_calls: list[dict] = []
+        safe_calls: list[ToolCall] = []
         for tc in tool_calls:
             fp = _tool_call_fingerprint(tc)
             tool_fp_count[fp] = tool_fp_count.get(fp, 0) + 1
@@ -454,8 +465,8 @@ async def handle_tool_calls(
     batch_start_time = time.time()
 
     async def _run_single_tool(
-        tool_call: dict,
-    ) -> tuple[dict, Any]:
+        tool_call: ToolCall,
+    ) -> tuple[ToolCall, Any]:
         """执行单个工具调用并返回 (tool_call, result)"""
         tool_name = tool_call.get("name", "")
         tool_args = tool_call.get("args", "")
@@ -551,7 +562,7 @@ async def handle_tool_calls(
 
 
 def reject_remaining_tools(
-    remaining_calls: list[dict],
+    remaining_calls: list[ToolCall],
     msg_buf: MessageBuffer,
     node_key: str,
     writer: Optional[StreamWriter],

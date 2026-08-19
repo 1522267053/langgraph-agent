@@ -19,6 +19,13 @@ from datetime import datetime
 
 import httpx
 from langchain_core.tools import BaseTool, StructuredTool
+from langchain_mcp_adapters.sessions import (
+    SSEConnection,
+    StdioConnection,
+    StreamableHttpConnection,
+    WebsocketConnection,
+)
+from sqlalchemy import false
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.mcp_server import McpServer, McpToolCache
@@ -221,7 +228,11 @@ class McpToolManager:
         - keep_alive=False 时，每次调用完成后自动关闭连接释放资源（如 xlsx 编辑）
         - 连接老化：超过 MAX_CONNECTION_AGE 时自动断开重建
         """
+        if not isinstance(tool, StructuredTool):
+            return tool
         original_coro = tool.coroutine
+        if not original_coro:
+            return tool
         is_stdio = transport == "stdio"
 
         async def locked_coro(**kwargs):
@@ -256,7 +267,6 @@ class McpToolManager:
                     BrokenPipeError,
                     ConnectionError,
                     ConnectionResetError,
-                    OSError,
                     httpx.RemoteProtocolError,
                     httpx.ConnectError,
                     httpx.ReadTimeout,
@@ -402,7 +412,12 @@ class McpToolManager:
         return await mcp_server_service.get_parsed_config(db, server_id)
 
     async def _start_connection(
-        self, server: McpServer, connection: dict[str, Any]
+        self,
+        server: McpServer,
+        connection: StdioConnection
+        | SSEConnection
+        | StreamableHttpConnection
+        | WebsocketConnection,
     ) -> ConnectionHolder:
         """
         启动 MCP 连接的后台生命周期管理 Task
@@ -428,7 +443,7 @@ class McpToolManager:
         ready_event = asyncio.Event()
         close_event = asyncio.Event()
         session_ref: list[Any] = [None]
-        error_ref: list[Exception] = [None]
+        error_ref: list[Optional[Exception]] = [None]
 
         async def _lifecycle():
             try:
@@ -563,7 +578,7 @@ class McpToolManager:
                 McpToolCache.server_id == server_id,
                 McpToolCache.tool_name.notin_(current_names)
                 if current_names
-                else False,
+                else false(),
             )
         )
 
