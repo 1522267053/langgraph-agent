@@ -4,9 +4,13 @@
 支持通过装饰器注册处理器，实现自动发现和创建
 """
 
-from typing import Callable, Type, Optional, Dict
+from typing import Callable, Type, Optional, Dict, TypeVar
 
 from app.agent_flow.node_handlers.base_handler import BaseNodeHandler
+
+# TypeVar 保留被装饰类/函数的类型，避免装饰后子类信息被擦除为基类
+_HandlerT = TypeVar("_HandlerT", bound=BaseNodeHandler)
+_FactoryT = TypeVar("_FactoryT", bound=Callable)
 
 
 class NodeHandlerRegistry:
@@ -78,7 +82,7 @@ class NodeHandlerRegistry:
                 ...
         """
 
-        def decorator(handler_class: Type["BaseNodeHandler"]):
+        def decorator(handler_class: Type[_HandlerT]) -> Type[_HandlerT]:
             cls._handlers[node_type] = handler_class
             return handler_class
 
@@ -98,7 +102,7 @@ class NodeHandlerRegistry:
                 return LlmToolNodeHandler(...)
         """
 
-        def decorator(factory: Callable):
+        def decorator(factory: _FactoryT) -> _FactoryT:
             cls._factories[node_type] = factory
             return factory
 

@@ -7,11 +7,9 @@
 
 from app.agent_flow.node_handlers.base_handler import BaseNodeHandler
 from app.agent_flow.variable_resolver import VariableResolver, variable_resolver
-from app.agent_flow.handler_registry import NodeHandlerRegistry
 
 __all__ = [
     "BaseNodeHandler",
     "VariableResolver",
     "variable_resolver",
-    "NodeHandlerRegistry",
 ]
