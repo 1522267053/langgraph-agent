@@ -283,7 +283,7 @@ async def _run_sub_agent(
     handler_ref: Optional["SubAgentNodeHandler"] = None,
     agent_id: int = 0,
     agent_name: str = "",
-) -> dict:
+) -> dict | str:
     """执行子Agent并返回结果
 
     当子Agent产生 tool_approval_required 事件时，通过父Agent的 writer 转发到父SSE流，

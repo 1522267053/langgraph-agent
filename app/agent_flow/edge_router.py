@@ -6,6 +6,7 @@
 """
 
 import logging
+from typing import Hashable
 from simpleeval import simple_eval, EvalWithCompoundTypes
 from langgraph.graph import END, StateGraph
 
@@ -129,7 +130,7 @@ def _add_condition_edges(
 
         return END
 
-    targets: dict[str, str] = {
+    targets: dict[Hashable, str] = {
         edge.target_node_key: edge.target_node_key for edge in edges
     }
     targets[END] = END
@@ -171,7 +172,7 @@ def _add_intent_route_edges(
 
         return END
 
-    targets: dict[str, str] = {
+    targets: dict[Hashable, str] = {
         edge.target_node_key: edge.target_node_key for edge in edges
     }
     targets[END] = END
@@ -233,7 +234,7 @@ def _add_conditional_edges(
 
         return END
 
-    targets: dict[str, str] = {
+    targets: dict[Hashable, str] = {
         edge.target_node_key: edge.target_node_key for edge in edges
     }
     targets[END] = END
