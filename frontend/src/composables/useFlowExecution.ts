@@ -123,24 +123,35 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
         const nodeKey = event.data.node_key || ''
         const toolName = event.data.tool_name || ''
         const toolArgs = event.data.tool_args || {}
+        const toolCallId = event.data.tool_call_id
         const current = streamingContent.value[nodeKey]
         const baseSegments = current?.segments ? [...current.segments] : []
-        const segments = addToolToSegments(baseSegments, toolName, toolArgs, 'running')
+        const segments = addToolToSegments(
+          baseSegments,
+          toolName,
+          toolArgs,
+          'running',
+          undefined,
+          toolCallId
+        )
         streamingContent.value = { ...streamingContent.value, [nodeKey]: { segments } }
       },
       onToolCallEnd: (event: SSEEvent) => {
         const nodeKey = event.data.node_key || ''
         const toolName = event.data.tool_name || ''
+        const toolCallId = event.data.tool_call_id
         const result = event.data.result
         const status: 'success' | 'error' = event.data.status === 'error' ? 'error' : 'success'
         const current = streamingContent.value[nodeKey]
         if (current?.segments?.length) {
           const base = [...current.segments]
-          const updated = updateToolInSegments(base, toolName, status, result)
+          const updated = updateToolInSegments(base, toolName, status, result, toolCallId)
           if (updated === base) {
             streamingContent.value = {
               ...streamingContent.value,
-              [nodeKey]: { segments: addToolToSegments(base, toolName, undefined, status, result) }
+              [nodeKey]: {
+                segments: addToolToSegments(base, toolName, undefined, status, result, toolCallId)
+              }
             }
           } else {
             streamingContent.value = { ...streamingContent.value, [nodeKey]: { segments: updated } }
@@ -149,7 +160,9 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
           const base = current?.segments ? [...current.segments] : []
           streamingContent.value = {
             ...streamingContent.value,
-            [nodeKey]: { segments: addToolToSegments(base, toolName, undefined, status, result) }
+            [nodeKey]: {
+              segments: addToolToSegments(base, toolName, undefined, status, result, toolCallId)
+            }
           }
         }
       },

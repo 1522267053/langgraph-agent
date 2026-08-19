@@ -284,7 +284,12 @@ def inject_resume_if_needed(
                 )
                 if node_key and writer and emit_tool_end_fn:
                     emit_tool_end_fn(
-                        writer, node_key, tc_name, resume_input, status="success"
+                        writer,
+                        node_key,
+                        tc_name,
+                        resume_input,
+                        status="success",
+                        tool_call_id=tc_id,
                     )
                 return True
 

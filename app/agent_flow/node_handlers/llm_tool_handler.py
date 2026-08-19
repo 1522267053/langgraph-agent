@@ -250,21 +250,43 @@ class LlmToolNodeHandler(BaseNodeHandler):
             return None
         return {"model": model, "api_key": api_key}
 
-    def _emit_tool_start(self, writer, node_key, tool_name, tool_args):
+    def _emit_tool_start(
+        self,
+        writer,
+        node_key,
+        tool_name,
+        tool_args,
+        tool_call_id: Optional[str] = None,
+    ):
         """发送工具调用开始事件"""
         self._emit(
             writer,
             ToolCallStartEvent(
-                node_key=node_key, tool_name=tool_name, tool_args=tool_args
+                node_key=node_key,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                tool_call_id=tool_call_id,
             ),
         )
 
-    def _emit_tool_end(self, writer, node_key, tool_name, result, status="success"):
+    def _emit_tool_end(
+        self,
+        writer,
+        node_key,
+        tool_name,
+        result,
+        status="success",
+        tool_call_id: Optional[str] = None,
+    ):
         """发送工具调用结束事件"""
         self._emit(
             writer,
             ToolCallEndEvent(
-                node_key=node_key, tool_name=tool_name, status=status, result=result
+                node_key=node_key,
+                tool_name=tool_name,
+                status=status,
+                result=result,
+                tool_call_id=tool_call_id,
             ),
         )
 

@@ -541,13 +541,19 @@ export const useAgentStore = defineStore('agent', () => {
         // 节点完成处理
       },
       onToolCallStart: (event: SSEEvent) => {
-        addToolSegment(event.data.tool_name || '', event.data.tool_args || {}, 'running')
+        addToolSegment(
+          event.data.tool_name || '',
+          event.data.tool_args || {},
+          'running',
+          event.data.tool_call_id
+        )
       },
       onToolCallEnd: (event: SSEEvent) => {
         updateToolSegment(
           event.data.tool_name || '',
           event.data.status === 'error' ? 'error' : 'success',
-          event.data.result
+          event.data.result,
+          event.data.tool_call_id
         )
       },
       onToolCallLimit: createOnToolCallLimitHandler(),
