@@ -8,7 +8,7 @@
 import asyncio
 import json
 import logging
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 from langchain_core.tools import StructuredTool
 from langchain_core.runnables import RunnableConfig
@@ -52,7 +52,7 @@ def _build_ask_tool_schema(agent_name: str, input_schema: dict | None, node_key:
     """
     model_name = f"Ask{node_key}Input"
 
-    fields_def: dict[str, tuple] = {
+    fields_def: dict[str, Any] = {
         "task": (str, Field(..., description="要委派给子Agent执行的任务描述")),
     }
 
@@ -123,7 +123,11 @@ class SubAgentNodeHandler(BaseNodeHandler):
                 )
             )
         if writer:
-            writer(NodeDoneEvent(node_key=node.node_key, output={}))
+            writer(
+                NodeDoneEvent(
+                    node_key=node.node_key, node_type=node.node_type, output_data={}
+                )
+            )
         return state
 
     @classmethod

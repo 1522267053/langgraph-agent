@@ -81,16 +81,29 @@ def extract_thinking(msg: BaseMessage) -> str:
 
 def extract_tool_calls(msg: BaseMessage) -> Optional[list[dict]]:
     """从消息中提取 tool_calls 并统一序列化为字典列表。"""
-    if not (hasattr(msg, "tool_calls") and msg.tool_calls):
+    if not (isinstance(msg, AIMessage) and msg.tool_calls):
         return None
     return [
         {
-            "id": tc.id if hasattr(tc, "id") else tc.get("id"),
-            "name": tc.name if hasattr(tc, "name") else tc.get("name"),
-            "args": tc.args if hasattr(tc, "args") else tc.get("args"),
+            "id": tc.get("id"),
+            "name": tc.get("name"),
+            "args": tc.get("args"),
         }
         for tc in msg.tool_calls
     ]
+
+
+def remove_unmatched_tool_calls(msg: BaseMessage, pending_ids: set) -> None:
+    """移除 AIMessage 中未匹配到 ToolMessage 的 tool_calls（就地修改）
+
+    Args:
+        msg: 待清理的消息（非 AIMessage 或无 tool_calls 时不动）
+        pending_ids: 尚未匹配到 ToolMessage 的 tool_call id 集合
+    """
+    if not (isinstance(msg, AIMessage) and msg.tool_calls):
+        return
+    kept = [tc for tc in msg.tool_calls if (tc.get("id") or "") not in pending_ids]
+    msg.tool_calls = kept
 
 
 def extract_tool_status(msg: BaseMessage) -> Optional[str]:
