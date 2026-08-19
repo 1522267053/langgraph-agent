@@ -81,24 +81,38 @@ export function addTool(
   name: string,
   args?: Record<string, unknown>,
   status: 'running' | 'success' | 'error' = 'running',
-  result?: unknown
+  result?: unknown,
+  toolCallId?: string
 ): Segment[] {
-  return [...segments, { type: 'tool', tool: { name, args, status, result } }]
+  return [...segments, { type: 'tool', tool: { name, args, status, result, id: toolCallId } }]
 }
 
 /**
  * 更新工具调用结果
- * 从后向前查找最后一个名称匹配且状态为 running 的工具分段进行更新
+ * 优先按 toolCallId 精确匹配（同名工具并行调用时结果不会错位）；
+ * 未提供 ID 或 ID 未命中时回退按名称匹配最后一个 running 的工具分段
  */
 export function updateTool(
   segments: Segment[],
   name: string,
   status: 'running' | 'success' | 'error',
-  result?: unknown
+  result?: unknown,
+  toolCallId?: string
 ): Segment[] {
-  const idx = segments.findLastIndex(
-    s => s.type === 'tool' && s.tool?.name === name && s.tool?.status === 'running'
-  )
+  let idx = -1
+  if (toolCallId) {
+    // 按 ID 精确匹配；命中但已结束（重复 end 事件）时直接忽略，防止误改同名工具
+    const idIdx = segments.findLastIndex(s => s.type === 'tool' && s.tool?.id === toolCallId)
+    if (idIdx !== -1) {
+      if (segments[idIdx].tool?.status !== 'running') return segments
+      idx = idIdx
+    }
+  }
+  if (idx === -1) {
+    idx = segments.findLastIndex(
+      s => s.type === 'tool' && s.tool?.name === name && s.tool?.status === 'running'
+    )
+  }
   if (idx === -1) return segments
   const seg = segments[idx]
   const updated: Segment = {

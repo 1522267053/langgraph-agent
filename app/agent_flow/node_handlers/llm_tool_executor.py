@@ -291,7 +291,9 @@ async def handle_tool_calls(
         tool_call_count += 1
 
         if emit_tool_start_fn:
-            emit_tool_start_fn(writer, node.node_key, tool_name, tool_args)
+            emit_tool_start_fn(
+                writer, node.node_key, tool_name, tool_args, tool_call_id=tool_id
+            )
 
         result = await handle_human_interaction(
             tool_args, tool_id, msg_buf.messages, node, state
@@ -304,7 +306,14 @@ async def handle_tool_calls(
         )
 
         if emit_tool_end_fn:
-            emit_tool_end_fn(writer, node.node_key, tool_name, result, status="success")
+            emit_tool_end_fn(
+                writer,
+                node.node_key,
+                tool_name,
+                result,
+                status="success",
+                tool_call_id=tool_id,
+            )
         return True, tool_call_count
 
     # ---- 工具确认（仅 Agent 模式） ----
@@ -348,7 +357,12 @@ async def handle_tool_calls(
                         )
                         if emit_tool_end_fn:
                             emit_tool_end_fn(
-                                writer, node.node_key, tc_name, msg, status="error"
+                                writer,
+                                node.node_key,
+                                tc_name,
+                                msg,
+                                status="error",
+                                tool_call_id=tc_id,
                             )
                     return False, tool_call_count
 
@@ -364,7 +378,12 @@ async def handle_tool_calls(
                         )
                         if emit_tool_end_fn:
                             emit_tool_end_fn(
-                                writer, node.node_key, tc_name, msg, status="error"
+                                writer,
+                                node.node_key,
+                                tc_name,
+                                msg,
+                                status="error",
+                                tool_call_id=tc_id,
                             )
                     return False, tool_call_count
 
@@ -417,7 +436,12 @@ async def handle_tool_calls(
                 )
                 if emit_tool_end_fn:
                     emit_tool_end_fn(
-                        writer, node.node_key, tc_name, skip_msg, status="error"
+                        writer,
+                        node.node_key,
+                        tc_name,
+                        skip_msg,
+                        status="error",
+                        tool_call_id=tc_id,
                     )
             else:
                 safe_calls.append(tc)
@@ -435,10 +459,13 @@ async def handle_tool_calls(
         """执行单个工具调用并返回 (tool_call, result)"""
         tool_name = tool_call.get("name", "")
         tool_args = tool_call.get("args", "")
+        tool_id = tool_call.get("id", "")
         if check_interrupted_fn(state):
             return tool_call, {"success": False, "error": "执行被中断"}
         if emit_tool_start_fn:
-            emit_tool_start_fn(writer, node.node_key, tool_name, tool_args)
+            emit_tool_start_fn(
+                writer, node.node_key, tool_name, tool_args, tool_call_id=tool_id
+            )
         result = await execute_tool(
             tool_name,
             tool_args,
@@ -497,7 +524,14 @@ async def handle_tool_calls(
 
         if emit_tool_end_fn:
             sse_result = raw_result if is_exempt else content
-            emit_tool_end_fn(writer, node.node_key, tool_name, sse_result, tool_status)
+            emit_tool_end_fn(
+                writer,
+                node.node_key,
+                tool_name,
+                sse_result,
+                tool_status,
+                tool_call_id=tool_id,
+            )
 
     # ---- 检测流程变更并发送预览事件 ----
     if emit_flow_preview_fn and writer:
@@ -549,6 +583,7 @@ def reject_remaining_tools(
                 call_name,
                 {"success": False, "error": reason},
                 status="error",
+                tool_call_id=call_id,
             )
         msg_buf.append(
             ToolMessage(content=reason, tool_call_id=call_id, name=call_name)

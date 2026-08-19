@@ -41,6 +41,8 @@ export interface SSEEventData {
   tool_name?: string
   /** 工具参数 */
   tool_args?: Record<string, unknown>
+  /** 工具调用ID（同名并行调用时用于精确匹配结果） */
+  tool_call_id?: string
   /** 工具调用结果 */
   result?: unknown
   /** 等待数据（人工交互） */

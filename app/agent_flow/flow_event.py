@@ -125,6 +125,9 @@ class ToolCallStartEvent(FlowEvent):
     node_key: str = Field(..., description="节点Key")
     tool_name: str = Field(..., description="工具名称")
     tool_args: dict = Field(default_factory=dict, description="工具参数")
+    tool_call_id: Optional[str] = Field(
+        default=None, description="工具调用ID（用于前端精确匹配同名并行调用）"
+    )
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.TOOL_CALL_START
@@ -137,6 +140,9 @@ class ToolCallEndEvent(FlowEvent):
     tool_name: str = Field(..., description="工具名称")
     status: str = Field(default="success", description="执行状态：success / error")
     result: Optional[Any] = Field(default=None, description="工具返回结果")
+    tool_call_id: Optional[str] = Field(
+        default=None, description="工具调用ID（用于前端精确匹配同名并行调用）"
+    )
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.TOOL_CALL_END
@@ -356,11 +362,17 @@ class FlowEventFactory:
 
     @staticmethod
     def tool_call_start(
-        node_key: str, tool_name: str, tool_args: Optional[dict] = None
+        node_key: str,
+        tool_name: str,
+        tool_args: Optional[dict] = None,
+        tool_call_id: Optional[str] = None,
     ) -> dict:
         """创建工具调用开始事件"""
         return ToolCallStartEvent(
-            node_key=node_key, tool_name=tool_name, tool_args=tool_args or {}
+            node_key=node_key,
+            tool_name=tool_name,
+            tool_args=tool_args or {},
+            tool_call_id=tool_call_id,
         ).to_dict()
 
     @staticmethod
@@ -369,10 +381,15 @@ class FlowEventFactory:
         tool_name: str,
         result: Optional[Any] = None,
         status: str = "success",
+        tool_call_id: Optional[str] = None,
     ) -> dict:
         """创建工具调用结束事件"""
         return ToolCallEndEvent(
-            node_key=node_key, tool_name=tool_name, status=status, result=result
+            node_key=node_key,
+            tool_name=tool_name,
+            status=status,
+            result=result,
+            tool_call_id=tool_call_id,
         ).to_dict()
 
     @staticmethod

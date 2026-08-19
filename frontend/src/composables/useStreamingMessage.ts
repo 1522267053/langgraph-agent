@@ -236,18 +236,19 @@ export function useStreamingMessage() {
   function addToolSegment(
     name: string,
     args?: Record<string, unknown>,
-    status: 'running' | 'success' | 'error' = 'running'
+    status: 'running' | 'success' | 'error' = 'running',
+    toolCallId?: string
   ): void {
     // 工具分段必须排在已缓冲的 thinking/content 之后
     flushPending()
     currentSegmentType.value = 'tool'
     const msg = getOrCreateStreamingMessage()
-    msg.segments = addToolToSegments(msg.segments, name, args, status)
+    msg.segments = addToolToSegments(msg.segments, name, args, status, undefined, toolCallId)
 
     if (!msg.tools) {
       msg.tools = []
     }
-    msg.tools.push({ name, args, status })
+    msg.tools.push({ name, args, status, id: toolCallId })
   }
 
   /**
@@ -256,17 +257,21 @@ export function useStreamingMessage() {
   function updateToolSegment(
     name: string,
     status: 'running' | 'success' | 'error',
-    result?: unknown
+    result?: unknown,
+    toolCallId?: string
   ): void {
     // 确保缓冲内容先落地，避免 tool 结果与 content 尾部显示不同步
     flushPending()
     const msg = messages.value[messages.value.length - 1]
     if (msg?.role !== 'ai' || !msg.segments) return
 
-    msg.segments = updateToolInSegments(msg.segments, name, status, result)
+    msg.segments = updateToolInSegments(msg.segments, name, status, result, toolCallId)
 
     if (msg.tools) {
-      const tool = [...msg.tools].reverse().find(t => t.name === name && t.status === 'running')
+      // 优先按 ID 精确匹配（同名并行工具结果不错位），无 ID 回退名称匹配
+      const tool = toolCallId
+        ? [...msg.tools].reverse().find(t => t.id === toolCallId && t.status === 'running')
+        : [...msg.tools].reverse().find(t => t.name === name && t.status === 'running')
       if (tool) {
         tool.status = status
         if (result !== undefined) tool.result = result
