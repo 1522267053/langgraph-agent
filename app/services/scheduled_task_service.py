@@ -139,7 +139,8 @@ class ScheduledTaskService(
                 target_type = task.target_type
                 target_id = task.target_id
                 input_data = task.input_data or {}
-
+                if not target_id:
+                    raise ValueError(f"定时任务[{task.name}]缺少目标ID，无法执行")
                 if target_type == ScheduledTaskTargetType.AGENT.value:
                     await self._execute_agent_task(
                         db, log, target_id, input_data, task.name

@@ -430,7 +430,10 @@ class BuiltinAgentService:
         await db.refresh(flow)
 
         await self._build_nodes_and_edges(db, flow, skills, global_llm)
-        return await flow_service.get_with_nodes_and_edges(db, flow.id)
+        new_flow = await flow_service.get_with_nodes_and_edges(db, flow.id)
+        if not new_flow:
+            raise ValueError(f"创建内置智能体失败: flow_id={flow.id} 查询不到流程")
+        return new_flow
 
     async def reset(self, db: AsyncSession) -> int:
         """恢复内置 Agent 出厂设置：删除节点和边，用模板重新构建"""
@@ -753,8 +756,6 @@ class BuiltinAgentService:
             for e in edges_data
         ]
         await flow_service.batch_create_edges(db, flow.id, edge_creates)
-
-        return await flow_service.get_with_nodes_and_edges(db, flow.id)
 
 
 builtin_agent_service = BuiltinAgentService()

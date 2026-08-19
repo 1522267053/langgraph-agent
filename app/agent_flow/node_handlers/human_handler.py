@@ -165,7 +165,7 @@ class HumanNodeHandler(BaseNodeHandler):
 
         return output if output else None
 
-    def get_tool(self, node: FlowNode) -> Optional[BaseTool]:
+    async def get_tool(self, node: FlowNode) -> Optional[BaseTool]:
         """
         返回人工协助工具
 
