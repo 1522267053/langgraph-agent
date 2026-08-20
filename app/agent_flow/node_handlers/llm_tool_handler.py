@@ -27,7 +27,7 @@ from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
 )
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.types import StreamWriter
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -544,7 +544,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
 
     async def _run_react_loop(
         self,
-        llm: BaseChatModel,
+        llm: BaseChatModel | Runnable,
         system_prompt: Optional[str],
         msg_buf: MessageBuffer,
         tools: list,

@@ -12,24 +12,25 @@
 """
 
 import logging
+from typing import Any
 
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlalchemy.sql.schema import MetaData, Table
+from sqlalchemy.sql.schema import Column, MetaData, Table
 
 logger = logging.getLogger(__name__)
 
 
 def _collect_missing_columns(
     sync_conn, metadata: MetaData
-) -> list[tuple[Table, object]]:
+) -> list[tuple[Table, Column[Any]]]:
     """对比模型与实际表结构，收集缺失的列（同步函数，通过 run_sync 调用）
 
     两阶段处理的第一阶段：仅收集信息，不执行 DDL，避免 inspector 缓存与 ALTER 冲突。
     """
     inspector = inspect(sync_conn)
     existing_tables = set(inspector.get_table_names())
-    missing: list[tuple[Table, object]] = []
+    missing: list[tuple[Table, Column[Any]]] = []
 
     for table_name, table_obj in metadata.tables.items():
         # 仅处理已存在的表（新表由 create_all 创建）
@@ -43,7 +44,9 @@ def _collect_missing_columns(
     return missing
 
 
-def _apply_missing_columns(sync_conn, missing: list[tuple[Table, object]]) -> list[str]:
+def _apply_missing_columns(
+    sync_conn, missing: list[tuple[Table, Column[Any]]]
+) -> list[str]:
     """为缺失列执行 ALTER TABLE ADD COLUMN（同步函数，通过 run_sync 调用）
 
     新增列一律可空（兼容 SQLite 的 ADD COLUMN 限制）。

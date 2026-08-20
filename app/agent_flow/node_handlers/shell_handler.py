@@ -750,7 +750,7 @@ async def _force_kill_process_tree(process: asyncio.subprocess.Process) -> None:
         else:
             import signal
 
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            os.killpg(os.getpgid(pid), signal.SIGKILL)  # type: ignore
     except Exception:
         try:
             process.kill()

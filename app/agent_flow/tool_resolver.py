@@ -9,6 +9,7 @@ import re
 
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.graph_builder import FlowLike
+from app.models.flow import Flow
 from app.models.flow_edge import FlowEdge
 from app.models.flow_node import FlowNode, NodeType
 
@@ -35,7 +36,9 @@ class LlmToolConfig:
         self.sub_agent_configs: dict[str, dict] = {}
 
 
-def get_connected_tool_nodes(flow: FlowLike, llm_node_key: str) -> list[FlowNode]:
+def get_connected_tool_nodes(
+    flow: FlowLike | Flow, llm_node_key: str
+) -> list[FlowNode]:
     """
     获取连接到LLM节点的所有工具节点（MCP、Human、API、Knowledge和Skill）
 
@@ -50,7 +53,7 @@ def get_connected_tool_nodes(flow: FlowLike, llm_node_key: str) -> list[FlowNode
 
 
 def get_connected_tool_edges(
-    flow: FlowLike, llm_node_key: str
+    flow: FlowLike | Flow, llm_node_key: str
 ) -> list[tuple[FlowNode, FlowEdge]]:
     """
     获取连接到LLM节点的所有工具节点及其边
@@ -160,7 +163,7 @@ def get_node_label(node: FlowNode) -> str:
 
 
 def resolve_connected_tool_info(
-    flow: FlowLike,
+    flow: FlowLike | Flow,
     llm_node_key: str,
 ) -> list[dict]:
     """

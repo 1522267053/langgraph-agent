@@ -16,6 +16,7 @@ import httpx
 import openai
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessageChunk, BaseMessage
+from langchain_core.runnables import Runnable
 
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.flow_event import (
@@ -44,7 +45,7 @@ _RETRY_DELAYS = [1, 2, 4]
 
 
 async def stream_llm_response(
-    llm: BaseChatModel,
+    llm: BaseChatModel | Runnable,
     messages: list[BaseMessage],
     node_key: str,
     state: FlowState,

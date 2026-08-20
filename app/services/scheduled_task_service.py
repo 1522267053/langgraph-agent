@@ -157,9 +157,10 @@ class ScheduledTaskService(
                 logger.error(f"定时任务[{task.name}]执行失败: {e}", exc_info=True)
             finally:
                 log.end_time = datetime.now()
-                if log.start_time and log.end_time:
+                end_time = log.end_time
+                if log.start_time and end_time:
                     log.duration_ms = int(
-                        (log.end_time - log.start_time).total_seconds() * 1000
+                        (end_time - log.start_time).total_seconds() * 1000
                     )
                 task.last_run_time = log.end_time
                 from app.services.scheduler_service import scheduler_service
