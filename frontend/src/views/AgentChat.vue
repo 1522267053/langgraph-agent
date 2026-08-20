@@ -387,15 +387,28 @@ async function handleCompress() {
     ElMessage.warning('暂无对话记录')
     return
   }
+  let compressPrompt = ''
   try {
-    await ElMessageBox.confirm('将总结全部对话历史为摘要。此操作不可撤销。', '压缩上下文', {
-      type: 'warning'
-    })
+    const { value } = await ElMessageBox.prompt(
+      '将总结全部对话历史为摘要。此操作不可撤销。',
+      '压缩上下文',
+      {
+        type: 'warning',
+        inputType: 'textarea',
+        inputPlaceholder: '自定义压缩要求（可留空，使用默认提示词）',
+        inputValue: ''
+      }
+    )
+    compressPrompt = value.trim()
   } catch {
     return
   }
   try {
-    const started = await store.compressSession(agentId.value, store.currentSession.id)
+    const started = await store.compressSession(
+      agentId.value,
+      store.currentSession.id,
+      compressPrompt
+    )
     if (started) {
       ElMessage.info('正在压缩上下文...')
     }

@@ -991,11 +991,16 @@ export const useAgentStore = defineStore('agent', () => {
 
   /**
    * 压缩会话上下文
+   * @param prompt 自定义压缩提示词，追加到默认提示词后，空则仅使用默认
    */
-  async function compressSession(agentId: number, sessionId: number): Promise<boolean> {
+  async function compressSession(
+    agentId: number,
+    sessionId: number,
+    prompt?: string
+  ): Promise<boolean> {
     isCompressing.value = true
     try {
-      const res = await agentApi.compress(agentId, sessionId)
+      const res = await agentApi.compress(agentId, sessionId, prompt)
       if (res.data.code === 1) {
         startCompressPolling(agentId, sessionId)
         return true

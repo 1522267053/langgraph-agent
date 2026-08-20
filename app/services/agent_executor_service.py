@@ -1073,13 +1073,15 @@ class AgentExecutorService(BaseExecutorService):
         """检查指定会话是否正在执行（用于刷新后前端检测并显示停止按钮）"""
         return session_id in self._running_sessions
 
-    async def _run_compress_background(self, session_id: int) -> None:
+    async def _run_compress_background(
+        self, session_id: int, custom_prompt: str = ""
+    ) -> None:
         """后台压缩任务，独立于 HTTP 请求生命周期，前端通过轮询 /compressing 检测完成"""
         from app.config.database import AsyncSessionLocal
 
         try:
             async with AsyncSessionLocal() as db:
-                result = await self.compress_session(db, session_id)
+                result = await self.compress_session(db, session_id, custom_prompt)
                 self._compress_results[session_id] = result
         except Exception as e:
             logger.error(f"后台压缩会话上下文失败: session_id={session_id}, error={e}")
@@ -1095,7 +1097,7 @@ class AgentExecutorService(BaseExecutorService):
         return self._compress_results.pop(session_id, None)
 
     async def compress_session(
-        self, db: AsyncSession, session_id: int
+        self, db: AsyncSession, session_id: int, custom_prompt: str = ""
     ) -> dict[str, Any]:
         """
         压缩会话上下文（手动/自动统一入口）
@@ -1103,16 +1105,21 @@ class AgentExecutorService(BaseExecutorService):
         用 Agent 自身的 LLM 将全部对话总结为摘要。
         同时清理 LangGraph checkpoint，确保下次执行从压缩后的历史重建。
 
+        Args:
+            custom_prompt: 自定义压缩提示词，非空时追加到默认提示词后
+
         Returns:
             {"summary": str|None, "kept_count": int, "removed_count": int, "token_usage": dict}
         """
         self._compressing_sessions.add(session_id)
         try:
-            return await self._do_compress(db, session_id)
+            return await self._do_compress(db, session_id, custom_prompt)
         finally:
             self._compressing_sessions.discard(session_id)
 
-    async def _do_compress(self, db: AsyncSession, session_id: int) -> dict[str, Any]:
+    async def _do_compress(
+        self, db: AsyncSession, session_id: int, custom_prompt: str = ""
+    ) -> dict[str, Any]:
         """压缩会话上下文的实际执行逻辑"""
         session = await self._get_session(db, session_id)
         if not session:
@@ -1179,6 +1186,9 @@ class AgentExecutorService(BaseExecutorService):
                 "11. 使用与对话相同的语言输出\n"
                 "12. 不要回答对话本身的内容，只做压缩"
             )
+            # 自定义提示词追加到默认规则后作为补充要求
+            if custom_prompt.strip():
+                summary_prompt += f"\n\n## 补充要求\n{custom_prompt.strip()}"
             response = await llm.ainvoke(
                 [
                     SystemMessage(content=summary_prompt),

@@ -41,6 +41,12 @@ class ToolApprovalRequest(BaseModel):
     action: str = Field(..., description="approved 或 rejected")
 
 
+class CompressRequest(BaseModel):
+    prompt: str = Field(
+        default="", description="自定义压缩提示词，追加到默认提示词后，空则仅使用默认"
+    )
+
+
 class AgentSearchRequest(BaseModel):
     keyword: str = Field(..., description="搜索关键词")
 
@@ -304,7 +310,10 @@ class AgentApi:
             summary="压缩会话上下文",
         )
         async def compress_session(
-            id: int, session_id: int, db: AsyncSession = Depends(get_db)
+            id: int,
+            session_id: int,
+            req: CompressRequest | None = None,
+            db: AsyncSession = Depends(get_db),
         ):
             """启动后台压缩任务，前端通过轮询 /compressing 检测完成"""
             session = await agent_executor_service._get_session(db, session_id)
@@ -314,8 +323,11 @@ class AgentApi:
                 return ApiResponse.error(msg="正在压缩中，请稍后再试")
             if session_id in agent_executor_service._running_sessions:
                 return ApiResponse.error(msg="会话正在执行中，请稍后再试")
+            custom_prompt = (req.prompt if req else "").strip()
             asyncio.create_task(
-                agent_executor_service._run_compress_background(session_id)
+                agent_executor_service._run_compress_background(
+                    session_id, custom_prompt
+                )
             )
             return ApiResponse.success(msg="开始压缩")
 
