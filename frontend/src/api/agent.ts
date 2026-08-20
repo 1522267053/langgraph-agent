@@ -174,10 +174,12 @@ export const agentApi = {
    * 压缩会话上下文
    * @param agentId Agent ID
    * @param sessionId 会话ID
+   * @param prompt 自定义压缩提示词，追加到默认提示词后，空则仅使用默认
    */
-  compress(agentId: number, sessionId: number) {
+  compress(agentId: number, sessionId: number, prompt?: string) {
     return post<{ summary: string | null; kept_count: number; removed_count: number }>(
-      `/agent/${agentId}/sessions/${sessionId}/compress`
+      `/agent/${agentId}/sessions/${sessionId}/compress`,
+      { prompt: prompt || '' }
     )
   },
 
