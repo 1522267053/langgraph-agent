@@ -300,6 +300,8 @@ async def handle_tool_calls(
         tool_name = tool_call.get("name", "")
         tool_args = tool_call.get("args", {})
         tool_id = tool_call.get("id", "")
+        if not tool_id:
+            raise Exception("人工协助工具调用缺少 id")
         tool_call_count += 1
 
         if emit_tool_start_fn:
