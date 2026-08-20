@@ -993,7 +993,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         """
         emb_svc = await get_embedding_service_async()
         if not emb_svc.is_available() or not memories:
-            return 0, [m.id for m in memories] if memories else (0, [])
+            return (0, [m.id for m in memories]) if memories else (0, [])
 
         vector_store = _get_vector_store()
 
