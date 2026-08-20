@@ -280,7 +280,8 @@ class SchedulerService:
             due = [
                 a
                 for a in agendas
-                if a.remind_at <= now
+                if a.remind_at
+                and a.remind_at <= now
                 and not (a.recurrence == "weekday" and now.weekday() >= 5)
             ]
             for agenda in due:
@@ -417,7 +418,8 @@ class SchedulerService:
             expired = [
                 a
                 for a in agendas
-                if a.remind_at <= now
+                if a.remind_at
+                and a.remind_at <= now
                 and not (a.recurrence == "weekday" and now.weekday() >= 5)
             ]
 
