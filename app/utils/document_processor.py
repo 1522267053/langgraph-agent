@@ -144,7 +144,7 @@ class DocumentProcessor:
             text = para.text.strip()
             if text:
                 style_name = para.style.name if para.style else ""
-                if "Heading" in style_name or "Title" in style_name:
+                if style_name and ("Heading" in style_name or "Title" in style_name):
                     level = self._get_heading_level(style_name)
                     paragraphs.append(f"{'#' * level} {text}")
                 else:
@@ -175,7 +175,8 @@ class DocumentProcessor:
         import io
         from openpyxl import load_workbook
 
-        with load_workbook(io.BytesIO(content), read_only=False, data_only=True) as wb:
+        wb = load_workbook(io.BytesIO(content), read_only=False, data_only=True)
+        try:
             sheet_texts = []
             for sheet_name in wb.sheetnames:
                 ws = wb[sheet_name]
@@ -204,7 +205,9 @@ class DocumentProcessor:
                     md_table = f"## {sheet_name}\n\n{table_lines[0]}\n{separator}\n"
                     md_table += "\n".join(table_lines[1:])
                     sheet_texts.append(md_table)
-
+        finally:
+            if wb:
+                wb.close()
         if not sheet_texts:
             return ""
 
