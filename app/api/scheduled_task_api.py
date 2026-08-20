@@ -2,7 +2,7 @@
 定时任务 API 路由
 """
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -116,6 +116,8 @@ class ScheduledTaskApi(
         """创建 - 校验名称唯一性 + 调度配置 + 流程目标合法性，启用时注册调度"""
         await self._check_name_unique(db, data.name)
         self._validate_schedule(data)
+        if not data.target_id:
+            raise HTTPException(status_code=400, detail="target_id 不能为空")
         await self._check_flow_target(db, data.target_type, data.target_id)
         task = await self.service.create(db, data)
         if task.is_enabled == 1:
@@ -172,6 +174,8 @@ class ScheduledTaskApi(
                 return ApiResponse.error(msg="任务不存在")
             is_enabling = task.is_enabled != 1
             if is_enabling:
+                if not task.target_id:
+                    raise HTTPException(status_code=400, detail="target_id 不能为空")
                 await self._check_flow_target(db, task.target_type, task.target_id)
             task = await scheduled_task_service.toggle_enabled(db, task_id)
             if task is None:
@@ -186,6 +190,8 @@ class ScheduledTaskApi(
             task = await scheduled_task_service.get_by_id(db, task_id)
             if not task:
                 return ApiResponse.error(msg="任务不存在")
+            if not task.target_id:
+                raise HTTPException(status_code=400, detail="target_id 不能为空")
             await self._check_flow_target(db, task.target_type, task.target_id)
             log = await scheduled_task_service.manual_trigger(db, task_id)
             return ApiResponse.success(

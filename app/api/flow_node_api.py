@@ -296,6 +296,8 @@ class FlowNodeApi(
             db, data.node_type, data.base_config
         )
         flow = await flow_service.get_by_id(db, data.flow_id, raise_not_found=True)
+        if not flow:
+            raise FlowValidationError(f"流程 {data.flow_id} 不存在")
         await self._check_agent_node(db, flow, data.node_type)
         await self._validate_node(
             db,
@@ -338,6 +340,8 @@ class FlowNodeApi(
         provided = data.model_fields_set
         node_type = data.node_type if "node_type" in provided else existing.node_type
         node_key = data.node_key if "node_key" in provided else existing.node_key
+        if not node_type or not node_key:
+            raise FlowValidationError("更新节点时必须提供 node_type 和 node_key")
         ref_flow_id = (
             data.ref_flow_id if "ref_flow_id" in provided else existing.ref_flow_id
         )
@@ -395,6 +399,12 @@ class FlowNodeApi(
         所有节点先统一校验，通过后再统一写入，避免部分成功。
         """
         for data in data_list:
+            if not data.node_type:
+                logger.warning(
+                    f"批量更新节点缺少 node_type，跳过注入默认配置: "
+                    f"id={data.id}, node_key={data.node_key}"
+                )
+                continue
             data.base_config = await self._inject_llm_defaults(
                 db, data.node_type, data.base_config
             )

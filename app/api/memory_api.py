@@ -43,6 +43,8 @@ class MemoryApi(
         ):
             """批量重新向量化指定记忆，先删除旧向量再重新生成"""
             ids = body.ids or []
+            if not body.agent_id:
+                return ApiResponse.error(msg="请提供 agent_id")
             result = await memory_service.revectorize(db, body.agent_id, ids)
             return ApiResponse.success(
                 data=result,
