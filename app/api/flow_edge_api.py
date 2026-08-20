@@ -3,8 +3,6 @@
 处理流程边相关的路由定义
 """
 
-from typing import Union
-
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +37,7 @@ class FlowEdgeApi(
 
     @staticmethod
     def _validate_basic_edges(
-        edges: list[Union[FlowEdgeCreate, FlowEdgeUpdate]],
+        edges: list[FlowEdgeCreate] | list[FlowEdgeUpdate],
     ) -> None:
         """校验通用边规则（自连接、工具边匹配），不通过时抛出 HTTPException。"""
         for edge in edges:
@@ -67,7 +65,7 @@ class FlowEdgeApi(
         self,
         db: AsyncSession,
         flow_id: int,
-        edges: list[Union[FlowEdgeCreate, FlowEdgeUpdate]],
+        edges: list[FlowEdgeCreate] | list[FlowEdgeUpdate],
     ) -> None:
         """统一校验通用边规则、Agent 边规则、工具边目标、工具节点不可出现在普通边中、工具边唯一性和条件边完整性，不通过时抛出 HTTPException。"""
         self._validate_basic_edges(edges)
@@ -104,6 +102,8 @@ class FlowEdgeApi(
 
     async def update(self, db: AsyncSession, data: FlowEdgeUpdate):
         """更新边"""
+        if data.flow_id is None:
+            raise HTTPException(status_code=400, detail="更新边时必须提供 flow_id")
         await self._validate_edges(db, data.flow_id, [data])
         return await flow_service.update_edge(db, data)
 
@@ -126,6 +126,10 @@ class FlowEdgeApi(
         """批量更新边"""
         if not data_list:
             return
+        if any(data.flow_id is None for data in data_list):
+            raise HTTPException(
+                status_code=400, detail="批量更新边时每条边都必须提供 flow_id"
+            )
         await self._validate_edges(db, data_list[0].flow_id, data_list)
         for data in data_list:
             await flow_service.update_edge(db, data)

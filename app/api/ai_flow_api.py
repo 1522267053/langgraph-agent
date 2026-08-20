@@ -231,7 +231,7 @@ class AiFlowApi:
             global_cfg = await global_config_service.get_default_llm_config(db)
             for nd in nodes_data:
                 node_key = nd.get("node_key", "")
-                node_type = key_to_type.get(node_key)
+                node_type = key_to_type.get(node_key, "")
                 partial = nd.get("base_config")
                 bc = fill_node_defaults(node_type, key_to_config.get(node_key) or {})
                 if isinstance(partial, dict):

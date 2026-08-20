@@ -155,7 +155,8 @@ class AuthApi:
             # 登录成功
             _clear_failures(client_ip)
             expected_hash = await global_config_service.get_password_hash(db)
-
+            if not expected_hash:
+                return ApiResponse.error(msg="未配置登录密码")
             timestamp = str(int(time.time()))
             session_token = _make_session_token(expected_hash, timestamp)
 
