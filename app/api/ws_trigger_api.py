@@ -24,9 +24,10 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, TypeVar
 
 from fastapi import WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
 from starlette.routing import WebSocketRoute
 
 from app.agent_flow.ws_tool_context import (
@@ -36,10 +37,27 @@ from app.agent_flow.ws_tool_context import (
 )
 from app.config.database import AsyncSessionLocal
 from app.models.flow import FlowType
+from app.schemas.ws_command_schema import (
+    WsCancelCommand,
+    WsCommandView,
+    WsCreateSessionCommand,
+    WsDeleteMessageCommand,
+    WsDeleteSessionCommand,
+    WsExecuteCommand,
+    WsGetMessagesCommand,
+    WsListSessionsCommand,
+    WsRegisterToolsCommand,
+    WsResumeCommand,
+    WsSwitchSessionCommand,
+    WsToolApprovalCommand,
+    WsToolResultCommand,
+)
 from app.services.flow_service import flow_service
 from app.services.ws_gateway_service import ws_gateway_service
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T", bound=WsCommandView)
 
 
 @dataclass
@@ -181,96 +199,124 @@ async def _message_receiver(conn: WSConnection):
             continue
 
         if action == "tool_result":
-            _resolve_tool_call(conn, data)
+            cmd = await _parse_command(conn, WsToolResultCommand, data)
+            if cmd:
+                _resolve_tool_call(conn, cmd)
         elif action == "register_tools":
-            await _handle_register_tools(conn, data)
+            cmd = await _parse_command(conn, WsRegisterToolsCommand, data)
+            if cmd:
+                await _handle_register_tools(conn, cmd)
         elif action == "unregister_tools":
             conn.registered_tools = []
             await conn.websocket.send_json({"type": "tools_unregistered", "data": {}})
         elif action == "execute":
-            task = asyncio.create_task(_handle_execute(conn, data))
-            conn._execute_tasks.add(task)
-            task.add_done_callback(conn._execute_tasks.discard)
+            cmd = await _parse_command(conn, WsExecuteCommand, data)
+            if cmd:
+                task = asyncio.create_task(_handle_execute(conn, cmd))
+                conn._execute_tasks.add(task)
+                task.add_done_callback(conn._execute_tasks.discard)
         elif action == "resume":
-            task = asyncio.create_task(_handle_resume(conn, data))
-            conn._execute_tasks.add(task)
-            task.add_done_callback(conn._execute_tasks.discard)
+            cmd = await _parse_command(conn, WsResumeCommand, data)
+            if cmd:
+                task = asyncio.create_task(_handle_resume(conn, cmd))
+                conn._execute_tasks.add(task)
+                task.add_done_callback(conn._execute_tasks.discard)
         elif action == "tool_approval":
-            await _handle_tool_approval(conn, data)
+            cmd = await _parse_command(conn, WsToolApprovalCommand, data)
+            if cmd:
+                await _handle_tool_approval(conn, cmd)
         elif action == "cancel":
-            task = asyncio.create_task(_handle_cancel(conn, data))
-            conn._execute_tasks.add(task)
-            task.add_done_callback(conn._execute_tasks.discard)
+            cmd = await _parse_command(conn, WsCancelCommand, data)
+            if cmd:
+                task = asyncio.create_task(_handle_cancel(conn, cmd))
+                conn._execute_tasks.add(task)
+                task.add_done_callback(conn._execute_tasks.discard)
         elif action == "create_session":
-            await _handle_create_session(conn, data)
+            cmd = await _parse_command(conn, WsCreateSessionCommand, data)
+            if cmd:
+                await _handle_create_session(conn, cmd)
         elif action == "switch_session":
-            await _handle_switch_session(conn, data)
+            cmd = await _parse_command(conn, WsSwitchSessionCommand, data)
+            if cmd:
+                await _handle_switch_session(conn, cmd)
         elif action == "list_sessions":
-            await _handle_list_sessions(conn, data)
+            cmd = await _parse_command(conn, WsListSessionsCommand, data)
+            if cmd:
+                await _handle_list_sessions(conn, cmd)
         elif action == "delete_session":
-            await _handle_delete_session(conn, data)
+            cmd = await _parse_command(conn, WsDeleteSessionCommand, data)
+            if cmd:
+                await _handle_delete_session(conn, cmd)
         elif action == "get_messages":
-            await _handle_get_messages(conn, data)
+            cmd = await _parse_command(conn, WsGetMessagesCommand, data)
+            if cmd:
+                await _handle_get_messages(conn, cmd)
         elif action == "delete_message":
-            await _handle_delete_message(conn, data)
+            cmd = await _parse_command(conn, WsDeleteMessageCommand, data)
+            if cmd:
+                await _handle_delete_message(conn, cmd)
         else:
             await _send_error(conn, f"未知指令: {action}")
+
+
+async def _parse_command(
+    conn: WSConnection, model_cls: type[T], data: dict
+) -> Optional[T]:
+    """将指令 data 解析为 Command 模型，校验失败时发送错误事件并返回 None"""
+    try:
+        return model_cls.model_validate(data)
+    except ValidationError as e:
+        details = "; ".join(
+            f"{'.'.join(str(loc) for loc in err['loc'])}: {err['msg']}"
+            for err in e.errors()
+        )
+        await _send_error(conn, f"参数校验失败: {details}")
+        return None
 
 
 # ---- 工具相关 ----
 
 
-def _resolve_tool_call(conn: WSConnection, data: dict):
+def _resolve_tool_call(conn: WSConnection, cmd: WsToolResultCommand):
     """将客户端返回的 tool_result resolve 到对应的 Future"""
-    call_id = data.get("call_id")
+    call_id = cmd.call_id
     if not call_id:
         return
     future = conn.pending_calls.pop(call_id, None)
     if future and not future.done():
-        error = data.get("error")
-        if error:
+        if cmd.error:
             future.set_result(
-                json.dumps({"success": False, "error": error}, ensure_ascii=False)
+                json.dumps({"success": False, "error": cmd.error}, ensure_ascii=False)
             )
         else:
-            future.set_result(data.get("result"))
+            future.set_result(cmd.result)
     else:
         logger.warning(f"收到未匹配的 tool_result: call_id={call_id}")
 
 
-async def _handle_register_tools(conn: WSConnection, data: dict):
+async def _handle_register_tools(conn: WSConnection, cmd: WsRegisterToolsCommand):
     """注册远程工具（仅 Agent 类型生效）"""
-    tools = data.get("tools", [])
-    if not isinstance(tools, list):
-        await _send_error(conn, "tools 必须是数组")
-        return
     if conn.flow_type != FlowType.AGENT.value:
         await _send_error(conn, "远程工具仅 Agent 类型支持，当前网关关联的不是智能体")
         return
-    conn.registered_tools = tools
-    names = [t.get("name", "") for t in tools if isinstance(t, dict)]
+    conn.registered_tools = cmd.tools
+    names = [t.get("name", "") for t in cmd.tools]
     await conn.websocket.send_json(
-        {"type": "tools_registered", "data": {"count": len(tools), "names": names}}
+        {"type": "tools_registered", "data": {"count": len(cmd.tools), "names": names}}
     )
 
 
 # ---- 执行 ----
 
 
-async def _handle_execute(conn: WSConnection, data: dict):
+async def _handle_execute(conn: WSConnection, cmd: WsExecuteCommand):
     """处理 execute 指令：流式执行 + 推送事件（会话级并发控制）
 
     - Agent + 显式 session_id：同一会话正在执行时拒绝，不同会话并发执行
     - Agent 未指定 session_id（新建会话）：全新会话无冲突，不加锁
     - Flow：每次执行独立 execution/thread_id，无共享状态，不加锁
     """
-    explicit_session = data.get("session_id")
-    if explicit_session is not None:
-        try:
-            explicit_session = int(explicit_session)
-        except (TypeError, ValueError):
-            await _send_error(conn, "session_id 必须是整数")
-            return
+    explicit_session = cmd.session_id
 
     lock_session: Optional[int] = None
     if conn.flow_type == FlowType.AGENT.value and explicit_session is not None:
@@ -289,10 +335,7 @@ async def _handle_execute(conn: WSConnection, data: dict):
             if explicit_session is not None
             else conn.current_session_id
         )
-        input_data = {**(conn.input_config or {})}
-        for k, v in data.items():
-            if k not in ("action", "session_id"):
-                input_data[k] = v
+        input_data = cmd.build_input_data(conn.input_config)
 
         record_id: Optional[int] = None
         async for event in ws_gateway_service.stream_execute(
@@ -320,26 +363,20 @@ async def _handle_execute(conn: WSConnection, data: dict):
         _current_ws_conn.set(None)
 
 
-async def _handle_resume(conn: WSConnection, data: dict):
+async def _handle_resume(conn: WSConnection, cmd: WsResumeCommand):
     """处理 resume 指令：恢复等待人工输入的执行（Agent 传 session_id，Flow 传 execution_id）
 
     Agent 会话与 execute 共用会话级锁；Flow 由 resume_execution 的 CAS 乐观锁保证并发安全。
     """
-    human_input = data.get("input")
-    if human_input is None or not str(human_input).strip():
+    if not cmd.input.strip():
         await _send_error(conn, "缺少 input 字段（人工输入内容）")
         return
-    human_input = str(human_input)
+    human_input = cmd.input
 
     key = "session_id" if conn.flow_type == FlowType.AGENT.value else "execution_id"
-    target_id = data.get(key)
+    target_id = cmd.session_id if key == "session_id" else cmd.execution_id
     if target_id is None:
         await _send_error(conn, f"缺少 {key} 字段")
-        return
-    try:
-        target_id = int(target_id)
-    except (TypeError, ValueError):
-        await _send_error(conn, f"{key} 必须是整数")
         return
 
     lock_session: Optional[int] = None
@@ -369,7 +406,7 @@ async def _handle_resume(conn: WSConnection, data: dict):
             conn.executing_sessions.discard(lock_session)
 
 
-async def _handle_tool_approval(conn: WSConnection, data: dict):
+async def _handle_tool_approval(conn: WSConnection, cmd: WsToolApprovalCommand):
     """处理 tool_approval 指令：确认/拒绝待审批的工具调用（仅 Agent 类型）
 
     WS 触发的执行中 LLM 调用需审批工具时，事件流下发
@@ -380,17 +417,7 @@ async def _handle_tool_approval(conn: WSConnection, data: dict):
         await _send_error(conn, "仅 Agent 类型支持工具审批")
         return
 
-    result = data.get("result")
-    if result not in ("approved", "rejected"):
-        await _send_error(conn, "result 必须为 approved 或 rejected")
-        return
-
-    session_id = data.get("session_id")
-    try:
-        session_id = int(session_id)
-    except (TypeError, ValueError):
-        await _send_error(conn, "缺少 session_id 或格式错误（需要整数）")
-        return
+    session_id = cmd.session_id
 
     # 归属校验：会话必须由该网关创建
     async with AsyncSessionLocal() as db:
@@ -403,7 +430,7 @@ async def _handle_tool_approval(conn: WSConnection, data: dict):
 
     from app.services.tool_approval_service import tool_approval_service
 
-    resolved = tool_approval_service.resolve(session_id, result)
+    resolved = tool_approval_service.resolve(session_id, cmd.result)
     await conn.websocket.send_json(
         {
             "type": "tool_approval_result",
@@ -412,7 +439,7 @@ async def _handle_tool_approval(conn: WSConnection, data: dict):
     )
 
 
-async def _handle_cancel(conn: WSConnection, data: dict):
+async def _handle_cancel(conn: WSConnection, cmd: WsCancelCommand):
     """处理 cancel 指令：取消正在执行的会话（Agent）或执行记录（Flow）
 
     Agent：设置 interrupt 标志（chat_stream 循环检测点自行停止，finally
@@ -423,14 +450,9 @@ async def _handle_cancel(conn: WSConnection, data: dict):
     from app.services.interrupt_service import interrupt_service
 
     key = "session_id" if conn.flow_type == FlowType.AGENT.value else "execution_id"
-    target_id = data.get(key)
+    target_id = cmd.session_id if key == "session_id" else cmd.execution_id
     if target_id is None:
         await _send_error(conn, f"缺少 {key} 字段")
-        return
-    try:
-        target_id = int(target_id)
-    except (TypeError, ValueError):
-        await _send_error(conn, f"{key} 必须是整数")
         return
 
     # 归属校验（与 resume 相同规则）
@@ -493,14 +515,13 @@ async def _validate_ws_target(db, gateway, flow_type: Optional[str], target_id: 
 # ---- 会话管理 ----
 
 
-async def _handle_create_session(conn: WSConnection, data: dict):
+async def _handle_create_session(conn: WSConnection, cmd: WsCreateSessionCommand):
     """创建新会话（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
         await _send_error(conn, "仅 Agent 类型支持创建会话")
         return
-    title = data.get("title")
     session_id, session_title = await ws_gateway_service.create_session_for_ws(
-        conn.token, title
+        conn.token, cmd.title
     )
     conn.current_session_id = session_id
     await conn.websocket.send_json(
@@ -511,15 +532,12 @@ async def _handle_create_session(conn: WSConnection, data: dict):
     )
 
 
-async def _handle_switch_session(conn: WSConnection, data: dict):
+async def _handle_switch_session(conn: WSConnection, cmd: WsSwitchSessionCommand):
     """切换当前会话（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
         await _send_error(conn, "仅 Agent 类型支持会话操作")
         return
-    session_id = data.get("session_id")
-    if not session_id:
-        await _send_error(conn, "缺少 session_id")
-        return
+    session_id = cmd.session_id
     async with AsyncSessionLocal() as db:
         gateway, session = await ws_gateway_service.get_session_by_token(
             db, conn.token, session_id
@@ -533,13 +551,13 @@ async def _handle_switch_session(conn: WSConnection, data: dict):
     )
 
 
-async def _handle_list_sessions(conn: WSConnection, data: dict):
+async def _handle_list_sessions(conn: WSConnection, cmd: WsListSessionsCommand):
     """查询会话列表（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
         await _send_error(conn, "仅 Agent 类型支持会话操作")
         return
-    page = data.get("page", 1)
-    page_size = data.get("page_size", 20)
+    page = cmd.page
+    page_size = cmd.page_size
     async with AsyncSessionLocal() as db:
         sessions, total = await ws_gateway_service.get_sessions_by_token(
             db, conn.token, page, page_size
@@ -557,15 +575,12 @@ async def _handle_list_sessions(conn: WSConnection, data: dict):
     )
 
 
-async def _handle_delete_session(conn: WSConnection, data: dict):
+async def _handle_delete_session(conn: WSConnection, cmd: WsDeleteSessionCommand):
     """删除会话（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
         await _send_error(conn, "仅 Agent 类型支持会话操作")
         return
-    session_id = data.get("session_id")
-    if not session_id:
-        await _send_error(conn, "缺少 session_id")
-        return
+    session_id = cmd.session_id
     async with AsyncSessionLocal() as db:
         success, msg = await ws_gateway_service.delete_session_by_token(
             db, conn.token, session_id
@@ -580,17 +595,14 @@ async def _handle_delete_session(conn: WSConnection, data: dict):
     )
 
 
-async def _handle_get_messages(conn: WSConnection, data: dict):
+async def _handle_get_messages(conn: WSConnection, cmd: WsGetMessagesCommand):
     """查询会话历史消息（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
         await _send_error(conn, "仅 Agent 类型支持会话操作")
         return
-    session_id = data.get("session_id")
-    if not session_id:
-        await _send_error(conn, "缺少 session_id")
-        return
-    before_id = data.get("before_id")
-    limit = data.get("limit", 20)
+    session_id = cmd.session_id
+    before_id = cmd.before_id
+    limit = cmd.limit
     async with AsyncSessionLocal() as db:
         messages, total = await ws_gateway_service.get_session_messages_by_token(
             db, conn.token, session_id, before_id, limit
@@ -601,16 +613,13 @@ async def _handle_get_messages(conn: WSConnection, data: dict):
     )
 
 
-async def _handle_delete_message(conn: WSConnection, data: dict):
+async def _handle_delete_message(conn: WSConnection, cmd: WsDeleteMessageCommand):
     """删除会话消息（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
         await _send_error(conn, "仅 Agent 类型支持会话操作")
         return
-    session_id = data.get("session_id")
-    message_id = data.get("message_id")
-    if not session_id or not message_id:
-        await _send_error(conn, "缺少 session_id 或 message_id")
-        return
+    session_id = cmd.session_id
+    message_id = cmd.message_id
     async with AsyncSessionLocal() as db:
         success, msg = await ws_gateway_service.delete_session_message_by_token(
             db, conn.token, session_id, message_id
