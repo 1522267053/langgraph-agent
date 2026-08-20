@@ -344,11 +344,11 @@ class LoopNodeHandler(BaseNodeHandler):
         state: FlowState,
         config: Optional[RunnableConfig],
         writer: Optional[StreamWriter],
-    ) -> List[dict]:
+    ) -> List[dict | None]:
         """并发模式：asyncio.gather 并发流式调用子图"""
         total_count = len(items)
         semaphore = asyncio.Semaphore(concurrency)
-        results: List[dict] = [None] * total_count
+        results: List[dict | None] = [None] * total_count
         iter_states: List[Optional[dict]] = [None] * total_count
         failed = asyncio.Event()
         ctx = get_execution_context()

@@ -3,7 +3,7 @@
 处理流程执行相关的路由定义
 """
 
-from typing import Optional
+from typing import Any, Optional
 from fastapi import Depends
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -265,7 +265,7 @@ class ExecutionApi(
 
             formatted_messages = []
             for msg in messages:
-                item = {"role": msg.role, "content": msg.content or ""}
+                item: dict[str, Any] = {"role": msg.role, "content": msg.content or ""}
                 if msg.name:
                     item["name"] = msg.name
                 if msg.tool_calls:

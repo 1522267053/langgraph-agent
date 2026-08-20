@@ -178,7 +178,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
         _agent_name = agent_name
         _file_list_fields = file_list_fields
 
-        async def ask_agent(**kwargs) -> dict:
+        async def ask_agent(**kwargs) -> dict | str:
             from app.services.agent_executor_service import agent_executor_service
 
             task = kwargs.get("task", "")

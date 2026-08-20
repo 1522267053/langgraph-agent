@@ -6,10 +6,11 @@ LLM 实例创建和工具绑定
 - 将工具绑定到 LLM（支持降级为无工具模式）
 """
 
-from typing import Optional
+from typing import Optional, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
+from langchain_core.runnables import Runnable
 
 from app.agent_flow.ai_provider import create_provider
 from app.agent_flow.flow_context import FlowState
@@ -62,7 +63,7 @@ def prepare_llm(
     tools: list[BaseTool],
     node_key: str,
     state: FlowState,
-) -> tuple[BaseChatModel, BaseChatModel, bool]:
+) -> tuple[BaseChatModel, Runnable, bool]:
     """创建 LLM 实例并绑定工具
 
     Args:
@@ -84,9 +85,9 @@ def prepare_llm(
     reasoning_effort = node_config.get("reasoning_effort")
 
     llm = create_llm(
-        api_key,
+        cast(str, api_key),
         model,
-        base_url,
+        cast(str, base_url),
         max_tokens,
         provider_name,
         temperature,

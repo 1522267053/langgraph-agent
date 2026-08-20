@@ -336,7 +336,7 @@ class AsyncMySQLSaver(BaseCheckpointSaver[str]):
                             }
                         },
                         checkpoint=checkpoint,
-                        metadata=metadata,
+                        metadata=CheckpointMetadata(**metadata),
                         parent_config=parent_config,
                         pending_writes=pending_writes if pending_writes else None,
                     )
