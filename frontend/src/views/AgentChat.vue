@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAgentStore } from '@/stores'
 import { ElMessage, ElMessageBox, ElImageViewer } from 'element-plus'
+import type { ScrollbarDirection, ScrollbarInstance } from 'element-plus'
 import { Operation, Bottom, Notebook, Warning } from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
 import type { FlowIOField } from '@/types/flow'
@@ -24,14 +25,16 @@ const route = useRoute()
 const store = useAgentStore()
 const toolOutputStore = useToolOutputStore()
 
-const messagesContainer = ref<HTMLElement | null>(null)
+const scrollbarRef = ref<ScrollbarInstance>()
+const messagesContainer = computed<HTMLElement | null>(
+  () => (scrollbarRef.value?.wrapRef as HTMLElement | undefined) ?? null
+)
 
 const {
   autoScroll,
   isAtBottom,
   scrollToBottom,
   handleScroll,
-  userScrolledUp,
   onUserScrollIntent,
   resetAutoScrollState
 } = useAutoScroll(messagesContainer, [
@@ -173,8 +176,6 @@ watch(
 )
 
 const isLoadingMore = ref(false)
-const loadMoreSentinel = ref<HTMLElement | null>(null)
-let loadMoreObserver: IntersectionObserver | null = null
 
 const dynamicFields = computed<FlowIOField[]>(() => {
   const fields = store.currentAgent?.input_schema?.fields || []
@@ -246,7 +247,6 @@ onMounted(async () => {
   } finally {
     if (store.sessionsLoading) store.sessionsLoading = false
     await nextTick()
-    initLoadMoreObserver()
   }
 })
 
@@ -258,8 +258,6 @@ onUnmounted(() => {
   store.stopRunningPolling()
   toolOutputStore.stopPolling()
   toolOutputStore.unregisterWsHandler()
-  loadMoreObserver?.disconnect()
-  loadMoreObserver = null
 })
 
 watch(
@@ -269,18 +267,6 @@ watch(
       resetAutoScrollState()
       await nextTick()
       scrollToBottom()
-      initLoadMoreObserver()
-    }
-  }
-)
-
-// hasMoreMessages 从 false→true 时（如 onFlowDone 后 sentinel 重建），重新初始化观察器
-watch(
-  () => store.hasMoreMessages,
-  async hasMore => {
-    if (hasMore) {
-      await nextTick()
-      initLoadMoreObserver()
     }
   }
 )
@@ -295,57 +281,26 @@ watch(
   }
 )
 
-function initLoadMoreObserver() {
-  if (!messagesContainer.value || !loadMoreSentinel.value) return
-  loadMoreObserver?.disconnect()
-  let firstCallback = true
-  loadMoreObserver = new IntersectionObserver(
-    entries => {
-      // observe() 后的首个回调是元素当前状态，非用户滚动，跳过避免误触发
-      if (firstCallback) {
-        firstCallback = false
-        return
-      }
-      // 非用户手动上滑且内容超出视口时跳过，避免布局变化导致误触发加载更多
-      const canScroll =
-        messagesContainer.value &&
-        messagesContainer.value.scrollHeight > messagesContainer.value.clientHeight
-      if (!userScrolledUp.value && canScroll) return
-      if (
-        entries[0].isIntersecting &&
-        !isLoadingMore.value &&
-        store.hasMoreMessages &&
-        !store.messagesLoading
-      ) {
-        handleLoadMore()
-      }
-    },
-    { root: messagesContainer.value }
-  )
-  loadMoreObserver.observe(loadMoreSentinel.value)
+function onEndReached(direction: ScrollbarDirection) {
+  if (direction !== 'top') return
+  if (isLoadingMore.value || !store.hasMoreMessages || store.messagesLoading) return
+  handleLoadMore()
 }
 
 async function handleLoadMore() {
   if (!agentId.value || isLoadingMore.value) return
   isLoadingMore.value = true
-  // 加载期间取消观察，避免重复触发
-  if (loadMoreObserver && loadMoreSentinel.value) {
-    loadMoreObserver.unobserve(loadMoreSentinel.value)
-  }
   try {
     const prevScrollHeight = messagesContainer.value?.scrollHeight || 0
     await store.loadMoreMessages(agentId.value)
     await nextTick()
     const newHeight = messagesContainer.value?.scrollHeight || 0
+    // 前插历史后恢复视口位置，避免消息列表跳动
     if (newHeight > prevScrollHeight && messagesContainer.value) {
       messagesContainer.value.scrollTop = newHeight - prevScrollHeight
     }
   } finally {
     isLoadingMore.value = false
-    // 加载完毕后重新观察
-    if (loadMoreObserver && loadMoreSentinel.value) {
-      loadMoreObserver.observe(loadMoreSentinel.value)
-    }
   }
 }
 
@@ -571,7 +526,11 @@ function handleRejectTools() {
                 计划模式
               </el-tag>
             </div>
-            <span v-if="store.currentSession" class="session-name" :title="store.currentSession.title">
+            <span
+              v-if="store.currentSession"
+              class="session-name"
+              :title="store.currentSession.title"
+            >
               {{ store.currentSession.title || '新会话' }}
             </span>
           </div>
@@ -602,17 +561,19 @@ function handleRejectTools() {
         </div>
       </header>
 
-      <div
-        ref="messagesContainer"
+      <el-scrollbar
+        ref="scrollbarRef"
         v-loading="store.messagesLoading"
         element-loading-text="加载中..."
-        class="messages-container"
+        class="messages-scrollbar"
+        :distance="100"
         @scroll="handleScroll"
+        @end-reached="onEndReached"
         @wheel="onUserScrollIntent"
         @touchmove="onUserScrollIntent"
       >
-        <div v-show="!store.messagesLoading">
-          <div v-if="store.hasMoreMessages" ref="loadMoreSentinel" class="load-more-sentinel">
+        <div v-show="!store.messagesLoading" class="messages-container">
+          <div v-if="store.hasMoreMessages" class="load-more-sentinel">
             <div v-show="isLoadingMore" class="load-more-dots">
               <span></span>
               <span></span>
@@ -629,7 +590,7 @@ function handleRejectTools() {
             @preview="handleImagePreview"
           />
         </div>
-      </div>
+      </el-scrollbar>
 
       <div :class="['scroll-to-bottom', { hidden: isAtBottom }]" @click="scrollToBottom">
         <el-icon :size="16">
@@ -892,11 +853,12 @@ export default {
   background: #f8fafc;
 }
 
-.messages-container {
+.messages-scrollbar {
   flex: 1;
-  overflow-y: auto;
+}
+
+.messages-container {
   padding: 32px 24px;
-  position: relative;
 }
 
 .empty-state {
