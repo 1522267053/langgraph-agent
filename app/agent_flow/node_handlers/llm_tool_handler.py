@@ -77,17 +77,32 @@ logger = logging.getLogger(__name__)
 # 自动压缩阈值比例：已用 token 超过 context_length 的此比例时触发压缩
 COMPRESS_THRESHOLD_RATIO = 0.83
 
-# 计划模式系统提示词：引导 LLM 只读探索并用 todo 工具产出结构化计划
-_PLAN_MODE_PROMPT = """
+
+def _build_mode_prompt(is_plan_mode: bool) -> str:
+    """构建当前模式和工具能力说明，避免 LLM 仅根据工具列表猜测权限。"""
+    disabled_tools = "、".join(sorted(_PLAN_DISABLED_TOOLS))
+    if is_plan_mode:
+        return f"""
 
 # 当前运行模式：计划模式（Plan Mode）
 
 你现在处于「计划模式」，必须严格遵守：
-1. **只读探索**：你可以读取文件、搜索代码、检索知识库来理解问题，但**严禁执行任何写操作或修改性命令**（写文件、编辑文件、执行 shell/python 脚本等工具已被禁用）。
-2. **产出计划**：分析完成后，必须产出一份清晰的、可执行的实施计划。若可用 `todowrite` 工具，请用它把计划拆解为有序的任务清单；若没有该工具，则用 Markdown 列表输出计划。
-3. **不动手实施**：本阶段只规划和讨论方案，不要尝试直接修改代码或运行修改性命令。
-4. **主动澄清**：如果需求有歧义、边界不清或存在多种方案，先向用户提问确认，再给出计划。
-5. 计划应包含：要改动的文件/模块、每个步骤的具体动作、潜在风险与注意事项。
+1. **只读探索**：可以读取文件、搜索代码、检索知识库来理解问题，但不得执行写入、编辑、删除或其他修改性操作。
+2. **禁用工具**：以下工具在当前模式不可用：{disabled_tools}。不要尝试调用这些工具。
+3. **Shell 限制**：`shell_executor` 当前可用，但仅允许执行只读、安全的探索命令；禁止通过 Shell 修改、删除文件或执行破坏性命令。
+4. **产出计划**：分析完成后，必须产出清晰、可执行的实施计划。若可用 `todowrite` 工具，请用它拆解有序任务；否则用 Markdown 列表输出计划。
+5. **不动手实施**：本阶段只规划和讨论方案，不要尝试直接修改代码。
+6. **主动澄清**：如果需求有歧义、边界不清或存在多种方案，先向用户提问确认，再给出计划。
+7. 计划应包含：要改动的文件/模块、具体动作、潜在风险与注意事项。
+"""
+
+    return f"""
+
+# 当前运行模式：普通执行模式（Normal Mode）
+
+你现在处于「普通执行模式」，可以根据用户需求执行任务并使用当前已提供的工具。
+以下工具在计划模式下会被禁用，但在当前普通执行模式下可用：{disabled_tools}。
+请根据任务需要正常使用这些工具，并遵守各工具自身的安全限制。
 """
 
 
@@ -406,9 +421,8 @@ class LlmToolNodeHandler(BaseNodeHandler):
         for hint in prompt_hints:
             system_prompt = (system_prompt or "") + hint
 
-        # 计划模式：追加只读探索与规划引导提示
-        if is_plan_mode:
-            system_prompt = (system_prompt or "") + _PLAN_MODE_PROMPT
+        # 始终说明当前模式和工具能力，避免模型仅根据工具列表推断权限
+        system_prompt = (system_prompt or "") + _build_mode_prompt(is_plan_mode)
 
         # 发送 node_start 事件
         self._emit(
