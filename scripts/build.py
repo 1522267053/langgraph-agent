@@ -184,8 +184,8 @@ _RELEASE_EXCLUDE_DIRS = {"data", "uploads", "logs", "workspace"}
 def package_release_zip(version: str) -> None:
     """将 dist/langgraph_agent/ 打包为自动更新用的发布 zip。
 
-    仅包含 exe + updater + _internal，排除所有用户数据与运行时配置，
-    确保客户端解压时不会覆盖用户的 .env / data / uploads 等。
+    包含默认 .env 配置，排除用户运行数据；自动更新仍只替换 exe + _internal，
+    不会覆盖已存在的用户 .env / data / uploads 等文件。
     """
     dist_base = PROJECT_ROOT / "dist" / "langgraph_agent"
     if not dist_base.exists():
@@ -203,8 +203,6 @@ def package_release_zip(version: str) -> None:
             rel_parts = item.relative_to(dist_base).parts
             top = rel_parts[0]
             if top in _RELEASE_EXCLUDE_DIRS:
-                continue
-            if top.startswith(".env"):
                 continue
             arcname = str(item.relative_to(dist_base))
             zf.write(item, arcname)
