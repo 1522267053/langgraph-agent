@@ -266,6 +266,9 @@ class FlowNodeApi(
         if not agent_id:
             return
 
+        if int(agent_id) == flow_id:
+            raise FlowValidationError("子Agent节点不能引用当前Agent自身")
+
         agent = await flow_service.get_by_id(db, agent_id, raise_not_found=False)
         if not agent:
             raise FlowValidationError("被引用的Agent不存在")

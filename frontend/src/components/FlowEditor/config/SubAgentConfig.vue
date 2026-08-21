@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { agentApi } from '@/api/agent'
 import { useFlowStore } from '@/stores/flowStore'
 import type { SubAgentConfig } from './types'
@@ -18,6 +18,10 @@ const store = useFlowStore()
 const agents = ref<{ id: number; name: string; description?: string }[]>([])
 const loaded = ref(false)
 const loading = ref(false)
+const availableAgents = computed(() => {
+  const currentId = store.flowInfo.value?.id
+  return agents.value.filter(agent => agent.id !== currentId)
+})
 
 const localConfig = ref<SubAgentConfig>({ agent_id: null })
 
@@ -73,7 +77,7 @@ function updateConfig(): void {
             @change="updateConfig"
           >
             <el-option
-              v-for="agent in agents"
+              v-for="agent in availableAgents"
               :key="agent.id"
               :label="agent.name"
               :value="agent.id"
@@ -83,7 +87,8 @@ function updateConfig(): void {
       </el-form>
       <div class="config-hint">
         <el-text size="small" type="info">
-          子Agent节点需通过工具连接到LLM节点使用。 被引用的Agent必须填写了描述。
+          子Agent节点需通过工具连接到LLM节点使用。会话模式和并行策略由父Agent在调用工具时决定；
+          被引用的Agent必须填写描述。
         </el-text>
       </div>
     </div>

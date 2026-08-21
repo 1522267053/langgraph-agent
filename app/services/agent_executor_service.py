@@ -85,6 +85,11 @@ class AgentExecutorService(BaseExecutorService):
                 label = type_labels.get(node.node_type, node.node_type)
                 raise ValueError(f"智能体不支持「{label}」类型的节点")
 
+            if node.node_type == NodeType.SUB_AGENT.value:
+                agent_id = (node.base_config or {}).get("agent_id")
+                if agent_id and int(agent_id) == flow.id:
+                    raise ValueError("子Agent节点不能引用当前Agent自身")
+
         start_nodes = [n for n in flow.nodes if n.node_type == NodeType.START.value]
         end_nodes = [n for n in flow.nodes if n.node_type == NodeType.END.value]
         llm_nodes = [n for n in flow.nodes if n.node_type == NodeType.LLM.value]
@@ -175,6 +180,38 @@ class AgentExecutorService(BaseExecutorService):
             gateway_id: 可选，由 网关触发创建时传入，用于区分 网关会话与用户聊天会话
         """
         return await self._create_session(db, flow_id, gateway_id)
+
+    async def get_or_create_sub_agent_session(
+        self,
+        db: AsyncSession,
+        flow_id: int,
+        parent_session_id: int,
+        parent_node_key: str,
+    ) -> AgentSession:
+        """获取同一父会话与节点对应的子Agent会话，不存在时创建。"""
+        query = (
+            select(AgentSession)
+            .where(
+                AgentSession.flow_id == flow_id,
+                AgentSession.parent_session_id == parent_session_id,
+                AgentSession.parent_node_key == parent_node_key,
+                AgentSession.is_delete == 0,
+            )
+            .order_by(AgentSession.id.asc())
+            .limit(1)
+        )
+        result = await db.execute(query)
+        session = result.scalar_one_or_none()
+        if session:
+            return session
+
+        session = await self._create_session(
+            db,
+            flow_id,
+            parent_session_id=parent_session_id,
+            parent_node_key=parent_node_key,
+        )
+        return session
 
     async def search_history(
         self, db: AsyncSession, flow_id: int, keyword: str
@@ -391,11 +428,21 @@ class AgentExecutorService(BaseExecutorService):
         return messages, total
 
     async def _create_session(
-        self, db: AsyncSession, flow_id: int, gateway_id: Optional[int] = None
+        self,
+        db: AsyncSession,
+        flow_id: int,
+        gateway_id: Optional[int] = None,
+        parent_session_id: Optional[int] = None,
+        parent_node_key: Optional[str] = None,
     ) -> AgentSession:
         """创建新会话"""
         session = AgentSession(
-            flow_id=flow_id, title="新对话", status=1, gateway_id=gateway_id
+            flow_id=flow_id,
+            title="新对话",
+            status=1,
+            gateway_id=gateway_id,
+            parent_session_id=parent_session_id,
+            parent_node_key=parent_node_key,
         )
         db.add(session)
         await db.commit()
