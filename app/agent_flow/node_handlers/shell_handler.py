@@ -296,6 +296,13 @@ class ShellToolInput(BaseModel):
     """Shell执行工具输入参数"""
 
     command: str = Field(..., description="要执行的Shell命令")
+    workdir: Optional[str] = Field(
+        None,
+        description=(
+            "本次命令的工作目录。默认使用当前Agent工作目录；相对路径基于该目录解析。"
+            "切换目录时使用此参数，不要依赖cd影响后续调用"
+        ),
+    )
 
 
 def _file_read_caps() -> tuple[int, int]:
@@ -793,6 +800,29 @@ class ShellNodeHandler(BaseNodeHandler):
                 return get_agent_work_dir(flow_id)
         return None
 
+    def _resolve_tool_working_dir(self, workdir: Optional[str]) -> Optional[Path]:
+        """解析单次 Shell 工具调用的工作目录。"""
+        default_dir = self._resolve_working_dir()
+        if workdir is None or not workdir.strip():
+            return default_dir
+
+        try:
+            candidate = Path(workdir).expanduser()
+            if not candidate.is_absolute():
+                candidate = (default_dir or Path.cwd()) / candidate
+            candidate = candidate.resolve()
+        except (OSError, RuntimeError) as e:
+            raise ValueError(f"工作目录解析失败: {e}") from e
+
+        is_valid, error_msg = _validate_file_path(str(candidate))
+        if not is_valid:
+            raise ValueError(f"工作目录校验失败: {error_msg}")
+        if not candidate.exists():
+            raise ValueError(f"工作目录不存在: {candidate}")
+        if not candidate.is_dir():
+            raise ValueError(f"工作目录不是目录: {candidate}")
+        return candidate
+
     async def execute(
         self,
         node: FlowNode,
@@ -954,10 +984,17 @@ class ShellNodeHandler(BaseNodeHandler):
 
         # ---- shell_executor ----
 
-        async def execute_shell(command: str) -> str | dict:
+        async def execute_shell(
+            command: str, workdir: Optional[str] = None
+        ) -> str | dict:
             is_valid, error_msg = validate_command(command)
             if not is_valid:
                 return {"error": error_msg, "success": False}
+
+            try:
+                command_working_dir = self._resolve_tool_working_dir(workdir)
+            except ValueError as e:
+                return {"error": str(e), "success": False}
 
             _cleanup_expired_tasks()
 
@@ -974,7 +1011,7 @@ class ShellNodeHandler(BaseNodeHandler):
                     stderr=asyncio.subprocess.PIPE,
                     shell=True,
                     env=env,
-                    cwd=self._resolve_working_dir(),
+                    cwd=command_working_dir,
                 )
             except Exception as e:
                 return {"error": f"启动进程失败: {e}", "success": False}
@@ -1042,6 +1079,8 @@ class ShellNodeHandler(BaseNodeHandler):
                 f"之后可用 shell_task_status 查询进度（建议最多1-2次），"
                 f"若仍未完成则告知用户任务在后台运行，等待用户询问结果时再查询。"
                 f"用 shell_task_input 向进程发送输入，用 shell_task_cancel 终止任务。"
+                f"可用 workdir 指定本次命令的工作目录；相对路径基于当前Agent工作目录解析。"
+                f"每次调用均启动独立进程，cd不会影响后续调用，切换目录请传workdir。"
                 f"禁止危险命令: rm -rf /, format, mkfs, dd写入设备, fork炸弹等。"
                 f"{windows_line_hint}"
             ),
@@ -1912,12 +1951,13 @@ class ShellNodeHandler(BaseNodeHandler):
             "- file_search 搜索文件内容（正则匹配），支持目录递归或单个文件路径\n"
             "- list_files 按文件名 glob 匹配（如 **/*.py），用于查找文件或了解目录结构\n"
             "- 禁止用 cat 读取大文件，始终使用 file_read\n"
+            "- Shell 每次调用都是独立进程；切换目录时传入 shell_executor 的 workdir 参数，不要依赖 cd 影响后续调用\n"
             + windows_compat_hint
             + f"\n临时文件输出目录: `{temp_dir}`（会被定时清理，勿存放重要数据）"
         ]
         if working_dir is not None:
             lines.append(
-                f"当前工作目录（持久化）: `{working_dir}`，Shell 命令默认在此目录下执行，文件操作优先使用此目录"
+                f"默认工作目录: `{working_dir}`，Shell 未传 workdir 时在此目录下执行，文件操作优先使用此目录"
             )
         lines.append(f"当前时间: {current_time_str}")
         return "\n".join(lines)
