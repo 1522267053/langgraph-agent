@@ -119,6 +119,7 @@ async function handleLogin() {
               placeholder="请输入用户名"
               clearable
               :disabled="autoLogging"
+              @keyup.enter="handleLogin"
             />
           </el-form-item>
 
@@ -130,11 +131,12 @@ async function handleLogin() {
               show-password
               clearable
               :disabled="autoLogging"
+              @keyup.enter="handleLogin"
             />
           </el-form-item>
 
           <el-form-item>
-            <el-checkbox v-model="rememberMe" :disabled="autoLogging">记住登录信息</el-checkbox>
+            <el-checkbox v-model="rememberMe" :disabled="autoLogging">记住密码并自动登录</el-checkbox>
           </el-form-item>
 
           <el-button
@@ -142,8 +144,8 @@ async function handleLogin() {
             size="large"
             class="full-width submit-btn"
             :loading="submitting || autoLogging"
-            :disabled="!canSubmit"
-            @click="handleLogin"
+            :disabled="!canSubmit || autoLogging"
+            native-type="submit"
           >
             登录
           </el-button>
