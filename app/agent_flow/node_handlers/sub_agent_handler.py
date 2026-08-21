@@ -8,7 +8,7 @@
 import asyncio
 import json
 import logging
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Literal, Optional, TYPE_CHECKING
 
 from langchain_core.tools import StructuredTool
 from langchain_core.runnables import RunnableConfig
@@ -54,6 +54,13 @@ def _build_ask_tool_schema(agent_name: str, input_schema: dict | None, node_key:
 
     fields_def: dict[str, Any] = {
         "task": (str, Field(..., description="要委派给子Agent执行的任务描述")),
+        "session_mode": (
+            Literal["resume", "new"],
+            Field(
+                default="resume",
+                description="会话模式：resume首次创建后复用，new每次创建新会话",
+            ),
+        ),
     }
 
     file_list_fields: set[str] = set()
@@ -104,6 +111,20 @@ class SubAgentNodeHandler(BaseNodeHandler):
     def __init__(self):
         super().__init__()
         self._writer: Optional[StreamWriter] = None
+        self._parent_session_id = 0
+
+    def _resolve_context(self, config: Optional[RunnableConfig]) -> None:
+        """记录当前父Agent会话，供子Agent工具创建/复用 session。"""
+        configurable = (config or {}).get("configurable", {})
+        session_id = configurable.get("session_id")
+        if not session_id:
+            thread_id = str(configurable.get("thread_id") or "")
+            if thread_id.startswith("agent_"):
+                session_id = thread_id.removeprefix("agent_")
+        try:
+            self._parent_session_id = int(session_id or 0)
+        except (TypeError, ValueError):
+            self._parent_session_id = 0
 
     async def execute(
         self,
@@ -170,7 +191,9 @@ class SubAgentNodeHandler(BaseNodeHandler):
         ask_desc = (
             f"将任务委派给子Agent「{agent_name}」执行。\n\n"
             f"{description}\n\n"
-            f"调用后阻塞等待子Agent完成并返回结果。"
+            f"调用后阻塞等待子Agent完成并返回结果。\n"
+            "session_mode=resume 时首次创建后复用同一会话，适合连续任务；"
+            "session_mode=new 时每次创建独立会话，适合互不依赖的并行任务。"
         )
 
         handler_ref = self
@@ -182,21 +205,36 @@ class SubAgentNodeHandler(BaseNodeHandler):
             from app.services.agent_executor_service import agent_executor_service
 
             task = kwargs.get("task", "")
+            session_mode = kwargs.get("session_mode", "resume")
             extra_params: dict = {
-                k: v for k, v in kwargs.items() if k != "task" and v is not None
+                k: v
+                for k, v in kwargs.items()
+                if k not in {"task", "session_mode"} and v is not None
             }
 
             session_id = 0
             try:
+                parent_session_id = handler_ref._parent_session_id
                 # 创建子Agent session（标题标记来源）
                 async with AsyncSessionLocal() as db:
-                    session = await agent_executor_service.create_session(db, _agent_id)
+                    if session_mode == "resume" and parent_session_id:
+                        session = await agent_executor_service.get_or_create_sub_agent_session(
+                            db,
+                            _agent_id,
+                            parent_session_id,
+                            node.node_key,
+                        )
+                    else:
+                        session = await agent_executor_service.create_session(
+                            db, _agent_id
+                        )
                     session_id = session.id
-                    title = f"[子Agent调用] {task[:40]}"
-                    if len(task) > 40:
-                        title += "..."
-                    session.title = title
-                    await db.commit()
+                    if session.title == "新对话":
+                        title = f"[子Agent调用] {task[:40]}"
+                        if len(task) > 40:
+                            title += "..."
+                        session.title = title
+                        await db.commit()
 
                 # 在后台执行子Agent（传入 handler_ref 以转发工具审批事件）
                 agent_task = asyncio.create_task(
@@ -244,15 +282,17 @@ class SubAgentNodeHandler(BaseNodeHandler):
                 logger.error(f"子Agent执行失败: {e}", exc_info=True)
                 return {"error": f"子Agent执行失败: {str(e)}"}
 
-        tools.append(
-            StructuredTool(
-                name=f"ask_{tool_prefix}",
-                description=ask_desc,
-                func=None,
-                coroutine=ask_agent,
-                args_schema=ask_schema,
-            )
+        tool = StructuredTool(
+            name=f"ask_{tool_prefix}",
+            description=ask_desc,
+            func=None,
+            coroutine=ask_agent,
+            args_schema=ask_schema,
+            metadata={
+                "sub_agent": True,
+            },
         )
+        tools.append(tool)
 
         return tools
 

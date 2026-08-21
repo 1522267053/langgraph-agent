@@ -33,6 +33,12 @@ class AgentSession(DbBaseModel):
         default=None,
         comment="创建该会话的 网关 ID（用户聊天创建则为空）",
     )
+    parent_session_id: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None, comment="父Agent会话ID（子Agent会话）"
+    )
+    parent_node_key: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, default=None, comment="创建该子会话的节点key"
+    )
 
     def __repr__(self) -> str:
         return (

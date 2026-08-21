@@ -488,8 +488,43 @@ async def handle_tool_calls(
         )
         return tool_call, result
 
-    results = await asyncio.gather(
-        *[_run_single_tool(tc) for tc in tool_calls], return_exceptions=True
+    # Sub-Agent resume 模式复用同一 session，不能同时执行多个调用；
+    # new 模式及不同工具仍保持并行。
+    tool_map = {tool.name: tool for tool in tools}
+    serial_groups: dict[str, list[int]] = {}
+    parallel_indices: list[int] = []
+    for index, tool_call in enumerate(tool_calls):
+        tool = tool_map.get(tool_call.get("name", ""))
+        metadata = getattr(tool, "metadata", None) or {}
+        tool_args = tool_call.get("args", {})
+        session_mode = (
+            tool_args.get("session_mode", "resume")
+            if isinstance(tool_args, dict)
+            else "resume"
+        )
+        if metadata.get("sub_agent") and session_mode == "resume":
+            serial_groups.setdefault(tool_call.get("name", ""), []).append(index)
+        else:
+            parallel_indices.append(index)
+
+    results: list[Any] = [None] * len(tool_calls)
+
+    async def _store_result(index: int) -> None:
+        try:
+            results[index] = await _run_single_tool(tool_calls[index])
+        except BaseException as exc:
+            results[index] = exc
+
+    async def _run_parallel() -> None:
+        await asyncio.gather(*(_store_result(index) for index in parallel_indices))
+
+    async def _run_serial(indices: list[int]) -> None:
+        for index in indices:
+            await _store_result(index)
+
+    await asyncio.gather(
+        _run_parallel(),
+        *(_run_serial(indices) for indices in serial_groups.values()),
     )
 
     for item in results:
