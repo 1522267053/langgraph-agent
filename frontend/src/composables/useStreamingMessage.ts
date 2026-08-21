@@ -10,7 +10,8 @@ import {
   updateContent,
   addTool as addToolToSegments,
   updateTool as updateToolInSegments,
-  addTodo as addTodoToSegments
+  addTodo as addTodoToSegments,
+  genSegmentId
 } from '@/composables/useSegmentBuilder'
 
 export type { Segment, ToolCall, TodoItem, SegmentType }
@@ -85,7 +86,10 @@ export function useStreamingMessage() {
     }
     const msg = getOrCreateStreamingMessage()
     if (isNewBlock) {
-      msg.segments = [...msg.segments, { type: 'thinking', thinking: thinkingContent.value }]
+      msg.segments = [
+        ...msg.segments,
+        { type: 'thinking', thinking: thinkingContent.value, id: genSegmentId() }
+      ]
     } else {
       msg.segments = updateThinking(msg.segments, thinkingContent.value)
     }
@@ -105,7 +109,10 @@ export function useStreamingMessage() {
     }
     const msg = getOrCreateStreamingMessage()
     if (isNewBlock) {
-      msg.segments = [...msg.segments, { type: 'content', content: textContent.value }]
+      msg.segments = [
+        ...msg.segments,
+        { type: 'content', content: textContent.value, id: genSegmentId() }
+      ]
     } else {
       msg.segments = updateContent(msg.segments, textContent.value)
     }

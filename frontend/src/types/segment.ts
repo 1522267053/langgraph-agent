@@ -27,6 +27,8 @@ export type SegmentType = 'thinking' | 'content' | 'tool' | 'todo'
 /** 消息分段 */
 export interface Segment {
   type: SegmentType
+  /** 流式分段稳定标识，供列表渲染使用 */
+  id?: string
   dbMsgId?: number
   thinking?: string
   content?: string

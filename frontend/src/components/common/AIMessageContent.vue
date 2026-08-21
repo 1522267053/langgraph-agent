@@ -22,37 +22,50 @@ const emit = defineEmits<{
   (e: 'revert', dbMsgId: number): void
 }>()
 
+const MAX_VISIBLE_SEGMENTS = 50
+
+const visibleSegments = computed(() =>
+  props.isStreaming && props.segments.length > MAX_VISIBLE_SEGMENTS
+    ? props.segments.slice(-MAX_VISIBLE_SEGMENTS)
+    : props.segments
+)
+
 const lastContentIdx = computed(() => {
-  for (let i = props.segments.length - 1; i >= 0; i--) {
-    if (props.segments[i].type === 'content') return i
+  for (let i = visibleSegments.value.length - 1; i >= 0; i--) {
+    if (visibleSegments.value[i].type === 'content') return i
   }
   return -1
 })
 
 function isLastSegment(idx: number): boolean {
-  return idx === props.segments.length - 1
+  return idx === visibleSegments.value.length - 1
 }
 
 function isThinkingInProgress(idx: number): boolean {
   if (!props.isStreaming) return false
-  for (let i = idx + 1; i < props.segments.length; i++) {
-    if (props.segments[i]?.type === 'content') return false
+  for (let i = idx + 1; i < visibleSegments.value.length; i++) {
+    if (visibleSegments.value[i]?.type === 'content') return false
   }
   return true
 }
 
-const expandedArgsSegments = ref(new Set<number>())
+function segmentKey(segment: Segment, idx: number): string {
+  return segment.id || `idx-${idx}`
+}
 
-function toggleArgsFormat(idx: number): void {
-  if (expandedArgsSegments.value.has(idx)) {
-    expandedArgsSegments.value.delete(idx)
+const expandedArgsSegments = ref(new Set<string>())
+
+function toggleArgsFormat(segment: Segment, idx: number): void {
+  const key = segmentKey(segment, idx)
+  if (expandedArgsSegments.value.has(key)) {
+    expandedArgsSegments.value.delete(key)
   } else {
-    expandedArgsSegments.value.add(idx)
+    expandedArgsSegments.value.add(key)
   }
 }
 
-function isArgsExpanded(idx: number): boolean {
-  return expandedArgsSegments.value.has(idx)
+function isArgsExpanded(segment: Segment, idx: number): boolean {
+  return expandedArgsSegments.value.has(segmentKey(segment, idx))
 }
 
 async function handleCopy(text: string): Promise<void> {
@@ -66,7 +79,7 @@ async function handleCopy(text: string): Promise<void> {
 </script>
 
 <template>
-  <template v-for="(segment, idx) in segments" :key="idx">
+  <template v-for="(segment, idx) in visibleSegments" :key="segmentKey(segment, idx)">
     <div v-if="segment.type === 'thinking'" class="thinking-block">
       <div class="code-block-header">
         <div class="code-block-dots">
@@ -118,7 +131,7 @@ async function handleCopy(text: string): Promise<void> {
           class="tool-content-args-wrapper"
         >
           <pre class="tool-content tool-content-args">{{
-            isArgsExpanded(idx)
+            isArgsExpanded(segment, idx)
               ? formatToolArgsExpanded(segment.tool.args)
               : formatToolArgs(segment.tool.args)
           }}</pre>
@@ -127,9 +140,9 @@ async function handleCopy(text: string): Promise<void> {
             link
             size="small"
             class="args-toggle-btn"
-            @click="toggleArgsFormat(idx)"
+            @click="toggleArgsFormat(segment, idx)"
           >
-            {{ isArgsExpanded(idx) ? '显示原始' : '显示格式化' }}
+            {{ isArgsExpanded(segment, idx) ? '显示原始' : '显示格式化' }}
           </el-button>
         </div>
         <ToolResultViewer

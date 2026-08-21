@@ -9,6 +9,13 @@
 
 import type { Segment, TodoItem } from '@/types/segment'
 
+let segmentIdCounter = 0
+
+export function genSegmentId(): string {
+  segmentIdCounter += 1
+  return `seg-${segmentIdCounter}`
+}
+
 // ---- Flow 端使用：增量 chunk 拼接 ----
 
 /**
@@ -21,7 +28,7 @@ export function appendThinking(segments: Segment[], content: string): Segment[] 
     last.thinking = (last.thinking || '') + content
     return segments
   }
-  return [...segments, { type: 'thinking', thinking: content }]
+  return [...segments, { type: 'thinking', thinking: content, id: genSegmentId() }]
 }
 
 /**
@@ -34,7 +41,7 @@ export function appendContent(segments: Segment[], content: string): Segment[] {
     last.content = (last.content || '') + content
     return segments
   }
-  return [...segments, { type: 'content', content }]
+  return [...segments, { type: 'content', content, id: genSegmentId() }]
 }
 
 // ---- Agent 端使用：全量累积内容替换 ----
@@ -52,7 +59,7 @@ export function updateThinking(segments: Segment[], content: string): Segment[] 
     updated[idx] = { ...updated[idx], thinking: content }
     return updated
   }
-  return [...segments, { type: 'thinking', thinking: content }]
+  return [...segments, { type: 'thinking', thinking: content, id: genSegmentId() }]
 }
 
 /**
@@ -68,7 +75,7 @@ export function updateContent(segments: Segment[], content: string): Segment[] {
     updated[idx] = { ...updated[idx], content }
     return updated
   }
-  return [...segments, { type: 'content', content }]
+  return [...segments, { type: 'content', content, id: genSegmentId() }]
 }
 
 // ---- 通用：tool / todo ----
@@ -84,7 +91,10 @@ export function addTool(
   result?: unknown,
   toolCallId?: string
 ): Segment[] {
-  return [...segments, { type: 'tool', tool: { name, args, status, result, id: toolCallId } }]
+  return [
+    ...segments,
+    { type: 'tool', tool: { name, args, status, result, id: toolCallId }, id: genSegmentId() }
+  ]
 }
 
 /**
@@ -130,5 +140,5 @@ export function updateTool(
  * 添加任务计划分段
  */
 export function addTodo(segments: Segment[], todos: TodoItem[]): Segment[] {
-  return [...segments, { type: 'todo', todo: [...todos] }]
+  return [...segments, { type: 'todo', todo: [...todos], id: genSegmentId() }]
 }
