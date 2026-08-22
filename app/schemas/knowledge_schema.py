@@ -2,8 +2,10 @@
 知识库相关数据模型
 """
 
-from typing import Optional, List
-from pydantic import BaseModel, ConfigDict, Field
+from typing import List, Optional
+
+from pydantic import Field
+
 from app.schemas.base_schema import BaseView
 
 
@@ -55,10 +57,11 @@ class KnowledgeDocumentCreate(KnowledgeDocumentBase):
     title: str = Field(..., description="文档标题")
 
 
-class KnowledgeDocumentUpdate(KnowledgeDocumentBase):
+class KnowledgeDocumentUpdate(BaseView):
     """更新文档"""
 
-    pass
+    id: int = Field(..., description="文档ID")
+    title: Optional[str] = Field(default=None, description="文档标题")
 
 
 class KnowledgeDocumentSegmentBase(BaseView):
@@ -87,6 +90,40 @@ class KnowledgeDocumentSegmentUpdate(KnowledgeDocumentSegmentBase):
     """更新文档分段"""
 
     pass
+
+
+class KnowledgeSegmentContextDocument(BaseView):
+    """分片上下文中的文档信息"""
+
+    id: int = Field(..., description="文档ID")
+    knowledge_base_id: int = Field(..., description="所属知识库ID")
+    title: str = Field(..., description="文档标题")
+    file_type: str = Field(..., description="文件类型")
+
+
+class KnowledgeSegmentContextItem(BaseView):
+    """分片上下文项"""
+
+    id: int = Field(..., description="分片ID")
+    document_id: int = Field(..., description="所属文档ID")
+    segment_index: int = Field(..., description="分片序号")
+    title: Optional[str] = Field(default=None, description="分片标题")
+    title_id: Optional[int] = Field(default=None, description="所属标题ID")
+    content: str = Field(..., description="分片内容")
+    word_count: int = Field(default=0, description="字数")
+
+
+class KnowledgeSegmentContextResult(BaseView):
+    """分片及相邻上下文"""
+
+    document: KnowledgeSegmentContextDocument = Field(..., description="活动文档")
+    current: KnowledgeSegmentContextItem = Field(..., description="当前分片")
+    prev: Optional[KnowledgeSegmentContextItem] = Field(
+        default=None, description="上一个活动分片"
+    )
+    next: Optional[KnowledgeSegmentContextItem] = Field(
+        default=None, description="下一个活动分片"
+    )
 
 
 class KnowledgeDocumentUploadResult(BaseView):
@@ -156,7 +193,7 @@ class KnowledgeDocumentTitleUpdate(KnowledgeDocumentTitleBase):
     pass
 
 
-class TitleTreeItem(BaseModel):
+class TitleTreeItem(BaseView):
     """标题树节点（工具返回用）"""
 
     id: int = Field(..., description="标题ID")
@@ -165,10 +202,8 @@ class TitleTreeItem(BaseModel):
     title_index: int = Field(..., description="文档内标题序号")
     paragraph_count: int = Field(..., description="该标题下段落数量")
 
-    model_config = ConfigDict(from_attributes=True)
 
-
-class DocumentListItem(BaseModel):
+class DocumentListItem(BaseView):
     """文档列表项（工具返回用）"""
 
     id: int = Field(..., description="文档ID")
@@ -176,10 +211,8 @@ class DocumentListItem(BaseModel):
     file_type: str = Field(..., description="文件类型")
     title_count: int = Field(default=0, description="标题数量")
 
-    model_config = ConfigDict(from_attributes=True)
 
-
-class ParagraphItem(BaseModel):
+class ParagraphItem(BaseView):
     """段落项（工具返回用）"""
 
     id: int = Field(..., description="段落ID")
@@ -187,10 +220,8 @@ class ParagraphItem(BaseModel):
     content: str = Field(..., description="段落内容")
     word_count: int = Field(default=0, description="字数")
 
-    model_config = ConfigDict(from_attributes=True)
 
-
-class AdjacentParagraphsResult(BaseModel):
+class AdjacentParagraphsResult(BaseView):
     """相邻段落结果（工具返回用）"""
 
     prev: Optional[ParagraphItem] = Field(default=None, description="上一个段落")
@@ -198,7 +229,7 @@ class AdjacentParagraphsResult(BaseModel):
     next: Optional[ParagraphItem] = Field(default=None, description="下一个段落")
 
 
-class TitleLookupResult(BaseModel):
+class TitleLookupResult(BaseView):
     """段落反向查找标题结果（工具返回用）"""
 
     current_title: Optional[TitleTreeItem] = Field(
@@ -209,7 +240,7 @@ class TitleLookupResult(BaseModel):
     )
 
 
-class SegmentSearchCondition(BaseModel):
+class SegmentSearchCondition(BaseView):
     """分段向量搜索条件"""
 
     knowledge_base_id: int = Field(..., description="知识库ID")

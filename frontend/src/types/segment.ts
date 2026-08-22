@@ -3,6 +3,8 @@
  * @description 统一的消息分段类型，供 AIMessageContent、Agent 聊天、Flow 执行共用
  */
 
+import type { KnowledgeReference } from '@/types/knowledge'
+
 /** 任务计划项 */
 export interface TodoItem {
   id?: number
@@ -34,4 +36,5 @@ export interface Segment {
   content?: string
   tool?: ToolCall
   todo?: TodoItem[]
+  knowledge_citations?: KnowledgeReference[]
 }

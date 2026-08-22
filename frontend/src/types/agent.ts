@@ -5,6 +5,7 @@
 
 import type { BaseEntity, ListResponse } from './common'
 import type { FlowIOSchema } from './flow'
+import type { KnowledgeReference } from './knowledge'
 
 /** Agent流程实体 */
 export interface AgentFlow {
@@ -62,6 +63,10 @@ export interface AgentMessage extends BaseEntity {
   tool_calls?: Record<string, unknown>
   /** 工具调用ID */
   tool_call_id?: string
+  /** 工具消息携带的知识库候选来源 */
+  knowledge_references?: KnowledgeReference[]
+  /** AI 消息实际引用的知识库来源 */
+  knowledge_citations?: KnowledgeReference[]
   /** 工具执行状态 */
   status?: string
   /** 消息序号 */

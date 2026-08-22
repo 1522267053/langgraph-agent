@@ -49,6 +49,12 @@ class AgentMessageBase(BaseModel):
     thinking: Optional[str] = Field(default=None, description="思考内容")
     tool_calls: Optional[List[dict]] = Field(default=None, description="工具调用列表")
     tool_call_id: Optional[str] = Field(default=None, description="工具调用ID")
+    knowledge_references: Optional[List[dict]] = Field(
+        default=None, description="知识库候选来源"
+    )
+    knowledge_citations: Optional[List[dict]] = Field(
+        default=None, description="AI回答实际引用"
+    )
     status: Optional[str] = Field(
         default=None, description="工具执行状态：success/error"
     )

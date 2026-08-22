@@ -22,6 +22,12 @@ class ConversationMessageBase(BaseView):
     )
     tool_call_id: Optional[str] = Field(default=None, description="工具调用ID")
     name: Optional[str] = Field(default=None, description="工具名称")
+    knowledge_references: Optional[list[dict[str, Any]]] = Field(
+        default=None, description="知识库候选来源"
+    )
+    knowledge_citations: Optional[list[dict[str, Any]]] = Field(
+        default=None, description="AI回答实际引用"
+    )
     status: Optional[str] = Field(
         default=None, description="工具执行状态：success/error"
     )

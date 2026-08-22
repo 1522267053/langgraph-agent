@@ -37,6 +37,11 @@ from app.agent_flow.tool_resolver import (
 from app.config.build_utils import get_agent_work_dir
 from app.models.flow import FlowType
 from app.models.flow_node import FlowNode
+from app.utils.knowledge_reference import (
+    KNOWLEDGE_REFERENCES_KEY,
+    filter_references_in_content,
+    unpack_knowledge_result,
+)
 
 if TYPE_CHECKING:
     from app.agent_flow.node_handlers.llm_tool_handler import LlmNodeConfig
@@ -556,9 +561,24 @@ async def handle_tool_calls(
             except (json.JSONDecodeError, TypeError):
                 tool_status = "success"
 
-        # 统一截断工具执行结果（load_skill 豁免，LLM 需要完整指令内容）
+        # 知识正文参与截断，引用元数据独立保存在 artifact 中。
+        tool = tool_map.get(tool_name)
+        tool_metadata = getattr(tool, "metadata", None) or {}
+        knowledge_result = (
+            unpack_knowledge_result(raw_result)
+            if tool_metadata.get("knowledge_tool")
+            else None
+        )
         is_exempt = tool_name == "load_skill"
-        if is_exempt:
+        artifact = None
+        if knowledge_result is not None:
+            knowledge_content, knowledge_references = knowledge_result
+            content = smart_truncate_output(knowledge_content, prefix=tool_name)
+            visible_references = filter_references_in_content(
+                content, knowledge_references
+            )
+            artifact = {KNOWLEDGE_REFERENCES_KEY: visible_references}
+        elif is_exempt:
             content = (
                 raw_result
                 if isinstance(raw_result, str)
@@ -567,11 +587,18 @@ async def handle_tool_calls(
         else:
             content = smart_truncate_output(raw_result, prefix=tool_name)
         msg_buf.append(
-            ToolMessage(content=content, tool_call_id=tool_id, name=tool_name)
+            ToolMessage(
+                content=content,
+                tool_call_id=tool_id,
+                name=tool_name,
+                artifact=artifact,
+            )
         )
 
         if emit_tool_end_fn:
-            sse_result = raw_result if is_exempt else content
+            sse_result = (
+                raw_result if is_exempt and knowledge_result is None else content
+            )
             emit_tool_end_fn(
                 writer,
                 node.node_key,

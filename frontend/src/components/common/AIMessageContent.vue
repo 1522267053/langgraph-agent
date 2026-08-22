@@ -3,9 +3,11 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, RefreshLeft, SetUp } from '@element-plus/icons-vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import KnowledgeCitationList from '@/components/common/KnowledgeCitationList.vue'
 import TodoList from '@/components/common/TodoList.vue'
 import ToolResultViewer from '@/components/common/ToolResultViewer.vue'
 import type { Segment } from '@/types/segment'
+import { useKnowledgeReferenceDrawer } from '@/composables/useKnowledgeReferenceDrawer'
 import { formatToolArgs, formatToolArgsExpanded, hasStringifiedJson } from '@/utils/format'
 
 const props = withDefaults(
@@ -32,7 +34,7 @@ const visibleSegments = computed(() =>
 
 const lastContentIdx = computed(() => {
   for (let i = visibleSegments.value.length - 1; i >= 0; i--) {
-    if (visibleSegments.value[i].type === 'content') return i
+    if (visibleSegments.value[i]?.type === 'content') return i
   }
   return -1
 })
@@ -54,6 +56,7 @@ function segmentKey(segment: Segment, idx: number): string {
 }
 
 const expandedArgsSegments = ref(new Set<string>())
+const { open: openKnowledgeReference } = useKnowledgeReferenceDrawer()
 
 function toggleArgsFormat(segment: Segment, idx: number): void {
   const key = segmentKey(segment, idx)
@@ -151,7 +154,8 @@ async function handleCopy(text: string): Promise<void> {
           :result="segment.tool.result"
         />
         <pre v-else-if="segment.tool.status === 'error'" class="tool-content tool-content-error">
-执行失败</pre>
+执行失败</pre
+        >
       </template>
       <div v-else-if="segment.tool.status === 'running'" class="tool-content tool-loading-text">
         执行中...
@@ -187,6 +191,13 @@ async function handleCopy(text: string): Promise<void> {
       <MarkdownRenderer
         :content="segment.content || ''"
         :streaming="isStreaming && isLastSegment(idx)"
+        :citations="segment.knowledge_citations || []"
+        @citation-click="openKnowledgeReference"
+      />
+      <KnowledgeCitationList
+        v-if="segment.knowledge_citations?.length"
+        :citations="segment.knowledge_citations"
+        @select="openKnowledgeReference"
       />
     </div>
 

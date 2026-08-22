@@ -1,22 +1,258 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import VueMarkdown from 'vue-markdown-render'
+import type { KnowledgeReference } from '@/types/knowledge'
+
+interface CitationEntry {
+  marker: string
+  number: number
+  href: string
+  reference: KnowledgeReference
+}
+
+interface InlineMarkdownState {
+  inlineCodeRun: number
+  bracketDepth: number
+  linkDestinationDepth: number
+  angleBracket: boolean
+  pendingLinkTarget: boolean
+}
 
 const props = withDefaults(
   defineProps<{
     content: string
     /** 是否处于流式输出中：节流渲染 markdown，且跳过 hljs/复制按钮/mermaid 后处理 */
     streaming?: boolean
+    citations?: KnowledgeReference[]
   }>(),
-  { streaming: false }
+  { streaming: false, citations: () => [] }
 )
+
+const emit = defineEmits<{
+  (e: 'citation-click', reference: KnowledgeReference): void
+}>()
 
 /** 组件是否已卸载：异步后处理（hljs/mermaid）在 await 间隙后需重新校验 */
 let isUnmounted = false
 
+const citationNamespace =
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+const citationEntries = computed<CitationEntry[]>(() => {
+  const seenMarkers = new Set<string>()
+  const entries: CitationEntry[] = []
+
+  props.citations.forEach((reference, index) => {
+    const marker = reference.citation_marker.trim()
+    if (!marker || seenMarkers.has(marker)) return
+    seenMarkers.add(marker)
+    entries.push({
+      marker,
+      number: index + 1,
+      href: `citation://${citationNamespace}/${index + 1}`,
+      reference
+    })
+  })
+
+  return entries
+})
+
+const citationLinkMap = ref<Map<string, KnowledgeReference>>(new Map())
+
+function isEscaped(text: string, index: number): boolean {
+  let slashCount = 0
+  for (let i = index - 1; i >= 0 && text[i] === '\\'; i--) slashCount++
+  return slashCount % 2 === 1
+}
+
+function countBackticks(text: string, index: number): number {
+  let end = index
+  while (text[end] === '`') end++
+  return end - index
+}
+
+function stripBlockContainerPrefixes(line: string): string {
+  let content = line
+  while (true) {
+    const stripped = content.replace(/^ {0,3}(?:> ?|[-+*][ \t]|\d+[.)][ \t])/, '')
+    if (stripped === content) return content
+    content = stripped
+  }
+}
+
+function replaceMarkersInLine(
+  line: string,
+  entries: CitationEntry[],
+  state: InlineMarkdownState
+): string {
+  let result = ''
+  let index = 0
+
+  while (index < line.length) {
+    const char = line[index]
+
+    if (state.inlineCodeRun > 0) {
+      if (char === '`' && !isEscaped(line, index)) {
+        const runLength = countBackticks(line, index)
+        if (state.inlineCodeRun === runLength) state.inlineCodeRun = 0
+        result += line.slice(index, index + runLength)
+        index += runLength
+        continue
+      }
+      result += char
+      index++
+      continue
+    }
+
+    if (state.angleBracket) {
+      result += char
+      if (char === '>' && !isEscaped(line, index)) state.angleBracket = false
+      index++
+      continue
+    }
+
+    if (state.linkDestinationDepth > 0) {
+      if (!isEscaped(line, index)) {
+        if (char === '(') state.linkDestinationDepth++
+        if (char === ')') state.linkDestinationDepth--
+      }
+      result += char
+      index++
+      continue
+    }
+
+    if (char === '`' && !isEscaped(line, index)) {
+      const runLength = countBackticks(line, index)
+      state.inlineCodeRun = runLength
+      result += line.slice(index, index + runLength)
+      index += runLength
+      continue
+    }
+
+    if (state.pendingLinkTarget) {
+      if (/\s/.test(char)) {
+        result += char
+        index++
+        continue
+      }
+      if (char === '(' && !isEscaped(line, index)) {
+        state.pendingLinkTarget = false
+        state.linkDestinationDepth = 1
+        result += char
+        index++
+        continue
+      }
+      if (char !== '[') state.pendingLinkTarget = false
+    }
+
+    if (state.bracketDepth === 0 && !state.pendingLinkTarget) {
+      const entry = entries.find(item => line.startsWith(item.marker, index))
+      if (entry && !isEscaped(line, index)) {
+        const markerEnd = index + entry.marker.length
+        const following = line.slice(markerEnd).match(/^\s*([([])/)?.[1]
+        const isExistingLink =
+          (index > 0 && line[index - 1] === '!' && !isEscaped(line, index - 1)) ||
+          following === '(' ||
+          following === '['
+        if (!isExistingLink) {
+          result += `[[${entry.number}]](${entry.href})`
+          index = markerEnd
+          continue
+        }
+      }
+    }
+
+    if (!isEscaped(line, index)) {
+      if (char === '<' && line.indexOf('>', index + 1) !== -1) {
+        state.angleBracket = true
+      } else if (char === '[') {
+        state.bracketDepth++
+      } else if (char === ']' && state.bracketDepth > 0) {
+        state.bracketDepth--
+        if (state.bracketDepth === 0) state.pendingLinkTarget = true
+      }
+    }
+
+    result += char
+    index++
+  }
+
+  return result
+}
+
+/** 只替换普通正文中的已知 marker，代码块、行内代码和已有链接保持原样。 */
+function replaceCitationMarkers(source: string, entries: CitationEntry[]): string {
+  if (!source || entries.length === 0) return source
+
+  const sortedEntries = [...entries].sort((a, b) => b.marker.length - a.marker.length)
+  const parts = source.split(/(\r\n|\r|\n)/)
+  const inlineState: InlineMarkdownState = {
+    inlineCodeRun: 0,
+    bracketDepth: 0,
+    linkDestinationDepth: 0,
+    angleBracket: false,
+    pendingLinkTarget: false
+  }
+  let fenceChar = ''
+  let fenceLength = 0
+
+  return parts
+    .map(part => {
+      if (/^(?:\r\n|\r|\n)$/.test(part)) return part
+
+      if (part === '') {
+        inlineState.inlineCodeRun = 0
+        inlineState.bracketDepth = 0
+        inlineState.linkDestinationDepth = 0
+        inlineState.angleBracket = false
+        inlineState.pendingLinkTarget = false
+        return part
+      }
+
+      const blockContent = stripBlockContainerPrefixes(part)
+
+      if (inlineState.inlineCodeRun === 0 && /^ {0,3}\[[^\]]+\]:/.test(blockContent)) {
+        return part
+      }
+
+      if (fenceChar) {
+        const closingFence = blockContent.match(/^ {0,3}(`{3,}|~{3,})\s*$/)
+        const closingRun = closingFence?.[1]
+        if (closingRun && closingRun.charAt(0) === fenceChar && closingRun.length >= fenceLength) {
+          fenceChar = ''
+          fenceLength = 0
+        }
+        return part
+      }
+
+      if (inlineState.inlineCodeRun === 0) {
+        const openingFence = blockContent.match(/^ {0,3}(`{3,}|~{3,})/)
+        const openingRun = openingFence?.[1]
+        if (openingRun) {
+          fenceChar = openingRun.charAt(0)
+          fenceLength = openingRun.length
+          return part
+        }
+        if (/^(?: {4}|\t)/.test(blockContent)) return part
+      }
+
+      return replaceMarkersInLine(part, sortedEntries, inlineState)
+    })
+    .join('')
+}
+
 const md = computed(() => props.content || '')
+
+function currentRenderedSource(): string {
+  const entries = citationEntries.value
+  citationLinkMap.value = new Map(entries.map(entry => [entry.href, entry.reference]))
+  return replaceCitationMarkers(md.value, entries)
+}
+
 /** 实际传给 VueMarkdown 的源文本：流式期间按 STREAM_RENDER_INTERVAL 节流更新 */
-const renderedSource = ref(md.value)
+const renderedSource = ref(currentRenderedSource())
 const containerRef = ref<HTMLDivElement>()
 let mermaidModule: (typeof import('mermaid'))['default'] | null = null
 let hljsModule: (typeof import('highlight.js'))['default'] | null = null
@@ -29,6 +265,45 @@ const STREAM_RENDER_INTERVAL = 150
 let streamRenderTimer: ReturnType<typeof setTimeout> | null = null
 let lastStreamRenderAt = 0
 let hasPendingStreamRender = false
+
+function decorateCitationLinks(): void {
+  if (!containerRef.value) return
+  const links = containerRef.value.querySelectorAll<HTMLAnchorElement>('a')
+  for (const link of links) {
+    const href = link.getAttribute('href') || ''
+    if (!href.toLowerCase().startsWith('citation:')) continue
+    const reference = citationLinkMap.value.get(href)
+    link.classList.toggle('knowledge-citation-link', Boolean(reference))
+    link.classList.toggle('invalid-citation-link', !reference)
+    if (reference) {
+      link.title = '查看引用来源'
+      link.setAttribute('aria-label', `${link.textContent || '引用'}，查看引用来源`)
+      link.removeAttribute('aria-disabled')
+    } else {
+      link.removeAttribute('href')
+      link.removeAttribute('title')
+      link.removeAttribute('aria-label')
+      link.setAttribute('aria-disabled', 'true')
+    }
+  }
+}
+
+function queueCitationLinkDecoration(): void {
+  nextTick(decorateCitationLinks)
+}
+
+function handleMarkdownClick(event: MouseEvent): void {
+  if (!(event.target instanceof Element)) return
+  const link = event.target.closest<HTMLAnchorElement>('a')
+  if (!link || !containerRef.value?.contains(link)) return
+  const href = link.getAttribute('href') || ''
+  if (!href.toLowerCase().startsWith('citation:')) return
+
+  // 所有模型生成的 citation:// 链接都先阻止，仅放行本组件由 metadata 生成的链接。
+  event.preventDefault()
+  const reference = citationLinkMap.value.get(href)
+  if (reference) emit('citation-click', reference)
+}
 
 async function loadMermaid() {
   if (!mermaidModule) {
@@ -230,12 +505,13 @@ async function onMarkdownRendered(immediate = false): Promise<void> {
 onMounted(async () => {
   await nextTick()
   await nextTick()
+  decorateCitationLinks()
   onMarkdownRendered(true)
 })
 
 /** 立即应用当前源文本并执行完整后处理（hljs/复制按钮/mermaid） */
 function applyRenderNow(): void {
-  renderedSource.value = md.value
+  renderedSource.value = currentRenderedSource()
   nextTick(() => {
     onMarkdownRendered(false)
   })
@@ -252,7 +528,7 @@ function scheduleStreamRender(): void {
     if (!hasPendingStreamRender) return
     hasPendingStreamRender = false
     lastStreamRenderAt = Date.now()
-    renderedSource.value = md.value
+    renderedSource.value = currentRenderedSource()
   }, wait)
 }
 
@@ -273,6 +549,17 @@ watch(md, () => {
     applyRenderNow()
   }
 })
+
+watch(citationEntries, () => {
+  if (props.streaming) {
+    scheduleStreamRender()
+  } else {
+    applyRenderNow()
+  }
+})
+
+watch(renderedSource, queueCitationLinkDecoration, { flush: 'post' })
+watch(citationLinkMap, queueCitationLinkDecoration)
 
 watch(
   () => props.streaming,
@@ -302,7 +589,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="containerRef" class="markdown-body">
+  <div ref="containerRef" class="markdown-body" @click="handleMarkdownClick">
     <VueMarkdown :source="renderedSource" />
   </div>
 </template>
@@ -457,6 +744,39 @@ onUnmounted(() => {
 
 .markdown-body a:hover {
   text-decoration: underline;
+}
+
+.markdown-body a.knowledge-citation-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  margin: 0 2px;
+  padding: 0 5px;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: 1px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.markdown-body a.knowledge-citation-link:hover {
+  border-color: #60a5fa;
+  background: #dbeafe;
+  color: #1d4ed8;
+  text-decoration: none;
+}
+
+.markdown-body a.invalid-citation-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: text;
 }
 
 .markdown-body hr {

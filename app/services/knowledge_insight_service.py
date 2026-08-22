@@ -7,10 +7,12 @@
 
 import logging
 import threading
-from typing import Optional, List
-from sqlalchemy import select, and_, or_, Select, update
+from typing import List, Optional
+
+from sqlalchemy import Select, and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.knowledge_base import KnowledgeBase
 from app.models.knowledge_insight import KnowledgeInsight, KnowledgeInsightSegment
 from app.schemas.knowledge_insight_schema import (
     KnowledgeInsightCondition,
@@ -19,6 +21,7 @@ from app.schemas.knowledge_insight_schema import (
 )
 from app.services.base_service import BaseService
 from app.services.embedding_service import get_embedding_service_async
+from app.services.knowledge_title_service import knowledge_title_service
 from app.services.vector_store_service import ChromaVectorStoreService
 
 logger = logging.getLogger(__name__)
@@ -90,6 +93,24 @@ class KnowledgeInsightService(
         source_segment_ids: Optional[List[int]] = None,
     ) -> KnowledgeInsight:
         """保存知识沉淀并自动向量化"""
+        kb_stmt = select(KnowledgeBase.id).where(
+            KnowledgeBase.id == knowledge_base_id,
+            KnowledgeBase.is_delete == 0,
+        )
+        kb_result = await db.execute(kb_stmt)
+        if kb_result.scalar_one_or_none() is None:
+            raise ValueError("知识库不存在或已删除")
+
+        valid_segment_ids: list[int] = []
+        if source_segment_ids:
+            requested_segment_ids = list(dict.fromkeys(source_segment_ids))
+            references = await knowledge_title_service.resolve_segment_references(
+                db, knowledge_base_id, requested_segment_ids
+            )
+            valid_segment_ids = [reference["segment_id"] for reference in references]
+            if len(valid_segment_ids) != len(requested_segment_ids):
+                raise ValueError("关联段落不属于当前知识库或已不可用")
+
         insight = KnowledgeInsight(
             knowledge_base_id=knowledge_base_id,
             question=question,
@@ -105,11 +126,11 @@ class KnowledgeInsightService(
         await db.refresh(insight)
 
         # 保存关联段落
-        if source_segment_ids:
-            await self._save_segment_relations(db, insight.id, source_segment_ids)
+        if valid_segment_ids:
+            await self._save_segment_relations(db, insight.id, valid_segment_ids)
 
         # 向量化
-        await self._vectorize(insight)
+        await self._vectorize(db, insight)
 
         logger.info(
             f"知识沉淀已保存: insight_id={insight.id}, "
@@ -138,7 +159,7 @@ class KnowledgeInsightService(
 
     # ---- 向量化 ----
 
-    async def _vectorize(self, insight: KnowledgeInsight) -> None:
+    async def _vectorize(self, db: AsyncSession, insight: KnowledgeInsight) -> None:
         """将沉淀内容向量化并存入 ChromaDB"""
         try:
             embedding_service = await get_embedding_service_async()
@@ -148,14 +169,6 @@ class KnowledgeInsightService(
             embedding = await embedding_service.embed_query(text)
 
             vector_id = f"insight_{insight.id}"
-            insight.vector_id = vector_id
-
-            from app.config.database import AsyncSessionLocal
-
-            async with AsyncSessionLocal() as vdb:
-                vdb.add(insight)
-                await vdb.commit()
-
             await vector_store.add_texts(
                 texts=[text],
                 embeddings=[embedding],
@@ -167,6 +180,8 @@ class KnowledgeInsightService(
                 ],
                 ids=[vector_id],
             )
+            insight.vector_id = vector_id
+            await db.commit()
         except Exception as e:
             logger.warning(f"知识沉淀向量化失败: insight_id={insight.id}, error={e}")
 
@@ -184,6 +199,14 @@ class KnowledgeInsightService(
         Returns:
             [{id, question, answer, score, source_segment_ids}, ...]
         """
+        kb_stmt = select(KnowledgeBase.id).where(
+            KnowledgeBase.id == knowledge_base_id,
+            KnowledgeBase.is_delete == 0,
+        )
+        kb_result = await db.execute(kb_stmt)
+        if kb_result.scalar_one_or_none() is None:
+            return []
+
         # ---- 向量搜索 ----
         try:
             from app.config.settings import settings
@@ -208,7 +231,11 @@ class KnowledgeInsightService(
                 ]
 
                 if vector_results:
-                    return await self._enrich_vector_results(db, vector_results, top_k)
+                    enriched = await self._enrich_vector_results(
+                        db, knowledge_base_id, vector_results, top_k
+                    )
+                    if enriched:
+                        return enriched
         except Exception as e:
             logger.warning(f"知识沉淀向量搜索失败: {e}")
 
@@ -216,7 +243,11 @@ class KnowledgeInsightService(
         return await self._like_search(db, knowledge_base_id, query, top_k)
 
     async def _enrich_vector_results(
-        self, db: AsyncSession, vector_results: List[dict], top_k: int
+        self,
+        db: AsyncSession,
+        knowledge_base_id: int,
+        vector_results: List[dict],
+        top_k: int,
     ) -> List[dict]:
         """将向量搜索结果与沉淀记录合并"""
         insight_ids = [
@@ -228,7 +259,11 @@ class KnowledgeInsightService(
         if not insight_ids:
             return []
 
-        stmt = select(KnowledgeInsight).where(KnowledgeInsight.id.in_(insight_ids))
+        stmt = select(KnowledgeInsight).where(
+            KnowledgeInsight.id.in_(insight_ids),
+            KnowledgeInsight.knowledge_base_id == knowledge_base_id,
+            KnowledgeInsight.is_delete == 0,
+        )
         db_result = await db.execute(stmt, execution_options={"include_deleted": False})
         id_to_insight = {i.id: i for i in db_result.scalars().all()}
 
@@ -331,6 +366,27 @@ class KnowledgeInsightService(
         result = await db.execute(stmt)
         return [row[0] for row in result.all()]
 
+    async def get_source_references(
+        self,
+        db: AsyncSession,
+        insight_id: int,
+        knowledge_base_id: int,
+    ) -> List[dict]:
+        """解析当前知识库中某条沉淀的活动来源引用。"""
+        insight_stmt = select(KnowledgeInsight.id).where(
+            KnowledgeInsight.id == insight_id,
+            KnowledgeInsight.knowledge_base_id == knowledge_base_id,
+            KnowledgeInsight.is_delete == 0,
+        )
+        insight_result = await db.execute(insight_stmt)
+        if insight_result.scalar_one_or_none() is None:
+            return []
+
+        segment_ids = await self.get_source_segment_ids(db, insight_id)
+        return await knowledge_title_service.resolve_segment_references(
+            db, knowledge_base_id, segment_ids
+        )
+
     # ---- 删除（重写：级联处理） ----
 
     async def delete(self, db: AsyncSession, id: int) -> None:
@@ -367,14 +423,30 @@ class KnowledgeInsightService(
 
         logger.info(f"知识沉淀已删除: insight_id={id}")
 
-    async def delete_batch_by_ids(self, db: AsyncSession, ids: List[int]) -> dict:
+    async def delete_batch_by_ids(
+        self,
+        db: AsyncSession,
+        ids: List[int],
+        knowledge_base_id: int | None = None,
+    ) -> dict:
         """批量删除知识沉淀
 
         Returns:
             {"total": 请求删除数, "deleted": 实际删除数}
         """
+        unique_ids = list(dict.fromkeys(ids))
+        deletable_ids = unique_ids
+        if knowledge_base_id is not None and unique_ids:
+            stmt = select(KnowledgeInsight.id).where(
+                KnowledgeInsight.id.in_(unique_ids),
+                KnowledgeInsight.knowledge_base_id == knowledge_base_id,
+                KnowledgeInsight.is_delete == 0,
+            )
+            result = await db.execute(stmt)
+            deletable_ids = list(result.scalars().all())
+
         deleted = 0
-        for insight_id in ids:
+        for insight_id in deletable_ids:
             try:
                 await self.delete(db, insight_id)
                 deleted += 1
@@ -383,7 +455,7 @@ class KnowledgeInsightService(
                     f"批量删除知识沉淀失败: insight_id={insight_id}, error={e}"
                 )
 
-        return {"total": len(ids), "deleted": deleted}
+        return {"total": len(unique_ids), "deleted": deleted}
 
 
 knowledge_insight_service = KnowledgeInsightService()

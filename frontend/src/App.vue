@@ -39,10 +39,21 @@ import {
   requestPermission as requestNotifyPermission,
   isDenied
 } from '@/composables/useBrowserNotification'
+import { useKnowledgeReferenceDrawer } from '@/composables/useKnowledgeReferenceDrawer'
+import KnowledgeReferenceDrawer from '@/components/common/KnowledgeReferenceDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
 const store = useAgentStore()
+const {
+  visible: knowledgeReferenceDrawerVisible,
+  reference: selectedKnowledgeReference,
+  close: closeKnowledgeReferenceDrawer
+} = useKnowledgeReferenceDrawer()
+
+watch([() => route.fullPath, () => store.currentAgent?.id, () => store.currentSession?.id], () =>
+  closeKnowledgeReferenceDrawer()
+)
 
 // ---- 路由切换加载动画 ----
 const routeLoading = ref(false)
@@ -815,6 +826,10 @@ function handleSessionPageChange(page: number): void {
         </template>
       </div>
     </div>
+    <KnowledgeReferenceDrawer
+      v-model:visible="knowledgeReferenceDrawerVisible"
+      :reference="selectedKnowledgeReference"
+    />
   </el-config-provider>
 </template>
 

@@ -749,6 +749,7 @@ class FlowExecutorService(BaseExecutorService):
                         "thinking": thinking,
                         "content": content,
                         "tool_calls": tool_calls,
+                        "knowledge_citations": msg.knowledge_citations,
                     }
                 )
             elif role == "tool":

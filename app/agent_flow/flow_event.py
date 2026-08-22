@@ -31,6 +31,7 @@ class FlowEventType(str, Enum):
     LLM_RETRY = "llm_retry"
     CONTEXT_COMPRESSING = "context_compressing"
     FLOW_PREVIEW = "flow_preview"
+    KNOWLEDGE_CITATIONS = "knowledge_citations"
 
 
 class FlowEvent(BaseModel):
@@ -147,6 +148,16 @@ class ToolCallEndEvent(FlowEvent):
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.TOOL_CALL_END
+
+
+class KnowledgeCitationsEvent(FlowEvent):
+    """LLM回答中经过校验的知识库引用"""
+
+    node_key: str = Field(..., description="节点Key")
+    citations: list[dict] = Field(default_factory=list, description="知识库引用列表")
+
+    def _get_event_type(self) -> FlowEventType:
+        return FlowEventType.KNOWLEDGE_CITATIONS
 
 
 class ToolApprovalEvent(FlowEvent):
@@ -286,6 +297,7 @@ AnyFlowEvent = Union[
     NodeContentEvent,
     ToolCallStartEvent,
     ToolCallEndEvent,
+    KnowledgeCitationsEvent,
     TokenUsageEvent,
     ToolCallLimitEvent,
     TodoUpdateEvent,

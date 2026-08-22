@@ -49,6 +49,8 @@ const showCreateDialog = ref(false)
 const showExecuteDialog = ref(false)
 const showExecutionPanel = ref(false)
 const pollingTimer = ref<number | null>(null)
+let pollingVersion = 0
+let pollingRequestInFlight = false
 
 // 历史状态
 const historyList = ref<FlowExecution[]>([])
@@ -233,13 +235,17 @@ function stopExecutionWithPolling() {
 
 function startPolling() {
   stopPolling()
+  const version = pollingVersion
   pollingTimer.value = window.setInterval(async () => {
-    if (!currentExecution.value?.id) return
+    const executionId = currentExecution.value?.id
+    if (!executionId || pollingRequestInFlight) return
+    pollingRequestInFlight = true
     try {
       const [execRes, nodesRes] = await Promise.all([
-        executionApi.get(currentExecution.value.id),
-        executionApi.getNodes(currentExecution.value.id)
+        executionApi.get(executionId),
+        executionApi.getNodes(executionId)
       ])
+      if (version !== pollingVersion || currentExecution.value?.id !== executionId) return
       if (execRes.data.code === 1) {
         currentExecution.value = execRes.data.data
       }
@@ -250,12 +256,16 @@ function startPolling() {
         stopPolling()
       }
     } catch {
-      stopPolling()
+      if (version === pollingVersion) stopPolling()
+    } finally {
+      if (version === pollingVersion) pollingRequestInFlight = false
     }
   }, 1000)
 }
 
 function stopPolling() {
+  pollingVersion++
+  pollingRequestInFlight = false
   if (pollingTimer.value) {
     clearInterval(pollingTimer.value)
     pollingTimer.value = null

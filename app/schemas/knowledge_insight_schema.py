@@ -32,13 +32,9 @@ class KnowledgeInsightCreate(BaseView):
 
 class KnowledgeInsightUpdate(BaseView):
     id: int = Field(..., description="ID")
-    knowledge_base_id: Optional[int] = Field(default=None, description="所属知识库ID")
     question: Optional[str] = Field(default=None, description="触发问题/查询")
     answer: Optional[str] = Field(default=None, description="AI生成的知识沉淀内容")
     keywords: Optional[str] = Field(default=None, description="关键词")
-    source_segment_ids: Optional[List[int]] = Field(
-        default=None, description="关联段落ID列表"
-    )
 
 
 class KnowledgeInsightCondition(BaseView):

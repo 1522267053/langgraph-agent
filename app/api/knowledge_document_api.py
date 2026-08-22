@@ -1,22 +1,25 @@
-from pathlib import Path
 import asyncio
-from fastapi import APIRouter, Depends, File, Form, UploadFile, Query
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config.database import get_db, AsyncSessionLocal
 from app.api.base_api import BaseApi, RouteConfig
+from app.config.database import AsyncSessionLocal, get_db
+from app.config.settings import settings
 from app.models.knowledge_document import KnowledgeDocument, ProcessingStatus
+from app.schemas.base_schema import ApiResponse
 from app.schemas.knowledge_schema import (
+    KnowledgeBaseVectorizeResult,
     KnowledgeDocumentBase,
     KnowledgeDocumentCreate,
+    KnowledgeDocumentSegmentBase,
     KnowledgeDocumentUpdate,
     KnowledgeDocumentUploadResult,
-    KnowledgeDocumentSegmentBase,
-    KnowledgeBaseVectorizeResult,
+    KnowledgeSegmentContextResult,
     SegmentSearchCondition,
 )
-from app.schemas.base_schema import ApiResponse
 from app.services.knowledge_document_service import knowledge_document_service
 from app.services.knowledge_title_service import knowledge_title_service
 
@@ -83,6 +86,22 @@ class KnowledgeDocumentApi(
             )
 
         @self.router.get(
+            "/segment/{segment_id}/context",
+            response_model=ApiResponse[KnowledgeSegmentContextResult],
+            summary="获取分片上下文",
+        )
+        async def get_segment_context(
+            segment_id: int, db: AsyncSession = Depends(get_db)
+        ):
+            """获取活动分片、所属文档及前后相邻分片。"""
+            context = await knowledge_document_service.get_segment_context(
+                db, segment_id
+            )
+            if context is None:
+                return ApiResponse.error(msg="分片不存在或所属文档不可用")
+            return ApiResponse.success(data=context, msg="查询成功")
+
+        @self.router.get(
             "/segments/{document_id}",
             response_model=ApiResponse[list[KnowledgeDocumentSegmentBase]],
             summary="获取文档分段列表",
@@ -116,22 +135,33 @@ class KnowledgeDocumentApi(
             document_id: int, db: AsyncSession = Depends(get_db)
         ):
             """下载文档源文件"""
-            document = await knowledge_document_service.get_by_id(
-                db, document_id, raise_not_found=False
+            document = await knowledge_document_service.get_active_document(
+                db, document_id
             )
             if not document:
                 return ApiResponse.error(msg="文档不存在")
 
             if not document.file_path:
-                return ApiResponse.error(msg="文件路径不存在")
+                return ApiResponse.error(msg="文件不可用")
 
-            file_path = Path(document.file_path)
-            if not file_path.exists():
-                return ApiResponse.error(msg="文件不存在")
+            knowledge_root = (
+                settings.get_absolute_path(settings.upload_dir) / "knowledge"
+            ).resolve()
+            try:
+                file_path = Path(document.file_path).resolve(strict=True)
+            except (OSError, RuntimeError):
+                return ApiResponse.error(msg="文件不可用")
+
+            if not file_path.is_relative_to(knowledge_root) or not file_path.is_file():
+                return ApiResponse.error(msg="文件不可用")
+
+            download_name = (
+                Path(document.title.replace("\\", "/")).name or file_path.name
+            )
 
             return FileResponse(
                 path=file_path,
-                filename=document.title,
+                filename=download_name,
                 media_type="application/octet-stream",
             )
 
@@ -144,8 +174,8 @@ class KnowledgeDocumentApi(
             document_id: int, db: AsyncSession = Depends(get_db)
         ):
             """获取文档原文内容"""
-            document = await knowledge_document_service.get_by_id(
-                db, document_id, raise_not_found=False
+            document = await knowledge_document_service.get_active_document(
+                db, document_id
             )
             if not document:
                 return ApiResponse.error(msg="文档不存在")

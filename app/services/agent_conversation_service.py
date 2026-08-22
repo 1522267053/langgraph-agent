@@ -26,6 +26,7 @@ from app.utils.media_resolver import (
     extract_files_from_params,
 )
 from app.utils.message_utils import (
+    DB_PERSISTED_MESSAGE_KEY,
     extract_token_usage,
     extract_thinking,
     extract_tool_calls,
@@ -34,6 +35,12 @@ from app.utils.message_utils import (
     normalize_role,
     remove_unmatched_tool_calls,
     serialize_content,
+)
+from app.utils.knowledge_reference import (
+    KNOWLEDGE_CITATIONS_KEY,
+    KNOWLEDGE_REFERENCES_KEY,
+    extract_message_knowledge_citations,
+    extract_message_knowledge_references,
 )
 
 
@@ -63,6 +70,8 @@ class AgentConversationService:
             thinking = extract_thinking(msg)
             token_usage = extract_token_usage(msg)
             tool_status = extract_tool_status(msg)
+            knowledge_references = extract_message_knowledge_references(msg)
+            knowledge_citations = extract_message_knowledge_citations(msg)
 
             role = normalize_role(msg)
 
@@ -89,6 +98,10 @@ class AgentConversationService:
                 kwargs["tool_call_id"] = tool_call_id
             if tool_status is not None:
                 kwargs["status"] = tool_status
+            if knowledge_references:
+                kwargs["knowledge_references"] = knowledge_references
+            if knowledge_citations:
+                kwargs["knowledge_citations"] = knowledge_citations
             if token_usage.get("prompt_tokens") is not None:
                 kwargs["prompt_tokens"] = token_usage["prompt_tokens"]
             if token_usage.get("completion_tokens") is not None:
@@ -214,7 +227,7 @@ class AgentConversationService:
     ) -> BaseMessage:
         """将数据库消息转换为 LangChain 消息（含附件的多模态重建）"""
         if msg.role == "system":
-            return SystemMessage(content=msg.content or "")
+            message: BaseMessage = SystemMessage(content=msg.content or "")
         elif msg.role == "human":
             content = msg.content or ""
             files = msg.files if isinstance(msg.files, list) else None
@@ -222,14 +235,18 @@ class AgentConversationService:
                 content = await build_content_from_db_files(
                     db, content, files, capabilities
                 )
-            return HumanMessage(content=content)
+            message = HumanMessage(content=content)
         elif msg.role == "ai":
             ai_msg = AIMessage(content=msg.content or "")
             if msg.tool_calls:
                 ai_msg.tool_calls = cast(list[ToolCall], msg.tool_calls)
             if msg.thinking:
                 ai_msg.additional_kwargs["reasoning_content"] = msg.thinking
-            return ai_msg
+            if msg.knowledge_citations:
+                ai_msg.additional_kwargs[KNOWLEDGE_CITATIONS_KEY] = (
+                    msg.knowledge_citations
+                )
+            message = ai_msg
         elif msg.role == "tool":
             kwargs = {
                 "content": msg.content or "",
@@ -237,9 +254,16 @@ class AgentConversationService:
             }
             if msg.status:
                 kwargs["status"] = msg.status
-            return ToolMessage(**kwargs)
+            if msg.knowledge_references:
+                kwargs["artifact"] = {
+                    KNOWLEDGE_REFERENCES_KEY: msg.knowledge_references
+                }
+            message = ToolMessage(**kwargs)
         else:
-            return HumanMessage(content=msg.content or "")
+            message = HumanMessage(content=msg.content or "")
+
+        message.response_metadata[DB_PERSISTED_MESSAGE_KEY] = True
+        return message
 
 
 agent_conversation_service = AgentConversationService()

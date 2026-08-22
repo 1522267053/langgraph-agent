@@ -32,7 +32,10 @@ from app.utils.media_resolver import (
     filter_capabilities_by_adapter,
     normalize_file_value,
 )
-from app.utils.message_utils import remove_unmatched_tool_calls
+from app.utils.message_utils import (
+    DB_PERSISTED_MESSAGE_KEY,
+    remove_unmatched_tool_calls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +149,26 @@ async def load_base_messages(
         if not isinstance(m, SystemMessage)
     ]
     if messages:
+        history_mode = node_config.get("history_mode", "node")
+        has_persisted_markers = any(
+            message.response_metadata.get(DB_PERSISTED_MESSAGE_KEY)
+            for message in messages
+        )
+        if execution_id and history_mode == "flow" and has_persisted_markers:
+            db_messages = await load_history_from_db(
+                node_config,
+                node.node_key,
+                session_id=session_id,
+                execution_id=execution_id,
+                conversation_service=conversation_service,
+                db_session_factory=db_session_factory,
+            )
+            pending_messages = [
+                message
+                for message in messages
+                if not message.response_metadata.get(DB_PERSISTED_MESSAGE_KEY)
+            ]
+            return [*db_messages, *pending_messages]
         return messages
 
     # checkpoint 为空则从数据库加载

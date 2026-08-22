@@ -42,6 +42,12 @@ class ConversationMessage(DbBaseModel):
     name: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True, comment="工具名称（tool角色）"
     )
+    knowledge_references: Mapped[Optional[list]] = mapped_column(
+        JSON, nullable=True, comment="知识库候选来源"
+    )
+    knowledge_citations: Mapped[Optional[list]] = mapped_column(
+        JSON, nullable=True, comment="AI回答实际引用"
+    )
     status: Mapped[Optional[str]] = mapped_column(
         String(20),
         nullable=True,

@@ -15,6 +15,7 @@ import type { FileItem, ImagePreviewData } from '@/components/common/FilePreview
 import TodoList from '@/components/common/TodoList.vue'
 import type { Segment, TodoItem } from '@/types/segment'
 import { formatTokenCount, getNodeStatusType } from '@/utils/format'
+import { executionStepsToSegments } from '@/composables/useSegmentBuilder'
 
 export interface StreamingContentItem {
   segments: Segment[]
@@ -102,47 +103,6 @@ function getExecutionSteps(node: NodeExecution): ExecutionStep[] {
     return node.execution_steps
   }
   return []
-}
-
-function executionStepsToSegments(steps: ExecutionStep[]): Segment[] {
-  const segments: Segment[] = []
-  const toolCallMap = new Map<string, number>()
-  for (const step of steps) {
-    if (step.role === 'human') {
-      continue
-    }
-    if (step.role === 'tool') {
-      const idx = toolCallMap.get(step.tool_call_id || '')
-      if (idx !== undefined && segments[idx]?.tool) {
-        segments[idx].tool.result = step.content || ''
-      }
-    } else {
-      if (step.thinking) {
-        segments.push({ type: 'thinking', thinking: step.thinking })
-      }
-      if (step.content) {
-        segments.push({ type: 'content', content: step.content })
-      }
-      if (step.tool_calls) {
-        for (const tool of step.tool_calls) {
-          const segIdx = segments.length
-          segments.push({
-            type: 'tool',
-            tool: {
-              name: tool.name,
-              args: tool.args || {},
-              status: (tool.status || 'running') as 'running' | 'success' | 'error',
-              result: tool.result
-            }
-          })
-          if (tool.id) {
-            toolCallMap.set(tool.id, segIdx)
-          }
-        }
-      }
-    }
-  }
-  return segments
 }
 </script>
 

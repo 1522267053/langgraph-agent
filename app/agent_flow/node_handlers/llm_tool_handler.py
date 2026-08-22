@@ -42,6 +42,7 @@ from app.agent_flow.flow_context import FlowState
 from app.agent_flow.flow_event import (
     ErrorEvent,
     FlowPreviewEvent,
+    KnowledgeCitationsEvent,
     NodeStartEvent,
     TokenUsageEvent,
     ToolCallEndEvent,
@@ -55,6 +56,13 @@ from app.agent_flow.node_handlers.base_handler import (
 )
 from app.agent_flow.message_buffer import MessageBuffer
 from app.utils.message_utils import extract_token_usage
+from app.utils.knowledge_reference import (
+    KNOWLEDGE_CITATIONS_KEY,
+    collect_message_knowledge_references,
+    filter_references_in_content,
+    merge_knowledge_references,
+    validate_knowledge_citations,
+)
 
 from app.agent_flow.node_handlers.llm_factory import prepare_llm
 from app.agent_flow.node_handlers.llm_message_builder import (
@@ -76,6 +84,13 @@ logger = logging.getLogger(__name__)
 
 # 自动压缩阈值比例：已用 token 超过 context_length 的此比例时触发压缩
 COMPRESS_THRESHOLD_RATIO = 0.83
+
+_KNOWLEDGE_CITATION_PROMPT = """
+
+# 知识库引用规则
+
+知识片段中的 `[段落ID:x]` 是可验证引用标记。回答使用某个片段的事实时，必须在对应句子末尾原样保留该标记。只能使用当前上下文或工具结果中实际出现的标记，不得自行编造；未使用知识库内容时不要添加引用。
+"""
 
 
 def _build_mode_prompt(is_plan_mode: bool) -> str:
@@ -306,6 +321,17 @@ class LlmToolNodeHandler(BaseNodeHandler):
             ),
         )
 
+    def _emit_knowledge_citations(
+        self, writer, node_key: str, citations: list[dict]
+    ) -> None:
+        """发送最终回答中经过校验的知识引用。"""
+        if not citations:
+            return
+        self._emit(
+            writer,
+            KnowledgeCitationsEvent(node_key=node_key, citations=citations),
+        )
+
     async def _emit_flow_preview(self, writer, flow_id: int, action: str):
         """查询 flow 详情并发送流程预览事件
 
@@ -417,9 +443,50 @@ class LlmToolNodeHandler(BaseNodeHandler):
         if not user_prompt:
             raise NodeExecutionError(node.node_key, "用户提示词（user_prompt）不能为空")
 
+        knowledge_reference_sources: dict[str, int] = {}
+        if self.flow:
+            for flow_node in self.flow.nodes:
+                if flow_node.node_type != "knowledge":
+                    continue
+                knowledge_base_id = (flow_node.base_config or {}).get(
+                    "knowledge_base_id"
+                )
+                if isinstance(knowledge_base_id, int):
+                    knowledge_reference_sources[
+                        f"nodes.{flow_node.node_key}.knowledge_references"
+                    ] = knowledge_base_id
+
+        preloaded_references: list[dict] = []
+        citation_context = f"{system_prompt or ''}\n{user_prompt}"
+        for key, knowledge_base_id in knowledge_reference_sources.items():
+            value = state.variables.get(key)
+            visible = [
+                reference
+                for reference in filter_references_in_content(citation_context, value)
+                if reference.get("knowledge_base_id") == knowledge_base_id
+            ]
+            preloaded_references = merge_knowledge_references(
+                preloaded_references, visible
+            )
+
+        allowed_knowledge_base_ids: set[int] = set()
+        for tool in tools:
+            metadata = getattr(tool, "metadata", None) or {}
+            if not metadata.get("knowledge_tool"):
+                continue
+            knowledge_base_id = metadata.get("knowledge_base_id")
+            if isinstance(knowledge_base_id, int):
+                allowed_knowledge_base_ids.add(knowledge_base_id)
+        for reference in preloaded_references:
+            knowledge_base_id = reference.get("knowledge_base_id")
+            if isinstance(knowledge_base_id, int):
+                allowed_knowledge_base_ids.add(knowledge_base_id)
+
         # 追加工具节点的 system_prompt 提示
         for hint in prompt_hints:
             system_prompt = (system_prompt or "") + hint
+        if preloaded_references:
+            system_prompt = (system_prompt or "") + _KNOWLEDGE_CITATION_PROMPT
 
         # 始终说明当前模式和工具能力，避免模型仅根据工具列表推断权限
         system_prompt = (system_prompt or "") + _build_mode_prompt(is_plan_mode)
@@ -469,6 +536,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
             db_session_factory=self.db_session_factory,
             conversation_service=self.conversation_service,
             node_key=node.node_key,
+            history_mode=cfg.history_mode,
             emit_fn=self._emit,
         )
         prompt_tokens = await should_auto_compress(
@@ -503,6 +571,8 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 tool_check_script=cfg.tool_check_script,
                 required_tools_max_retries=cfg.required_tools_max_retries,
                 required_tools_hint=cfg.required_tools_hint,
+                initial_knowledge_references=preloaded_references,
+                allowed_knowledge_base_ids=allowed_knowledge_base_ids,
             )
             if last_content:
                 state.set_node_variable(node.node_key, result_name, last_content)
@@ -556,6 +626,69 @@ class LlmToolNodeHandler(BaseNodeHandler):
 
     # ---- ReAct 循环 ----
 
+    async def _revalidate_knowledge_references(
+        self,
+        references: list[dict],
+        allowed_knowledge_base_ids: set[int],
+    ) -> list[dict]:
+        """按当前连接的知识库重新校验历史候选引用。"""
+        candidates = merge_knowledge_references(references)
+        if not candidates or not allowed_knowledge_base_ids:
+            return []
+
+        grouped_segment_ids: dict[int, list[int]] = {}
+        candidate_by_id: dict[str, dict] = {}
+        for reference in candidates:
+            knowledge_base_id = reference.get("knowledge_base_id")
+            segment_id = reference.get("segment_id")
+            if (
+                not isinstance(knowledge_base_id, int)
+                or knowledge_base_id not in allowed_knowledge_base_ids
+                or not isinstance(segment_id, int)
+            ):
+                continue
+            grouped_segment_ids.setdefault(knowledge_base_id, []).append(segment_id)
+            candidate_by_id[reference["reference_id"]] = reference
+
+        if not grouped_segment_ids:
+            return []
+
+        try:
+            from app.config.database import AsyncSessionLocal
+            from app.services.knowledge_title_service import knowledge_title_service
+
+            session_factory = self.db_session_factory or AsyncSessionLocal
+            refreshed: list[dict] = []
+            async with session_factory() as db:
+                for knowledge_base_id, segment_ids in grouped_segment_ids.items():
+                    score_map = {}
+                    method_map = {}
+                    for segment_id in segment_ids:
+                        candidate = candidate_by_id.get(f"segment:{segment_id}", {})
+                        score_map[segment_id] = candidate.get("score")
+                        method_map[segment_id] = candidate.get("retrieval_method")
+                    refreshed.extend(
+                        await knowledge_title_service.resolve_segment_references(
+                            db,
+                            knowledge_base_id,
+                            segment_ids,
+                            score_by_segment_id=score_map,
+                            retrieval_method_by_segment_id=method_map,
+                        )
+                    )
+        except Exception as exc:
+            logger.warning(f"重新校验知识引用失败: {exc}")
+            return []
+
+        refreshed_by_id = {
+            reference["reference_id"]: reference for reference in refreshed
+        }
+        return [
+            refreshed_by_id[reference["reference_id"]]
+            for reference in candidates
+            if reference["reference_id"] in refreshed_by_id
+        ]
+
     async def _run_react_loop(
         self,
         llm: BaseChatModel | Runnable,
@@ -572,6 +705,8 @@ class LlmToolNodeHandler(BaseNodeHandler):
         tool_check_script: str = "",
         required_tools_max_retries: int = 2,
         required_tools_hint: str = "",
+        initial_knowledge_references: Optional[list[dict]] = None,
+        allowed_knowledge_base_ids: Optional[set[int]] = None,
     ) -> tuple[str, list[str], set[str]]:
         """ReAct 循环：流式调用 LLM → 处理工具调用 → 继续调用
 
@@ -587,6 +722,13 @@ class LlmToolNodeHandler(BaseNodeHandler):
         called_tools: set[str] = set()
         retry_count = 0
         tool_fp_count: dict[str, int] = {}
+        knowledge_references = await self._revalidate_knowledge_references(
+            merge_knowledge_references(
+                initial_knowledge_references or [],
+                collect_message_knowledge_references(msg_buf.messages),
+            ),
+            allowed_knowledge_base_ids or set(),
+        )
 
         while True:
             messages = msg_buf.messages
@@ -610,6 +752,14 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 writer,
                 check_interrupted_fn=self._check_interrupted,
             )
+
+            if response and not response.tool_calls:
+                citations = validate_knowledge_citations(
+                    current_content, knowledge_references
+                )
+                response.additional_kwargs[KNOWLEDGE_CITATIONS_KEY] = citations
+                state.set_node_variable(node.node_key, "knowledge_citations", citations)
+                self._emit_knowledge_citations(writer, node.node_key, citations)
 
             # 推送 token 用量事件 + 持久化到 token_usage 表
             if response:
@@ -735,6 +885,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 break
 
             # 处理工具调用
+            message_count_before_tools = len(msg_buf.messages)
             should_continue, tool_call_count = await handle_tool_calls(
                 response.tool_calls,
                 tools,
@@ -752,6 +903,12 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 emit_flow_preview_fn=self._emit_flow_preview,
                 tool_fp_count=tool_fp_count,
                 doom_loop_threshold=_DOOM_LOOP_THRESHOLD,
+            )
+            knowledge_references = merge_knowledge_references(
+                knowledge_references,
+                collect_message_knowledge_references(
+                    msg_buf.messages[message_count_before_tools:]
+                ),
             )
             if not should_continue:
                 break
