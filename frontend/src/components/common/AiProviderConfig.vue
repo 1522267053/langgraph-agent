@@ -78,13 +78,13 @@ function hasAnyCapability(): boolean {
   return caps.image || caps.video || caps.audio || caps.pdf || caps.xlsx
 }
 
-function applyModelAutoFill() {
+function applyModelAutoFill(overwriteContextLength = false) {
   const opt = selectedModelOption.value
   if (!opt) return
   if (capabilities.value && opt.capabilities && !hasAnyCapability()) {
     capabilities.value = { ...opt.capabilities }
   }
-  if (opt.context_length) {
+  if (opt.context_length && (overwriteContextLength || !contextLength.value)) {
     contextLength.value = opt.context_length
   }
   if (opt.max_tokens && maxTokens.value !== undefined && !maxTokens.value) {
@@ -164,13 +164,13 @@ async function onProviderChange(newVal: string, oldVal: string) {
     baseUrl.value = nextDefault
   }
   await loadModels(newVal)
-  applyModelAutoFill()
+  applyModelAutoFill(true)
   emit('change')
 }
 
 function onModelChange() {
   if (_init.value) return
-  applyModelAutoFill()
+  applyModelAutoFill(true)
   emit('change')
 }
 

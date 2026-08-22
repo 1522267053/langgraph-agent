@@ -228,6 +228,7 @@ watch(
     <div class="config-section">
       <div class="section-title">大模型配置</div>
       <AiProviderConfig
+        :key="currentNodeId"
         v-model:provider="localConfig.provider"
         v-model:model="localConfig.model"
         v-model:api-key="localConfig.api_key"
