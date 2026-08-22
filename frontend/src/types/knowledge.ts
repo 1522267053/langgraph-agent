@@ -53,16 +53,61 @@ export interface KnowledgeDocumentCreate {
   file_type?: DocumentType
 }
 
-export interface KnowledgeDocumentUpdate extends KnowledgeDocumentCreate {
+export interface KnowledgeDocumentUpdate {
   id: number
+  title?: string
 }
 
 export interface SegmentSearchResult {
+  knowledge_base_id?: number
   document_id: number
   document_title: string
+  file_type?: string
   title_id?: number
   title_text: string
   segment_id: number
+  segment_index?: number
   content: string
-  score: number
+  score?: number
+  retrieval_method?: string
+}
+
+export interface KnowledgeReference {
+  reference_id: string
+  citation_marker: string
+  knowledge_base_id: number
+  document_id: number
+  document_title: string
+  file_type?: string
+  title_id?: number
+  title_text?: string
+  segment_id: number
+  segment_index?: number
+  excerpt?: string
+  score?: number
+  retrieval_method?: string
+}
+
+export interface KnowledgeSegmentContextDocument {
+  id: number
+  knowledge_base_id: number
+  title: string
+  file_type: string
+}
+
+export interface KnowledgeSegmentContextItem {
+  id: number
+  document_id: number
+  segment_index: number
+  title?: string
+  title_id?: number
+  content: string
+  word_count: number
+}
+
+export interface KnowledgeSegmentContextResult {
+  document: KnowledgeSegmentContextDocument
+  current: KnowledgeSegmentContextItem
+  prev?: KnowledgeSegmentContextItem
+  next?: KnowledgeSegmentContextItem
 }

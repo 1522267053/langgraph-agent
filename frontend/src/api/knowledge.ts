@@ -9,6 +9,7 @@ import type {
   KnowledgeDocumentCreate,
   KnowledgeDocumentUpdate,
   KnowledgeDocumentUploadResult,
+  KnowledgeSegmentContextResult,
   SegmentSearchResult
 } from '@/types/knowledge'
 
@@ -90,8 +91,16 @@ export const knowledgeDocumentApi = {
     )
   },
 
-  getDownloadUrl(documentId: number) {
-    return `/api/knowledge/document/download/${documentId}`
+  getSegmentContext(segmentId: number) {
+    return request.get<ApiResponse<KnowledgeSegmentContextResult>>(
+      `/knowledge/document/segment/${segmentId}/context`
+    )
+  },
+
+  download(documentId: number) {
+    return request.get<Blob>(`/knowledge/document/download/${documentId}`, {
+      responseType: 'blob'
+    })
   },
 
   getContent(documentId: number) {

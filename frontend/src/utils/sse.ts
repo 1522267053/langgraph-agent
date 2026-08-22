@@ -245,6 +245,7 @@ export function createFlowSSEConnection(
     llm_retry: handlers.onLlmRetry,
     context_compressing: handlers.onContextCompressing,
     flow_preview: handlers.onFlowPreview,
+    knowledge_citations: handlers.onKnowledgeCitations,
     error: handlers.onError
   }
 

@@ -23,6 +23,15 @@ import { createOnToolCallLimitHandler, createOnLlmRetryHandler } from '@/composa
 import { useStreamingMessage } from '@/composables'
 import { ElMessage } from 'element-plus'
 
+const MESSAGE_REFRESH_LIMIT = 100
+
+interface AgentStreamContext {
+  agentId: number
+  sessionId: number
+  generation: number
+  wasFirstMessage: boolean
+}
+
 export const useAgentStore = defineStore('agent', () => {
   // ========== 基础数据 ==========
   const agents = ref<AgentFlow[]>([])
@@ -63,6 +72,7 @@ export const useAgentStore = defineStore('agent', () => {
     addToolSegment,
     updateToolSegment,
     addTodoSegment,
+    addKnowledgeCitations,
     updateTodos,
     addTokenUsage,
     stopStreaming,
@@ -97,14 +107,17 @@ export const useAgentStore = defineStore('agent', () => {
 
   // ========== 压缩上下文状态 ==========
   const isCompressing = ref(false)
-  let compressPollTimer: ReturnType<typeof setInterval> | null = null
+  let compressPollTimer: ReturnType<typeof setTimeout> | null = null
+  let compressPollVersion = 0
 
   // ========== 中断保存状态 ==========
   const isStopping = ref(false)
   let savePollTimer: ReturnType<typeof setTimeout> | null = null
+  let savePollVersion = 0
 
   // ========== 后台运行检测（刷新后检测会话是否仍在跑） ==========
   let runningPollTimer: ReturnType<typeof setTimeout> | null = null
+  let runningPollVersion = 0
 
   // ========== 计划模式（只读探索，不执行修改），localStorage 持久化 ==========
   const planMode = ref(localStorage.getItem('agent_plan_mode') === '1')
@@ -125,7 +138,8 @@ export const useAgentStore = defineStore('agent', () => {
 
   // ========== 中断函数引用 ==========
   let streamAbort: (() => void) | null = null
-  let wasFirstMessage = false
+  let streamGeneration = 0
+  let sessionSelectionVersion = 0
   let isResume = false
 
   // ========== 数据加载方法 ==========
@@ -215,27 +229,42 @@ export const useAgentStore = defineStore('agent', () => {
    * 选择会话
    */
   async function selectSession(agentId: number, session: AgentSession) {
+    const selectionVersion = ++sessionSelectionVersion
     messagesLoading.value = true
     clearMessages()
     cancelStream()
+    stopCompressPolling()
+    isCompressing.value = false
+    const selectionGeneration = streamGeneration
     flowPreview.value = null
 
     currentSession.value = session
     try {
       const res = await agentApi.getMessages(agentId, session.id)
-      if (res.data.code === 1) {
+      if (
+        res.data.code === 1 &&
+        selectionVersion === sessionSelectionVersion &&
+        selectionGeneration === streamGeneration &&
+        currentAgent.value?.id === agentId &&
+        currentSession.value?.id === session.id
+      ) {
         messages.value = res.data.data?.list || []
         messageTotal.value = res.data.data?.total || 0
         rebuildChatMessages()
       }
     } finally {
-      messagesLoading.value = false
+      if (selectionVersion === sessionSelectionVersion) messagesLoading.value = false
     }
 
     // 检查会话是否正在压缩（页面刷新/重选场景）
     try {
       const statusRes = await agentApi.compressStatus(agentId, session.id)
-      if (statusRes.data.code === 1 && statusRes.data.data?.status === 'compressing') {
+      if (
+        selectionVersion === sessionSelectionVersion &&
+        selectionGeneration === streamGeneration &&
+        statusRes.data.code === 1 &&
+        statusRes.data.data?.status === 'compressing'
+      ) {
         startCompressPolling(agentId, session.id)
       }
     } catch {
@@ -245,7 +274,12 @@ export const useAgentStore = defineStore('agent', () => {
     // 检测会话是否正在后台执行（刷新/重选场景），点亮停止按钮
     try {
       const runRes = await agentApi.runningStatus(agentId, session.id)
-      if (runRes.data.code === 1 && runRes.data.data?.running) {
+      if (
+        selectionVersion === sessionSelectionVersion &&
+        selectionGeneration === streamGeneration &&
+        runRes.data.code === 1 &&
+        runRes.data.data?.running
+      ) {
         // 复用 isStreaming 点亮停止按钮（不会创建空气泡，气泡仅在真实 SSE 内容到达时创建）
         isStreaming.value = true
         startRunningPolling(agentId, session.id)
@@ -259,14 +293,29 @@ export const useAgentStore = defineStore('agent', () => {
    * 加载更多历史消息（向上翻页）
    */
   async function loadMoreMessages(agentId: number) {
-    if (!currentSession.value || loadingMoreMessages.value || !hasMoreMessages.value) return 0
+    if (
+      !currentSession.value ||
+      loadingMoreMessages.value ||
+      !hasMoreMessages.value ||
+      isStreaming.value
+    )
+      return 0
+    const sessionId = currentSession.value.id
+    const selectionVersion = sessionSelectionVersion
+    const generation = streamGeneration
     const firstMsgId = messages.value[0]?.id
     if (!firstMsgId) return 0
 
     loadingMoreMessages.value = true
     try {
-      const res = await agentApi.getMessages(agentId, currentSession.value.id, firstMsgId)
-      if (res.data.code === 1) {
+      const res = await agentApi.getMessages(agentId, sessionId, firstMsgId)
+      if (
+        res.data.code === 1 &&
+        currentAgent.value?.id === agentId &&
+        currentSession.value?.id === sessionId &&
+        selectionVersion === sessionSelectionVersion &&
+        generation === streamGeneration
+      ) {
         const olderMessages = res.data.data?.list || []
         if (olderMessages.length > 0) {
           messageTotal.value = res.data.data?.total || messageTotal.value
@@ -340,8 +389,13 @@ export const useAgentStore = defineStore('agent', () => {
           currentAssistant.thinking = msg.thinking
         }
 
-        if (msg.content) {
-          currentAssistant.segments.push({ type: 'content', content: msg.content, dbMsgId: msg.id })
+        if (msg.content || msg.knowledge_citations?.length) {
+          currentAssistant.segments.push({
+            type: 'content',
+            content: msg.content,
+            dbMsgId: msg.id,
+            knowledge_citations: msg.knowledge_citations
+          })
           currentAssistant.content = msg.content
         }
 
@@ -436,7 +490,11 @@ export const useAgentStore = defineStore('agent', () => {
   function isSameSegment(a: MessageSegment, b: MessageSegment): boolean {
     if (a.type !== b.type) return false
     if (a.type === 'content' && b.type === 'content') {
-      return a.content === b.content && a.dbMsgId === b.dbMsgId
+      return (
+        a.content === b.content &&
+        a.dbMsgId === b.dbMsgId &&
+        JSON.stringify(a.knowledge_citations) === JSON.stringify(b.knowledge_citations)
+      )
     }
     if (a.type === 'thinking' && b.type === 'thinking') {
       return a.thinking === b.thinking && a.dbMsgId === b.dbMsgId
@@ -519,12 +577,56 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
+  function isCurrentStream(context: AgentStreamContext): boolean {
+    return (
+      context.generation === streamGeneration &&
+      currentAgent.value?.id === context.agentId &&
+      currentSession.value?.id === context.sessionId
+    )
+  }
+
+  function applyLatestMessages(
+    latestMessages: AgentMessage[],
+    total: number,
+    replace = false
+  ): void {
+    if (replace) {
+      messages.value = latestMessages
+    } else if (latestMessages.length > 0) {
+      const oldestLatestId = latestMessages[0].id
+      const loadedOlderMessages = messages.value.filter(message => message.id < oldestLatestId)
+      messages.value = [...loadedOlderMessages, ...latestMessages]
+      if (messages.value.length > total) {
+        messages.value = messages.value.slice(messages.value.length - total)
+      }
+    } else if (total === 0) {
+      messages.value = []
+    }
+    messageTotal.value = total
+    rebuildChatMessages()
+  }
+
+  async function refreshStreamMessages(
+    context: AgentStreamContext,
+    replace = false
+  ): Promise<void> {
+    const res = await agentApi.getMessages(
+      context.agentId,
+      context.sessionId,
+      undefined,
+      MESSAGE_REFRESH_LIMIT
+    )
+    if (res.data.code !== 1 || !isCurrentStream(context)) return
+    applyLatestMessages(res.data.data?.list || [], res.data.data?.total || 0, replace)
+  }
+
   /**
    * 创建SSE事件处理器
    */
-  function createStreamHandlers() {
+  function createStreamHandlers(context: AgentStreamContext) {
     return {
       onFlowStart: () => {
+        if (!isCurrentStream(context)) return
         flowPreview.value = null
         startStreaming()
       },
@@ -532,15 +634,18 @@ export const useAgentStore = defineStore('agent', () => {
         // 节点开始处理
       },
       onNodeThinking: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
         appendThinking(event.data.content || '')
       },
       onNodeContent: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
         appendContent(event.data.content || '')
       },
       onNodeDone: () => {
         // 节点完成处理
       },
       onToolCallStart: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
         addToolSegment(
           event.data.tool_name || '',
           event.data.tool_args || {},
@@ -549,6 +654,7 @@ export const useAgentStore = defineStore('agent', () => {
         )
       },
       onToolCallEnd: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
         updateToolSegment(
           event.data.tool_name || '',
           event.data.status === 'error' ? 'error' : 'success',
@@ -558,6 +664,7 @@ export const useAgentStore = defineStore('agent', () => {
       },
       onToolCallLimit: createOnToolCallLimitHandler(),
       onTokenUsage: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
         addTokenUsage(
           event.data.prompt_tokens || 0,
           event.data.completion_tokens || 0,
@@ -565,11 +672,17 @@ export const useAgentStore = defineStore('agent', () => {
         )
       },
       onTodoUpdate: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
         const newTodos = (event.data.todos || []) as TodoItem[]
         updateTodos(newTodos)
         addTodoSegment(newTodos)
       },
+      onKnowledgeCitations: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
+        addKnowledgeCitations(event.data.citations || [])
+      },
       onWaitingHuman: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
         stopStreaming()
         isWaitingHuman.value = true
         currentWaitData.value = event.data.wait_data || {
@@ -580,6 +693,7 @@ export const useAgentStore = defineStore('agent', () => {
         }
       },
       onToolApproval: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
         isWaitingToolApproval.value = true
         pendingToolCalls.value = event.data.tool_calls || []
         pendingApprovalNeeded.value = event.data.approval_needed || []
@@ -597,27 +711,16 @@ export const useAgentStore = defineStore('agent', () => {
         startApprovalCountdown(298)
       },
       onContextCompressing: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
         const status = event.data.status as string
         if (status === 'compressing') {
           isCompressing.value = true
         } else {
           isCompressing.value = false
-          if (status === 'done' && currentAgent.value && currentSession.value) {
-            try {
-              agentApi.getMessages(currentAgent.value.id, currentSession.value.id).then(res => {
-                if (res.data.code === 1) {
-                  messages.value = res.data.data?.list || []
-                  messageTotal.value = res.data.data?.total || 0
-                  rebuildChatMessages()
-                }
-              })
-            } catch (e) {
-              console.error('[onContextCompressing] 刷新消息失败', e)
-            }
-          }
         }
       },
       onFlowPreview: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
         flowPreview.value = {
           flow_id: event.data.flow_id || 0,
           flow_name: event.data.flow_name,
@@ -628,6 +731,7 @@ export const useAgentStore = defineStore('agent', () => {
         }
       },
       onFlowDone: async () => {
+        if (!isCurrentStream(context)) return
         stopStreaming()
         isCompressing.value = false
         if (isWaitingToolApproval.value) {
@@ -640,25 +744,18 @@ export const useAgentStore = defineStore('agent', () => {
         if (isResume) {
           isResume = false
         }
-        if (currentAgent.value && currentSession.value) {
-          try {
-            const res = await agentApi.getMessages(currentAgent.value.id, currentSession.value.id)
-            if (res.data.code === 1) {
-              messages.value = res.data.data?.list || []
-              messageTotal.value = res.data.data?.total || 0
-              rebuildChatMessages()
-            }
-          } catch (e) {
-            console.error('[onFlowDone] 刷新消息失败', e)
-          }
+        try {
+          await refreshStreamMessages(context)
+        } catch (e) {
+          console.error('[onFlowDone] 刷新消息失败', e)
         }
-        if (currentAgent.value && wasFirstMessage) {
-          await loadSessions(currentAgent.value.id, sessionPage.value)
-          wasFirstMessage = false
+        if (context.wasFirstMessage && isCurrentStream(context)) {
+          await loadSessions(context.agentId, sessionPage.value)
         }
       },
       onLlmRetry: createOnLlmRetryHandler(),
       onError: async (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
         stopStreaming()
         isCompressing.value = false
         if (isWaitingToolApproval.value) {
@@ -667,17 +764,10 @@ export const useAgentStore = defineStore('agent', () => {
           pendingApprovalNeeded.value = []
           stopApprovalCountdown()
         }
-        if (currentAgent.value && currentSession.value) {
-          try {
-            const res = await agentApi.getMessages(currentAgent.value.id, currentSession.value.id)
-            if (res.data.code === 1) {
-              messages.value = res.data.data?.list || []
-              messageTotal.value = res.data.data?.total || 0
-              rebuildChatMessages()
-            }
-          } catch (e) {
-            console.error('[onError] 刷新消息失败', e)
-          }
+        try {
+          await refreshStreamMessages(context)
+        } catch (e) {
+          console.error('[onError] 刷新消息失败', e)
         }
         ElMessage.error(event.data.message || '发送失败')
       }
@@ -696,16 +786,21 @@ export const useAgentStore = defineStore('agent', () => {
   ) {
     if (!currentAgent.value || !currentSession.value) return
 
-    wasFirstMessage = messages.value.length === 0
+    const context: AgentStreamContext = {
+      agentId: currentAgent.value.id,
+      sessionId: currentSession.value.id,
+      generation: ++streamGeneration,
+      wasFirstMessage: messages.value.length === 0
+    }
 
     addUserMessage(content, files)
     startStreaming()
 
     streamAbort = agentApi.chat(
-      currentAgent.value.id,
-      currentSession.value.id,
+      context.agentId,
+      context.sessionId,
       { content, params: { ...params, __plan_mode__: planMode.value } },
-      createStreamHandlers()
+      createStreamHandlers(context)
     )
   }
 
@@ -715,6 +810,12 @@ export const useAgentStore = defineStore('agent', () => {
   function resumeWithInput(humanInput: string) {
     if (!currentAgent.value || !currentSession.value) return
 
+    const context: AgentStreamContext = {
+      agentId: currentAgent.value.id,
+      sessionId: currentSession.value.id,
+      generation: ++streamGeneration,
+      wasFirstMessage: false
+    }
     isResume = true
     addUserMessage(humanInput)
     isWaitingHuman.value = false
@@ -722,10 +823,10 @@ export const useAgentStore = defineStore('agent', () => {
     startStreaming()
 
     streamAbort = agentApi.resume(
-      currentAgent.value.id,
-      currentSession.value.id,
+      context.agentId,
+      context.sessionId,
       { human_input: humanInput },
-      createStreamHandlers()
+      createStreamHandlers(context)
     )
   }
 
@@ -801,12 +902,14 @@ export const useAgentStore = defineStore('agent', () => {
    * @param waitForSave 是否等待后端 save_to_db 完成后刷新消息（仅中断场景传 true）
    */
   function cancelStream(waitForSave = false) {
+    streamGeneration++
     if (streamAbort) {
       streamAbort()
       streamAbort = null
     }
     if (!waitForSave) {
       stopStreaming()
+      isStopping.value = false
     }
     isWaitingHuman.value = false
     currentWaitData.value = null
@@ -826,53 +929,61 @@ export const useAgentStore = defineStore('agent', () => {
    */
   function startSavePolling(agentId: number, sessionId: number) {
     stopSavePolling()
+    const pollVersion = savePollVersion
+    const expectedGeneration = streamGeneration
     const startTime = Date.now()
     const timeout = 8000
+    const isCurrentPoll = () =>
+      pollVersion === savePollVersion &&
+      expectedGeneration === streamGeneration &&
+      currentAgent.value?.id === agentId &&
+      currentSession.value?.id === sessionId
     const onDone = () => {
+      if (!isCurrentPoll()) return
       stopStreaming()
       isStopping.value = false
       ElMessage.success('停止成功')
     }
     const poll = async () => {
-      if (!currentAgent.value || currentSession.value?.id !== sessionId) {
-        stopSavePolling()
-        stopStreaming()
-        isStopping.value = false
-        return
-      }
+      if (!isCurrentPoll()) return
       try {
         const res = await agentApi.saveStatus(agentId, sessionId)
+        if (!isCurrentPoll()) return
         if (res.data.code === 1 && res.data.data?.saving) {
           if (Date.now() - startTime >= timeout) {
-            stopSavePolling()
-            refreshMessages(agentId, sessionId)
+            refreshMessages(agentId, sessionId, expectedGeneration)
             onDone()
+            stopSavePolling()
           } else {
             savePollTimer = setTimeout(poll, 1000)
           }
         } else {
-          stopSavePolling()
-          refreshMessages(agentId, sessionId)
+          refreshMessages(agentId, sessionId, expectedGeneration)
           onDone()
+          stopSavePolling()
         }
       } catch {
-        stopSavePolling()
-        refreshMessages(agentId, sessionId)
+        if (!isCurrentPoll()) return
+        refreshMessages(agentId, sessionId, expectedGeneration)
         onDone()
+        stopSavePolling()
       }
     }
     poll()
   }
 
-  function refreshMessages(agentId: number, sessionId: number) {
+  function refreshMessages(agentId: number, sessionId: number, expectedGeneration: number) {
     if (currentSession.value?.id === sessionId) {
       agentApi
-        .getMessages(agentId, sessionId)
+        .getMessages(agentId, sessionId, undefined, MESSAGE_REFRESH_LIMIT)
         .then(res => {
-          if (res.data.code === 1 && currentSession.value?.id === sessionId) {
-            messages.value = res.data.data?.list || []
-            messageTotal.value = res.data.data?.total || 0
-            rebuildChatMessages()
+          if (
+            res.data.code === 1 &&
+            streamGeneration === expectedGeneration &&
+            currentAgent.value?.id === agentId &&
+            currentSession.value?.id === sessionId
+          ) {
+            applyLatestMessages(res.data.data?.list || [], res.data.data?.total || 0)
           }
         })
         .catch(() => {})
@@ -880,6 +991,7 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   function stopSavePolling() {
+    savePollVersion++
     if (savePollTimer) {
       clearTimeout(savePollTimer)
       savePollTimer = null
@@ -890,6 +1002,7 @@ export const useAgentStore = defineStore('agent', () => {
    * 停止后台运行检测轮询
    */
   function stopRunningPolling() {
+    runningPollVersion++
     if (runningPollTimer) {
       clearTimeout(runningPollTimer)
       runningPollTimer = null
@@ -905,23 +1018,27 @@ export const useAgentStore = defineStore('agent', () => {
    */
   function startRunningPolling(agentId: number, sessionId: number) {
     stopRunningPolling()
+    const pollVersion = runningPollVersion
+    const expectedGeneration = streamGeneration
+    const isCurrentPoll = () =>
+      pollVersion === runningPollVersion &&
+      expectedGeneration === streamGeneration &&
+      currentAgent.value?.id === agentId &&
+      currentSession.value?.id === sessionId
     const poll = async () => {
-      // 切换会话或无当前 Agent 时停止
-      if (!currentAgent.value || currentSession.value?.id !== sessionId) {
-        stopRunningPolling()
-        isStreaming.value = false
-        return
-      }
+      if (!isCurrentPoll()) return
       try {
         const res = await agentApi.runningStatus(agentId, sessionId)
+        if (!isCurrentPoll()) return
         if (res.data.code === 1 && res.data.data?.running) {
           runningPollTimer = setTimeout(poll, 1000)
         } else {
           stopRunningPolling()
           isStreaming.value = false
-          refreshMessages(agentId, sessionId)
+          refreshMessages(agentId, sessionId, expectedGeneration)
         }
       } catch {
+        if (!isCurrentPoll()) return
         stopRunningPolling()
         isStreaming.value = false
       }
@@ -934,11 +1051,17 @@ export const useAgentStore = defineStore('agent', () => {
    */
   async function interruptExecution() {
     if (isStopping.value) return
+    if (!currentAgent.value || !currentSession.value) return
     isStopping.value = true
-    if (currentAgent.value && currentSession.value) {
-      await agentApi.cancel(currentAgent.value.id, currentSession.value.id)
-    }
+    const agentId = currentAgent.value.id
+    const sessionId = currentSession.value.id
+    const cancelRequest = agentApi.cancel(agentId, sessionId)
     cancelStream(true)
+    try {
+      await cancelRequest
+    } catch {
+      // 保存轮询会继续确认后端是否已停止。
+    }
   }
 
   /**
@@ -998,9 +1121,17 @@ export const useAgentStore = defineStore('agent', () => {
     sessionId: number,
     prompt?: string
   ): Promise<boolean> {
+    if (currentAgent.value?.id !== agentId || currentSession.value?.id !== sessionId) return false
+    const selectionVersion = sessionSelectionVersion
     isCompressing.value = true
     try {
       const res = await agentApi.compress(agentId, sessionId, prompt)
+      if (
+        selectionVersion !== sessionSelectionVersion ||
+        currentAgent.value?.id !== agentId ||
+        currentSession.value?.id !== sessionId
+      )
+        return false
       if (res.data.code === 1) {
         startCompressPolling(agentId, sessionId)
         return true
@@ -1008,7 +1139,13 @@ export const useAgentStore = defineStore('agent', () => {
       isCompressing.value = false
       return false
     } catch {
-      isCompressing.value = false
+      if (
+        selectionVersion === sessionSelectionVersion &&
+        currentAgent.value?.id === agentId &&
+        currentSession.value?.id === sessionId
+      ) {
+        isCompressing.value = false
+      }
       return false
     }
   }
@@ -1018,34 +1155,45 @@ export const useAgentStore = defineStore('agent', () => {
    */
   function startCompressPolling(agentId: number, sessionId: number) {
     stopCompressPolling()
+    const pollVersion = compressPollVersion
+    const selectionVersion = sessionSelectionVersion
+    const isCurrentPoll = () =>
+      pollVersion === compressPollVersion &&
+      selectionVersion === sessionSelectionVersion &&
+      currentAgent.value?.id === agentId &&
+      currentSession.value?.id === sessionId
     const check = async () => {
+      if (!isCurrentPoll()) return
       try {
         const res = await agentApi.compressStatus(agentId, sessionId)
+        if (!isCurrentPoll()) return
         if (res.data.code === 1 && res.data.data?.status === 'compressing') {
           isCompressing.value = true
+          compressPollTimer = setTimeout(check, 1000)
         } else if (isCompressing.value) {
           const data = res.data.code === 1 ? res.data.data : null
           isCompressing.value = false
           stopCompressPolling()
           if (data?.status === 'failed') {
             ElMessage.error(data?.error || '上下文压缩失败')
-          } else if (currentAgent.value && currentSession.value) {
-            await selectSession(currentAgent.value.id, currentSession.value)
+          } else if (currentSession.value) {
+            await selectSession(agentId, currentSession.value)
           }
         } else {
           stopCompressPolling()
         }
       } catch {
+        if (!isCurrentPoll()) return
         stopCompressPolling()
       }
     }
-    check()
-    compressPollTimer = setInterval(check, 1000)
+    void check()
   }
 
   function stopCompressPolling() {
+    compressPollVersion++
     if (compressPollTimer) {
-      clearInterval(compressPollTimer)
+      clearTimeout(compressPollTimer)
       compressPollTimer = null
     }
   }

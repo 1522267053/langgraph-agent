@@ -1,5 +1,7 @@
 """对话消息缓冲区，管理消息的完整生命周期：加载、追加、压缩、持久化"""
 
+import asyncio
+import json
 import logging
 from typing import TYPE_CHECKING, Callable, Optional, Union
 
@@ -9,12 +11,19 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
 )
-from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent_flow.flow_event import (
     ContextCompressingEvent,
     FlowEvent,
     TokenUsageEvent,
+)
+from app.utils.message_utils import (
+    DB_PERSISTED_MESSAGE_KEY,
+    extract_tool_calls,
+    extract_tool_info,
+    normalize_role,
+    serialize_content,
 )
 
 if TYPE_CHECKING:
@@ -23,6 +32,7 @@ if TYPE_CHECKING:
     from app.services.conversation_service import ConversationService
 
 logger = logging.getLogger(__name__)
+_message_save_lock = asyncio.Lock()
 
 
 class MessageBuffer:
@@ -32,9 +42,8 @@ class MessageBuffer:
     消费方（react loop、工具处理）通过 msg_buf.messages 读取、
     通过 msg_buf.append() 追加，压缩时 msg_buf 内部原子替换列表。
 
-    持久化时自动感知压缩状态：
-    - 未压缩：增量保存（saved_count 对比）
-    - 已压缩：只保存 _post_compress_offset 之后的新增部分
+    持久化时通过消息上的数据库标记识别新增内容；压缩后只检查
+    _post_compress_offset 之后的消息。
     """
 
     def __init__(
@@ -48,6 +57,7 @@ class MessageBuffer:
             Union["ConversationService", "AgentConversationService"]
         ] = None,
         node_key: str = "",
+        history_mode: str = "node",
         emit_fn: Optional[Callable] = None,
     ):
         self._messages = messages
@@ -56,7 +66,9 @@ class MessageBuffer:
         self.db_session_factory = db_session_factory
         self.conversation_service = conversation_service
         self.node_key = node_key
+        self.history_mode = history_mode
         self._post_compress_offset: int = 0
+        self._persistence_reconciled = False
         self._emit_fn = emit_fn
 
     @property
@@ -157,54 +169,109 @@ class MessageBuffer:
         self._post_compress_offset = 2
         return True
 
+    @staticmethod
+    def _message_fingerprint(message: BaseMessage) -> tuple[str, str, str, str]:
+        """构造不含运行时 metadata 的稳定消息指纹。"""
+        tool_call_id, _ = extract_tool_info(message)
+        return (
+            normalize_role(message),
+            serialize_content(message.content),
+            json.dumps(
+                extract_tool_calls(message),
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ),
+            tool_call_id or "",
+        )
+
+    async def _reconcile_persisted_messages(self, db: AsyncSession) -> None:
+        """将升级前 checkpoint 中已存在于数据库的消息标记为已保存。"""
+        if self._persistence_reconciled or not self._messages:
+            return
+
+        if self.session_id or self.history_mode == "flow":
+            persisted = await self.conversation_service.get_full_history(
+                db, self._id_param, limit=0
+            )
+        elif self.history_mode == "none":
+            persisted = []
+        else:
+            persisted = await self.conversation_service.get_history(
+                db, self._id_param, self.node_key, limit=0
+            )
+        self._persistence_reconciled = True
+
+        if not persisted:
+            return
+
+        local_fingerprints = [
+            self._message_fingerprint(message) for message in self._messages
+        ]
+        persisted_fingerprints = [
+            self._message_fingerprint(message) for message in persisted
+        ]
+        best_match_length = 0
+        first_local = local_fingerprints[0]
+        for start, fingerprint in enumerate(persisted_fingerprints):
+            if fingerprint != first_local:
+                continue
+            match_length = 0
+            while (
+                match_length < len(local_fingerprints)
+                and start + match_length < len(persisted_fingerprints)
+                and local_fingerprints[match_length]
+                == persisted_fingerprints[start + match_length]
+            ):
+                match_length += 1
+            best_match_length = max(best_match_length, match_length)
+
+        for message in self._messages[:best_match_length]:
+            message.response_metadata[DB_PERSISTED_MESSAGE_KEY] = True
+
     async def save_to_db(self) -> None:
         """持久化到 DB，压缩后只保存 _post_compress_offset 之后的新增部分"""
         if not self.conversation_service or not self.db_session_factory:
             return
 
-        from app.models.agent_message import AgentMessage
-        from app.models.conversation_message import ConversationMessage
-
         try:
-            ModelClass = AgentMessage if self.session_id else ConversationMessage
-            id_field = (
-                AgentMessage.session_id
-                if self.session_id
-                else ConversationMessage.execution_id
+            async with _message_save_lock:
+                async with self.db_session_factory() as db:
+                    await self._reconcile_persisted_messages(db)
+                    if self._post_compress_offset > 0:
+                        candidates = self._messages[self._post_compress_offset :]
+                    else:
+                        candidates = self._messages
+
+                    new_messages = [
+                        m
+                        for m in candidates
+                        if not m.response_metadata.get(DB_PERSISTED_MESSAGE_KEY)
+                        and not (
+                            isinstance(m, AIMessageChunk)
+                            and not m.content
+                            and not m.tool_calls
+                            and not m.additional_kwargs.get("reasoning_content")
+                        )
+                    ]
+
+                    if new_messages:
+                        start_seq = (
+                            await self.conversation_service.get_max_sequence(
+                                db, self._id_param, self.node_key
+                            )
+                            + 1
+                        )
+                        await self.conversation_service.add_messages(
+                            db,
+                            self._id_param,
+                            self.node_key,
+                            new_messages,
+                            start_sequence=start_seq,
+                        )
+                        for message in new_messages:
+                            message.response_metadata[DB_PERSISTED_MESSAGE_KEY] = True
+        except Exception as exc:
+            logger.warning(
+                f"保存对话历史到数据库失败: node_key={self.node_key}, error={exc}"
             )
-
-            async with self.db_session_factory() as db:
-                if self._post_compress_offset > 0:
-                    new_messages = self._messages[self._post_compress_offset :]
-                    start_seq = self._post_compress_offset
-                else:
-                    query = select(func.count(ModelClass.id)).where(
-                        id_field == self._id_param,
-                        ModelClass.is_delete == 0,
-                    )
-                    result = await db.execute(query)
-                    saved_count = result.scalar() or 0
-                    new_messages = self._messages[saved_count:]
-                    start_seq = saved_count
-
-                new_messages = [
-                    m
-                    for m in new_messages
-                    if not (
-                        isinstance(m, AIMessageChunk)
-                        and not m.content
-                        and not m.tool_calls
-                        and not m.additional_kwargs.get("reasoning_content")
-                    )
-                ]
-
-                if new_messages:
-                    await self.conversation_service.add_messages(
-                        db,
-                        self._id_param,
-                        self.node_key,
-                        new_messages,
-                        start_sequence=start_seq,
-                    )
-        except Exception:
-            logger.warning(f"保存对话历史到数据库失败: node_key={self.node_key}")

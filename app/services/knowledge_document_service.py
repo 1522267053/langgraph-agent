@@ -3,11 +3,13 @@
 """
 
 import logging
-from typing import List, Dict, Any
-from fastapi import UploadFile
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from typing import Any, Dict, List
 
+from fastapi import UploadFile
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.knowledge_base import KnowledgeBase
 from app.models.knowledge_document import (
     KnowledgeDocument,
     ProcessingStatus,
@@ -17,10 +19,13 @@ from app.models.knowledge_document_title import KnowledgeDocumentTitle
 from app.schemas.knowledge_schema import (
     KnowledgeDocumentCreate,
     KnowledgeDocumentUpdate,
+    KnowledgeSegmentContextDocument,
+    KnowledgeSegmentContextItem,
+    KnowledgeSegmentContextResult,
 )
 from app.services.base_service import BaseService
-from app.utils.document_processor import document_processor
 from app.services.knowledge_title_service import knowledge_title_service
+from app.utils.document_processor import document_processor
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +72,35 @@ class KnowledgeDocumentService(
         """
         更新文档，自动计算字数
         """
-        if obj_in.content is not None:
-            obj_in.word_count = len(obj_in.content)
-        return await super().update(db, obj_in)
+        if isinstance(obj_in, KnowledgeDocument):
+            document = obj_in
+            if document.content is not None:
+                document.word_count = len(document.content)
+        else:
+            document = await self.get_by_id(db, obj_in.id)
+            if "title" in obj_in.model_fields_set and obj_in.title is not None:
+                document.title = obj_in.title
+
+        return await super().update(db, document)
+
+    async def get_active_document(
+        self, db: AsyncSession, document_id: int
+    ) -> KnowledgeDocument | None:
+        """获取所属知识库和文档均未删除的记录。"""
+        stmt = (
+            select(KnowledgeDocument)
+            .join(
+                KnowledgeBase,
+                KnowledgeDocument.knowledge_base_id == KnowledgeBase.id,
+            )
+            .where(
+                KnowledgeDocument.id == document_id,
+                KnowledgeDocument.is_delete == 0,
+                KnowledgeBase.is_delete == 0,
+            )
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
 
     # ---- 上传（异步） ----
 
@@ -319,6 +350,79 @@ class KnowledgeDocumentService(
             .order_by(KnowledgeDocumentSegment.segment_index)
         )
         return list(result.scalars().all())
+
+    async def get_segment_context(
+        self, db: AsyncSession, segment_id: int
+    ) -> KnowledgeSegmentContextResult | None:
+        """获取活动分片、所属文档及相邻活动分片。"""
+        current_stmt = (
+            select(KnowledgeDocumentSegment, KnowledgeDocument)
+            .join(
+                KnowledgeDocument,
+                KnowledgeDocumentSegment.document_id == KnowledgeDocument.id,
+            )
+            .join(
+                KnowledgeBase,
+                KnowledgeDocument.knowledge_base_id == KnowledgeBase.id,
+            )
+            .where(
+                KnowledgeDocumentSegment.id == segment_id,
+                KnowledgeDocumentSegment.is_delete == 0,
+                KnowledgeDocument.is_delete == 0,
+                KnowledgeBase.is_delete == 0,
+            )
+        )
+        current_result = await db.execute(current_stmt)
+        current_row = current_result.one_or_none()
+        if current_row is None:
+            return None
+
+        current, document = current_row
+        prev_stmt = (
+            select(KnowledgeDocumentSegment)
+            .where(
+                KnowledgeDocumentSegment.document_id == document.id,
+                KnowledgeDocumentSegment.segment_index < current.segment_index,
+                KnowledgeDocumentSegment.is_delete == 0,
+            )
+            .order_by(
+                KnowledgeDocumentSegment.segment_index.desc(),
+                KnowledgeDocumentSegment.id.desc(),
+            )
+            .limit(1)
+        )
+        next_stmt = (
+            select(KnowledgeDocumentSegment)
+            .where(
+                KnowledgeDocumentSegment.document_id == document.id,
+                KnowledgeDocumentSegment.segment_index > current.segment_index,
+                KnowledgeDocumentSegment.is_delete == 0,
+            )
+            .order_by(
+                KnowledgeDocumentSegment.segment_index,
+                KnowledgeDocumentSegment.id,
+            )
+            .limit(1)
+        )
+        prev_result = await db.execute(prev_stmt)
+        next_result = await db.execute(next_stmt)
+        prev_segment = prev_result.scalar_one_or_none()
+        next_segment = next_result.scalar_one_or_none()
+
+        return KnowledgeSegmentContextResult(
+            document=KnowledgeSegmentContextDocument.model_validate(document),
+            current=KnowledgeSegmentContextItem.model_validate(current),
+            prev=(
+                KnowledgeSegmentContextItem.model_validate(prev_segment)
+                if prev_segment is not None
+                else None
+            ),
+            next=(
+                KnowledgeSegmentContextItem.model_validate(next_segment)
+                if next_segment is not None
+                else None
+            ),
+        )
 
     # ---- 删除 ----
 

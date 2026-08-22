@@ -47,6 +47,11 @@ const {
     (store.chatMessages.at(-1)?.segments || []).filter(
       s => s.type === 'tool' && s.tool?.status !== 'running'
     ).length,
+  () =>
+    (store.chatMessages.at(-1)?.segments || []).reduce(
+      (count, segment) => count + (segment.knowledge_citations?.length || 0),
+      0
+    ),
   () => store.isStreaming,
   () => store.todos.length
 ])

@@ -4,6 +4,7 @@
  */
 
 import type { BaseEntity } from './common'
+import type { KnowledgeReference } from './knowledge'
 
 /** 执行状态枚举 */
 export enum ExecutionStatus {
@@ -129,6 +130,8 @@ export interface ExecutionStep {
   tool_call_id?: string
   /** 工具名称（role=tool 时） */
   tool_name?: string
+  /** AI 消息实际引用的知识库来源 */
+  knowledge_citations?: KnowledgeReference[]
 }
 
 /** 节点执行记录实体 */

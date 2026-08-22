@@ -22,6 +22,7 @@ from app.utils.media_resolver import (
     extract_files_from_params,
 )
 from app.utils.message_utils import (
+    DB_PERSISTED_MESSAGE_KEY,
     extract_thinking,
     extract_tool_calls,
     extract_tool_info,
@@ -29,6 +30,12 @@ from app.utils.message_utils import (
     extract_token_usage,
     normalize_role,
     serialize_content,
+)
+from app.utils.knowledge_reference import (
+    KNOWLEDGE_CITATIONS_KEY,
+    KNOWLEDGE_REFERENCES_KEY,
+    extract_message_knowledge_citations,
+    extract_message_knowledge_references,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +60,8 @@ class ConversationService:
             thinking = extract_thinking(msg)
             token_usage = extract_token_usage(msg)
             tool_status = extract_tool_status(msg)
+            knowledge_references = extract_message_knowledge_references(msg)
+            knowledge_citations = extract_message_knowledge_citations(msg)
             role = normalize_role(msg)
 
             kwargs: dict = {
@@ -70,6 +79,10 @@ class ConversationService:
                 kwargs["name"] = name
             if tool_status is not None:
                 kwargs["status"] = tool_status
+            if knowledge_references:
+                kwargs["knowledge_references"] = knowledge_references
+            if knowledge_citations:
+                kwargs["knowledge_citations"] = knowledge_citations
             if thinking:
                 kwargs["thinking"] = thinking
             if token_usage.get("prompt_tokens") is not None:
@@ -109,12 +122,15 @@ class ConversationService:
         if node_key:
             query = query.where(ConversationMessage.node_key == node_key)
 
-        query = query.order_by(ConversationMessage.sequence.asc())
+        query = query.order_by(
+            ConversationMessage.sequence.desc(), ConversationMessage.id.desc()
+        )
         if limit > 0:
             query = query.limit(limit)
 
         result = await db.execute(query)
-        messages = result.scalars().all()
+        messages = list(result.scalars().all())
+        messages.reverse()
 
         return [await self._to_langchain_message(db, m, capabilities) for m in messages]
 
@@ -136,7 +152,6 @@ class ConversationService:
 
         query = select(func.max(ConversationMessage.sequence)).where(
             ConversationMessage.execution_id == execution_id,
-            ConversationMessage.node_key == node_key,
             ConversationMessage.is_delete == 0,
         )
         result = await db.execute(query)
@@ -151,7 +166,7 @@ class ConversationService:
     ) -> BaseMessage:
         """将数据库消息转换为 LangChain 消息（含附件的多模态重建）"""
         if msg.role == "system":
-            return SystemMessage(content=msg.content or "")
+            message: BaseMessage = SystemMessage(content=msg.content or "")
         elif msg.role == "human":
             content = msg.content or ""
             files = msg.files if isinstance(msg.files, list) else None
@@ -159,14 +174,18 @@ class ConversationService:
                 content = await build_content_from_db_files(
                     db, content, files, capabilities
                 )
-            return HumanMessage(content=content)
+            message = HumanMessage(content=content)
         elif msg.role == "ai":
             ai_msg = AIMessage(content=msg.content or "")
             if msg.tool_calls:
                 ai_msg.tool_calls = cast(list[ToolCall], msg.tool_calls)
             if msg.thinking:
                 ai_msg.additional_kwargs["reasoning_content"] = msg.thinking
-            return ai_msg
+            if msg.knowledge_citations:
+                ai_msg.additional_kwargs[KNOWLEDGE_CITATIONS_KEY] = (
+                    msg.knowledge_citations
+                )
+            message = ai_msg
         elif msg.role == "tool":
             kwargs = {
                 "content": msg.content or "",
@@ -175,9 +194,16 @@ class ConversationService:
             }
             if msg.status:
                 kwargs["status"] = msg.status
-            return ToolMessage(**kwargs)
+            if msg.knowledge_references:
+                kwargs["artifact"] = {
+                    KNOWLEDGE_REFERENCES_KEY: msg.knowledge_references
+                }
+            message = ToolMessage(**kwargs)
         else:
-            return HumanMessage(content=msg.content or "")
+            message = HumanMessage(content=msg.content or "")
+
+        message.response_metadata[DB_PERSISTED_MESSAGE_KEY] = True
+        return message
 
 
 conversation_service = ConversationService()

@@ -3,6 +3,7 @@
  * @description 定义SSE流式传输的事件类型和处理接口
  */
 
+import type { KnowledgeReference } from '@/types/knowledge'
 import type { TodoItem } from '@/types/segment'
 
 export type { TodoItem }
@@ -79,6 +80,8 @@ export interface SSEEventData {
   nodes?: Record<string, unknown>[]
   /** 边列表（flow_preview 事件） */
   edges?: Record<string, unknown>[]
+  /** LLM 回答中经过校验的知识库引用 */
+  citations?: KnowledgeReference[]
 }
 
 /** 人工等待数据 */
@@ -117,6 +120,7 @@ export type FlowSSEEventType =
   | 'llm_retry'
   | 'context_compressing'
   | 'flow_preview'
+  | 'knowledge_citations'
 
 /** SSE事件类型（Agent会话） */
 export type AgentSSEEventType = FlowSSEEventType
@@ -168,6 +172,8 @@ export interface FlowSSEHandlers {
   onContextCompressing?: SSEEventHandler
   /** 流程预览（AI 创建/修改流程时推送） */
   onFlowPreview?: SSEEventHandler
+  /** 知识库引用 */
+  onKnowledgeCitations?: SSEEventHandler
 }
 
 /** Agent会话SSE处理器接口 */

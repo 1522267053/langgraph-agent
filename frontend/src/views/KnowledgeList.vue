@@ -13,6 +13,7 @@ import {
 } from '@element-plus/icons-vue'
 import { knowledgeBaseApi, knowledgeDocumentApi } from '@/api/knowledge'
 import { configApi } from '@/api/config'
+import { downloadKnowledgeDocument } from '@/utils/knowledgeDownload'
 import ActionColumn from '@/components/common/ActionColumn.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 import type {
@@ -261,8 +262,7 @@ async function viewSegments(row: KnowledgeDocument) {
 }
 
 function handleDownload(row: KnowledgeDocument) {
-  const url = knowledgeDocumentApi.getDownloadUrl(row.id!)
-  window.open(url, '_blank')
+  void downloadKnowledgeDocument(row.id!, row.title || `knowledge-${row.id}`)
 }
 
 async function viewContent(row: KnowledgeDocument) {
@@ -729,8 +729,16 @@ onMounted(() => {
                   <span v-if="item.title_text" class="search-result-title">
                     / {{ item.title_text }}
                   </span>
-                  <el-tag size="small" type="success" class="search-result-score">
+                  <el-tag
+                    v-if="typeof item.score === 'number'"
+                    size="small"
+                    type="success"
+                    class="search-result-score"
+                  >
                     {{ formatScore(item.score) }}
+                  </el-tag>
+                  <el-tag v-else size="small" type="info" class="search-result-score">
+                    关键词匹配
                   </el-tag>
                 </div>
                 <div class="search-result-content">{{ item.content }}</div>

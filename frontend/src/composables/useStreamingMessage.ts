@@ -4,6 +4,7 @@
  */
 
 import { ref, computed, triggerRef, type Ref } from 'vue'
+import type { KnowledgeReference } from '@/types/knowledge'
 import type { Segment, ToolCall, TodoItem, SegmentType } from '@/types/segment'
 import {
   updateThinking,
@@ -11,6 +12,7 @@ import {
   addTool as addToolToSegments,
   updateTool as updateToolInSegments,
   addTodo as addTodoToSegments,
+  attachKnowledgeCitations,
   genSegmentId
 } from '@/composables/useSegmentBuilder'
 
@@ -306,6 +308,16 @@ export function useStreamingMessage() {
     msg.segments = addTodoToSegments(msg.segments, newTodos)
   }
 
+  /** Attach validated citations after all buffered answer text is visible. */
+  function addKnowledgeCitations(citations: KnowledgeReference[]): void {
+    if (citations.length === 0) return
+    flushPending()
+    const msg = getOrCreateStreamingMessage()
+    msg.segments = attachKnowledgeCitations(msg.segments, citations)
+    currentSegmentType.value = null
+    triggerRef(messages)
+  }
+
   function addTokenUsage(
     prompt_tokens: number,
     completion_tokens: number,
@@ -362,6 +374,7 @@ export function useStreamingMessage() {
     addToolSegment,
     updateToolSegment,
     addTodoSegment,
+    addKnowledgeCitations,
     updateTodos,
     addTokenUsage,
     stopStreaming,

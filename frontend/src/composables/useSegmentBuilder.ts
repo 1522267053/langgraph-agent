@@ -8,6 +8,8 @@
  */
 
 import type { Segment, TodoItem } from '@/types/segment'
+import type { KnowledgeReference } from '@/types/knowledge'
+import type { ExecutionStep } from '@/types/execution'
 
 let segmentIdCounter = 0
 
@@ -141,4 +143,68 @@ export function updateTool(
  */
 export function addTodo(segments: Segment[], todos: TodoItem[]): Segment[] {
   return [...segments, { type: 'todo', todo: [...todos], id: genSegmentId() }]
+}
+
+/** Attach validated knowledge citations to the latest content segment. */
+export function attachKnowledgeCitations(
+  segments: Segment[],
+  citations: KnowledgeReference[]
+): Segment[] {
+  const idx = segments.findLastIndex(segment => segment.type === 'content')
+  if (idx === -1 || citations.length === 0) return segments
+
+  const seen = new Set<string>()
+  const merged = [...(segments[idx].knowledge_citations || []), ...citations].filter(reference => {
+    if (seen.has(reference.reference_id)) return false
+    seen.add(reference.reference_id)
+    return true
+  })
+  const updated = [...segments]
+  updated[idx] = { ...updated[idx], knowledge_citations: merged }
+  return updated
+}
+
+/** 将持久化的 Flow 执行步骤还原为消息分段。 */
+export function executionStepsToSegments(steps: ExecutionStep[]): Segment[] {
+  const segments: Segment[] = []
+  const toolCallMap = new Map<string, number>()
+
+  for (const step of steps) {
+    if (step.role === 'human') continue
+
+    if (step.role === 'tool') {
+      const index = toolCallMap.get(step.tool_call_id || '')
+      if (index !== undefined && segments[index]?.tool) {
+        segments[index].tool.result = step.content || ''
+      }
+      continue
+    }
+
+    if (step.thinking) {
+      segments.push({ type: 'thinking', thinking: step.thinking })
+    }
+    if (step.content || step.knowledge_citations?.length) {
+      segments.push({
+        type: 'content',
+        content: step.content,
+        knowledge_citations: step.knowledge_citations
+      })
+    }
+    for (const tool of step.tool_calls || []) {
+      const segmentIndex = segments.length
+      segments.push({
+        type: 'tool',
+        tool: {
+          name: tool.name,
+          args: tool.args || {},
+          status: tool.status || 'running',
+          result: tool.result,
+          id: tool.id
+        }
+      })
+      if (tool.id) toolCallMap.set(tool.id, segmentIndex)
+    }
+  }
+
+  return segments
 }

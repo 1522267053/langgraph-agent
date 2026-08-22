@@ -8,11 +8,12 @@
 - 全局向量搜索：语义搜索段落，返回文件名+标题+段落
 """
 
-from typing import List, Dict
+from typing import Any, Dict, List
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.knowledge_base import KnowledgeBase
 from app.models.knowledge_document import KnowledgeDocument
 from app.models.knowledge_document_segment import KnowledgeDocumentSegment
 from app.models.knowledge_document_title import KnowledgeDocumentTitle
@@ -53,9 +54,14 @@ class KnowledgeTitleService:
                 KnowledgeDocument.title,
                 KnowledgeDocument.file_type,
             )
+            .join(
+                KnowledgeBase,
+                KnowledgeDocument.knowledge_base_id == KnowledgeBase.id,
+            )
             .where(
                 KnowledgeDocument.knowledge_base_id == knowledge_base_id,
                 KnowledgeDocument.is_delete == 0,
+                KnowledgeBase.is_delete == 0,
             )
             .order_by(KnowledgeDocument.id)
         )
@@ -337,7 +343,7 @@ class KnowledgeTitleService:
             top_k: 返回结果数量
 
         Returns:
-            搜索结果列表 [{document_id, document_title, title_id, title_text, segment_id, content, score}, ...]
+            包含知识库、文档、标题、分片、分数和检索方式的结果列表
         """
         from app.config.settings import settings
 
@@ -364,11 +370,19 @@ class KnowledgeTitleService:
 
             # 相关度阈值过滤，过滤后为空回退 LIKE 模糊搜索
             vector_results = [
-                r for r in vector_results if 1 - r.get("distance", 1.0) >= min_score
+                result
+                for result in vector_results
+                if (score := self._score_from_distance(result.get("distance")))
+                is not None
+                and score >= min_score
             ]
 
             if vector_results:
-                return await self._enrich_vector_results(db, vector_results)
+                enriched_results = await self._enrich_vector_results(
+                    db, knowledge_base_id, vector_results
+                )
+                if enriched_results:
+                    return enriched_results
         except Exception:
             pass
 
@@ -376,50 +390,58 @@ class KnowledgeTitleService:
         return await self._like_search(db, knowledge_base_id, query, top_k)
 
     async def _enrich_vector_results(
-        self, db: AsyncSession, vector_results: List[Dict]
+        self,
+        db: AsyncSession,
+        knowledge_base_id: int,
+        vector_results: List[Dict],
     ) -> List[Dict]:
-        """将向量搜索结果与数据库信息合并"""
-        doc_ids = set()
-        title_ids = set()
-        segment_ids = set()
-
+        """使用活动数据库记录补全向量结果。"""
+        segment_ids = []
         for item in vector_results:
-            metadata = item.get("metadata", {})
-            doc_id = metadata.get("document_id")
-            title_id = metadata.get("title_id")
-            segment_id = metadata.get("segment_id")
-            if doc_id:
-                doc_ids.add(doc_id)
-            if title_id:
-                title_ids.add(title_id)
-            if segment_id:
-                segment_ids.add(segment_id)
+            metadata = item.get("metadata") or {}
+            try:
+                segment_id = int(metadata.get("segment_id"))
+            except (TypeError, ValueError):
+                continue
+            segment_ids.append(segment_id)
 
-        doc_name_map = await self._batch_doc_names(db, doc_ids)
-        title_name_map = await self._batch_title_names(db, title_ids)
-        segment_content_map = await self._batch_segment_contents(db, segment_ids)
+        segment_data = await self._batch_active_segment_data(
+            db, knowledge_base_id, segment_ids
+        )
 
         results = []
         for item in vector_results:
-            metadata = item.get("metadata", {})
-            doc_id = metadata.get("document_id")
-            title_id = metadata.get("title_id")
-            segment_id = metadata.get("segment_id")
-            distance = item.get("distance", 0)
+            metadata = item.get("metadata") or {}
+            try:
+                segment_id = int(metadata.get("segment_id"))
+            except (TypeError, ValueError):
+                continue
 
-            content = segment_content_map.get(segment_id) or item.get("text", "")
+            data = segment_data.get(segment_id)
+            if data is None:
+                continue
 
-            results.append(
-                {
-                    "document_id": doc_id,
-                    "document_title": doc_name_map.get(doc_id, ""),
-                    "title_id": title_id,
-                    "title_text": title_name_map.get(title_id, ""),
-                    "segment_id": segment_id,
-                    "content": content,
-                    "score": round(1 - distance, 4) if distance else 0,
-                }
-            )
+            metadata_document_id = metadata.get("document_id")
+            if metadata_document_id is not None:
+                try:
+                    if int(metadata_document_id) != data["document_id"]:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+
+            metadata_knowledge_base_id = metadata.get("knowledge_base_id")
+            if metadata_knowledge_base_id is not None:
+                try:
+                    if int(metadata_knowledge_base_id) != knowledge_base_id:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+
+            score = self._score_from_distance(item.get("distance"))
+            enriched = dict(data)
+            enriched["score"] = round(score, 4) if score is not None else None
+            enriched["retrieval_method"] = "vector"
+            results.append(enriched)
 
         return results
 
@@ -428,18 +450,18 @@ class KnowledgeTitleService:
     ) -> List[Dict]:
         """LIKE 模糊搜索知识库分段（向量搜索不可用时的回退方案）"""
         stmt = (
-            select(
-                KnowledgeDocumentSegment.id,
-                KnowledgeDocumentSegment.document_id,
-                KnowledgeDocumentSegment.title_id,
-                KnowledgeDocumentSegment.content,
-            )
+            select(KnowledgeDocumentSegment.id)
             .join(
                 KnowledgeDocument,
                 KnowledgeDocumentSegment.document_id == KnowledgeDocument.id,
             )
+            .join(
+                KnowledgeBase,
+                KnowledgeDocument.knowledge_base_id == KnowledgeBase.id,
+            )
             .where(
-                KnowledgeDocument.knowledge_base_id == knowledge_base_id,
+                KnowledgeBase.id == knowledge_base_id,
+                KnowledgeBase.is_delete == 0,
                 KnowledgeDocument.is_delete == 0,
                 KnowledgeDocumentSegment.is_delete == 0,
                 KnowledgeDocumentSegment.content.like(f"%{query}%"),
@@ -447,68 +469,160 @@ class KnowledgeTitleService:
             .limit(top_k)
         )
         result = await db.execute(stmt)
-        rows = result.all()
-
-        if not rows:
+        segment_ids = list(result.scalars().all())
+        if not segment_ids:
             return []
 
-        doc_ids = {r.document_id for r in rows}
-        title_ids = {r.title_id for r in rows if r.title_id}
-
-        doc_name_map = await self._batch_doc_names(db, doc_ids)
-        title_name_map = await self._batch_title_names(db, title_ids)
-
-        return [
-            {
-                "document_id": r.document_id,
-                "document_title": doc_name_map.get(r.document_id, ""),
-                "title_id": r.title_id,
-                "title_text": title_name_map.get(r.title_id, "") if r.title_id else "",
-                "segment_id": r.id,
-                "content": r.content,
-                "score": 0,
-            }
-            for r in rows
-        ]
-
-    async def _batch_doc_names(self, db: AsyncSession, doc_ids: set) -> Dict[int, str]:
-        """批量查询文档名称"""
-        if not doc_ids:
-            return {}
-        stmt = select(KnowledgeDocument.id, KnowledgeDocument.title).where(
-            KnowledgeDocument.id.in_(doc_ids),
-            KnowledgeDocument.is_delete == 0,
+        segment_data = await self._batch_active_segment_data(
+            db, knowledge_base_id, segment_ids
         )
-        result = await db.execute(stmt)
-        return {row.id: row.title for row in result.all()}
+        results = []
+        for segment_id in segment_ids:
+            data = segment_data.get(segment_id)
+            if data is None:
+                continue
+            enriched = dict(data)
+            enriched["score"] = None
+            enriched["retrieval_method"] = "like"
+            results.append(enriched)
+        return results
 
-    async def _batch_title_names(
-        self, db: AsyncSession, title_ids: set
-    ) -> Dict[int, str]:
-        """批量查询标题名称"""
-        if not title_ids:
-            return {}
-        stmt = select(KnowledgeDocumentTitle.id, KnowledgeDocumentTitle.title).where(
-            KnowledgeDocumentTitle.id.in_(title_ids),
-            KnowledgeDocumentTitle.is_delete == 0,
+    async def resolve_segment_references(
+        self,
+        db: AsyncSession,
+        knowledge_base_id: int,
+        segment_ids: List[int],
+        *,
+        score_by_segment_id: Dict[int, float | None] | None = None,
+        retrieval_method_by_segment_id: Dict[int, str | None] | None = None,
+    ) -> List[Dict]:
+        """批量解析当前知识库中的活动分片引用。"""
+        ordered_ids = list(dict.fromkeys(segment_ids))
+        segment_data = await self._batch_active_segment_data(
+            db, knowledge_base_id, ordered_ids
         )
-        result = await db.execute(stmt)
-        return {row.id: row.title for row in result.all()}
 
-    async def _batch_segment_contents(
-        self, db: AsyncSession, segment_ids: set
-    ) -> Dict[int, str]:
-        """批量查询段落内容"""
+        references = []
+        for segment_id in ordered_ids:
+            data = segment_data.get(segment_id)
+            if data is None:
+                continue
+
+            excerpt = data["content"].strip()
+            if len(excerpt) > 300:
+                excerpt = f"{excerpt[:300].rstrip()}..."
+
+            references.append(
+                {
+                    "reference_id": f"segment:{segment_id}",
+                    "citation_marker": f"[段落ID:{segment_id}]",
+                    "knowledge_base_id": data["knowledge_base_id"],
+                    "document_id": data["document_id"],
+                    "document_title": data["document_title"],
+                    "file_type": data["file_type"],
+                    "title_id": data["title_id"],
+                    "title_text": data["title_text"],
+                    "segment_id": data["segment_id"],
+                    "segment_index": data["segment_index"],
+                    "excerpt": excerpt,
+                    "score": (
+                        score_by_segment_id.get(segment_id)
+                        if score_by_segment_id is not None
+                        else None
+                    ),
+                    "retrieval_method": (
+                        retrieval_method_by_segment_id.get(segment_id)
+                        if retrieval_method_by_segment_id is not None
+                        else None
+                    ),
+                }
+            )
+        return references
+
+    async def _batch_active_segment_data(
+        self,
+        db: AsyncSession,
+        knowledge_base_id: int,
+        segment_ids: List[int],
+    ) -> Dict[int, Dict[str, Any]]:
+        """批量查询当前知识库中的活动文档和分片。"""
         if not segment_ids:
             return {}
-        stmt = select(
-            KnowledgeDocumentSegment.id, KnowledgeDocumentSegment.content
-        ).where(
-            KnowledgeDocumentSegment.id.in_(segment_ids),
-            KnowledgeDocumentSegment.is_delete == 0,
+
+        stmt = (
+            select(
+                KnowledgeDocumentSegment.id.label("segment_id"),
+                KnowledgeDocumentSegment.document_id,
+                KnowledgeDocumentSegment.segment_index,
+                KnowledgeDocumentSegment.title_id,
+                KnowledgeDocumentSegment.content,
+                KnowledgeDocument.knowledge_base_id,
+                KnowledgeDocument.title.label("document_title"),
+                KnowledgeDocument.file_type,
+            )
+            .select_from(KnowledgeDocumentSegment)
+            .join(
+                KnowledgeDocument,
+                KnowledgeDocumentSegment.document_id == KnowledgeDocument.id,
+            )
+            .join(
+                KnowledgeBase,
+                KnowledgeDocument.knowledge_base_id == KnowledgeBase.id,
+            )
+            .where(
+                KnowledgeDocumentSegment.id.in_(segment_ids),
+                KnowledgeBase.id == knowledge_base_id,
+                KnowledgeBase.is_delete == 0,
+                KnowledgeDocument.is_delete == 0,
+                KnowledgeDocumentSegment.is_delete == 0,
+            )
         )
         result = await db.execute(stmt)
-        return {row.id: row.content for row in result.all()}
+        rows = result.all()
+        if not rows:
+            return {}
+
+        title_ids = {row.title_id for row in rows if row.title_id is not None}
+        title_map = {}
+        if title_ids:
+            title_stmt = select(
+                KnowledgeDocumentTitle.id,
+                KnowledgeDocumentTitle.document_id,
+                KnowledgeDocumentTitle.title,
+            ).where(
+                KnowledgeDocumentTitle.id.in_(title_ids),
+                KnowledgeDocumentTitle.is_delete == 0,
+            )
+            title_result = await db.execute(title_stmt)
+            title_map = {
+                (row.id, row.document_id): row.title for row in title_result.all()
+            }
+
+        segment_data = {}
+        for row in rows:
+            title_text = title_map.get((row.title_id, row.document_id))
+            segment_data[row.segment_id] = {
+                "knowledge_base_id": row.knowledge_base_id,
+                "document_id": row.document_id,
+                "document_title": row.document_title,
+                "file_type": row.file_type,
+                "title_id": row.title_id if title_text is not None else None,
+                "title_text": title_text or "",
+                "segment_id": row.segment_id,
+                "segment_index": row.segment_index,
+                "content": row.content,
+            }
+        return segment_data
+
+    @staticmethod
+    def _score_from_distance(distance: Any) -> float | None:
+        """将向量距离转换为相关度分数。"""
+        if distance is None:
+            return None
+        try:
+            return 1 - float(distance)
+        except (TypeError, ValueError):
+            return None
 
     async def _get_titles_by_document(
         self, db: AsyncSession, document_id: int

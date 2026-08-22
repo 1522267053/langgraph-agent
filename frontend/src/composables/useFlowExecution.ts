@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { executionApi } from '@/api/execution'
 import type { FlowExecution, NodeExecution } from '@/types/execution'
 import type { SSEEvent } from '@/types/sse'
@@ -7,9 +7,12 @@ import {
   appendThinking as appendThinkingToSegments,
   appendContent as appendContentToSegments,
   addTool as addToolToSegments,
-  updateTool as updateToolInSegments
+  updateTool as updateToolInSegments,
+  attachKnowledgeCitations,
+  executionStepsToSegments
 } from '@/composables/useSegmentBuilder'
 import { createOnToolCallLimitHandler, createOnLlmRetryHandler } from '@/composables/useSSEHandlers'
+import { useKnowledgeReferenceDrawer } from '@/composables/useKnowledgeReferenceDrawer'
 import { ElMessage } from 'element-plus'
 
 interface ConversationMessage {
@@ -31,7 +34,15 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
   const isStreamRunning = ref(false)
   const streamAbort = ref<(() => void) | null>(null)
   const streamingContent = ref<Record<string, { segments: Segment[] }>>({})
+  let streamingSegmentOffsets: Record<string, number> = {}
+  let executionRequestVersion = 0
   const flowTodos = ref<TodoItem[]>([])
+  const { close: closeKnowledgeReferenceDrawer } = useKnowledgeReferenceDrawer()
+
+  watch(
+    () => currentExecution.value?.id,
+    () => closeKnowledgeReferenceDrawer()
+  )
 
   // ---- 人工输入状态 ----
   const showHumanInputDialog = ref(false)
@@ -65,6 +76,7 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
             [nodeKey]: { segments: [] }
           }
         }
+        streamingSegmentOffsets[nodeKey] = streamingContent.value[nodeKey]?.segments.length || 0
         const existingIndex = nodeExecutions.value.findIndex(n => n.node_key === nodeKey)
         if (existingIndex === -1) {
           nodeExecutions.value = [
@@ -92,7 +104,11 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
         const current = streamingContent.value[nodeKey]
         const content = event.data.content || ''
         const baseSegments = current?.segments ? [...current.segments] : []
-        const segments = appendThinkingToSegments(baseSegments, content)
+        const offset = streamingSegmentOffsets[nodeKey] || 0
+        const segments = [
+          ...baseSegments.slice(0, offset),
+          ...appendThinkingToSegments(baseSegments.slice(offset), content)
+        ]
         streamingContent.value = { ...streamingContent.value, [nodeKey]: { segments } }
       },
       onNodeContent: (event: SSEEvent) => {
@@ -100,7 +116,19 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
         const current = streamingContent.value[nodeKey]
         const content = event.data.content || ''
         const baseSegments = current?.segments ? [...current.segments] : []
-        const segments = appendContentToSegments(baseSegments, content)
+        const offset = streamingSegmentOffsets[nodeKey] || 0
+        const segments = [
+          ...baseSegments.slice(0, offset),
+          ...appendContentToSegments(baseSegments.slice(offset), content)
+        ]
+        streamingContent.value = { ...streamingContent.value, [nodeKey]: { segments } }
+      },
+      onKnowledgeCitations: (event: SSEEvent) => {
+        const nodeKey = event.data.node_key || ''
+        const current = streamingContent.value[nodeKey]
+        const citations = event.data.citations || []
+        if (!current || citations.length === 0) return
+        const segments = attachKnowledgeCitations([...current.segments], citations)
         streamingContent.value = { ...streamingContent.value, [nodeKey]: { segments } }
       },
       onNodeDone: (event: SSEEvent) => {
@@ -237,15 +265,24 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
     humanInputContext.value = event.data.context || ''
     humanInputMessages.value = []
     if (event.data.execution_id) {
-      loadConversationHistory(event.data.execution_id, event.data.node_key)
+      loadConversationHistory(event.data.execution_id, event.data.node_key, executionRequestVersion)
     }
     showHumanInputDialog.value = true
   }
 
-  async function loadConversationHistory(executionId: number, nodeKey?: string): Promise<void> {
+  async function loadConversationHistory(
+    executionId: number,
+    nodeKey?: string,
+    requestVersion = executionRequestVersion
+  ): Promise<void> {
     try {
       const res = await executionApi.getConversationHistory(executionId, nodeKey)
-      if (res.data.code === 1 && res.data.data.messages) {
+      if (
+        requestVersion === executionRequestVersion &&
+        currentExecution.value?.id === executionId &&
+        res.data.code === 1 &&
+        res.data.data.messages
+      ) {
         humanInputMessages.value = res.data.data.messages.map(msg => ({
           role: msg.role,
           content: msg.content,
@@ -269,7 +306,9 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
     }
     humanInputLoading.value = true
     try {
+      executionRequestVersion++
       showHumanInputDialog.value = false
+      isStreamRunning.value = true
       streamAbort.value = executionApi.resumeStream(
         currentExecution.value.id,
         value,
@@ -286,7 +325,9 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
     input: Record<string, unknown>,
     files?: Array<{ id: number; original_name: string; mime_type: string }>
   ): void {
+    executionRequestVersion++
     streamingContent.value = {}
+    streamingSegmentOffsets = {}
     currentExecution.value = {
       flow_id: flowId,
       status: 1,
@@ -303,27 +344,50 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
   }
 
   async function resumeFromHistory(exec: FlowExecution): Promise<void> {
+    const requestVersion = ++executionRequestVersion
+    if (streamAbort.value) {
+      streamAbort.value()
+      streamAbort.value = null
+    }
+    isStreamRunning.value = false
+    streamingContent.value = {}
+    streamingSegmentOffsets = {}
+    showHumanInputDialog.value = false
     currentExecution.value = exec
     if (exec.id) {
       const nodesRes = await executionApi.getNodes(exec.id)
+      if (requestVersion !== executionRequestVersion) return
       if (nodesRes.data.code === 1) {
         nodeExecutions.value = nodesRes.data.data
+        const restored: Record<string, { segments: Segment[] }> = {}
+        for (const node of nodeExecutions.value) {
+          if (!node.node_key) continue
+          const segments = executionStepsToSegments(node.execution_steps || [])
+          if (segments.length === 0) continue
+          restored[node.node_key] = { segments }
+          streamingSegmentOffsets[node.node_key] = segments.length
+        }
+        streamingContent.value = restored
       }
-      await loadConversationHistory(exec.id)
+      await loadConversationHistory(exec.id, undefined, requestVersion)
+      if (requestVersion !== executionRequestVersion) return
       const waitRes = await executionApi.getWaitStatus(exec.id)
+      if (requestVersion !== executionRequestVersion) return
       if (waitRes.data.code === 1 && waitRes.data.data.waiting) {
         humanInputQuestion.value = waitRes.data.data.prompt || '请提供输入'
         humanInputContext.value = waitRes.data.data.context || ''
+        showHumanInputDialog.value = true
       }
-      showHumanInputDialog.value = true
     }
   }
 
   async function loadExecutionDetail(executionId: number): Promise<void> {
+    const requestVersion = ++executionRequestVersion
     const [execRes, nodesRes] = await Promise.all([
       executionApi.get(executionId),
       executionApi.getNodes(executionId)
     ])
+    if (requestVersion !== executionRequestVersion) return
     if (execRes.data.code === 1) {
       currentExecution.value = execRes.data.data
     }
@@ -334,24 +398,29 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
 
   async function stopExecution(): Promise<void> {
     const executionId = currentExecution.value?.id
-    if (executionId) {
-      try {
-        await executionApi.cancel(executionId)
-        await loadExecutionDetail(executionId)
-      } catch {
-        // 即使后端取消失败，也要断开前端连接
-      }
-    }
     cancelStream()
+    const stopVersion = executionRequestVersion
+    if (!executionId) return
+
+    try {
+      await executionApi.cancel(executionId)
+      if (stopVersion !== executionRequestVersion || currentExecution.value?.id !== executionId)
+        return
+      await loadExecutionDetail(executionId)
+    } catch {
+      // 前端连接已断开，后端取消失败由统一错误处理提示。
+    }
   }
 
   function cancelStream(): void {
+    executionRequestVersion++
     if (streamAbort.value) {
       streamAbort.value()
       streamAbort.value = null
     }
     isStreamRunning.value = false
     streamingContent.value = {}
+    streamingSegmentOffsets = {}
     showHumanInputDialog.value = false
     if (currentExecution.value) {
       currentExecution.value = {
@@ -363,6 +432,7 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
   }
 
   function resetState(): void {
+    executionRequestVersion++
     if (streamAbort.value) {
       streamAbort.value()
       streamAbort.value = null
@@ -370,6 +440,7 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
     currentExecution.value = null
     nodeExecutions.value = []
     streamingContent.value = {}
+    streamingSegmentOffsets = {}
     flowTodos.value = []
     isStreamRunning.value = false
     showHumanInputDialog.value = false

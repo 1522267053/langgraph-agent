@@ -82,6 +82,7 @@ export function useSSE(options: SSEOptions = {}) {
       },
       onLlmRetry: handlers.onLlmRetry,
       onContextCompressing: handlers.onContextCompressing,
+      onKnowledgeCitations: handlers.onKnowledgeCitations,
       onError: event => {
         isConnecting.value = false
         isConnected.value = false

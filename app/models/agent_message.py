@@ -34,6 +34,12 @@ class AgentMessage(DbBaseModel):
     tool_call_id: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True, comment="工具调用ID"
     )
+    knowledge_references: Mapped[Optional[list]] = mapped_column(
+        JSON, nullable=True, comment="知识库候选来源"
+    )
+    knowledge_citations: Mapped[Optional[list]] = mapped_column(
+        JSON, nullable=True, comment="AI回答实际引用"
+    )
     status: Mapped[Optional[str]] = mapped_column(
         String(20),
         nullable=True,

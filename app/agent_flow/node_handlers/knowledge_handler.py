@@ -33,8 +33,18 @@ from app.config.database import AsyncSessionLocal
 from app.services.knowledge_base_service import knowledge_base_service
 from app.services.knowledge_title_service import knowledge_title_service
 from app.services.knowledge_insight_service import knowledge_insight_service
+from app.utils.knowledge_reference import (
+    build_knowledge_result,
+    merge_knowledge_references,
+)
 
 logger = logging.getLogger(__name__)
+
+_CITATION_GUIDANCE = (
+    "\n\n引用规则：知识片段中的 [段落ID:x] 是可验证引用标记。"
+    "回答使用某个片段的事实时，必须在对应句子末尾原样保留该标记；"
+    "只能使用工具结果中出现的标记，不得自行编造。"
+)
 
 if TYPE_CHECKING:
     from app.agent_flow.tool_resolver import LlmToolConfig
@@ -88,7 +98,7 @@ class VectorSearchInput(BaseModel):
         ...,
         description="语义搜索文本，建议用完整的句子或描述（向量检索句子越长越精准）",
     )
-    top_k: int = Field(5, description="返回结果数量，默认5")
+    top_k: int = Field(5, ge=1, le=50, description="返回结果数量，默认5")
 
 
 class SaveInsightInput(BaseModel):
@@ -166,9 +176,30 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 results = await knowledge_title_service.vector_search(
                     db, knowledge_base_id, query_text, top_k
                 )
+                score_map = {r["segment_id"]: r.get("score") for r in results}
+                method_map = {
+                    r["segment_id"]: r.get("retrieval_method") for r in results
+                }
+                references = await knowledge_title_service.resolve_segment_references(
+                    db,
+                    knowledge_base_id,
+                    [r["segment_id"] for r in results],
+                    score_by_segment_id=score_map,
+                    retrieval_method_by_segment_id=method_map,
+                )
+            marker_map = {
+                reference["segment_id"]: reference["citation_marker"]
+                for reference in references
+            }
+            results = [
+                {**result, "citation_marker": marker_map.get(result["segment_id"])}
+                for result in results
+                if result["segment_id"] in marker_map
+            ]
             output_names = self._get_output_var_names(node, ["result"])
             result_name = output_names[0] if output_names else "result"
             state.set_node_variable(node.node_key, result_name, results)
+            state.set_node_variable(node.node_key, "knowledge_references", references)
         except Exception as e:
             state.add_error(node.node_key, f"知识库查询失败: {str(e)}")
             logger.exception(e)
@@ -253,7 +284,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 dynamic_suffix = f"\n知识库名称：{name}"
                 if description:
                     dynamic_suffix += f"\n简介：{description}"
-                return static_prefix + dynamic_suffix
+                return static_prefix + _CITATION_GUIDANCE + dynamic_suffix
         except Exception:
             return None
 
@@ -285,6 +316,11 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                         )
                     return "## 文档列表\n" + "\n".join(result)
                 else:
+                    documents = await knowledge_title_service.get_document_list(
+                        db, kb_id
+                    )
+                    if not any(item.id == doc_id for item in documents):
+                        return f"当前知识库中未找到文档ID:{doc_id}"
                     tree = await knowledge_title_service.get_title_tree(db, doc_id)
                     if not tree:
                         return f"文档{doc_id}没有标题索引"
@@ -296,7 +332,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                         )
                     return f"## 标题树（文档ID:{doc_id}）\n" + "\n".join(lines)
 
-        async def get_paragraphs(title_id: int) -> str:
+        async def get_paragraphs(title_id: int) -> str | dict:
             """获取标题下的所有段落内容"""
             async with AsyncSessionLocal() as db:
                 paragraphs = await knowledge_title_service.get_paragraphs_by_title(
@@ -304,39 +340,63 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 )
                 if not paragraphs:
                     return f"标题ID:{title_id}下没有段落"
+                references = await knowledge_title_service.resolve_segment_references(
+                    db, kb_id, [paragraph.id for paragraph in paragraphs]
+                )
+                if not references:
+                    return f"当前知识库中未找到标题ID:{title_id}"
+                reference_ids = {reference["segment_id"] for reference in references}
                 lines = []
                 for p in paragraphs:
+                    if p.id not in reference_ids:
+                        continue
                     lines.append(
-                        f"### 段落 [ID:{p.id}]（第{p.segment_index}段，{p.word_count}字）\n{p.content}"
+                        f"### 段落 [段落ID:{p.id}]（第{p.segment_index}段，{p.word_count}字）\n{p.content}"
                     )
-                return "\n\n".join(lines)
+                content = _CITATION_GUIDANCE.strip() + "\n\n" + "\n\n".join(lines)
+                return build_knowledge_result(content, references)
 
-        async def adjacent(segment_id: int, direction: str = "both") -> str:
+        async def adjacent(segment_id: int, direction: str = "both") -> str | dict:
             """查看相邻段落：direction可选 prev/next/both"""
             async with AsyncSessionLocal() as db:
                 result = await knowledge_title_service.get_adjacent_segments(
                     db, segment_id, direction
                 )
+                segment_ids = [
+                    paragraph.id
+                    for paragraph in (result.prev, result.current, result.next)
+                    if paragraph is not None
+                ]
+                references = await knowledge_title_service.resolve_segment_references(
+                    db, kb_id, segment_ids
+                )
+                reference_ids = {reference["segment_id"] for reference in references}
                 parts = []
-                if result.prev:
+                if result.prev and result.prev.id in reference_ids:
                     parts.append(
-                        f"### 上一个段落 [ID:{result.prev.id}]\n{result.prev.content}"
+                        f"### 上一个段落 [段落ID:{result.prev.id}]\n{result.prev.content}"
                     )
-                if result.current:
+                if result.current and result.current.id in reference_ids:
                     parts.append(
-                        f"### 当前段落 [ID:{result.current.id}]\n{result.current.content}"
+                        f"### 当前段落 [段落ID:{result.current.id}]\n{result.current.content}"
                     )
-                if result.next:
+                if result.next and result.next.id in reference_ids:
                     parts.append(
-                        f"### 下一个段落 [ID:{result.next.id}]\n{result.next.content}"
+                        f"### 下一个段落 [段落ID:{result.next.id}]\n{result.next.content}"
                     )
                 if not parts:
-                    return f"未找到段落ID:{segment_id}"
-                return "\n\n".join(parts)
+                    return f"当前知识库中未找到段落ID:{segment_id}"
+                content = _CITATION_GUIDANCE.strip() + "\n\n" + "\n\n".join(parts)
+                return build_knowledge_result(content, references)
 
         async def title_lookup(segment_id: int) -> str:
             """查看段落所属的标题及文档标题树"""
             async with AsyncSessionLocal() as db:
+                references = await knowledge_title_service.resolve_segment_references(
+                    db, kb_id, [segment_id]
+                )
+                if not references:
+                    return f"当前知识库中未找到段落ID:{segment_id}"
                 result = await knowledge_title_service.get_title_for_segment(
                     db, segment_id
                 )
@@ -365,7 +425,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
 
         # ---- 搜索工具（优先AI沉淀，兜底原始文档） ----
 
-        async def vector_search(query: str, top_k: int = 5) -> str:
+        async def vector_search(query: str, top_k: int = 5) -> str | dict:
             """全局语义搜索段落（优先匹配AI沉淀的知识，未命中时检索原始文档）"""
             async with AsyncSessionLocal() as db:
                 # ① 先查 AI 沉淀层
@@ -373,14 +433,44 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                     db, kb_id, query, top_k
                 )
 
+                insight_segment_ids: list[int] = []
+                insight_score_map: dict[int, float | None] = {}
+                for item in insights:
+                    for segment_id in item.get("source_segment_ids") or []:
+                        insight_segment_ids.append(segment_id)
+                        current_score = insight_score_map.get(segment_id)
+                        item_score = item.get("score")
+                        if current_score is None or (
+                            item_score is not None and item_score > current_score
+                        ):
+                            insight_score_map[segment_id] = item_score
+                insight_method_map = {
+                    segment_id: "insight" for segment_id in insight_segment_ids
+                }
+                insight_references = (
+                    await knowledge_title_service.resolve_segment_references(
+                        db,
+                        kb_id,
+                        insight_segment_ids,
+                        score_by_segment_id=insight_score_map,
+                        retrieval_method_by_segment_id=insight_method_map,
+                    )
+                )
+                valid_insight_segment_ids = {
+                    reference["segment_id"] for reference in insight_references
+                }
+
                 insight_lines = []
                 for i, item in enumerate(insights, 1):
                     seg_refs = ""
                     if item.get("source_segment_ids"):
                         seg_ids = ", ".join(
-                            f"[段落ID:{sid}]" for sid in item["source_segment_ids"]
+                            f"[段落ID:{sid}]"
+                            for sid in item["source_segment_ids"]
+                            if sid in valid_insight_segment_ids
                         )
-                        seg_refs = f"\n- 关联段落：{seg_ids}"
+                        if seg_ids:
+                            seg_refs = f"\n- 关联段落：{seg_ids}"
 
                     insight_lines.append(
                         f"### 结果{i}（相似度:{item['score']}）[来源：AI沉淀，沉淀ID:{item['id']}]\n"
@@ -390,11 +480,32 @@ class KnowledgeNodeHandler(BaseNodeHandler):
 
                 # ② 沉淀结果足够好时直接返回
                 if insights and len(insights) >= 3 and insights[0]["score"] > 0.6:
-                    return "## 搜索结果（AI沉淀）\n\n" + "\n\n".join(insight_lines)
+                    content = (
+                        _CITATION_GUIDANCE.strip()
+                        + "\n\n## 搜索结果（AI沉淀）\n\n"
+                        + "\n\n".join(insight_lines)
+                    )
+                    return build_knowledge_result(content, insight_references)
 
                 # ③ 补充查原始文档
                 doc_results = await knowledge_title_service.vector_search(
                     db, kb_id, query, top_k
+                )
+                doc_score_map = {
+                    result["segment_id"]: result.get("score") for result in doc_results
+                }
+                doc_method_map = {
+                    result["segment_id"]: result.get("retrieval_method")
+                    for result in doc_results
+                }
+                doc_references = (
+                    await knowledge_title_service.resolve_segment_references(
+                        db,
+                        kb_id,
+                        [result["segment_id"] for result in doc_results],
+                        score_by_segment_id=doc_score_map,
+                        retrieval_method_by_segment_id=doc_method_map,
+                    )
                 )
 
                 doc_lines = []
@@ -419,7 +530,13 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 if not parts:
                     return "未找到相关内容"
 
-                return "\n\n---\n\n".join(parts)
+                content = (
+                    _CITATION_GUIDANCE.strip() + "\n\n" + "\n\n---\n\n".join(parts)
+                )
+                references = merge_knowledge_references(
+                    insight_references, doc_references
+                )
+                return build_knowledge_result(content, references)
 
         # ---- 知识沉淀工具 ----
 
@@ -452,11 +569,17 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 return "未提供有效的沉淀ID"
 
             async with AsyncSessionLocal() as db:
-                result = await knowledge_insight_service.delete_batch_by_ids(db, ids)
+                result = await knowledge_insight_service.delete_batch_by_ids(
+                    db, ids, knowledge_base_id=kb_id
+                )
                 return (
                     f"删除完成: 请求{result['total']}条，实际删除{result['deleted']}条"
                 )
 
+        tool_metadata = {
+            "knowledge_tool": True,
+            "knowledge_base_id": kb_id,
+        }
         return [
             StructuredTool(
                 name=f"{tool_prefix}_search",
@@ -464,6 +587,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 func=None,
                 coroutine=vector_search,
                 args_schema=VectorSearchInput,
+                metadata=tool_metadata,
             ),
             StructuredTool(
                 name=f"{tool_prefix}_title_search",
@@ -471,6 +595,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 func=None,
                 coroutine=title_search,
                 args_schema=TitleSearchInput,
+                metadata=tool_metadata,
             ),
             StructuredTool(
                 name=f"{tool_prefix}_get_paragraphs",
@@ -478,6 +603,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 func=None,
                 coroutine=get_paragraphs,
                 args_schema=GetParagraphsInput,
+                metadata=tool_metadata,
             ),
             StructuredTool(
                 name=f"{tool_prefix}_adjacent",
@@ -485,6 +611,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 func=None,
                 coroutine=adjacent,
                 args_schema=AdjacentInput,
+                metadata=tool_metadata,
             ),
             StructuredTool(
                 name=f"{tool_prefix}_title_lookup",
@@ -492,6 +619,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 func=None,
                 coroutine=title_lookup,
                 args_schema=TitleLookupInput,
+                metadata=tool_metadata,
             ),
             StructuredTool(
                 name=f"{tool_prefix}_save_insight",
@@ -499,6 +627,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 func=None,
                 coroutine=save_insight,
                 args_schema=SaveInsightInput,
+                metadata=tool_metadata,
             ),
             StructuredTool(
                 name=f"{tool_prefix}_delete_insight",
@@ -506,6 +635,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 func=None,
                 coroutine=delete_insight,
                 args_schema=DeleteInsightInput,
+                metadata=tool_metadata,
             ),
         ]
 

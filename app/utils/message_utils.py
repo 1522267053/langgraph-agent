@@ -17,6 +17,8 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+DB_PERSISTED_MESSAGE_KEY = "_db_persisted"
+
 
 def extract_token_usage(message: BaseMessage) -> dict:
     """从 AI 消息中提取 token 用量，非 AI 消息返回空字典。
