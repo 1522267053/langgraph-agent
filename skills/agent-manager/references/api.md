@@ -1,348 +1,244 @@
-# AI Flow API 参考
+# Agent Manager API 参考
 
-Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{code:0, msg}` 失败
+基础地址：`http://localhost:8000/api`。除 SSE 外，响应统一为：
 
-## 接口总览
+```json
+{"code": 1, "msg": "success", "data": {}}
+```
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/ai/flow/create` | 创建流程（可同时设 input_schema） |
-| POST | `/api/flow/update` | 更新流程元数据（含 input_schema） |
-| POST | `/api/ai/flow/delete/{id}` | 删除流程 |
-| GET | `/api/ai/flow/list[?flow_type=agent\|flow&keyword=]` | 查询列表 |
-| GET | `/api/ai/flow/{id}/detail` | 详情（节点+边+Mermaid图） |
-| GET | `/api/ai/flow/node-types` | 所有节点类型 |
-| GET | `/api/ai/flow/node-types/{type}/config-schema` | 节点配置字段 |
-| POST | `/api/ai/flow/{id}/nodes/batch` | 批量创建节点（node_key 省略则自动生成） |
-| POST | `/api/ai/flow/{id}/nodes/batch/config` | 批量更新配置（base_config 字段级合并） |
-| POST | `/api/ai/flow/{id}/nodes/batch/delete` | 批量删除节点（级联删边） |
-| POST | `/api/ai/flow/{id}/edges/batch` | 批量创建边 |
-| POST | `/api/ai/flow/{id}/edges/batch/delete` | 批量删除边 |
-| GET | `/api/ai/flow/{id}/node/{node_key}/connected-tools` | 查询 LLM 已连接的工具名 |
-| POST | `/api/execution/stream/{id}` | 执行 Flow（SSE） |
-| POST | `/api/agent/{id}/sessions` | 创建 Agent 会话 |
-| POST | `/api/agent/{id}/sessions/{sid}/chat` | Agent 聊天（SSE） |
+业务错误通常也返回 HTTP 200，始终检查 `code` 和 `msg`。以下路径均省略 `/api` 前缀。
 
-## 工具信息接口详情
+## 环境与发现
 
-### GET /api/ai/flow/{flow_id}/node/{node_key}/connected-tools
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/config/check` | 检查初始化和模型配置状态 |
+| GET | `/config/providers` | 获取可用模型提供商 |
+| GET | `/ai/flow/list?flow_type=agent&keyword=xxx` | 查询流程或 Agent |
+| GET | `/ai/flow/node-types` | 获取节点类型及 Agent 可用性 |
+| GET | `/ai/flow/node-types/{node_type}/config-schema` | 获取单类节点实时配置 Schema |
+| GET | `/ai/flow/config-schemas` | 一次获取全部节点配置 Schema |
 
-查询 LLM 节点当前通过工具边连接的所有工具名称和描述（不实际执行），用于配置 `required_tools`。
+创建或修改节点时，以实时 Schema 为准；参考文档只解释用法，不替代 Schema。
 
-**响应示例**:
+## 流程生命周期
+
+### 创建
+
+`POST /ai/flow/create`
+
 ```json
 {
-  "code": 1,
-  "data": [
+  "name": "日报整理",
+  "description": "汇总输入并生成日报",
+  "flow_type": "flow",
+  "input_schema": {
+    "fields": [
+      {"name": "content", "type": "string", "required": true}
+    ]
+  },
+  "output_schema": {
+    "fields": [
+      {"name": "summary", "type": "string", "required": true}
+    ]
+  }
+}
+```
+
+`flow_type` 只能是 `flow` 或 `agent`。`input_schema`、`output_schema` 都是含 `fields` 数组的对象，不是数组本身。
+
+### 读取与元数据更新
+
+- `GET /ai/flow/{flow_id}/detail`：返回流程、节点、边和 Mermaid 图。
+- `POST /flow/update`：更新名称、描述、状态、输入输出 Schema 等；请求中必须带 `id`。
+- `POST /ai/flow/delete/{flow_id}`：级联软删除流程及关联数据。
+
+修改已有流程前必须先读取详情。删除只在用户明确要求时执行。
+
+## 节点操作
+
+### 批量创建
+
+`POST /ai/flow/{flow_id}/nodes/batch`
+
+```json
+{
+  "nodes": [
     {
-      "node_key": "memory",
-      "node_type": "memory",
-      "node_label": "记忆",
-      "tools": [
-        {"name": "memory_save", "description": "保存记忆"},
-        {"name": "memory_search", "description": "语义搜索记忆"},
-        {"name": "memory_list", "description": "列出最近记忆"},
-        {"name": "memory_delete", "description": "批量删除记忆"},
-        {"name": "memory_get", "description": "按ID获取记忆"}
-      ]
-    },
-    {
-      "node_key": "python_1",
       "node_type": "python",
-      "node_label": "Python 代码",
-      "tools": [
-        {"name": "python_executor_python_1", "description": "在沙箱环境中执行Python代码"}
-      ]
+      "node_key": "normalize_text",
+      "node_name": "清洗文本",
+      "position_x": 320,
+      "position_y": 120,
+      "base_config": {
+        "code": "def main(text):\n    return {'result': text.strip()}",
+        "input_variables": [{"name": "text", "source": "input.content"}],
+        "output_variables": [{"name": "result", "type": "object"}]
+      }
     }
   ]
 }
 ```
 
-## 执行接口详情
-
-### POST /api/execution/stream/{flow_id}
-
-```json
-{"input_data": {"message": "hello"}, "files": [{"id": 1, "original_name": "doc.pdf"}]}
-```
-
-SSE 事件: `flow_start` → `node_start` → `node_thinking` / `node_content` / `node_done` → ... → `flow_done`
-
-### POST /api/agent/{id}/sessions/{sid}/chat
-
-```json
-{"content": "用户消息", "params": {}}
-```
-
----
-
-## 节点配置字段参考
-
-> 创建/更新节点前务必调用 `GET /api/ai/flow/node-types/{type}/config-schema` 确认最新字段。
-> 以下为各节点核心字段摘要，`input_variables` / `output_variable` 等通用字段省略。
-
-### start
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `input_variables` | array | 流程入口的输入参数定义，元素: `{name, type, description, placeholder?, required?, accept?, multiple?, max_size?}`。**注意**：通常不需要直接配置此字段，flow 的 `input_schema` 在 `POST /api/ai/flow/create` 时已通过顶层 `input_schema` 设置，start 节点会自动同步 |
-
-### end
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `output_variables` | string | **注意：后端存储为字符串**，传入对象数组 JSON：`[{"name","source","type"}]` |
-
-### condition
-
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `logic` | string | `"and"` | `and` / `or` |
-| `rules` | array | `[]` | `[{variable, operator, value}]` |
-
-`operator`: `==` `!=` `>` `>=` `<` `<=` `contains` `not_contains` `starts_with` `ends_with` `is_empty` `is_not_empty`
-
-⚠️ 用 `rules` 字段，`conditions` 已废弃。
-
-### intent_router
-
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `enable_rule_layer` | bool | `true` | 规则层（keywords + regex） |
-| `enable_llm_layer` | bool | `true` | LLM 层（规则未命中时） |
-| `case_sensitive` | bool | `false` | |
-| `input_variable` | string | `"input.question"` | 待分类文本路径 |
-| `confidence_threshold` | number | `0.6` | LLM 层置信度阈值 |
-| `temperature` | number | `0.1` | LLM 层温度 |
-| `max_tokens` | number | `200` | LLM 层 max tokens |
-| `provider/model/api_key/base_url` | string | — | 留空走全局默认 |
-| `intents` | array | `[]` | `[{key, description, examples, rule:{keywords,regex_patterns}}]` |
-
-分类逻辑：规则层按 intents 顺序短路 → LLM 层 → `default` 分支。
-分支边 `source_handle` = 意图 key，未命中走 `default`。
-输出：`intent` / `raw_response` / `metadata`
-
-### llm
-
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `provider` | string | — | 留空走全局默认 |
-| `model` | string | — | |
-| `api_key` | string | — | 留空走全局默认 |
-| `base_url` | string | `""` | |
-| `system_prompt` | string | `""` | 支持 `{{var}}` 模板 |
-| `user_prompt` | string | `""` | 支持 `{{var}}`，省略时用 `input.message` |
-| `temperature` | number | `0.7` | 0-2 |
-| `max_tokens` | number | `8192` | 256-128000 |
-| `max_tool_iterations` | number | `20` | 1-100 |
-| `history_mode` | string | `"node"` | `node` / `flow` / `none` |
-| `max_history_turns` | number | `10` | 1-100 |
-| `capabilities` | object | 全 false | `{image, video, audio, pdf, xlsx}` |
-
-输出：`{output_variable}` (文本响应) / `{thinking_variable}` (思考过程)
-
-### python
-
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `code` | string | `""` | 必须定义 `main()` 函数 |
-| `timeout` | number | `30` | 5-300 |
-| `use_preset_for_tool` | bool | `false` | 工具预设模式：true 时 LLM 不接触代码，只提供 input_variables 参数 |
-| `description` | string | `""` | 工具描述，预设模式下 LLM 据此判断何时调用该工具 |
-
-⚠️ 返回值被包装为 `{stdout, stderr, result, success}`，引用为 `nodes.<key>.result.<field>`。
-RestrictedPython 沙箱，支持 `requests`/`json`/`time`/`hashlib`/`openpyxl` 等模块。**支持网络请求**。
-
-**工具模式行为**：
-- `use_preset_for_tool: true` → 工具名 = 节点名称(小写下划线)，参数 = input_variables，LLM 看不到代码
-- `use_preset_for_tool: false` → 通用 `python_executor`，LLM 自行编写完整代码
-
-### shell
-
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `command` | string | `""` | 支持 `{{var}}` 模板 |
-| `timeout` | number | `30` | 5-300 |
-
-输出：`{stdout, stderr, return_code, success, command}`
-
-工具模式：连到 LLM 的 tools 边时提供 9 个工具
-- `shell_executor` 执行命令（危险命令黑名单保护，超时自动转后台任务）
-- `shell_task_status` / `shell_task_input` / `shell_task_cancel` 后台任务查询/输入/取消
-- `file_read` 读取文件（带行号，offset/limit 分页）
-- `text_editor` 精准字符串替换（old_string→new_string，支持 replace_all）
-- `file_write` 写入或新建文件（原子写入）
-- `file_search` 按内容搜索（正则匹配，ripgrep 优先）
-- `list_files` 按文件名 glob 匹配（如 `**/*.py`，用于查找文件或了解目录结构）
-
-### knowledge
-
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `knowledge_base_id` | number | — | 知识库 ID |
-| `knowledge_base_name` | string | `""` | 显示名称 |
-| `top_k` | number | `5` | 1-20 |
-| `score_threshold` | number | `0.5` | 最低相似度 |
-| `description` | string | `""` | 用于系统提示注入 |
-
-工具模式：7 个工具（search/title_search/get_paragraphs/adjacent/title_lookup/save_insight/delete_insight）
-
-### human
-
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `assist_prompt` | string | 预设 | 工具模式下引导 LLM 何时请求帮助 |
-| `review_prompt` | string | `""` | 检查点模式下给用户的提示 |
-
-工具模式：`request_human_help` 工具，触发 `interrupt()` 暂停流程。
-
-### api
-
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `api_url` | string | `""` | 支持 `{{var}}` 模板 |
-| `method` | string | `"GET"` | GET/POST/PUT/DELETE |
-| `headers` | string | `""` | JSON 字符串，支持 `{{var}}` 模板 |
-| `body` | string | `""` | JSON 字符串，支持 `{{var}}` 模板 |
-| `content_type` | string | `"application/json"` | 请求内容类型 |
-| `file_config` | object | — | `{upload_fields, download}` 文件上传/下载配置 |
-| `use_preset_for_tool` | bool | `false` | 工具预设模式：true 时 LLM 不接触 URL/Method/Headers/Body，只提供 input_variables 参数 |
-| `description` | string | `""` | 工具描述，预设模式下 LLM 据此判断何时调用该工具 |
-
-输出：`{status_code, headers, data, success}`
-
-**工具模式行为**：
-- `use_preset_for_tool: true` → 工具名 = 节点名称(小写下划线)，参数 = input_variables，模板 `{{var}}` 自动用 LLM 传入值渲染；LLM 看不到 URL/Method/Headers/Body
-- `use_preset_for_tool: false` → 通用 `api_call_tool`，LLM 自行提供完整 URL/Method/Headers/Body
-
-### mcp / skill / memory / todo
-
-| 节点 | 核心配置 | 工具模式说明 |
-|------|---------|-------------|
-| mcp | `mcp_server_ids: []` | 返回 MCP 服务器所有工具 |
-| skill | `skill_ids: []` | `load_skill` 工具（同一 LLM 仅限 1 个） |
-| memory | `max_results/default_importance/default_category` 等 | 4 工具: save/search/list/delete；三层 hot/warm/cold |
-| todo | 无需配置 | `todowrite` / `todoread` 工具 |
-
-memory 分类: `decision/preference/lesson/relation/event/task/other`
-
-### loop
-
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `loop_mode` | string | `"count"` | `count` / `condition` / `for_each` |
-| `max_count` | number | `10` | count 模式最大次数 |
-| `condition_expression` | string | `""` | condition 模式表达式 |
-| `for_each_source` | string | `""` | for_each 模式数组路径 |
-| `break_on_error` | bool | `true` | |
-| `concurrency` | number | `1` | 1=串行 |
-| `input_mappings` | array | `[]` | `{card_field/name, source, type}` 两种格式等效 |
-
-⚠️ Loop 使用**内联子节点**（key 带 `{loop_key}__` 前缀），**不需要 `ref_flow_id`**。
-自动注入：`variables.loop_index`（0起始）/ `variables.loop_count` / `loop_item`（for_each）
-禁止嵌套 loop。子 End 输出变量名固定 `res`，聚合为数组 `nodes.<loop>.res`。
-
-### card
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `input_mappings` | array | `{card_field, source}` — source 从父流程解析 |
-| `output_mappings` | array | `{card_field, target_variable}` |
-
-⚠️ `ref_flow_id` 是**独立顶层字段**，仅创建时可设，`batch/config` 不能改，修改需删节点重建。
-
----
-## 边 Handle 配对
-
-| source_handle | target_handle | 说明 |
+| 字段 | 必需 | 说明 |
 |---|---|---|
-| `default` | `default` | 标准数据流 |
-| `tools` | `tools` | 工具边，目标必须 LLM |
+| `node_type` | 是 | 必须是 `/node-types` 返回的类型 |
+| `node_key` | 否 | 省略时自动生成；冲突时自动追加序号 |
+| `node_name` | 否 | UI 显示名 |
+| `position_x/y` | 否 | 默认 0，仅影响 UI |
+| `base_config` | 否 | JSON 对象，缺失字段由节点默认值补全 |
+| `ref_flow_id` | 卡片需要 | `card` 引用的子流程 ID |
 
----
+响应 `data.created_nodes` 返回最终 `node_key`，创建边时使用这个值。
 
-## 批量操作接口完整字段名（重要！）
+### 批量配置
 
-下表汇总批量操作接口的 body 字段名（这些字段名容易混淆，必须严格匹配）：
-
-| 接口 | body 字段 | 元素格式 | 说明 |
-|------|----------|---------|------|
-| `POST /api/ai/flow/{id}/nodes/batch` | `nodes` | `{node_type, node_key, node_name, position_x, position_y, base_config?}` | 批量创建节点 |
-| `POST /api/ai/flow/{id}/nodes/batch/config` | `nodes` | `{node_key, base_config}` | 批量更新节点配置（字段级合并） |
-| `POST /api/ai/flow/{id}/nodes/batch/delete` | `node_keys` | `[string, ...]` | 批量删除节点（**级联删边**） |
-| `POST /api/ai/flow/{id}/edges/batch` | `edges` | `{source_node_key, target_node_key, source_handle, target_handle}` | 批量创建边 |
-| `POST /api/ai/flow/{id}/edges/batch/delete` | `edges` | 同上 | 批量删除边（按完整四元组匹配） |
-
-> ⚠️ **特别注意**：
-> - `nodes/batch/delete` 字段名是 **`node_keys`**（数组，元素是字符串），不是 `nodes`！
-> - `nodes/batch` 和 `nodes/batch/config` 字段名都是 `nodes`（数组，元素是对象）
-> - `output_variables` 字段值必须是 **JSON 字符串**，不是对象数组（见 SKILL.md 核心规则 #3）
-
-### 完整请求示例
+`POST /ai/flow/{flow_id}/nodes/batch/config`
 
 ```json
-// 1. 批量创建节点
-POST /api/ai/flow/16/nodes/batch
 {
   "nodes": [
-    {"node_type": "start", "node_key": "start", "node_name": "开始", "position_x": 100, "position_y": 200},
-    {"node_type": "llm", "node_key": "llm", "node_name": "AI助手", "position_x": 350, "position_y": 200,
-     "base_config": {"system_prompt": "你是...", "user_prompt": "{{input.message}}"}},
-    {"node_type": "end", "node_key": "end", "node_name": "结束", "position_x": 600, "position_y": 200,
-     "base_config": {"output_variables": "[{\"name\":\"content\",\"source\":\"nodes.llm.result\",\"type\":\"string\"}]"}}
-  ]
-}
-
-// 2. 批量更新节点配置
-POST /api/ai/flow/16/nodes/batch/config
-{
-  "nodes": [
-    {"node_key": "llm", "base_config": {"required_tools": ["send_reply"]}}
-  ]
-}
-
-// 3. 批量删除节点
-POST /api/ai/flow/16/nodes/batch/delete
-{
-  "node_keys": ["end_old", "llm_old"]
-}
-
-// 4. 批量创建边
-POST /api/ai/flow/16/edges/batch
-{
-  "edges": [
-    {"source_node_key": "start", "target_node_key": "llm", "source_handle": "default", "target_handle": "default"},
-    {"source_node_key": "llm", "target_node_key": "end", "source_handle": "default", "target_handle": "default"}
-  ]
-}
-
-// 5. 批量删除边
-POST /api/ai/flow/16/edges/batch/delete
-{
-  "edges": [
-    {"source_node_key": "old_node", "target_node_key": "llm", "source_handle": "default", "target_handle": "default"}
+    {
+      "node_key": "assistant",
+      "node_name": "主助手",
+      "base_config": {
+        "system_prompt": "回答要简洁",
+        "required_tools": ["web_search"]
+      }
+    }
   ]
 }
 ```
-| `true` / `false` | `default` | condition 分支（必须同时有 true+false） |
-| `<intent_key>` | `default` | intent_router 分支（`default` 为兜底） |
 
-## Agent 约束
+`base_config` 按键合并到已有配置；未传键保留。`node_name`、位置等顶层字段传 `null` 时不会覆盖旧值；嵌套配置能否为 `null` 以节点 Schema 为准。
 
-- 仅 1 个 LLM 节点
-- 允许: condition, intent_router
-- 禁止: loop, card, human
+### 批量删除
 
-## 生成媒体文件（图片/音频/视频）
+`POST /ai/flow/{flow_id}/nodes/batch/delete`
 
-通过 python 或 api 工具节点生成媒体文件，自动保存并在聊天中预览。
-
-### python 工具方式
-main() 返回以下格式时，文件自动落盘并在聊天中预览：
 ```json
-{"__save_file__": true, "content_base64": "<base64编码>", "mime_type": "image/png", "filename": "optional.png"}
+{"node_keys": ["obsolete_node"]}
 ```
-base64 不会出现在对话中，只返回 `success + preview_url`，前端自动展示"查看预览"按钮。
 
-### api 工具方式
-设置 `download_file=true`，当响应 Content-Type 为二进制类型（image/*, audio/*, video/*）时，文件自动下载保存。返回结果含 `success + preview_url + download_url`。
+关联边会级联删除。
+
+## 边操作
+
+### 批量创建
+
+`POST /ai/flow/{flow_id}/edges/batch`
+
+```json
+{
+  "edges": [
+    {
+      "source_node_key": "start",
+      "target_node_key": "assistant",
+      "source_handle": "default",
+      "target_handle": "default"
+    },
+    {
+      "source_node_key": "web_search",
+      "target_node_key": "assistant",
+      "source_handle": "tools",
+      "target_handle": "tools"
+    }
+  ]
+}
+```
+
+合法 handle 配对：
+
+| 边类型 | `source_handle` | `target_handle` |
+|---|---|---|
+| 普通数据流 | `default` | `default` |
+| 工具连接 | `tools` | `tools` |
+| 条件分支 | `true` / `false` | `default` |
+| 意图路由 | intent key | `default` |
+
+批量接口会校验节点存在性、handle、Agent 结构、工具连接限制及条件分支完整性。
+
+### 批量删除
+
+`POST /ai/flow/{flow_id}/edges/batch/delete`
+
+```json
+{
+  "edges": [
+    {
+      "source_node_key": "start",
+      "target_node_key": "assistant",
+      "source_handle": "default"
+    }
+  ]
+}
+```
+
+### 检查工具发现
+
+`GET /ai/flow/{flow_id}/node/{llm_node_key}/connected-tools`
+
+返回指定 LLM 通过工具边发现的工具信息。若预期工具不在结果中，优先检查边方向、两端 handle 和工具节点配置。
+
+## Workflow 执行
+
+`POST /execution/stream/{flow_id}`，响应为 SSE：
+
+```json
+{
+  "input_data": {"content": "待处理文本"},
+  "files": []
+}
+```
+
+常见事件：`flow_start`、`node_start`、`node_thinking`、`node_content`、`tool_call_start`、`tool_call_end`、`node_done`、`token_usage`、`waiting_human`、`flow_done`、`error`。
+
+- 从 `flow_start.data.execution_id` 保存执行 ID。
+- 仅 `flow_done` 且 `data.status` 为 `success` 表示正常结束，最终结果在 `data.output_data`。
+- `waiting_human` 表示暂停而非失败。
+- `error` 后应读取消息并修复，不要把连接关闭当作成功。
+
+人工输入恢复：
+
+```text
+GET  /execution/wait-status/{execution_id}
+POST /execution/human-input-stream/{execution_id}
+Body: {"input": "用户补充内容"}
+```
+
+恢复接口同样返回 SSE，并以状态为 `success` 的 `flow_done` 判断完成。
+
+## Agent 会话
+
+1. `POST /agent/{agent_id}/sessions` 创建会话，请求体为空。
+2. 从普通响应的 `data.id` 获取 `session_id`。
+3. `POST /agent/{agent_id}/sessions/{session_id}/chat` 发送消息并读取 SSE。
+
+```json
+{"content": "帮我分析这段数据", "params": {}}
+```
+
+`params` 必须是 JSON 对象，可承载 Agent 输入字段和文件参数。
+
+Agent 人工输入恢复：
+
+```text
+POST /agent/{agent_id}/sessions/{session_id}/resume
+Body: {"human_input": "用户补充内容"}
+```
+
+工具审批：
+
+```text
+POST /agent/{agent_id}/sessions/{session_id}/tool_approval
+Body: {"action": "approved"}
+```
+
+`action` 只能是 `approved` 或 `rejected`。子 Agent 审批需要使用事件携带的子 Agent ID 和子会话 ID，详见 [子 Agent](sub-agent.md)。
+
+## 修改后验证
+
+1. 再次读取 `/ai/flow/{flow_id}/detail`，确认没有丢失无关配置。
+2. 对每个 LLM 调用 `connected-tools`，确认工具可见。
+3. 使用最小真实输入执行一次。
+4. 检查 `flow_done.data.output_data` 的字段、类型和内容。
