@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 _RUN_END_EVENT_TYPES = frozenset({"error", "flow_done", "waiting_human"})
-_COMPLETED_RUN_RETENTION_SECONDS = 300
+_COMPLETED_RUN_RETENTION_SECONDS = 60
 
 
 @dataclass
@@ -51,9 +51,7 @@ class _AgentRun:
     run_id: str
     session_id: int
     events: list[dict[str, Any]] = dataclass_field(default_factory=list)
-    subscribers: set[asyncio.Queue[dict[str, Any] | None]] = dataclass_field(
-        default_factory=set
-    )
+    subscribers: set[asyncio.Event] = dataclass_field(default_factory=set)
     task: asyncio.Task[None] | None = None
     started: bool = False
     cancel_requested: bool = False
@@ -105,7 +103,7 @@ class AgentExecutorService(BaseExecutorService):
             self._agent_runs.pop(session_id, None)
 
     def _publish_agent_run_event(self, run: _AgentRun, event: dict) -> None:
-        """记录事件并推送给当前订阅者。"""
+        """记录事件并唤醒当前订阅者。"""
         stored_event = {
             "id": run.next_event_id,
             "type": event.get("type", "unknown"),
@@ -113,8 +111,8 @@ class AgentExecutorService(BaseExecutorService):
         }
         run.next_event_id += 1
         run.events.append(stored_event)
-        for queue in tuple(run.subscribers):
-            queue.put_nowait(stored_event)
+        for wake_event in tuple(run.subscribers):
+            wake_event.set()
 
     @staticmethod
     async def _await_cancellation_safe(
@@ -146,8 +144,8 @@ class AgentExecutorService(BaseExecutorService):
         finally:
             run.done = True
             run.completed_at = time.monotonic()
-            for queue in tuple(run.subscribers):
-                queue.put_nowait(None)
+            for wake_event in tuple(run.subscribers):
+                wake_event.set()
 
     async def _consume_agent_run(
         self,
@@ -357,27 +355,21 @@ class AgentExecutorService(BaseExecutorService):
             return
 
         cursor = max(after_event_id, 0)
-        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-        run.subscribers.add(queue)
+        wake_event = asyncio.Event()
+        run.subscribers.add(wake_event)
         try:
-            replay_events = [event for event in run.events if event["id"] > cursor]
-            for event in replay_events:
-                cursor = event["id"]
-                yield event
-
-            if run.done and queue.empty():
-                return
-
             while True:
-                event = await queue.get()
-                if event is None:
+                wake_event.clear()
+                # 事件 ID 从 1 连续递增，cursor 同时是下一事件的列表索引。
+                while cursor < run.last_event_id:
+                    event = run.events[cursor]
+                    cursor = event["id"]
+                    yield event
+                if run.done:
                     return
-                if event["id"] <= cursor:
-                    continue
-                cursor = event["id"]
-                yield event
+                await wake_event.wait()
         finally:
-            run.subscribers.discard(queue)
+            run.subscribers.discard(wake_event)
 
     def get_run_status(self, session_id: int) -> dict[str, Any]:
         """返回会话运行状态及当前可订阅游标。"""
