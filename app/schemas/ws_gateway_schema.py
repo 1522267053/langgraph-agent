@@ -136,7 +136,11 @@ class WsGatewayMessageResponse(BaseView):
 
     id: Optional[int] = Field(default=None, description="消息ID")
     role: Optional[str] = Field(default=None, description="角色")
+    message_type: Optional[str] = Field(default=None, description="内部消息类型")
     content: Optional[str] = Field(default=None, description="内容")
+    removed_count: Optional[int] = Field(
+        default=None, description="上下文摘要压缩的历史消息数量"
+    )
     thinking: Optional[str] = Field(default=None, description="思考内容")
     tool_calls: Optional[list] = Field(default=None, description="工具调用")
     tool_call_id: Optional[str] = Field(default=None, description="工具调用ID")

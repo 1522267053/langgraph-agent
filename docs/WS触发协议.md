@@ -249,6 +249,29 @@ Agent 调用远程工具时服务端下发：
 | `get_messages` | `session_id`、`before_id`（游标）、`limit`（默认20） | `messages_list` | 查询会话历史消息（游标分页） |
 | `delete_message` | `session_id`、`message_id` | `message_deleted` | 删除 message_id 及其后所有消息（含 checkpoint 清理） |
 
+`messages_list` 中每条消息包含 `message_type` 和 `removed_count`。当
+`message_type="context_summary"` 时，该消息是上下文压缩摘要，`removed_count`
+表示被压缩的历史消息数量；普通消息的这两个字段为 `null`。
+
+```json
+{
+  "type": "messages_list",
+  "data": {
+    "messages": [
+      {
+        "id": 101,
+        "role": "human",
+        "message_type": "context_summary",
+        "content": "用户正在排查订单同步问题……",
+        "removed_count": 18,
+        "create_time": "2026-08-23T10:00:00"
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
 ---
 
 ## 四、服务端事件总览
