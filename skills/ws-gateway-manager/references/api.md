@@ -315,6 +315,30 @@ Flow 类型：
 {"action": "get_messages", "session_id": 5, "limit": 20, "before_id": 100}
 ```
 
+响应中的每条消息都包含 `message_type` 和 `removed_count`：
+
+```json
+{
+  "type": "messages_list",
+  "data": {
+    "messages": [
+      {
+        "id": 101,
+        "role": "human",
+        "message_type": "context_summary",
+        "content": "用户正在排查订单同步问题……",
+        "removed_count": 18,
+        "create_time": "2026-08-23T10:00:00"
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
+`message_type="context_summary"` 表示上下文压缩摘要，`removed_count` 是被
+压缩的历史消息数量。普通消息的这两个字段为 `null`。
+
 ### delete_message — 删除会话消息
 
 ```json

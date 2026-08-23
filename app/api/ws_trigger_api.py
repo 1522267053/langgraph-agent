@@ -640,10 +640,17 @@ async def _handle_delete_message(conn: WSConnection, cmd: WsDeleteMessageCommand
 
 def _serialize_message(m: Any) -> dict:
     """将消息对象序列化为 dict"""
+    input_data = m.input_data if isinstance(m.input_data, dict) else {}
     return {
         "id": m.id,
         "role": m.role,
+        "message_type": m.message_type,
         "content": m.content,
+        "removed_count": (
+            input_data.get("removed_count")
+            if m.message_type == "context_summary"
+            else None
+        ),
         "create_time": m.create_time.isoformat() if m.create_time else None,
     }
 
