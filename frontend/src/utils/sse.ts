@@ -17,6 +17,10 @@ export interface SSEConnectionConfig<T extends string> {
   logPrefix?: string
   /** 断线超时毫秒数，超时无数据自动触发 error（默认 90000 = 90s） */
   disconnectTimeout?: number
+  /** 收到带 ID 的事件时调用 */
+  onEventId?: (eventId: string) => void
+  /** 连接意外结束时调用；提供后由调用方决定是否重连 */
+  onDisconnect?: (error?: Error) => void
 }
 
 /** SSE解析器状态 */
@@ -44,9 +48,10 @@ function createSSEParser() {
    * @param eventStr 事件字符串
    * @returns 解析后的事件对象，注释/ping返回null
    */
-  function parseEvent(eventStr: string): { type: string; data: string } | null {
+  function parseEvent(eventStr: string): { type: string; data: string; id?: string } | null {
     let eventType = ''
     let eventData = ''
+    let eventId: string | undefined
 
     const lines = eventStr.replace(/\r\n/g, '\n').split('\n')
     for (const line of lines) {
@@ -59,11 +64,13 @@ function createSSEParser() {
         eventType = trimmedLine.substring(6).trim()
       } else if (trimmedLine.startsWith('data:')) {
         eventData = trimmedLine.substring(5).trim()
+      } else if (trimmedLine.startsWith('id:')) {
+        eventId = trimmedLine.substring(3).trim()
       }
     }
 
     if (eventType && eventData) {
-      return { type: eventType, data: eventData }
+      return { type: eventType, data: eventData, id: eventId }
     }
     return null
   }
@@ -73,7 +80,10 @@ function createSSEParser() {
    * @param value 数据块
    * @param onEvent 事件回调
    */
-  function processChunk(value: Uint8Array, onEvent: (type: string, data: unknown) => void): void {
+  function processChunk(
+    value: Uint8Array,
+    onEvent: (type: string, data: unknown, eventId?: string) => void
+  ): void {
     state.buffer += state.decoder.decode(value, { stream: true })
 
     let events: string[]
@@ -91,7 +101,7 @@ function createSSEParser() {
       if (parsed) {
         try {
           const data = JSON.parse(parsed.data)
-          onEvent(parsed.type, data)
+          onEvent(parsed.type, data, parsed.id)
         } catch (parseError) {
           console.error('[SSE] Failed to parse event data:', eventStr, parseError)
         }
@@ -123,24 +133,39 @@ export function createSSEConnection<T extends string = string>(
     body,
     handlers,
     logPrefix = '[SSE]',
-    disconnectTimeout = DEFAULT_DISCONNECT_TIMEOUT
+    disconnectTimeout = DEFAULT_DISCONNECT_TIMEOUT,
+    onEventId,
+    onDisconnect
   } = config
   const controller = new AbortController()
   const parser = createSSEParser()
   let disconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let manuallyAborted = false
+  let disconnectNotified = false
+
+  function notifyDisconnect(error?: Error): void {
+    if (manuallyAborted || disconnectNotified) return
+    disconnectNotified = true
+    clearDisconnectTimer()
+    if (onDisconnect) {
+      onDisconnect(error)
+      return
+    }
+    if (error) {
+      const errorHandler = handlers['error']
+      errorHandler?.({
+        type: 'error' as T,
+        data: { message: error.message }
+      })
+    }
+  }
 
   function resetDisconnectTimer(): void {
     if (disconnectTimer) clearTimeout(disconnectTimer)
     disconnectTimer = setTimeout(() => {
       console.warn(`${logPrefix} 连接超时（${disconnectTimeout / 1000}s无数据），主动断开`)
       controller.abort()
-      const errorHandler = handlers['error']
-      if (errorHandler) {
-        errorHandler({
-          type: 'error' as T,
-          data: { message: `SSE 连接超时（${disconnectTimeout / 1000}s 无数据）` }
-        })
-      }
+      notifyDisconnect(new Error(`SSE 连接超时（${disconnectTimeout / 1000}s 无数据）`))
     }, disconnectTimeout)
   }
 
@@ -167,6 +192,20 @@ export function createSSEConnection<T extends string = string>(
         throw new Error(`HTTP error! status: ${response.status}`)
       }
 
+      const contentType = response.headers.get('content-type') || ''
+      if (!contentType.includes('text/event-stream')) {
+        let message = 'SSE 接口返回了非事件流响应'
+        try {
+          const payload = (await response.json()) as { msg?: string; message?: string }
+          message = payload.msg || payload.message || message
+        } catch {
+          // 使用默认协议错误信息
+        }
+        const protocolError = new Error(message)
+        protocolError.name = 'SSEProtocolError'
+        throw protocolError
+      }
+
       const reader = response.body?.getReader()
       if (!reader) {
         throw new Error('No response body')
@@ -176,36 +215,33 @@ export function createSSEConnection<T extends string = string>(
         const { done, value } = await reader.read()
         if (done) {
           clearDisconnectTimer()
+          notifyDisconnect()
           break
         }
 
         resetDisconnectTimer()
 
-        parser.processChunk(value, (type, data) => {
+        parser.processChunk(value, (type, data, eventId) => {
           const handler = handlers[type]
           if (handler) {
-            const event = { type, data } as SSEEvent<T>
+            const event = { id: eventId, type, data } as SSEEvent<T>
             handler(event)
           } else {
             console.warn(`${logPrefix} Unknown event type:`, type)
           }
+          if (eventId) onEventId?.(eventId)
         })
       }
     })
     .catch(error => {
       clearDisconnectTimer()
       if (error.name !== 'AbortError') {
-        const errorHandler = handlers['error']
-        if (errorHandler) {
-          errorHandler({
-            type: 'error' as T,
-            data: { message: error.message }
-          })
-        }
+        notifyDisconnect(error instanceof Error ? error : new Error(String(error)))
       }
     })
 
   return () => {
+    manuallyAborted = true
     clearDisconnectTimer()
     controller.abort()
     parser.reset()
@@ -225,7 +261,11 @@ export function createFlowSSEConnection(
   url: string,
   body: unknown,
   handlers: FlowSSEHandlers,
-  logPrefix = '[Flow SSE]'
+  logPrefix = '[Flow SSE]',
+  options: Pick<
+    SSEConnectionConfig<string>,
+    'disconnectTimeout' | 'onEventId' | 'onDisconnect'
+  > = {}
 ): () => void {
   const handlerMap: Record<string, SSEEventHandler | undefined> = {
     flow_start: handlers.onFlowStart,
@@ -253,6 +293,7 @@ export function createFlowSSEConnection(
     url,
     body,
     handlers: handlerMap,
-    logPrefix
+    logPrefix,
+    ...options
   })
 }

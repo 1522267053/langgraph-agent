@@ -2,10 +2,9 @@
 import { computed } from 'vue'
 import { Operation } from '@element-plus/icons-vue'
 import MessageBubble from '@/components/AgentChat/MessageBubble.vue'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import type { StreamingMessage } from '@/composables/useStreamingMessage'
-
-const COMPRESS_MARKER = '[上下文压缩]'
 
 const props = defineProps<{
   messages: StreamingMessage[]
@@ -20,21 +19,14 @@ const emit = defineEmits<{
   (e: 'preview', data: ImagePreviewData): void
 }>()
 
-function isCompressMarker(msg: StreamingMessage): boolean {
-  return msg.role === 'human' && msg.content.startsWith(COMPRESS_MARKER)
+function isCompressSummary(msg: StreamingMessage): boolean {
+  return msg.displayType === 'context-summary'
 }
 
-function isCompressSummary(msg: StreamingMessage, index: number): boolean {
-  if (msg.role !== 'ai') return false
-  const prev = props.messages[index - 1]
-  return !!prev && isCompressMarker(prev)
-}
-
-const hasTextContent = computed(() => {
+const showStandaloneTyping = computed(() => {
   if (!props.isStreaming) return false
   const last = props.messages.at(-1)
-  if (!last || last.role !== 'ai') return true
-  return !last.segments || last.segments.length === 0
+  return !last || last.role !== 'ai' || isCompressSummary(last)
 })
 
 /** 判断指定消息是否为最后一条（用于流式指示器定位） */
@@ -46,15 +38,13 @@ function isLastMessage(idx: number): boolean {
 <template>
   <div class="messages-list">
     <template v-for="(msg, idx) in messages" :key="msg.id">
-      <div v-if="isCompressSummary(msg, idx)" class="compress-summary">
-        <div class="compress-summary-label">上下文摘要</div>
-        <div class="compress-summary-content">{{ msg.content }}</div>
-      </div>
-      <div v-else-if="isCompressMarker(msg)" class="message compress-marker">
-        <div class="compress-notice">
+      <div v-if="isCompressSummary(msg)" class="compress-summary">
+        <div class="compress-summary-label">
           <el-icon :size="14"><Operation /></el-icon>
-          <span>{{ msg.content }}</span>
+          <span>上下文摘要</span>
+          <span v-if="msg.removedCount">已压缩 {{ msg.removedCount }} 条历史消息</span>
         </div>
+        <MarkdownRenderer class="compress-summary-content" :content="msg.content" />
       </div>
       <MessageBubble
         v-else
@@ -70,7 +60,7 @@ function isLastMessage(idx: number): boolean {
       />
     </template>
 
-    <div v-if="hasTextContent" class="message assistant animate-fade-in">
+    <div v-if="showStandaloneTyping" class="message assistant animate-fade-in">
       <div class="message-avatar">
         <div class="avatar avatar-ai">
           <el-icon :size="16"><ChatDotRound /></el-icon>
@@ -185,21 +175,6 @@ export default {
   }
 }
 
-.compress-marker {
-  padding: 8px 0 4px;
-}
-
-.compress-notice {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #94a3b8;
-  background: #f8fafc;
-  padding: 8px 14px;
-  border-radius: 8px;
-}
-
 .compress-summary {
   background: #f8fafc;
   border-left: 3px solid #d97706;
@@ -209,6 +184,9 @@ export default {
 }
 
 .compress-summary-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   font-weight: 600;
   color: #d97706;

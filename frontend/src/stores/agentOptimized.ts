@@ -10,7 +10,7 @@ import type {
   AgentMessage,
   AgentDeleteMessagesResult
 } from '@/types/agent'
-import type { SSEWaitData, SSEEvent } from '@/types/sse'
+import type { FlowSSEHandlers, SSEWaitData, SSEEvent, SSEEventHandler } from '@/types/sse'
 import type {
   StreamingMessage,
   ToolCall,
@@ -24,6 +24,7 @@ import { useStreamingMessage } from '@/composables'
 import { ElMessage } from 'element-plus'
 
 const MESSAGE_REFRESH_LIMIT = 100
+const CONTEXT_SUMMARY_MESSAGE_TYPE = 'context_summary'
 
 interface AgentStreamContext {
   agentId: number
@@ -75,6 +76,7 @@ export const useAgentStore = defineStore('agent', () => {
     addKnowledgeCitations,
     updateTodos,
     addTokenUsage,
+    flushPending,
     stopStreaming,
     clearMessages,
     latestPromptTokens
@@ -137,7 +139,7 @@ export const useAgentStore = defineStore('agent', () => {
   } | null>(null)
 
   // ========== 中断函数引用 ==========
-  let streamAbort: (() => void) | null = null
+  let streamAbort: ((cancelRun?: boolean) => void | Promise<void>) | null = null
   let streamGeneration = 0
   let sessionSelectionVersion = 0
   let isResume = false
@@ -280,9 +282,51 @@ export const useAgentStore = defineStore('agent', () => {
         runRes.data.code === 1 &&
         runRes.data.data?.running
       ) {
-        // 复用 isStreaming 点亮停止按钮（不会创建空气泡，气泡仅在真实 SSE 内容到达时创建）
-        isStreaming.value = true
-        startRunningPolling(agentId, session.id)
+        // 新事件写入独立气泡；完成后仍以数据库消息为准重建。
+        startStreaming(true)
+        const context: AgentStreamContext = {
+          agentId,
+          sessionId: session.id,
+          generation: selectionGeneration,
+          wasFirstMessage: false
+        }
+        const runId = runRes.data.data?.run_id
+        if (runId && runRes.data.data?.managed_running) {
+          const lastEventId = runRes.data.data?.last_event_id || 0
+          streamAbort = agentApi.subscribeRun(
+            agentId,
+            session.id,
+            runId,
+            Math.max(0, lastEventId - 1),
+            createReattachHandlers(context, lastEventId)
+          )
+        } else {
+          startRunningPolling(agentId, session.id)
+        }
+      } else if (
+        selectionVersion === sessionSelectionVersion &&
+        selectionGeneration === streamGeneration &&
+        runRes.data.code === 1 &&
+        runRes.data.data?.waiting_human
+      ) {
+        const context: AgentStreamContext = {
+          agentId,
+          sessionId: session.id,
+          generation: selectionGeneration,
+          wasFirstMessage: false
+        }
+        const handlers = createStreamHandlers(context)
+        if (runRes.data.data.waiting_event) {
+          handlers.onWaitingHuman?.(runRes.data.data.waiting_event)
+        } else if (runRes.data.data.run_id) {
+          streamAbort = agentApi.subscribeRun(
+            agentId,
+            session.id,
+            runRes.data.data.run_id,
+            Math.max(0, runRes.data.data.last_event_id - 1),
+            handlers
+          )
+        }
       }
     } catch {
       // 检测失败不影响正常使用
@@ -356,7 +400,25 @@ export const useAgentStore = defineStore('agent', () => {
     for (const msg of dbMessages) {
       const role = msg.role
 
-      if (role === 'human') {
+      if (msg.message_type === CONTEXT_SUMMARY_MESSAGE_TYPE) {
+        if (currentAssistant) {
+          result.push(currentAssistant)
+          currentAssistant = null
+        }
+        const removedCount = Number(msg.input_data?.removed_count || 0)
+        result.push({
+          id: `msg-${msg.id}`,
+          role: 'ai',
+          displayType: 'context-summary',
+          removedCount: Number.isFinite(removedCount) ? removedCount : 0,
+          content: msg.content,
+          segments: [],
+          prompt_tokens: msg.prompt_tokens,
+          completion_tokens: msg.completion_tokens,
+          total_tokens: msg.total_tokens,
+          createdAt: new Date(msg.created_at || Date.now())
+        })
+      } else if (role === 'human') {
         if (currentAssistant) {
           result.push(currentAssistant)
           currentAssistant = null
@@ -526,6 +588,8 @@ export const useAgentStore = defineStore('agent', () => {
     if (a.id !== b.id) return false
     if (
       a.role !== b.role ||
+      a.displayType !== b.displayType ||
+      a.removedCount !== b.removedCount ||
       a.content !== b.content ||
       a.thinking !== b.thinking ||
       a.prompt_tokens !== b.prompt_tokens ||
@@ -547,7 +611,7 @@ export const useAgentStore = defineStore('agent', () => {
    * 从历史消息就地 diff 更新聊天消息列表（不 clearMessages，保留 Vue DOM 稳定性）
    * 用于 selectSession、onFlowDone、loadMoreMessages 等场景
    */
-  function rebuildChatMessages() {
+  function rebuildChatMessages(preserveStreaming = false) {
     const rebuilt = buildChatMessagesFromDB(messages.value)
 
     for (let i = 0; i < rebuilt.length; i++) {
@@ -566,11 +630,11 @@ export const useAgentStore = defineStore('agent', () => {
     thinkingContent.value = ''
     textContent.value = ''
     currentSegmentType.value = null
-    isStreaming.value = false
+    if (!preserveStreaming) isStreaming.value = false
 
     for (let i = messages.value.length - 1; i >= 0; i--) {
       const m = messages.value[i]
-      if (m.role === 'ai') {
+      if (m.role === 'ai' || m.message_type === CONTEXT_SUMMARY_MESSAGE_TYPE) {
         latestPromptTokens.value = m.latest_prompt_tokens || m.prompt_tokens || 0
         break
       }
@@ -588,7 +652,8 @@ export const useAgentStore = defineStore('agent', () => {
   function applyLatestMessages(
     latestMessages: AgentMessage[],
     total: number,
-    replace = false
+    replace = false,
+    preserveStreaming = false
   ): void {
     if (replace) {
       messages.value = latestMessages
@@ -603,12 +668,13 @@ export const useAgentStore = defineStore('agent', () => {
       messages.value = []
     }
     messageTotal.value = total
-    rebuildChatMessages()
+    rebuildChatMessages(preserveStreaming)
   }
 
   async function refreshStreamMessages(
     context: AgentStreamContext,
-    replace = false
+    replace = false,
+    preserveStreaming = false
   ): Promise<void> {
     const res = await agentApi.getMessages(
       context.agentId,
@@ -617,14 +683,81 @@ export const useAgentStore = defineStore('agent', () => {
       MESSAGE_REFRESH_LIMIT
     )
     if (res.data.code !== 1 || !isCurrentStream(context)) return
-    applyLatestMessages(res.data.data?.list || [], res.data.data?.total || 0, replace)
+    applyLatestMessages(
+      res.data.data?.list || [],
+      res.data.data?.total || 0,
+      replace,
+      preserveStreaming
+    )
   }
 
   /**
    * 创建SSE事件处理器
    */
   function createStreamHandlers(context: AgentStreamContext) {
-    return {
+    // SSE 解析器不会等待异步 handler，刷新压缩历史期间需串行化后续事件，避免新内容被覆盖。
+    let compressionRefreshBarrier: Promise<void> | null = null
+
+    const trackCompressionRefresh = (task: Promise<void>) => {
+      const barrier = task.catch(error => {
+        console.error('[context_compressing] 刷新消息失败', error)
+      })
+      compressionRefreshBarrier = barrier
+      void barrier.finally(() => {
+        if (compressionRefreshBarrier === barrier) compressionRefreshBarrier = null
+      })
+    }
+
+    const runAfterCompressionRefresh = (action: () => void | Promise<void>) => {
+      const previous = compressionRefreshBarrier
+      if (!previous) {
+        try {
+          const result = action()
+          if (result) {
+            void result.catch(error => {
+              console.error('[Agent SSE] 处理事件失败', error)
+            })
+          }
+        } catch (error) {
+          console.error('[Agent SSE] 处理事件失败', error)
+        }
+        return
+      }
+
+      const queued = previous
+        .then(async () => {
+          if (!isCurrentStream(context)) return
+          await action()
+        })
+        .catch(error => {
+          console.error('[Agent SSE] 处理压缩后事件失败', error)
+        })
+      compressionRefreshBarrier = queued
+      void queued.finally(() => {
+        if (compressionRefreshBarrier === queued) compressionRefreshBarrier = null
+      })
+    }
+
+    const deferDuringCompressionRefresh = (
+      handler: SSEEventHandler | undefined
+    ): SSEEventHandler | undefined => {
+      if (!handler) return undefined
+      return event => runAfterCompressionRefresh(() => handler(event))
+    }
+
+    const applyWaitingHuman = (event: SSEEvent) => {
+      if (!isCurrentStream(context)) return
+      stopStreaming()
+      isWaitingHuman.value = true
+      currentWaitData.value = event.data.wait_data || {
+        type: 'human',
+        node_key: event.data.node_key || '',
+        question: event.data.question || '请提供输入',
+        context: event.data.context
+      }
+    }
+
+    const handlers: FlowSSEHandlers = {
       onFlowStart: () => {
         if (!isCurrentStream(context)) return
         flowPreview.value = null
@@ -681,17 +814,7 @@ export const useAgentStore = defineStore('agent', () => {
         if (!isCurrentStream(context)) return
         addKnowledgeCitations(event.data.citations || [])
       },
-      onWaitingHuman: (event: SSEEvent) => {
-        if (!isCurrentStream(context)) return
-        stopStreaming()
-        isWaitingHuman.value = true
-        currentWaitData.value = event.data.wait_data || {
-          type: 'human',
-          node_key: event.data.node_key || '',
-          question: event.data.question || '请提供输入',
-          context: event.data.context
-        }
-      },
+      onWaitingHuman: applyWaitingHuman,
       onToolApproval: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
         isWaitingToolApproval.value = true
@@ -717,6 +840,11 @@ export const useAgentStore = defineStore('agent', () => {
           isCompressing.value = true
         } else {
           isCompressing.value = false
+          if (status === 'done') {
+            // 压缩事务已提交；清空 chunk 缓冲后以 DB 为准替换已软删除的旧历史。
+            flushPending()
+            trackCompressionRefresh(refreshStreamMessages(context, true, true))
+          }
         }
       },
       onFlowPreview: (event: SSEEvent) => {
@@ -769,8 +897,77 @@ export const useAgentStore = defineStore('agent', () => {
         } catch (e) {
           console.error('[onError] 刷新消息失败', e)
         }
+        try {
+          const status = await agentApi.runningStatus(context.agentId, context.sessionId)
+          if (
+            status.data.code === 1 &&
+            status.data.data?.waiting_human &&
+            isCurrentStream(context)
+          ) {
+            applyWaitingHuman(
+              status.data.data.waiting_event || {
+                type: 'waiting_human',
+                data: {
+                  wait_data: {
+                    type: 'human',
+                    node_key: '',
+                    question: '请重新提供输入'
+                  }
+                }
+              }
+            )
+          }
+        } catch {
+          // 错误提示仍使用原始执行错误。
+        }
         ElMessage.error(event.data.message || '发送失败')
       }
+    }
+
+    return {
+      ...handlers,
+      onNodeThinking: deferDuringCompressionRefresh(handlers.onNodeThinking),
+      onNodeContent: deferDuringCompressionRefresh(handlers.onNodeContent),
+      onToolCallStart: deferDuringCompressionRefresh(handlers.onToolCallStart),
+      onToolCallEnd: deferDuringCompressionRefresh(handlers.onToolCallEnd),
+      onToolCallLimit: deferDuringCompressionRefresh(handlers.onToolCallLimit),
+      onTokenUsage: deferDuringCompressionRefresh(handlers.onTokenUsage),
+      onWaitingHuman: deferDuringCompressionRefresh(handlers.onWaitingHuman),
+      onToolApproval: deferDuringCompressionRefresh(handlers.onToolApproval),
+      onTodoUpdate: deferDuringCompressionRefresh(handlers.onTodoUpdate),
+      onFlowDone: deferDuringCompressionRefresh(handlers.onFlowDone),
+      onLlmRetry: deferDuringCompressionRefresh(handlers.onLlmRetry),
+      onContextCompressing: deferDuringCompressionRefresh(handlers.onContextCompressing),
+      onFlowPreview: deferDuringCompressionRefresh(handlers.onFlowPreview),
+      onKnowledgeCitations: deferDuringCompressionRefresh(handlers.onKnowledgeCitations),
+      onError: deferDuringCompressionRefresh(handlers.onError)
+    }
+  }
+
+  function createReattachHandlers(
+    context: AgentStreamContext,
+    snapshotEventId: number
+  ): FlowSSEHandlers {
+    const handlers = createStreamHandlers(context)
+    const afterSnapshot = (handler: ((event: SSEEvent) => void) | undefined) => {
+      return (event: SSEEvent) => {
+        const eventId = Number(event.id)
+        if (!Number.isInteger(eventId) || eventId > snapshotEventId) {
+          handler?.(event)
+        }
+      }
+    }
+    return {
+      ...handlers,
+      onNodeThinking: afterSnapshot(handlers.onNodeThinking),
+      onNodeContent: afterSnapshot(handlers.onNodeContent),
+      onToolCallStart: afterSnapshot(handlers.onToolCallStart),
+      onToolCallEnd: afterSnapshot(handlers.onToolCallEnd),
+      onToolCallLimit: afterSnapshot(handlers.onToolCallLimit),
+      onTokenUsage: afterSnapshot(handlers.onTokenUsage),
+      onTodoUpdate: afterSnapshot(handlers.onTodoUpdate),
+      onKnowledgeCitations: afterSnapshot(handlers.onKnowledgeCitations),
+      onLlmRetry: afterSnapshot(handlers.onLlmRetry)
     }
   }
 
@@ -898,14 +1095,20 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   /**
-   * 取消流式输出（仅断开SSE连接）
+   * 取消流式输出；中断场景会在启动请求完成后取消后台执行
    * @param waitForSave 是否等待后端 save_to_db 完成后刷新消息（仅中断场景传 true）
    */
   function cancelStream(waitForSave = false) {
     streamGeneration++
+    const cancelGeneration = streamGeneration
+    const agentId = currentAgent.value?.id
+    const sessionId = currentSession.value?.id
+    let cancelResult: void | Promise<void> = undefined
     if (streamAbort) {
-      streamAbort()
+      cancelResult = streamAbort(waitForSave)
       streamAbort = null
+    } else if (waitForSave && agentId && sessionId) {
+      cancelResult = agentApi.cancel(agentId, sessionId).then(() => undefined)
     }
     if (!waitForSave) {
       stopStreaming()
@@ -919,8 +1122,28 @@ export const useAgentStore = defineStore('agent', () => {
     stopApprovalCountdown()
     stopSavePolling()
     stopRunningPolling()
-    if (waitForSave && currentAgent.value && currentSession.value) {
-      startSavePolling(currentAgent.value.id, currentSession.value.id)
+    if (waitForSave && agentId && sessionId) {
+      void Promise.resolve(cancelResult)
+        .then(() => {
+          if (
+            cancelGeneration === streamGeneration &&
+            currentAgent.value?.id === agentId &&
+            currentSession.value?.id === sessionId
+          ) {
+            startSavePolling(agentId, sessionId)
+          }
+        })
+        .catch(() => {
+          if (
+            cancelGeneration === streamGeneration &&
+            currentAgent.value?.id === agentId &&
+            currentSession.value?.id === sessionId
+          ) {
+            isStopping.value = false
+            startRunningPolling(agentId, sessionId)
+            ElMessage.error('停止请求失败，请稍后重试')
+          }
+        })
     }
   }
 
@@ -1049,19 +1272,11 @@ export const useAgentStore = defineStore('agent', () => {
   /**
    * 中断执行（通知后端停止并断开SSE）
    */
-  async function interruptExecution() {
+  function interruptExecution() {
     if (isStopping.value) return
     if (!currentAgent.value || !currentSession.value) return
     isStopping.value = true
-    const agentId = currentAgent.value.id
-    const sessionId = currentSession.value.id
-    const cancelRequest = agentApi.cancel(agentId, sessionId)
     cancelStream(true)
-    try {
-      await cancelRequest
-    } catch {
-      // 保存轮询会继续确认后端是否已停止。
-    }
   }
 
   /**

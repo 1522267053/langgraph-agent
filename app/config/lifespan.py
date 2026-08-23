@@ -110,6 +110,12 @@ async def startup() -> None:
     await init_db()
     logger.info("[OK] Database initialized")
 
+    # ---- 迁移旧版上下文压缩消息格式 ----
+    from app.services.agent_executor_service import agent_executor_service
+
+    async with AsyncSessionLocal() as db:
+        await agent_executor_service.migrate_legacy_compression_messages(db)
+
     # ---- 更新收尾：若由 updater 拉起且最终结果未写入，后台轮询判定成功/中断 ----
     from app.services.update_service import update_service
 
@@ -157,17 +163,23 @@ async def startup() -> None:
 async def shutdown() -> None:
     """应用关闭流程"""
     from app.agent_flow.mcp_manager import mcp_tool_manager
+    from app.services.agent_executor_service import agent_executor_service
     from app.services.scheduler_service import scheduler_service
+
+    # ---- 先停止任务生产者，避免 Agent 清理期间产生新执行 ----
+    logger.info("Closing scheduler...")
+    await scheduler_service.shutdown()
+    logger.info("[OK] Scheduler closed")
+
+    # ---- 停止后台 Agent 执行，确保其数据库会话先完成清理 ----
+    logger.info("Stopping background Agent runs...")
+    await agent_executor_service.shutdown_runs()
+    logger.info("[OK] Background Agent runs stopped")
 
     # ---- 清理 MCP 连接 ----
     logger.info("Closing MCP connections...")
     await mcp_tool_manager.clear_all_cache()
     logger.info("[OK] MCP connections closed")
-
-    # ---- 关闭定时任务调度器 ----
-    logger.info("Closing scheduler...")
-    await scheduler_service.shutdown()
-    logger.info("[OK] Scheduler closed")
 
     # ---- 关闭数据库连接 ----
     logger.info("Closing database connection...")

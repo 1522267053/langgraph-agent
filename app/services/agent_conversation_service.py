@@ -230,6 +230,12 @@ class AgentConversationService:
             message: BaseMessage = SystemMessage(content=msg.content or "")
         elif msg.role == "human":
             content = msg.content or ""
+            if msg.message_type == "context_summary":
+                removed_count = (msg.input_data or {}).get("removed_count", 0)
+                content = (
+                    f"[上下文压缩] 共 {removed_count} 条历史对话已压缩为以下摘要："
+                    f"\n\n{content}"
+                )
             files = msg.files if isinstance(msg.files, list) else None
             if files:
                 content = await build_content_from_db_files(

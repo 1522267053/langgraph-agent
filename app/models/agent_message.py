@@ -21,6 +21,9 @@ class AgentMessage(DbBaseModel):
     role: Mapped[str] = mapped_column(
         String(20), nullable=False, comment="human/ai/tool"
     )
+    message_type: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True, comment="内部消息类型，如 context_summary"
+    )
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="消息内容")
     original_content: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, comment="原始用户消息内容（未渲染模板的）"

@@ -57,12 +57,6 @@ const emit = defineEmits<{
           :is-streaming="isStreaming"
           @revert="dbMsgId => emit('revert', dbMsgId)"
         />
-        <!-- 流式输出指示器：最后一个 assistant 消息在 streaming 期间持续显示 -->
-        <div v-if="isStreaming && isLast" class="streaming-indicator">
-          <span class="dot"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
-        </div>
         <div v-if="msg.total_tokens && !(isStreaming && isLast)" class="token-info">
           <span>
             输入:
@@ -92,6 +86,13 @@ const emit = defineEmits<{
           @preview="data => emit('preview', data)"
         />
       </template>
+
+      <!-- 已有 AI 气泡时在气泡内显示加载状态，避免再创建第二个占位气泡 -->
+      <div v-if="msg.role === 'ai' && isStreaming && isLast" class="streaming-indicator">
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
+      </div>
     </div>
   </div>
 </template>

@@ -212,7 +212,9 @@ Body: {"input": "用户补充内容"}
 
 1. `POST /agent/{agent_id}/sessions` 创建会话，请求体为空。
 2. 从普通响应的 `data.id` 获取 `session_id`。
-3. `POST /agent/{agent_id}/sessions/{session_id}/chat` 发送消息并读取 SSE。
+3. `POST /agent/{agent_id}/sessions/{session_id}/chat` 发送消息，从普通响应的
+   `data.run_id` 获取后台执行 ID。
+4. `POST /agent/{agent_id}/sessions/{session_id}/events` 订阅 SSE。
 
 ```json
 {"content": "帮我分析这段数据", "params": {}}
@@ -220,12 +222,30 @@ Body: {"input": "用户补充内容"}
 
 `params` 必须是 JSON 对象，可承载 Agent 输入字段和文件参数。
 
+事件订阅请求：
+
+```json
+{"run_id": "chat 返回的 run_id", "after_event_id": 0}
+```
+
+后台执行产生的 SSE 包含递增的 `id`。连接中断后使用最后处理的 `id` 作为
+`after_event_id` 重新订阅，不要重新提交 `/chat`，否则可能重复执行工具。
+已完成执行的事件最多在当前服务进程保留 5 分钟；同一会话启动新执行后，
+旧执行不再保证可回放。`waiting_human` 执行会保留到恢复或取消。
+
+页面恢复可查询 `GET /agent/{agent_id}/sessions/{session_id}/running`。
+`running=true` 表示会话仍被占用；仅当 `managed_running=true` 且存在 `run_id`
+时才能通过 `/events` 重新订阅。直接执行（如定时任务或 WebSocket）只支持状态轮询。
+等待人工输入时响应包含 `waiting_human=true` 和 `waiting_event`。
+
 Agent 人工输入恢复：
 
 ```text
 POST /agent/{agent_id}/sessions/{session_id}/resume
 Body: {"human_input": "用户补充内容"}
 ```
+
+恢复接口同样先返回新的 `run_id`，再通过 `/events` 订阅执行事件。
 
 工具审批：
 

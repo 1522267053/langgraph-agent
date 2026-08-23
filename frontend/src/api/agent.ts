@@ -3,7 +3,7 @@
  * @description Agent会话相关的API接口，包含会话管理和流式聊天
  */
 import { get, post } from './index'
-import type { ListResponse } from '@/types/common'
+import type { ApiResponse, ListResponse } from '@/types/common'
 import type {
   AgentFlow,
   AgentSession,
@@ -12,11 +12,191 @@ import type {
   AgentResumeRequest,
   AgentDeleteMessagesResult
 } from '@/types/agent'
-import type { FlowSSEHandlers, SSEWaitData } from '@/types/sse'
+import type { FlowSSEHandlers, SSEEvent, SSEWaitData } from '@/types/sse'
 import { createFlowSSEConnection } from '@/utils/sse'
 
 /** Agent等待数据（兼容旧类型） */
 export type AgentWaitData = SSEWaitData
+
+interface AgentRunStart {
+  run_id: string
+}
+
+interface AgentRunStatus {
+  running: boolean
+  managed_running: boolean
+  waiting_human: boolean
+  run_id: string | null
+  last_event_id: number
+  terminal_event_type: string | null
+  waiting_event: SSEEvent | null
+}
+
+type AgentRunAbort = (cancelRun?: boolean) => void | Promise<void>
+
+const MAX_RECONNECT_DELAY = 5000
+
+function cancelAgentRunRequest(agentId: number, sessionId: number): Promise<void> {
+  return post<void>(`/agent/${agentId}/sessions/${sessionId}/cancel`, undefined, {
+    showError: false
+  }).then(() => undefined)
+}
+
+function connectAgentRun(
+  agentId: number,
+  sessionId: number,
+  runId: string,
+  afterEventId: number,
+  handlers: FlowSSEHandlers
+): () => void {
+  let stopped = false
+  let terminal = false
+  let lastEventId = afterEventId
+  let reconnectAttempts = 0
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let abortCurrent: (() => void) | null = null
+
+  const clearReconnectTimer = () => {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+  }
+
+  const markTerminal = () => {
+    terminal = true
+    clearReconnectTimer()
+  }
+
+  const streamHandlers: FlowSSEHandlers = {
+    ...handlers,
+    onWaitingHuman: event => {
+      markTerminal()
+      handlers.onWaitingHuman?.(event)
+    },
+    onFlowDone: event => {
+      markTerminal()
+      handlers.onFlowDone?.(event)
+    },
+    onError: event => {
+      markTerminal()
+      handlers.onError?.(event)
+    }
+  }
+
+  function scheduleReconnect(error?: Error): void {
+    abortCurrent = null
+    if (stopped || terminal || reconnectTimer) return
+    const status = Number(error?.message.match(/status: (\d+)/)?.[1])
+    if (error?.name === 'SSEProtocolError' || (status >= 400 && status < 500)) {
+      markTerminal()
+      handlers.onError?.({
+        type: 'error',
+        data: {
+          message:
+            error?.name === 'SSEProtocolError'
+              ? error.message
+              : `Agent 事件订阅失败（HTTP ${status}）`
+        }
+      })
+      return
+    }
+    const delay = Math.min(500 * 2 ** Math.min(reconnectAttempts, 4), MAX_RECONNECT_DELAY)
+    reconnectAttempts++
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      connect()
+    }, delay)
+  }
+
+  function connect(): void {
+    if (stopped || terminal) return
+    abortCurrent = createFlowSSEConnection(
+      `/api/agent/${agentId}/sessions/${sessionId}/events`,
+      { run_id: runId, after_event_id: lastEventId },
+      streamHandlers,
+      '[Agent SSE]',
+      {
+        onEventId: eventId => {
+          const parsedId = Number(eventId)
+          if (Number.isInteger(parsedId) && parsedId > lastEventId) {
+            lastEventId = parsedId
+          }
+          reconnectAttempts = 0
+        },
+        onDisconnect: scheduleReconnect
+      }
+    )
+  }
+
+  connect()
+  return () => {
+    stopped = true
+    clearReconnectTimer()
+    abortCurrent?.()
+    abortCurrent = null
+  }
+}
+
+function startAgentRun(
+  startRequest: Promise<{ data: ApiResponse<AgentRunStart> }>,
+  agentId: number,
+  sessionId: number,
+  handlers: FlowSSEHandlers
+): AgentRunAbort {
+  let stopped = false
+  let abortSubscription: (() => void) | null = null
+  let cancelPromise: Promise<void> | null = null
+
+  const runPromise = startRequest.then(response => {
+    const runId = response.data.data?.run_id
+    if (!runId) throw new Error('后端未返回 Agent 执行 ID')
+    return runId
+  })
+
+  void runPromise
+    .then(runId => {
+      if (stopped) return
+      abortSubscription = connectAgentRun(agentId, sessionId, runId, 0, handlers)
+    })
+    .catch(async (error: unknown) => {
+      if (stopped) return
+      try {
+        const response = await get<AgentRunStatus>(
+          `/agent/${agentId}/sessions/${sessionId}/running`,
+          undefined,
+          { showError: false }
+        )
+        const status = response.data.data
+        if (!stopped && status?.managed_running && status.run_id) {
+          abortSubscription = connectAgentRun(agentId, sessionId, status.run_id, 0, handlers)
+          return
+        }
+      } catch {
+        // 启动响应丢失时尽力恢复；状态查询失败则显示原始错误。
+      }
+      if (stopped) return
+      const event: SSEEvent = {
+        type: 'error',
+        data: { message: error instanceof Error ? error.message : '发送失败' }
+      }
+      handlers.onError?.(event)
+    })
+
+  return (cancelRun = false) => {
+    stopped = true
+    abortSubscription?.()
+    abortSubscription = null
+    if (!cancelRun) return
+
+    if (!cancelPromise) {
+      cancelPromise = runPromise
+        .then(() => cancelAgentRunRequest(agentId, sessionId))
+        .catch(() => cancelAgentRunRequest(agentId, sessionId))
+    }
+    return cancelPromise
+  }
+}
 
 /** Agent API */
 export const agentApi = {
@@ -116,7 +296,7 @@ export const agentApi = {
   },
 
   /**
-   * 发送消息（流式）
+   * 启动后台对话并订阅可重连事件流
    * @param agentId Agent ID
    * @param sessionId 会话ID
    * @param chatRequest 聊天请求
@@ -128,13 +308,19 @@ export const agentApi = {
     sessionId: number,
     chatRequest: AgentChatRequest,
     handlers: FlowSSEHandlers
-  ): () => void {
-    const url = `/api/agent/${agentId}/sessions/${sessionId}/chat`
-    return createFlowSSEConnection(url, chatRequest, handlers, '[Agent SSE]')
+  ): AgentRunAbort {
+    return startAgentRun(
+      post<AgentRunStart>(`/agent/${agentId}/sessions/${sessionId}/chat`, chatRequest, {
+        showError: false
+      }),
+      agentId,
+      sessionId,
+      handlers
+    )
   },
 
   /**
-   * 恢复会话（人工交互后继续）
+   * 启动后台恢复并订阅可重连事件流
    * @param agentId Agent ID
    * @param sessionId 会话ID
    * @param resumeRequest 恢复请求
@@ -146,9 +332,33 @@ export const agentApi = {
     sessionId: number,
     resumeRequest: AgentResumeRequest,
     handlers: FlowSSEHandlers
-  ): () => void {
-    const url = `/api/agent/${agentId}/sessions/${sessionId}/resume`
-    return createFlowSSEConnection(url, resumeRequest, handlers, '[Agent SSE Resume]')
+  ): AgentRunAbort {
+    return startAgentRun(
+      post<AgentRunStart>(`/agent/${agentId}/sessions/${sessionId}/resume`, resumeRequest, {
+        showError: false
+      }),
+      agentId,
+      sessionId,
+      handlers
+    )
+  },
+
+  /** 重新订阅仍在后台运行的 Agent 执行 */
+  subscribeRun(
+    agentId: number,
+    sessionId: number,
+    runId: string,
+    afterEventId: number,
+    handlers: FlowSSEHandlers
+  ): AgentRunAbort {
+    const abortSubscription = connectAgentRun(agentId, sessionId, runId, afterEventId, handlers)
+    let cancelPromise: Promise<void> | null = null
+    return (cancelRun = false) => {
+      abortSubscription()
+      if (!cancelRun) return
+      cancelPromise ||= cancelAgentRunRequest(agentId, sessionId)
+      return cancelPromise
+    }
   },
 
   /**
@@ -157,7 +367,9 @@ export const agentApi = {
    * @param sessionId 会话ID
    */
   cancel(agentId: number, sessionId: number) {
-    return post<void>(`/agent/${agentId}/sessions/${sessionId}/cancel`)
+    return post<void>(`/agent/${agentId}/sessions/${sessionId}/cancel`, undefined, {
+      showError: false
+    })
   },
 
   /**
@@ -211,7 +423,9 @@ export const agentApi = {
    * @param sessionId 会话ID
    */
   runningStatus(agentId: number, sessionId: number) {
-    return get<{ running: boolean }>(`/agent/${agentId}/sessions/${sessionId}/running`)
+    return get<AgentRunStatus>(`/agent/${agentId}/sessions/${sessionId}/running`, undefined, {
+      showError: false
+    })
   },
 
   /**

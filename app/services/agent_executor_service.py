@@ -9,8 +9,13 @@ Agent执行服务模块
 """
 
 import asyncio
+import json
 import logging
-from typing import Optional, AsyncGenerator, Dict, Any, List
+import re
+import time
+import uuid
+from dataclasses import dataclass, field as dataclass_field
+from typing import Optional, AsyncGenerator, Awaitable, Callable, Dict, Any, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables.config import RunnableConfig
@@ -35,6 +40,34 @@ from app.utils.message_utils import extract_text_content, extract_token_usage
 logger = logging.getLogger(__name__)
 
 
+_RUN_END_EVENT_TYPES = frozenset({"error", "flow_done", "waiting_human"})
+_COMPLETED_RUN_RETENTION_SECONDS = 300
+
+
+@dataclass
+class _AgentRun:
+    """后台 Agent 执行及其可回放事件。"""
+
+    run_id: str
+    session_id: int
+    events: list[dict[str, Any]] = dataclass_field(default_factory=list)
+    subscribers: set[asyncio.Queue[dict[str, Any] | None]] = dataclass_field(
+        default_factory=set
+    )
+    task: asyncio.Task[None] | None = None
+    started: bool = False
+    cancel_requested: bool = False
+    finalizing: bool = False
+    done: bool = False
+    completed_at: float | None = None
+    terminal_event_type: str | None = None
+    next_event_id: int = 1
+
+    @property
+    def last_event_id(self) -> int:
+        return self.next_event_id - 1
+
+
 class AgentExecutorService(BaseExecutorService):
     """
     Agent执行服务
@@ -48,8 +81,363 @@ class AgentExecutorService(BaseExecutorService):
         self._compressing_sessions: set[int] = set()
         self._compress_results: dict[int, dict] = {}
         self._running_sessions: set[int] = set()
+        self._waiting_sessions: set[int] = set()
+        self._waiting_events: dict[int, dict] = {}
         self._pending_save_sessions: set[int] = set()
         self._streaming_tasks: Dict[str, asyncio.Task] = {}
+        self._compression_tasks: dict[int, asyncio.Task[None]] = {}
+        self._direct_streaming_tasks: dict[int, set[asyncio.Task]] = {}
+        self._agent_runs: dict[int, _AgentRun] = {}
+        self._shutting_down = False
+
+    def _prune_agent_runs(self) -> None:
+        """清理已结束且超过回放保留时间的执行。"""
+        now = time.monotonic()
+        stale_session_ids = [
+            session_id
+            for session_id, run in self._agent_runs.items()
+            if run.done
+            and session_id not in self._waiting_sessions
+            and run.completed_at is not None
+            and now - run.completed_at > _COMPLETED_RUN_RETENTION_SECONDS
+        ]
+        for session_id in stale_session_ids:
+            self._agent_runs.pop(session_id, None)
+
+    def _publish_agent_run_event(self, run: _AgentRun, event: dict) -> None:
+        """记录事件并推送给当前订阅者。"""
+        stored_event = {
+            "id": run.next_event_id,
+            "type": event.get("type", "unknown"),
+            "data": dict(event.get("data") or {}),
+        }
+        run.next_event_id += 1
+        run.events.append(stored_event)
+        for queue in tuple(run.subscribers):
+            queue.put_nowait(stored_event)
+
+    @staticmethod
+    async def _await_cancellation_safe(
+        awaitable: Awaitable[Any],
+    ) -> BaseException | None:
+        """即使外层任务被重复取消，也等待清理 awaitable 真正结束。"""
+        cleanup_task = asyncio.ensure_future(awaitable)
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                continue
+        try:
+            cleanup_task.result()
+        except (Exception, asyncio.CancelledError) as exc:
+            return exc
+        return None
+
+    def _finalize_agent_run(self, run: _AgentRun, terminal_event: dict) -> None:
+        """原子发布结束事件并释放所有订阅者。"""
+        if run.done:
+            return
+        run.terminal_event_type = terminal_event.get("type", "error")
+        if run.terminal_event_type == "waiting_human":
+            self._waiting_sessions.add(run.session_id)
+            self._waiting_events[run.session_id] = terminal_event
+        try:
+            self._publish_agent_run_event(run, terminal_event)
+        finally:
+            run.done = True
+            run.completed_at = time.monotonic()
+            for queue in tuple(run.subscribers):
+                queue.put_nowait(None)
+
+    async def _consume_agent_run(
+        self,
+        run: _AgentRun,
+        stream_generator: AsyncGenerator[Dict[str, Any], None],
+    ) -> None:
+        """独立于 SSE 连接消费执行流，并将事件写入会话回放缓冲。"""
+        run.started = True
+        terminal_event: dict | None = None
+        try:
+            async for event in stream_generator:
+                if event.get("type") in _RUN_END_EVENT_TYPES:
+                    terminal_event = event
+                    break
+                else:
+                    self._publish_agent_run_event(run, event)
+        except asyncio.CancelledError:
+            terminal_event = FlowEventFactory.flow_done(
+                execution_id=run.session_id,
+                output_data={},
+                status="cancelled",
+            )
+        except Exception as exc:
+            logger.exception(
+                "后台 Agent 执行异常: session_id=%s, run_id=%s",
+                run.session_id,
+                run.run_id,
+            )
+            terminal_event = FlowEventFactory.error(f"执行失败: {exc}")
+        finally:
+            run.finalizing = True
+            try:
+                cleanup_error = await self._await_cancellation_safe(
+                    stream_generator.aclose()
+                )
+                if cleanup_error:
+                    raise cleanup_error
+            except BaseException:
+                logger.debug("关闭 Agent 执行流失败", exc_info=True)
+            finally:
+                if terminal_event is None:
+                    terminal_event = FlowEventFactory.error("Agent 执行未返回结束事件")
+
+                if run.cancel_requested:
+                    if terminal_event.get("type") == "waiting_human":
+                        cleanup_error = await self._await_cancellation_safe(
+                            self._cleanup_thread_checkpoint(run.session_id)
+                        )
+                        if cleanup_error:
+                            logger.warning(f"取消时清理checkpoint失败: {cleanup_error}")
+                    self._waiting_sessions.discard(run.session_id)
+                    self._waiting_events.pop(run.session_id, None)
+                    interrupt_service.clear_agent_interrupted(run.session_id)
+                    terminal_event = FlowEventFactory.flow_done(
+                        execution_id=run.session_id,
+                        output_data={},
+                        status="cancelled",
+                    )
+                self._finalize_agent_run(run, terminal_event)
+
+    def _start_agent_run(
+        self,
+        session_id: int,
+        stream_factory: Callable[[], AsyncGenerator[Dict[str, Any], None]],
+        *,
+        allow_waiting: bool = False,
+    ) -> str:
+        """启动单个会话的后台执行并返回 run_id。"""
+        if self._shutting_down:
+            raise ValueError("服务正在关闭，无法启动 Agent 执行")
+        self._prune_agent_runs()
+        current_run = self._agent_runs.get(session_id)
+        if current_run and not current_run.done:
+            raise ValueError("会话正在执行中，请稍后再发送消息")
+        if session_id in self._running_sessions:
+            raise ValueError("会话正在执行中，请稍后再发送消息")
+        if session_id in self._compressing_sessions:
+            raise ValueError("正在压缩上下文，请稍后再发送消息")
+        if session_id in self._waiting_sessions and not allow_waiting:
+            raise ValueError("会话正在等待人工输入，请使用恢复执行")
+
+        run = _AgentRun(run_id=uuid.uuid4().hex, session_id=session_id)
+        self._agent_runs[session_id] = run
+        stream_generator = stream_factory()
+        task = asyncio.create_task(self._consume_agent_run(run, stream_generator))
+        run.task = task
+
+        task_key = str(session_id)
+        self._streaming_tasks[task_key] = task
+
+        def remove_completed_task(completed_task: asyncio.Task) -> None:
+            if self._streaming_tasks.get(task_key) is completed_task:
+                self._streaming_tasks.pop(task_key, None)
+            if not run.done and not run.finalizing:
+                if completed_task.cancelled():
+                    terminal_event = FlowEventFactory.flow_done(
+                        execution_id=session_id,
+                        output_data={},
+                        status="cancelled",
+                    )
+                else:
+                    error = completed_task.exception()
+                    terminal_event = FlowEventFactory.error(
+                        f"执行失败: {error}" if error else "Agent 执行异常结束"
+                    )
+                self._waiting_sessions.discard(session_id)
+                self._pending_save_sessions.discard(session_id)
+                self._finalize_agent_run(run, terminal_event)
+
+        task.add_done_callback(remove_completed_task)
+        return run.run_id
+
+    def start_chat_run(
+        self,
+        session_id: int,
+        user_message: str,
+        params: dict | None = None,
+    ) -> str:
+        """启动后台 Agent 对话。"""
+        return self._start_agent_run(
+            session_id,
+            lambda: self.chat_stream(
+                session_id,
+                user_message,
+                dict(params or {}),
+                _managed_run=True,
+            ),
+        )
+
+    def start_resume_run(self, session_id: int, human_input: str) -> str:
+        """启动后台 Agent 人工恢复。"""
+        current_run = self._agent_runs.get(session_id)
+        if current_run and current_run.done and not self.is_waiting(session_id):
+            raise ValueError("会话当前没有等待中的人工输入")
+        return self._start_agent_run(
+            session_id,
+            lambda: self.resume_stream(
+                session_id,
+                human_input,
+                _managed_run=True,
+            ),
+            allow_waiting=True,
+        )
+
+    async def cancel_run(self, session_id: int) -> bool:
+        """标记并取消当前托管执行，由 Runner 完成保存和结束事件。"""
+        run = self._agent_runs.get(session_id)
+        if not run or not run.task:
+            return False
+        if run.done:
+            if not self.is_waiting(session_id):
+                return False
+            if session_id in self._running_sessions:
+                return True
+            self._running_sessions.add(session_id)
+            try:
+                cleanup_error = await self._await_cancellation_safe(
+                    self._cleanup_thread_checkpoint(session_id)
+                )
+                if cleanup_error:
+                    logger.warning(f"取消等待状态时清理checkpoint失败: {cleanup_error}")
+            finally:
+                self._waiting_sessions.discard(session_id)
+                self._waiting_events.pop(session_id, None)
+                interrupt_service.clear_agent_interrupted(session_id)
+                self._pending_save_sessions.discard(session_id)
+                self._running_sessions.discard(session_id)
+                if self._agent_runs.get(session_id) is run:
+                    self._agent_runs.pop(session_id, None)
+            return True
+        was_started = run.started
+        run.cancel_requested = True
+        run.finalizing = not run.started
+        self._waiting_sessions.discard(session_id)
+        self._waiting_events.pop(session_id, None)
+        if not run.task.done():
+            run.task.cancel()
+        if not was_started:
+            cleanup_error = await self._await_cancellation_safe(
+                self._cleanup_thread_checkpoint(session_id)
+            )
+            if cleanup_error:
+                logger.warning(f"取消时清理checkpoint失败: {cleanup_error}")
+            interrupt_service.clear_agent_interrupted(session_id)
+            self._pending_save_sessions.discard(session_id)
+            self._finalize_agent_run(
+                run,
+                FlowEventFactory.flow_done(
+                    execution_id=session_id,
+                    output_data={},
+                    status="cancelled",
+                ),
+            )
+        return True
+
+    async def subscribe_run(
+        self,
+        session_id: int,
+        run_id: str,
+        after_event_id: int = 0,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """订阅后台执行；断线重连时回放游标之后的事件。"""
+        self._prune_agent_runs()
+        run = self._agent_runs.get(session_id)
+        if not run or run.run_id != run_id:
+            yield FlowEventFactory.error("Agent 执行不存在或事件回放已过期")
+            return
+
+        cursor = max(after_event_id, 0)
+        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        run.subscribers.add(queue)
+        try:
+            replay_events = [event for event in run.events if event["id"] > cursor]
+            for event in replay_events:
+                cursor = event["id"]
+                yield event
+
+            if run.done and queue.empty():
+                return
+
+            while True:
+                event = await queue.get()
+                if event is None:
+                    return
+                if event["id"] <= cursor:
+                    continue
+                cursor = event["id"]
+                yield event
+        finally:
+            run.subscribers.discard(queue)
+
+    def get_run_status(self, session_id: int) -> dict[str, Any]:
+        """返回会话运行状态及当前可订阅游标。"""
+        self._prune_agent_runs()
+        run = self._agent_runs.get(session_id)
+        managed_running = bool(run and not run.done)
+        return {
+            "running": managed_running or session_id in self._running_sessions,
+            "managed_running": managed_running,
+            "waiting_human": session_id in self._waiting_sessions,
+            "run_id": run.run_id if run else None,
+            "last_event_id": run.last_event_id if run else 0,
+            "terminal_event_type": run.terminal_event_type if run else None,
+            "waiting_event": self._waiting_events.get(session_id),
+        }
+
+    def is_waiting(self, session_id: int) -> bool:
+        """检查会话是否停在 LangGraph 人工输入中断点。"""
+        return session_id in self._waiting_sessions
+
+    def start_compress_background(
+        self, session_id: int, custom_prompt: str = ""
+    ) -> None:
+        """原子预占会话并启动手动上下文压缩。"""
+        if self._shutting_down:
+            raise ValueError("服务正在关闭，无法压缩上下文")
+        if session_id in self._compressing_sessions:
+            raise ValueError("正在压缩中，请稍后再试")
+        if self.is_running(session_id):
+            raise ValueError("会话正在执行中，请稍后再试")
+        if self.is_waiting(session_id):
+            raise ValueError("会话正在等待人工输入，无法压缩上下文")
+
+        self._compressing_sessions.add(session_id)
+        task = asyncio.create_task(
+            self._run_compress_background(session_id, custom_prompt)
+        )
+        self._compression_tasks[session_id] = task
+
+        def release_reservation(completed_task: asyncio.Task) -> None:
+            self._compressing_sessions.discard(session_id)
+            if self._compression_tasks.get(session_id) is completed_task:
+                self._compression_tasks.pop(session_id, None)
+
+        task.add_done_callback(release_reservation)
+
+    async def shutdown_runs(self) -> None:
+        """应用退出时停止所有后台 Agent 执行。"""
+        self._shutting_down = True
+        run_tasks = [
+            run.task for run in self._agent_runs.values() if run.task and not run.done
+        ]
+        direct_tasks = {
+            task for tasks in self._direct_streaming_tasks.values() for task in tasks
+        }
+        tasks = list({*run_tasks, *self._compression_tasks.values(), *direct_tasks})
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _validate_agent_flow(self, flow: Flow) -> None:
         """
@@ -313,6 +701,8 @@ class AgentExecutorService(BaseExecutorService):
         await db.commit()
 
         await self._cleanup_thread_checkpoint(session_id)
+        self._waiting_sessions.discard(session_id)
+        self._waiting_events.pop(session_id, None)
 
         return True
 
@@ -397,6 +787,8 @@ class AgentExecutorService(BaseExecutorService):
         await db.commit()
 
         await self._cleanup_thread_checkpoint(session_id)
+        self._waiting_sessions.discard(session_id)
+        self._waiting_events.pop(session_id, None)
 
         return {
             "content": user_message_content,
@@ -625,6 +1017,8 @@ class AgentExecutorService(BaseExecutorService):
         session_id: int,
         user_message: str,
         params: dict | None = None,
+        *,
+        _managed_run: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         执行Agent对话（流式）
@@ -639,7 +1033,14 @@ class AgentExecutorService(BaseExecutorService):
         """
         from app.config.database import AsyncSessionLocal
 
+        if self._shutting_down:
+            yield FlowEventFactory.error("服务正在关闭，无法启动 Agent 执行")
+            return
+
         db: AsyncSession | None = None
+        direct_task: asyncio.Task | None = None
+        owns_execution = False
+        preserve_checkpoint = False
         try:
             db = AsyncSessionLocal()
         except Exception as e:
@@ -647,21 +1048,34 @@ class AgentExecutorService(BaseExecutorService):
             return
 
         try:
+            current_run = self._agent_runs.get(session_id)
+            if not _managed_run and current_run and not current_run.done:
+                yield FlowEventFactory.error("会话正在执行中，请稍后再发送消息")
+                return
+            if session_id in self._running_sessions:
+                yield FlowEventFactory.error("会话正在执行中，请稍后再发送消息")
+                return
+            if session_id in self._compressing_sessions:
+                yield FlowEventFactory.error("正在压缩上下文，请稍后再发送消息")
+                return
+            if session_id in self._waiting_sessions:
+                yield FlowEventFactory.error("会话正在等待人工输入，请使用恢复执行")
+                return
+
+            self._running_sessions.add(session_id)
+            owns_execution = True
+            if not _managed_run:
+                direct_task = asyncio.current_task()
+                if direct_task:
+                    self._direct_streaming_tasks.setdefault(session_id, set()).add(
+                        direct_task
+                    )
+
             # 获取会话
             session = await self._get_session(db, session_id)
             if not session:
                 yield FlowEventFactory.error("会话不存在")
                 return
-
-            if session_id in self._compressing_sessions:
-                yield FlowEventFactory.error("正在压缩上下文，请稍后再发送消息")
-                return
-
-            # check-then-act: asyncio 单线程下 in/add 间无 await，不会被抢占
-            if session_id in self._running_sessions:
-                yield FlowEventFactory.error("会话正在执行中，请稍后再发送消息")
-                return
-            self._running_sessions.add(session_id)
 
             # 获取Flow
             flow = await self._get_flow_with_details(
@@ -769,9 +1183,13 @@ class AgentExecutorService(BaseExecutorService):
                         # 处理 interrupt
                         if node_key == "__interrupt__":
                             interrupt_data = result[0].value if result else {}
-                            yield await self._handle_interrupt(
+                            preserve_checkpoint = True
+                            self._waiting_sessions.add(session_id)
+                            waiting_event = await self._handle_interrupt(
                                 db, session_id, interrupt_data
                             )
+                            self._waiting_events[session_id] = waiting_event
+                            yield waiting_event
                             return
 
                         node = next(
@@ -863,20 +1281,36 @@ class AgentExecutorService(BaseExecutorService):
                 interrupt_service.clear_agent_interrupted(session_id)
 
         finally:
-            self._running_sessions.discard(session_id)
-            self._pending_save_sessions.discard(session_id)
-            from app.services.tool_approval_service import tool_approval_service
-
-            tool_approval_service.cancel(session_id)
             try:
-                await self._cleanup_thread_checkpoint(session_id)
-            except Exception as cleanup_err:
-                logger.warning(f"清理checkpoint失败: {cleanup_err}")
-            if db is not None:
-                try:
-                    await db.close()
-                except Exception:
-                    pass
+                if owns_execution:
+                    try:
+                        from app.services.tool_approval_service import (
+                            tool_approval_service,
+                        )
+
+                        tool_approval_service.cancel(session_id)
+                    except Exception as approval_err:
+                        logger.warning(f"清理工具确认状态失败: {approval_err}")
+                    if not preserve_checkpoint:
+                        cleanup_error = await self._await_cancellation_safe(
+                            self._cleanup_thread_checkpoint(session_id)
+                        )
+                        if cleanup_error:
+                            logger.warning(f"清理checkpoint失败: {cleanup_error}")
+                if db is not None:
+                    close_error = await self._await_cancellation_safe(db.close())
+                    if close_error:
+                        logger.debug(f"关闭Agent数据库会话失败: {close_error}")
+            finally:
+                if owns_execution:
+                    self._running_sessions.discard(session_id)
+                    self._pending_save_sessions.discard(session_id)
+                    if direct_task:
+                        tasks = self._direct_streaming_tasks.get(session_id)
+                        if tasks:
+                            tasks.discard(direct_task)
+                            if not tasks:
+                                self._direct_streaming_tasks.pop(session_id, None)
 
     async def _update_session_title(
         self, db: AsyncSession, session_id: int, title: str
@@ -904,7 +1338,6 @@ class AgentExecutorService(BaseExecutorService):
             SSE事件字典
         """
         interrupt_type = interrupt_data.get("type", "unknown")
-
         if interrupt_type == "human_input_required":
             pass
 
@@ -922,7 +1355,11 @@ class AgentExecutorService(BaseExecutorService):
         )
 
     async def resume_stream(
-        self, session_id: int, human_input: str
+        self,
+        session_id: int,
+        human_input: str,
+        *,
+        _managed_run: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         恢复Agent执行（流式）
@@ -936,7 +1373,16 @@ class AgentExecutorService(BaseExecutorService):
         """
         from app.config.database import AsyncSessionLocal
 
+        if self._shutting_down:
+            yield FlowEventFactory.error("服务正在关闭，无法恢复 Agent 执行")
+            return
+
         db: AsyncSession | None = None
+        direct_task: asyncio.Task | None = None
+        owns_execution = False
+        was_waiting = self.is_waiting(session_id)
+        preserve_checkpoint = was_waiting
+        resume_claimed = False
         try:
             db = AsyncSessionLocal()
         except Exception as e:
@@ -944,8 +1390,26 @@ class AgentExecutorService(BaseExecutorService):
             return
 
         try:
-            # 占用运行锁，供刷新后前端 /running 检测（与 chat_stream 对称）
+            current_run = self._agent_runs.get(session_id)
+            if not _managed_run and current_run and not current_run.done:
+                yield FlowEventFactory.error("会话正在执行中，请稍后再恢复")
+                return
+            if session_id in self._running_sessions:
+                yield FlowEventFactory.error("会话正在执行中，请稍后再恢复")
+                return
+            if session_id in self._compressing_sessions:
+                yield FlowEventFactory.error("正在压缩上下文，请稍后再恢复")
+                return
+
             self._running_sessions.add(session_id)
+            owns_execution = True
+            if not _managed_run:
+                direct_task = asyncio.current_task()
+                if direct_task:
+                    self._direct_streaming_tasks.setdefault(session_id, set()).add(
+                        direct_task
+                    )
+
             # 获取会话
             session = await self._get_session(db, session_id)
             if not session:
@@ -971,7 +1435,6 @@ class AgentExecutorService(BaseExecutorService):
                     "_human_resume_input": human_input,
                 }
             }
-
             # 收集LLM响应内容
             llm_content = ""
             llm_thinking = ""
@@ -983,6 +1446,11 @@ class AgentExecutorService(BaseExecutorService):
                     config=config,
                     stream_mode=["updates", "custom"],
                 ):
+                    if not resume_claimed:
+                        resume_claimed = True
+                        self._waiting_sessions.discard(session_id)
+                        self._waiting_events.pop(session_id, None)
+                        preserve_checkpoint = False
                     if not isinstance(event, tuple) or len(event) != 2:
                         continue
 
@@ -1016,9 +1484,13 @@ class AgentExecutorService(BaseExecutorService):
                         # 处理再次interrupt
                         if node_key == "__interrupt__":
                             interrupt_data = result[0].value if result else {}
-                            yield await self._handle_interrupt(
+                            preserve_checkpoint = True
+                            self._waiting_sessions.add(session_id)
+                            waiting_event = await self._handle_interrupt(
                                 db, session_id, interrupt_data
                             )
+                            self._waiting_events[session_id] = waiting_event
+                            yield waiting_event
                             return
 
                         node = next(
@@ -1045,6 +1517,9 @@ class AgentExecutorService(BaseExecutorService):
                             node_type=node.node_type,
                             error=node_error,
                         )
+
+                if was_waiting and not resume_claimed:
+                    raise RuntimeError("未找到可恢复的 Agent 中断状态")
 
                 # 发送完成事件
                 is_interrupted = interrupt_service.is_agent_interrupted(session_id)
@@ -1091,22 +1566,99 @@ class AgentExecutorService(BaseExecutorService):
                 interrupt_service.clear_agent_interrupted(session_id)
 
         finally:
-            self._running_sessions.discard(session_id)
-            self._pending_save_sessions.discard(session_id)
-            from app.services.tool_approval_service import tool_approval_service
-
-            tool_approval_service.cancel(session_id)
             try:
-                await self._cleanup_thread_checkpoint(session_id)
-            except Exception as cleanup_err:
-                logger.warning(f"清理checkpoint失败: {cleanup_err}")
-            if db is not None:
-                try:
-                    await db.close()
-                except Exception:
-                    pass
+                if owns_execution:
+                    try:
+                        from app.services.tool_approval_service import (
+                            tool_approval_service,
+                        )
+
+                        tool_approval_service.cancel(session_id)
+                    except Exception as approval_err:
+                        logger.warning(f"清理工具确认状态失败: {approval_err}")
+                    if not preserve_checkpoint:
+                        cleanup_error = await self._await_cancellation_safe(
+                            self._cleanup_thread_checkpoint(session_id)
+                        )
+                        if cleanup_error:
+                            logger.warning(f"清理checkpoint失败: {cleanup_error}")
+                if db is not None:
+                    close_error = await self._await_cancellation_safe(db.close())
+                    if close_error:
+                        logger.debug(f"关闭Agent数据库会话失败: {close_error}")
+            finally:
+                if owns_execution:
+                    self._running_sessions.discard(session_id)
+                    self._pending_save_sessions.discard(session_id)
+                    if direct_task:
+                        tasks = self._direct_streaming_tasks.get(session_id)
+                        if tasks:
+                            tasks.discard(direct_task)
+                            if not tasks:
+                                self._direct_streaming_tasks.pop(session_id, None)
 
     COMPRESS_MARKER = "[上下文压缩]"
+    CONTEXT_SUMMARY_TYPE = "context_summary"
+
+    async def migrate_legacy_compression_messages(self, db: AsyncSession) -> int:
+        """将旧压缩消息归一为带 message_type 的单条摘要记录。"""
+        query = (
+            select(AgentMessage)
+            .where(
+                AgentMessage.role == "human",
+                AgentMessage.message_type.is_(None),
+                AgentMessage.content.startswith(self.COMPRESS_MARKER),
+            )
+            .order_by(AgentMessage.id.asc())
+        )
+        result = await db.execute(query)
+        markers = list(result.scalars().all())
+
+        migrated = 0
+        for marker in markers:
+            notice, separator, summary = (marker.content or "").partition("\n\n")
+            summary = summary.strip() if separator else ""
+
+            # 旧手动压缩格式为 Human marker + AI summary，将两条合并。
+            if not summary:
+                next_query = (
+                    select(AgentMessage)
+                    .where(
+                        AgentMessage.session_id == marker.session_id,
+                        AgentMessage.sequence > marker.sequence,
+                    )
+                    .order_by(AgentMessage.sequence.asc(), AgentMessage.id.asc())
+                    .limit(1)
+                )
+                next_result = await db.execute(next_query)
+                next_message = next_result.scalar_one_or_none()
+                if (
+                    next_message
+                    and next_message.role == "ai"
+                    and not next_message.tool_calls
+                ):
+                    summary = (next_message.content or "").strip()
+                    marker.prompt_tokens = next_message.prompt_tokens
+                    marker.completion_tokens = next_message.completion_tokens
+                    marker.total_tokens = next_message.total_tokens
+                    next_message.is_delete = 1
+
+            if not summary:
+                logger.warning("旧压缩消息缺少摘要内容: message_id=%s", marker.id)
+                continue
+
+            count_match = re.search(r"共\s*(\d+)\s*条", notice)
+            marker.content = summary
+            marker.message_type = self.CONTEXT_SUMMARY_TYPE
+            marker.input_data = {
+                "removed_count": int(count_match.group(1)) if count_match else 0
+            }
+            migrated += 1
+
+        if migrated:
+            await db.commit()
+            logger.info("已迁移 %s 条旧上下文压缩消息", migrated)
+        return migrated
 
     async def is_compressing_session(self, db: AsyncSession, session_id: int) -> bool:
         """检查指定会话是否正在压缩上下文"""
@@ -1118,7 +1670,7 @@ class AgentExecutorService(BaseExecutorService):
 
     def is_running(self, session_id: int) -> bool:
         """检查指定会话是否正在执行（用于刷新后前端检测并显示停止按钮）"""
-        return session_id in self._running_sessions
+        return bool(self.get_run_status(session_id)["running"])
 
     async def _run_compress_background(
         self, session_id: int, custom_prompt: str = ""
@@ -1144,7 +1696,14 @@ class AgentExecutorService(BaseExecutorService):
         return self._compress_results.pop(session_id, None)
 
     async def compress_session(
-        self, db: AsyncSession, session_id: int, custom_prompt: str = ""
+        self,
+        db: AsyncSession,
+        session_id: int,
+        custom_prompt: str = "",
+        *,
+        exclude_tail_count: int = 0,
+        continue_react: bool = False,
+        cleanup_checkpoint: bool = True,
     ) -> dict[str, Any]:
         """
         压缩会话上下文（手动/自动统一入口）
@@ -1154,18 +1713,35 @@ class AgentExecutorService(BaseExecutorService):
 
         Args:
             custom_prompt: 自定义压缩提示词，非空时追加到默认提示词后
+            exclude_tail_count: 不参与摘要并在事务中原样重建的末尾消息数
+            continue_react: 是否为需要继续执行的 ReAct 中途压缩
+            cleanup_checkpoint: 压缩完成后是否立即清理 LangGraph checkpoint
 
         Returns:
             {"summary": str|None, "kept_count": int, "removed_count": int, "token_usage": dict}
         """
         self._compressing_sessions.add(session_id)
         try:
-            return await self._do_compress(db, session_id, custom_prompt)
+            return await self._do_compress(
+                db,
+                session_id,
+                custom_prompt,
+                exclude_tail_count=exclude_tail_count,
+                continue_react=continue_react,
+                cleanup_checkpoint=cleanup_checkpoint,
+            )
         finally:
             self._compressing_sessions.discard(session_id)
 
     async def _do_compress(
-        self, db: AsyncSession, session_id: int, custom_prompt: str = ""
+        self,
+        db: AsyncSession,
+        session_id: int,
+        custom_prompt: str = "",
+        *,
+        exclude_tail_count: int = 0,
+        continue_react: bool = False,
+        cleanup_checkpoint: bool = True,
     ) -> dict[str, Any]:
         """压缩会话上下文的实际执行逻辑"""
         session = await self._get_session(db, session_id)
@@ -1178,6 +1754,25 @@ class AgentExecutorService(BaseExecutorService):
         if total == 0:
             return {"summary": None, "kept_count": 0, "removed_count": 0}
 
+        exclude_tail_count = max(0, exclude_tail_count)
+        if exclude_tail_count > total:
+            return {
+                "summary": None,
+                "kept_count": total,
+                "removed_count": 0,
+                "error": "保留消息数量超过当前会话消息总数",
+            }
+        tail_messages = all_messages[-exclude_tail_count:] if exclude_tail_count else []
+        messages_to_compress = (
+            all_messages[:-exclude_tail_count] if exclude_tail_count else all_messages
+        )
+        if not messages_to_compress:
+            return {
+                "summary": None,
+                "kept_count": exclude_tail_count,
+                "removed_count": 0,
+            }
+
         # 获取 flow 及 LLM 配置
         flow = await self._get_flow_with_details(db, session.flow_id, FlowType.AGENT)
         if not flow:
@@ -1187,17 +1782,70 @@ class AgentExecutorService(BaseExecutorService):
         if not llm_config.get("model"):
             return {"summary": None, "kept_count": total, "removed_count": 0}
 
-        removed_count = total
+        removed_count = len(messages_to_compress)
 
-        # 构建压缩文本（跳过 tool 消息）
+        # ReAct 中途压缩仅纳入最近的有限工具输出，避免摘要请求本身溢出。
+        recent_tool_contents: dict[int, str] = {}
+        recent_tool_calls: dict[int, str] = {}
+        if continue_react:
+            remaining_bytes = max(settings.tool_output_max_bytes * 2, 4096)
+            for index in range(len(messages_to_compress) - 1, -1, -1):
+                message = messages_to_compress[index]
+                if message.role != "tool" or remaining_bytes <= 0:
+                    continue
+                content_bytes = (message.content or "").encode("utf-8")
+                if len(content_bytes) <= remaining_bytes:
+                    recent_tool_contents[index] = message.content or ""
+                    remaining_bytes -= len(content_bytes)
+                else:
+                    recent_tool_contents[index] = (
+                        content_bytes[:remaining_bytes].decode("utf-8", errors="ignore")
+                        + "\n...[工具输出已截断]"
+                    )
+                    remaining_bytes = 0
+
+            remaining_call_bytes = 4096
+            for index in range(len(messages_to_compress) - 1, -1, -1):
+                message = messages_to_compress[index]
+                if (
+                    message.role != "ai"
+                    or not message.tool_calls
+                    or remaining_call_bytes <= 0
+                ):
+                    continue
+                call_bytes = json.dumps(
+                    message.tool_calls,
+                    ensure_ascii=False,
+                    default=str,
+                ).encode("utf-8")
+                if len(call_bytes) > remaining_call_bytes:
+                    call_bytes = call_bytes[:remaining_call_bytes]
+                recent_tool_calls[index] = call_bytes.decode("utf-8", errors="ignore")
+                remaining_call_bytes -= len(call_bytes)
+
         conversation_lines = []
-        for msg in all_messages:
-            role_label = {"human": "用户", "ai": "AI", "tool": "工具"}.get(
-                msg.role, msg.role
+        for index, msg in enumerate(messages_to_compress):
+            role_label = (
+                "上下文摘要"
+                if msg.message_type == self.CONTEXT_SUMMARY_TYPE
+                else {"human": "用户", "ai": "AI", "tool": "工具"}.get(
+                    msg.role, msg.role
+                )
             )
             if msg.role == "tool":
-                continue
-            content = msg.content or ""
+                content = recent_tool_contents.get(index)
+                if content is None:
+                    continue
+                content = f"tool_call_id={msg.tool_call_id or ''}\n{content}"
+            else:
+                content = msg.content or ""
+                tool_calls = recent_tool_calls.get(index)
+                if tool_calls:
+                    content = (
+                        f"{content}\n工具调用: {tool_calls}"
+                        if content
+                        else f"工具调用: {tool_calls}"
+                    )
             conversation_lines.append(f"{role_label}: {content}")
         conversation_text = "\n".join(conversation_lines)
 
@@ -1271,25 +1919,15 @@ class AgentExecutorService(BaseExecutorService):
             update(AgentMessage).where(AgentMessage.id.in_(all_ids)).values(is_delete=1)
         )
 
-        # 插入摘要用户消息
-        user_content = (
-            f"{self.COMPRESS_MARKER} 共 {removed_count} 条历史对话已压缩为以下摘要："
-        )
-        summary_user = AgentMessage(
-            session_id=session_id,
-            role="human",
-            content=user_content,
-            sequence=0,
-        )
-        db.add(summary_user)
-        await db.flush()
-
-        # 插入摘要助手消息（保存压缩 LLM 的 token 用量）
+        # 手动和自动压缩统一为单条 Human 摘要，避免自动压缩时摘要 AI
+        # 与待处理的 AI tool_calls 连续出现。input_data 仅用于 UI 识别内部消息。
         summary_kwargs: dict[str, Any] = {
             "session_id": session_id,
-            "role": "ai",
+            "role": "human",
+            "message_type": self.CONTEXT_SUMMARY_TYPE,
             "content": summary,
-            "sequence": 1,
+            "input_data": {"removed_count": removed_count},
+            "sequence": 0,
         }
         if compress_usage.get("prompt_tokens") is not None:
             summary_kwargs["prompt_tokens"] = compress_usage["prompt_tokens"]
@@ -1297,17 +1935,32 @@ class AgentExecutorService(BaseExecutorService):
             summary_kwargs["completion_tokens"] = compress_usage["completion_tokens"]
         if compress_usage.get("total_tokens") is not None:
             summary_kwargs["total_tokens"] = compress_usage["total_tokens"]
-        summary_assistant = AgentMessage(**summary_kwargs)
-        db.add(summary_assistant)
+        summary_user = AgentMessage(**summary_kwargs)
+        db.add(summary_user)
         await db.flush()
+
+        summary_message_count = 1
+
+        # 活动 ReAct 尾部在同一事务内重建，确保 AI tool_calls 与 ToolMessage
+        # 不会在摘要提交和后续保存之间因取消或进程退出而丢失。
+        for sequence, message in enumerate(tail_messages, start=summary_message_count):
+            values = {
+                column.name: getattr(message, column.name)
+                for column in AgentMessage.__table__.columns
+                if column.name != "id"
+            }
+            values["sequence"] = sequence
+            values["is_delete"] = 0
+            db.add(AgentMessage(**values))
 
         await db.commit()
 
-        await self._cleanup_thread_checkpoint(session_id)
+        if cleanup_checkpoint:
+            await self._cleanup_thread_checkpoint(session_id)
 
         return {
             "summary": summary,
-            "kept_count": 0,
+            "kept_count": exclude_tail_count,
             "removed_count": removed_count,
             "token_usage": compress_usage,
         }

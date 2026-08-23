@@ -40,6 +40,10 @@ async def _pump_to_queue(
     except Exception:
         logger.warning("后台 generator 执行异常", exc_info=True)
     finally:
+        try:
+            await gen.aclose()
+        except (Exception, asyncio.CancelledError):
+            logger.debug("关闭后台 SSE generator 失败", exc_info=True)
         await queue.put(None)
 
 
@@ -90,10 +94,13 @@ async def create_sse_response(
                         break
                     event_type = event.get("type", "unknown")
                     event_data = event.get("data", {})
-                    yield {
+                    sse_event = {
                         "event": event_type,
                         "data": json.dumps(event_data, ensure_ascii=False),
                     }
+                    if event.get("id") is not None:
+                        sse_event["id"] = str(event["id"])
+                    yield sse_event
             except asyncio.CancelledError:
                 pass
 
@@ -102,19 +109,18 @@ async def create_sse_response(
                 async for event in stream_generator:
                     event_type = event.get("type", "unknown")
                     event_data = event.get("data", {})
-                    yield {
+                    sse_event = {
                         "event": event_type,
                         "data": json.dumps(event_data, ensure_ascii=False),
                     }
+                    if event.get("id") is not None:
+                        sse_event["id"] = str(event["id"])
+                    yield sse_event
                     if event_type in end_event_types:
                         break
             except asyncio.CancelledError:
-                await stream_generator.aclose()
+                pass
             except _DISCONNECT_ERRORS:
-                try:
-                    await stream_generator.aclose()
-                except Exception:
-                    pass
                 logger.debug("SSE 客户端已断开连接")
             except Exception as e:
                 from app.agent_flow.flow_event import FlowEventFactory
@@ -124,9 +130,17 @@ async def create_sse_response(
                     "event": error_event["type"],
                     "data": json.dumps(error_event["data"], ensure_ascii=False),
                 }
+            finally:
+                try:
+                    await stream_generator.aclose()
+                except (Exception, asyncio.CancelledError):
+                    logger.debug("关闭 SSE generator 失败", exc_info=True)
 
     return EventSourceResponse(
-        event_generator(), ping=30, ping_message_factory=lambda: {"comment": "ping"}
+        event_generator(),
+        ping=30,
+        ping_message_factory=lambda: {"comment": "ping"},
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
