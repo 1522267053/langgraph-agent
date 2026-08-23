@@ -276,6 +276,17 @@ class UpdateService:
         if self._state != UpdateState.READY.value:
             return {"error": "更新包未就绪"}
 
+        current = get_version()
+        if not is_newer(self._version, current):
+            obsolete_version = self._version or "未知"
+            self._discard_obsolete_update(current)
+            return {
+                "error": (
+                    f"更新包版本 v{obsolete_version} 不高于当前版本 v{current}，"
+                    "已清理过期更新包"
+                )
+            }
+
         zip_path = get_update_cache_dir() / f"download_{self._version}.zip"
         if not zip_path.exists():
             self._error = "更新包文件丢失"
@@ -342,6 +353,7 @@ class UpdateService:
 
     def get_status(self) -> dict:
         current = get_version()
+        self._discard_obsolete_update(current)
         return {
             "state": self._state,
             "version": self._version,
@@ -412,8 +424,29 @@ class UpdateService:
                     self._version = data.get("version", "")
                     self._progress = data.get("progress", 0)
                     self._error = data.get("error", "")
+                self._discard_obsolete_update(get_version())
         except Exception:
             logger.debug("读取 status.json 失败", exc_info=True)
+
+    def _discard_obsolete_update(self, current: str) -> bool:
+        """清理目标版本不高于当前版本的已就绪更新包。"""
+        if self._state != UpdateState.READY.value or is_newer(self._version, current):
+            return False
+
+        obsolete_version = self._version or "未知"
+        self._version = ""
+        self._progress = 0
+        self._error = ""
+        self._sha256 = ""
+        self._file_size = 0
+        self._set_state(UpdateState.IDLE)
+        self._cleanup_download_files()
+        logger.info(
+            "已清理过期更新包: target=%s, current=%s",
+            obsolete_version,
+            current,
+        )
+        return True
 
     def _consume_result_file(self) -> Optional[dict]:
         """读取并清理 updater 写入的 result.json，无文件或读取失败返回 None"""
