@@ -580,7 +580,7 @@ class BuiltinAgentService:
                         "capabilities": capabilities,
                         "system_prompt": BUILTIN_AGENT_SYSTEM_PROMPT,
                         "user_prompt": "{{message}}",
-                        "max_tool_iterations": 100,
+                        "max_tool_iterations": 99999,
                         "input_variables": [
                             {
                                 "name": "message",
