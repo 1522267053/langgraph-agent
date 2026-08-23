@@ -262,7 +262,7 @@ onMounted(() => {
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="50" align="center" />
-        <el-table-column label="预览" width="70" align="center">
+        <el-table-column label="预览" width="100" align="center">
           <template #default="{ row }">
             <img
               v-if="isImage(row.mime_type)"
