@@ -388,7 +388,7 @@ npm run format                          # Prettier 格式化
 ❌ `feat:xxx` — 冒号后无空格
 ❌ `修复登录bug` — 缺少 type 前缀
 
-> 一个提交只做一件事；混合改动（功能+格式化+重构）请拆成多个提交。详见 [AGENTS.md](AGENTS.md#git-提交规范强制)。
+> 一次提交可以包含多个改动；type/scope/subject 以主要改动为准，其余内容可写入 body。详见 [AGENTS.md](AGENTS.md#git-提交规范强制)。
 
 ## 相关文档
 
