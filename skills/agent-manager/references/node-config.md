@@ -82,9 +82,9 @@ GET /api/ai/flow/node-types/{node_type}/config-schema
 | `required_tools` | 本轮必须调用的实际工具名列表 |
 | `tool_check_script` | 自定义必需工具检查脚本 |
 | `max_tool_iterations` | 单轮最大工具调用轮次 |
-| `require_tool_approval` | Agent 模式下危险工具调用前请求审批 |
+| `approval_required_tools` | Agent 模式下执行前需要审批的完整工具名列表；空列表表示关闭审批 |
 
-配置 `required_tools` 前先调用 connected-tools 接口，从返回的 `tools[].name` 复制准确名称。它不是节点 key。
+配置 `required_tools` 或 `approval_required_tools` 前先调用 connected-tools 接口，从返回的 `tools[].name` 复制准确名称。它不是节点 key。动态注册且接口未返回的工具可手动填写完整名称。
 
 ## 条件与意图路由
 

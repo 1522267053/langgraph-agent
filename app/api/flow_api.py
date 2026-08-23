@@ -15,10 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config.database import get_db
 from app.api.base_api import BaseApi, RouteConfig
 from app.models.flow import Flow, FlowType
+from app.models.flow_node import FlowNode
 from app.services.flow_service import flow_service
 from app.services.flow_transfer_service import FlowExportOptions, flow_transfer_service
 from app.schemas.flow_schema import FlowBase, FlowCreate, FlowUpdate, FlowDetail
-from app.schemas.flow_node_schema import FlowNodeBase
+from app.schemas.flow_node_schema import ConnectedToolNodeInput, FlowNodeBase
 from app.schemas.flow_edge_schema import FlowEdgeBase
 from app.schemas.flow_schema import (
     VueFlowGraph,
@@ -144,6 +145,30 @@ class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
                 return ApiResponse.error(msg="流程不存在")
 
             tools = resolve_connected_tool_info(flow, node_key)
+            return ApiResponse.success(data=tools)
+
+        @self.router.post(
+            "/{flow_id}/connected-tools/resolve",
+            summary="根据当前节点快照解析工具信息",
+        )
+        async def resolve_connected_tools(
+            flow_id: int,
+            nodes: list[ConnectedToolNodeInput],
+        ):
+            """解析前端尚未保存的当前工具节点配置。"""
+            from app.agent_flow.tool_resolver import resolve_tool_node_info
+
+            tool_nodes = [
+                FlowNode(
+                    flow_id=flow_id,
+                    node_key=item.node_key,
+                    node_type=item.node_type,
+                    node_name=item.node_name,
+                    base_config=item.base_config,
+                )
+                for item in nodes
+            ]
+            tools = resolve_tool_node_info(tool_nodes)
             return ApiResponse.success(data=tools)
 
         @self.router.get(

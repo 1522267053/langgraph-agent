@@ -51,11 +51,6 @@ logger = logging.getLogger(__name__)
 # 人工协助工具名（LLM 通过此工具名触发 interrupt）
 _REQUEST_HUMAN_HELP = "request_human_help"
 
-# 需要用户确认才能执行的工具名（仅 Agent 模式生效）
-_APPROVAL_REQUIRED_TOOLS: frozenset[str] = frozenset(
-    {"shell_executor", "python_executor", "file_write", "text_editor"}
-)
-
 # 计划模式下禁用的工具名（写操作 / 有副作用）
 _PLAN_DISABLED_TOOLS: frozenset[str] = frozenset(
     {
@@ -232,6 +227,7 @@ async def handle_tool_calls(
     *,
     session_id: int,
     check_interrupted_fn: Callable[[FlowState], bool],
+    approval_required_tools: Optional[list[str]] = None,
     emit_fn: Optional[Callable] = None,
     emit_tool_start_fn: Optional[Callable] = None,
     emit_tool_end_fn: Optional[Callable] = None,
@@ -255,6 +251,7 @@ async def handle_tool_calls(
         max_tool_iterations: 最大工具调用轮次
         session_id: 会话 ID（Agent 模式 > 0）
         check_interrupted_fn: 中断检查回调
+        approval_required_tools: 执行前需要用户确认的完整工具名列表
         emit_fn: 事件发送回调
         emit_tool_start_fn: 工具开始事件发送回调
         emit_tool_end_fn: 工具结束事件发送回调
@@ -336,11 +333,15 @@ async def handle_tool_calls(
 
     # ---- 工具确认（仅 Agent 模式） ----
     if session_id > 0:
-        config = node.base_config or {}
-        if config.get("require_tool_approval"):
-            approval_names = {
-                tc["name"] for tc in tool_calls
-            } & _APPROVAL_REQUIRED_TOOLS
+        if approval_required_tools:
+            configured_approval_tools = set(approval_required_tools)
+            approval_names = list(
+                dict.fromkeys(
+                    tc.get("name", "")
+                    for tc in tool_calls
+                    if tc.get("name", "") in configured_approval_tools
+                )
+            )
             if approval_names:
                 from app.services.tool_approval_service import (
                     tool_approval_service,
@@ -348,7 +349,7 @@ async def handle_tool_calls(
 
                 # 注册等待句柄并通过 SSE 通知前端
                 future = tool_approval_service.register(
-                    session_id, tool_calls, list(approval_names)
+                    session_id, tool_calls, approval_names
                 )
                 if emit_fn:
                     emit_fn(
@@ -356,7 +357,7 @@ async def handle_tool_calls(
                         ToolApprovalEvent(
                             node_key=node.node_key,
                             tool_calls=tool_calls,
-                            approval_needed=list(approval_names),
+                            approval_needed=approval_names,
                         ),
                     )
 

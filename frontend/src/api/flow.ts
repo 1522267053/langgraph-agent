@@ -22,6 +22,13 @@ export interface ConnectedToolInfo {
   tools: Array<{ name: string; description: string }>
 }
 
+export interface ConnectedToolNodeInput {
+  node_key: string
+  node_type: string
+  node_name?: string
+  base_config: Record<string, unknown>
+}
+
 export const flowApi = {
   page(params: PaginationParams<Flow>) {
     return request.post<ApiResponse<PaginatedResponse<Flow>>>('/flow/page', params)
@@ -84,6 +91,13 @@ export const flowApi = {
   getConnectedTools(flowId: number, nodeKey: string) {
     return request.get<ApiResponse<ConnectedToolInfo[]>>(
       `/flow/${flowId}/node/${nodeKey}/connected-tools`
+    )
+  },
+
+  resolveConnectedTools(flowId: number, nodes: ConnectedToolNodeInput[]) {
+    return request.post<ApiResponse<ConnectedToolInfo[]>>(
+      `/flow/${flowId}/connected-tools/resolve`,
+      nodes
     )
   },
 
