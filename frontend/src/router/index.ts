@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 import { configApi } from '@/api/config'
 import { authApi } from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -152,14 +153,17 @@ let authChecked = false
 let needAuth = false
 
 async function checkAuth(): Promise<{ needLogin: boolean; authenticated: boolean }> {
+  const authStore = useAuthStore()
   try {
     const res = await authApi.check()
     const data = res.data.data
+    authStore.applyCheck(data)
     return {
       needLogin: data?.need_login ?? false,
       authenticated: data?.authenticated ?? false
     }
   } catch {
+    authStore.clear()
     return { needLogin: false, authenticated: false }
   }
 }

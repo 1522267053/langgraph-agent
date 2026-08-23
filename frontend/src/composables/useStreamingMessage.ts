@@ -31,6 +31,8 @@ export interface MessageFile {
 export interface StreamingMessage {
   id: string
   role: 'human' | 'ai'
+  displayType?: 'context-summary'
+  removedCount?: number
   content: string
   thinking?: string
   tools?: ToolCall[]
@@ -166,7 +168,7 @@ export function useStreamingMessage() {
    */
   function getOrCreateStreamingMessage(): StreamingMessage {
     let lastMsg = messages.value[messages.value.length - 1]
-    if (!lastMsg || lastMsg.role !== 'ai') {
+    if (!lastMsg || lastMsg.role !== 'ai' || lastMsg.displayType === 'context-summary') {
       lastMsg = {
         id: `streaming-${Date.now()}`,
         role: 'ai',
@@ -196,11 +198,20 @@ export function useStreamingMessage() {
   /**
    * 开始流式输出
    */
-  function startStreaming(): void {
+  function startStreaming(forceNewMessage = false): void {
     isStreaming.value = true
     currentSegmentType.value = null
     thinkingContent.value = ''
     textContent.value = ''
+    if (forceNewMessage) {
+      messages.value.push({
+        id: `streaming-${Date.now()}`,
+        role: 'ai',
+        content: '',
+        segments: [],
+        createdAt: new Date()
+      })
+    }
   }
 
   /**
@@ -323,8 +334,7 @@ export function useStreamingMessage() {
     completion_tokens: number,
     total_tokens: number
   ): void {
-    const msg = messages.value[messages.value.length - 1]
-    if (msg?.role !== 'ai') return
+    const msg = getOrCreateStreamingMessage()
     msg.prompt_tokens = prompt_tokens
     msg.completion_tokens = completion_tokens
     msg.total_tokens = total_tokens
@@ -377,6 +387,7 @@ export function useStreamingMessage() {
     addKnowledgeCitations,
     updateTodos,
     addTokenUsage,
+    flushPending,
     stopStreaming,
     clearMessages,
     reset

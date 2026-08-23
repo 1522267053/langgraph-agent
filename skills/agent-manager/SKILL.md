@@ -68,7 +68,8 @@ Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router` 及工�
 | 已连接工具 | `GET /ai/flow/{id}/node/{node_key}/connected-tools` |
 | 执行 Workflow | `POST /execution/stream/{id}` |
 | 创建 Agent 会话 | `POST /agent/{id}/sessions` |
-| Agent 对话 | `POST /agent/{id}/sessions/{session_id}/chat` |
+| 启动 Agent 对话 | `POST /agent/{id}/sessions/{session_id}/chat` |
+| 订阅 Agent 事件 | `POST /agent/{id}/sessions/{session_id}/events` |
 
 所有普通响应使用 `{ "code": 1, "msg": "success", "data": ... }`；HTTP 状态码通常仍为 200，因此必须检查 `code`。
 

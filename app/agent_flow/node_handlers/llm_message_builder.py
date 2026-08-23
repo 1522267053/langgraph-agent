@@ -22,6 +22,7 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.agent_flow.exceptions import NodeExecutionError
 from app.agent_flow.flow_context import FlowState
 from app.models.flow_node import FlowNode
 from app.services.agent_conversation_service import AgentConversationService
@@ -73,7 +74,7 @@ async def build_initial_messages(
 ) -> list[BaseMessage]:
     """构建初始消息列表（统一入口）
 
-    流程：加载历史 → 校验配对 → 注入恢复 → 追加用户消息
+    流程：加载历史 → 注入恢复 → 校验配对 → 追加用户消息
 
     Args:
         node: 流程节点
@@ -101,7 +102,6 @@ async def build_initial_messages(
         conversation_service=conversation_service,
         db_session_factory=db_session_factory,
     )
-    messages = validate_tool_pairs(messages)
     resume_injected = inject_resume_if_needed(
         messages,
         config,
@@ -110,6 +110,20 @@ async def build_initial_messages(
         emit_fn=emit_fn,
         emit_tool_end_fn=emit_tool_end_fn,
     )
+    if _expects_human_tool_resume(config, node.node_key) and not resume_injected:
+        expected_tool_call_id = (
+            (config or {}).get("configurable", {}).get("_human_resume_tool_call_id")
+        )
+        logger.error(
+            "人工协助恢复失败: node_key=%s, tool_call_id=%s",
+            node.node_key,
+            expected_tool_call_id,
+        )
+        raise NodeExecutionError(
+            node.node_key,
+            f"未找到待恢复的人工协助工具调用: {expected_tool_call_id or 'unknown'}",
+        )
+    messages = validate_tool_pairs(messages)
     await append_user_message(
         messages, state, node_config, user_prompt, resume_injected=resume_injected
     )
@@ -271,8 +285,19 @@ def inject_resume_if_needed(
     if not messages or not config:
         return False
 
-    resume_input = config.get("configurable", {}).get("_human_resume_input")
+    configurable = config.get("configurable", {})
+    resume_input = configurable.get("_human_resume_input")
     if not resume_input:
+        return False
+
+    resume_type = configurable.get("_human_resume_type")
+    expected_node_key = configurable.get("_human_resume_node_key")
+    expected_tool_call_id = configurable.get("_human_resume_tool_call_id")
+
+    # 独立 Human 节点也会携带 resume input，不能绑定到历史工具调用。
+    if resume_type == "human_checkpoint":
+        return False
+    if expected_node_key and expected_node_key != node_key:
         return False
 
     # 收集已有 ToolMessage 的 tool_call_id
@@ -282,33 +307,64 @@ def inject_resume_if_needed(
         if isinstance(m, ToolMessage) and m.tool_call_id
     }
 
-    # 查找未匹配的 tool_call 并注入回复
-    for msg in messages:
+    # 优先精确匹配等待记录中的调用 ID；旧记录没有 ID 时匹配最近一次调用。
+    for msg in reversed(messages):
         if not isinstance(msg, AIMessage) or not msg.tool_calls:
             continue
-        for tc in msg.tool_calls:
+        for tc in reversed(msg.tool_calls):
             tc_id = tc.get("id", "") if isinstance(tc, dict) else tc.id or ""
             tc_name = tc.get("name", "") if isinstance(tc, dict) else tc.name or ""
-            if tc_id and tc_id not in matched_ids:
-                messages.append(
-                    ToolMessage(
-                        content=str(resume_input),
-                        tool_call_id=tc_id,
-                        name=tc_name,
-                    )
-                )
-                if node_key and writer and emit_tool_end_fn:
-                    emit_tool_end_fn(
-                        writer,
-                        node_key,
-                        tc_name,
-                        resume_input,
-                        status="success",
-                        tool_call_id=tc_id,
-                    )
-                return True
+            if tc_name != "request_human_help" or not tc_id:
+                continue
+            if expected_tool_call_id and tc_id != expected_tool_call_id:
+                continue
+            if tc_id in matched_ids:
+                return bool(expected_tool_call_id)
 
+            messages.append(
+                ToolMessage(
+                    content=str(resume_input),
+                    tool_call_id=tc_id,
+                    name=tc_name,
+                )
+            )
+            logger.info(
+                "已注入人工协助回复: node_key=%s, tool_call_id=%s",
+                node_key,
+                tc_id,
+            )
+            if node_key and writer and emit_tool_end_fn:
+                emit_tool_end_fn(
+                    writer,
+                    node_key,
+                    tc_name,
+                    resume_input,
+                    status="success",
+                    tool_call_id=tc_id,
+                )
+            return True
+
+    logger.warning(
+        "未找到待恢复的人工协助工具调用: node_key=%s, tool_call_id=%s",
+        node_key,
+        expected_tool_call_id,
+    )
     return False
+
+
+def _expects_human_tool_resume(config: Optional[RunnableConfig], node_key: str) -> bool:
+    """判断当前节点是否必须恢复 request_human_help 工具调用。"""
+    configurable = (config or {}).get("configurable", {})
+    if not configurable.get("_human_resume_input"):
+        return False
+
+    expected_node_key = configurable.get("_human_resume_node_key")
+    if expected_node_key and expected_node_key != node_key:
+        return False
+
+    return bool(configurable.get("_human_resume_tool_call_id")) or (
+        configurable.get("_human_resume_type") == "human_input_required"
+    )
 
 
 async def append_user_message(

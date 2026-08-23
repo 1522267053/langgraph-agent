@@ -27,12 +27,16 @@ export function useAutoScroll(
   let _lastScrollAt = 0
   let _trailingTimer: ReturnType<typeof setTimeout> | null = null
   let _lastUserScrollAt = 0
+  let _lastScrollTop = 0
+  let _lastScrollHeight = 0
 
   function scrollToBottom(): void {
     if (!containerRef.value) return
     _programmaticScroll = true
     const el = containerRef.value
     el.scrollTop = el.scrollHeight
+    _lastScrollTop = el.scrollTop
+    _lastScrollHeight = el.scrollHeight
     isAtBottom.value = true
     userScrolledUp.value = false
     requestAnimationFrame(() => {
@@ -72,6 +76,8 @@ export function useAutoScroll(
     isAtBottom.value = true
     _lastUserScrollAt = 0
     _lastScrollAt = 0
+    _lastScrollTop = containerRef.value?.scrollTop || 0
+    _lastScrollHeight = containerRef.value?.scrollHeight || 0
     if (_trailingTimer) {
       clearTimeout(_trailingTimer)
       _trailingTimer = null
@@ -85,18 +91,30 @@ export function useAutoScroll(
 
   /** 绑定到容器 @scroll 事件 */
   function handleScroll(): void {
-    if (!containerRef.value || _programmaticScroll) return
+    if (!containerRef.value) return
     const { scrollTop, scrollHeight, clientHeight } = containerRef.value
+    if (_programmaticScroll) {
+      _lastScrollTop = scrollTop
+      _lastScrollHeight = scrollHeight
+      return
+    }
+
     const atBottom = scrollHeight - scrollTop - clientHeight <= threshold
+    const recentUserIntent = Date.now() - _lastUserScrollAt < 500
+    const scrollPositionChanged = Math.abs(scrollTop - _lastScrollTop) > 1
+    const contentHeightChanged = Math.abs(scrollHeight - _lastScrollHeight) > 1
     isAtBottom.value = atBottom
     if (!atBottom) {
-      // 不在底部 → 用户已上滑（或 DOM 重排推离底部）
-      userScrolledUp.value = true
-    } else if (Date.now() - _lastUserScrollAt < 500) {
-      // 用户主动滚回底部 → 恢复自动滚动
+      // Markdown、图片等撑高内容时 scrollTop 不变，不能误判成用户上滚。
+      if (recentUserIntent || (scrollPositionChanged && !contentHeightChanged)) {
+        userScrolledUp.value = true
+      }
+    } else if (recentUserIntent || (scrollPositionChanged && !contentHeightChanged)) {
+      // 用户主动滚回底部（包括拖动滚动条）→ 恢复自动滚动
       userScrolledUp.value = false
     }
-    // else: DOM 重排导致位置在底部附近，非用户意图 → 不恢复自动滚动
+    _lastScrollTop = scrollTop
+    _lastScrollHeight = scrollHeight
   }
 
   // 用户开启 autoScroll 时重置上滚状态

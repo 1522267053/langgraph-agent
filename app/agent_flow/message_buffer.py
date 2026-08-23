@@ -6,7 +6,6 @@ import logging
 from typing import TYPE_CHECKING, Callable, Optional, Union
 
 from langchain_core.messages import (
-    AIMessage,
     AIMessageChunk,
     BaseMessage,
     HumanMessage,
@@ -93,8 +92,10 @@ class MessageBuffer:
         context_length: int,
         node_config: dict,
         writer: Optional["StreamWriter"] = None,
+        *,
+        preserve_tail_count: int = 0,
     ) -> bool:
-        """检查并执行压缩（先保存当前消息到 DB → 再压缩 DB → 替换本地列表），返回是否成功"""
+        """压缩数据库历史，并可原样保留末尾消息供当前 ReAct 继续执行。"""
         if context_length <= 0 or not self.session_id or not self.db_session_factory:
             return False
 
@@ -105,13 +106,28 @@ class MessageBuffer:
             ContextCompressingEvent(status="compressing"),
         )
 
-        # 先保存当前消息到 DB，确保 _do_compress 能看到本次执行的所有消息
-        await self.save_to_db()
+        # 先保存当前消息到 DB，确保 _do_compress 能看到本次执行的所有消息。
+        if not await self.save_to_db():
+            self._emit(writer, ContextCompressingEvent(status="failed"))
+            return False
+
+        preserve_tail_count = max(0, min(preserve_tail_count, len(self._messages)))
+        preserved_tail = (
+            list(self._messages[-preserve_tail_count:]) if preserve_tail_count else []
+        )
+        persisted_tail_count = sum(
+            bool(message.response_metadata.get(DB_PERSISTED_MESSAGE_KEY))
+            for message in preserved_tail
+        )
 
         try:
             async with self.db_session_factory() as db:
                 result = await agent_executor_service.compress_session(
-                    db, self.session_id
+                    db,
+                    self.session_id,
+                    exclude_tail_count=persisted_tail_count,
+                    continue_react=bool(preserve_tail_count),
+                    cleanup_checkpoint=False,
                 )
         except Exception as e:
             logger.warning(f"自动压缩失败: {e}")
@@ -125,10 +141,19 @@ class MessageBuffer:
             return False
 
         removed = result.get("removed_count", 0)
-        self._emit(
-            writer,
-            ContextCompressingEvent(status="done", removed_count=removed),
+
+        user_content = (
+            f"{agent_executor_service.COMPRESS_MARKER} "
+            f"共 {removed} 条历史对话已压缩为以下摘要："
         )
+        summary_messages: list[BaseMessage] = [
+            HumanMessage(content=f"{user_content}\n\n{summary}")
+        ]
+        for message in summary_messages:
+            message.response_metadata[DB_PERSISTED_MESSAGE_KEY] = True
+
+        self._messages = [*summary_messages, *preserved_tail]
+        self._post_compress_offset = len(summary_messages)
 
         # 发送压缩 LLM 调用的 token 用量事件 + 持久化
         token_usage = result.get("token_usage") or {}
@@ -161,12 +186,10 @@ class MessageBuffer:
                 except Exception as e:
                     logger.warning(f"记录压缩 token_usage 失败: {e}")
 
-        user_content = f"{agent_executor_service.COMPRESS_MARKER} 共 {removed} 条历史对话已压缩为以下摘要："
-        self._messages = [
-            HumanMessage(content=user_content),
-            AIMessage(content=summary),
-        ]
-        self._post_compress_offset = 2
+        self._emit(
+            writer,
+            ContextCompressingEvent(status="done", removed_count=removed),
+        )
         return True
 
     @staticmethod
@@ -229,10 +252,10 @@ class MessageBuffer:
         for message in self._messages[:best_match_length]:
             message.response_metadata[DB_PERSISTED_MESSAGE_KEY] = True
 
-    async def save_to_db(self) -> None:
+    async def save_to_db(self) -> bool:
         """持久化到 DB，压缩后只保存 _post_compress_offset 之后的新增部分"""
         if not self.conversation_service or not self.db_session_factory:
-            return
+            return False
 
         try:
             async with _message_save_lock:
@@ -271,7 +294,9 @@ class MessageBuffer:
                         )
                         for message in new_messages:
                             message.response_metadata[DB_PERSISTED_MESSAGE_KEY] = True
+                    return True
         except Exception as exc:
             logger.warning(
                 f"保存对话历史到数据库失败: node_key={self.node_key}, error={exc}"
             )
+            return False

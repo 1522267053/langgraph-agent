@@ -84,6 +84,7 @@ logger = logging.getLogger(__name__)
 
 # 自动压缩阈值比例：已用 token 超过 context_length 的此比例时触发压缩
 COMPRESS_THRESHOLD_RATIO = 0.83
+_MAX_REACT_COMPRESSIONS = 3
 
 _KNOWLEDGE_CITATION_PROMPT = """
 
@@ -585,16 +586,22 @@ class LlmToolNodeHandler(BaseNodeHandler):
             await msg_buf.save_to_db()
         except asyncio.CancelledError:
             logger.info(f"LLM节点被取消, node_key={node.node_key}")
-            try:
-                await asyncio.shield(msg_buf.save_to_db())
-            except Exception as e:
-                logger.warning(f"取消时保存消息失败: {e}")
+            save_error: BaseException | None = None
             if self.session_id:
                 from app.services.agent_executor_service import (
                     agent_executor_service,
                 )
 
-                agent_executor_service._pending_save_sessions.discard(self.session_id)
+                save_error = await agent_executor_service._await_cancellation_safe(
+                    msg_buf.save_to_db()
+                )
+            else:
+                try:
+                    await asyncio.shield(msg_buf.save_to_db())
+                except (Exception, asyncio.CancelledError) as exc:
+                    save_error = exc
+            if save_error:
+                logger.warning(f"取消时保存消息失败: {save_error}")
             state.set_interrupted()
             if last_content:
                 state.set_node_variable(node.node_key, result_name, last_content)
@@ -721,6 +728,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
         tool_call_count = 0
         called_tools: set[str] = set()
         retry_count = 0
+        react_compress_attempts = 0
         tool_fp_count: dict[str, int] = {}
         knowledge_references = await self._revalidate_knowledge_references(
             merge_knowledge_references(
@@ -730,7 +738,34 @@ class LlmToolNodeHandler(BaseNodeHandler):
             allowed_knowledge_base_ids or set(),
         )
 
+        async def compress_react_tail(active_tail_start: int) -> bool:
+            nonlocal react_compress_attempts
+            if react_compress_attempts >= _MAX_REACT_COMPRESSIONS:
+                error = "本次执行上下文压缩次数已达上限，已停止继续调用工具"
+                state.add_error(node.node_key, error)
+                self._emit(writer, ErrorEvent(node_key=node.node_key, message=error))
+                return False
+
+            react_compress_attempts += 1
+            preserved_count = len(msg_buf.messages) - active_tail_start
+            compressed = await msg_buf.maybe_compress(
+                context_length,
+                node.base_config or {},
+                writer,
+                preserve_tail_count=preserved_count,
+            )
+            if not compressed:
+                error = "上下文压缩失败，已停止 ReAct 以避免超出模型上下文窗口"
+                state.add_error(node.node_key, error)
+                self._emit(writer, ErrorEvent(node_key=node.node_key, message=error))
+                return False
+
+            state.set_conversation_messages(node.node_key, list(msg_buf.messages))
+            return True
+
         while True:
+            active_tail_start = len(msg_buf.messages)
+            needs_context_compression = False
             messages = msg_buf.messages
             # system_prompt 不存入 messages/checkpoint，每次调用时临时拼接
             call_messages = (
@@ -810,21 +845,9 @@ class LlmToolNodeHandler(BaseNodeHandler):
                         except Exception as e:
                             logger.warning(f"记录 token_usage 失败: {e}")
 
-                    # 循环中检查上下文是否需要压缩
-                    if context_length > 0 and usage.get("prompt_tokens", 0) > int(
-                        context_length * COMPRESS_THRESHOLD_RATIO
-                    ):
-                        # 先将当前 response 追加到 msg_buf，确保压缩时能看到 LLM 最新输出
-                        msg_buf.append(response)
-                        if current_content:
-                            last_content = current_content
-                        thinking_content.extend(current_thinking)
-                        node_config = node.base_config or {}
-                        await msg_buf.maybe_compress(
-                            context_length, node_config, writer
-                        )
-                        # 压缩后直接结束循环，用户下次发消息时从压缩后的摘要继续
-                        break
+                    needs_context_compression = context_length > 0 and usage.get(
+                        "prompt_tokens", 0
+                    ) > int(context_length * COMPRESS_THRESHOLD_RATIO)
 
                 # 检查 finish_reason，上下文溢出时记录错误并终止循环
                 finish_reason = (
@@ -848,6 +871,10 @@ class LlmToolNodeHandler(BaseNodeHandler):
                     if current_content:
                         last_content = current_content
                     thinking_content.extend(current_thinking)
+                    if needs_context_compression:
+                        await msg_buf.maybe_compress(
+                            context_length, node.base_config or {}, writer
+                        )
                     break
 
             # 将完整 AI 消息追加到历史
@@ -880,8 +907,16 @@ class LlmToolNodeHandler(BaseNodeHandler):
                     )
                     if need_retry and hint:
                         retry_count += 1
+                        if needs_context_compression and not await compress_react_tail(
+                            active_tail_start
+                        ):
+                            break
                         msg_buf.append(HumanMessage(content=hint))
                         continue
+                if needs_context_compression:
+                    await msg_buf.maybe_compress(
+                        context_length, node.base_config or {}, writer
+                    )
                 break
 
             # 处理工具调用
@@ -911,6 +946,11 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 ),
             )
             if not should_continue:
+                break
+
+            if needs_context_compression and not await compress_react_tail(
+                active_tail_start
+            ):
                 break
 
         return last_content, thinking_content, called_tools

@@ -8,3 +8,6 @@ export { useAgentStore } from './agentOptimized'
 
 // 流程Store
 export { useFlowStore } from './flowStore'
+
+// Auth session state
+export { useAuthStore } from './auth'

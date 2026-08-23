@@ -127,6 +127,8 @@ export type AgentSSEEventType = FlowSSEEventType
 
 /** SSE事件结构 */
 export interface SSEEvent<T extends string = FlowSSEEventType> {
+  /** 服务端事件游标 */
+  id?: string
   /** 事件类型 */
   type: T
   /** 事件数据 */

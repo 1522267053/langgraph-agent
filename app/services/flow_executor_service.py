@@ -337,6 +337,7 @@ class FlowExecutorService(BaseExecutorService):
             if execution.status != ExecutionStatus.WAITING_HUMAN.value:
                 yield FlowEventFactory.error("当前执行不在等待人工输入状态")
                 return
+            resume_wait_data = dict(execution.wait_data or {})
 
             # 乐观锁：CAS 更新，防止并发 resume
             stmt = (
@@ -380,8 +381,18 @@ class FlowExecutorService(BaseExecutorService):
                 "configurable": {
                     "thread_id": f"flow_{execution_id}",
                     "scope_type": "flow",
+                    "_human_resume_type": resume_wait_data.get("type"),
+                    "_human_resume_node_key": resume_wait_data.get("node_key"),
+                    "_human_resume_tool_call_id": resume_wait_data.get("tool_call_id"),
                 }
             }
+            logger.info(
+                "恢复人工输入: execution_id=%s, type=%s, node_key=%s, tool_call_id=%s",
+                execution_id,
+                resume_wait_data.get("type"),
+                resume_wait_data.get("node_key"),
+                resume_wait_data.get("tool_call_id"),
+            )
 
             context = await self._restore_context_from_checkpoint(
                 execution, expanded_flow, config
@@ -776,7 +787,7 @@ class FlowExecutorService(BaseExecutorService):
             if step.get("role") == "ai" and step.get("tool_calls"):
                 for tc in step["tool_calls"]:
                     if isinstance(tc, dict) and tc.get("id"):
-                        tc["status"] = tool_call_status.get(tc["id"], "success")
+                        tc["status"] = tool_call_status.get(tc["id"], "running")
 
         return steps if steps else None
 
@@ -917,7 +928,9 @@ class FlowExecutorService(BaseExecutorService):
         node_key = interrupt_data.get("node_key", "")
 
         wait_data = {
+            **interrupt_data,
             "type": interrupt_type,
+            "node_key": node_key,
             "question": question,
             "context": context_str,
         }

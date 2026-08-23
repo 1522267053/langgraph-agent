@@ -334,6 +334,7 @@ async def _run_sub_agent(
     from app.services.tool_approval_service import tool_approval_service
 
     content = ""
+    error_result: dict | None = None
     async for event in agent_executor_service.chat_stream(
         session_id, task, params or {}
     ):
@@ -343,7 +344,7 @@ async def _run_sub_agent(
             content = output.get("content", "") if isinstance(output, dict) else ""
         elif event_type == "error":
             error_msg = event.get("data", {}).get("message", "未知错误")
-            return {"error": f"子Agent执行出错: {error_msg}"}
+            error_result = {"error": f"子Agent执行出错: {error_msg}"}
         elif event_type == "tool_approval_required":
             if handler_ref and hasattr(handler_ref, "_writer") and handler_ref._writer:
                 from app.agent_flow.flow_event import SubAgentToolApprovalEvent
@@ -367,4 +368,4 @@ async def _run_sub_agent(
                 except asyncio.TimeoutError:
                     tool_approval_service.remove(session_id)
 
-    return content
+    return error_result or content

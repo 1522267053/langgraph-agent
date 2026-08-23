@@ -3,7 +3,6 @@ Agent API 路由
 处理Agent相关的路由定义
 """
 
-import asyncio
 import logging
 from typing import Optional
 
@@ -49,6 +48,13 @@ class CompressRequest(BaseModel):
 
 class AgentSearchRequest(BaseModel):
     keyword: str = Field(..., description="搜索关键词")
+
+
+class AgentRunEventsRequest(BaseModel):
+    run_id: str = Field(..., description="后台执行 ID")
+    after_event_id: int = Field(
+        default=0, ge=0, description="仅回放该事件 ID 之后的事件"
+    )
 
 
 class AgentApi:
@@ -216,58 +222,51 @@ class AgentApi:
                 msg="查询成功",
             )
 
-        @self.router.post("/{id}/sessions/{session_id}/chat", summary="发送消息(SSE)")
+        @self.router.post("/{id}/sessions/{session_id}/chat", summary="启动Agent对话")
         async def chat(
             id: int,
             session_id: int,
             request: AgentChatRequest,
         ):
-            """
-            发送消息（Server-Sent Events）
-
-            事件类型：
-            - flow_start: 对话开始
-            - node_start: 节点开始执行
-            - node_thinking: 节点思考内容（LLM节点）
-            - node_content: 节点响应内容（LLM节点）
-            - node_done: 节点执行完成
-            - flow_done: 对话完成
-            - waiting_human: 等待人工输入
-            - error: 执行错误
-            """
-
-            async def stream():
-                async for event in agent_executor_service.chat_stream(
+            """启动后台执行，事件通过 /events 独立订阅。"""
+            try:
+                run_id = agent_executor_service.start_chat_run(
                     session_id, request.content, request.params
-                ):
-                    yield event
+                )
+            except ValueError as exc:
+                return ApiResponse.error(msg=str(exc))
+            return ApiResponse.success(data={"run_id": run_id}, msg="执行已启动")
 
-            return await create_sse_response(
-                stream(),
-                detach_on_disconnect=True,
-                task_store=agent_executor_service._streaming_tasks,
-                task_key=str(session_id),
-            )
-
-        @self.router.post("/{id}/sessions/{session_id}/resume", summary="恢复执行(SSE)")
+        @self.router.post("/{id}/sessions/{session_id}/resume", summary="启动恢复执行")
         async def resume(
             id: int,
             session_id: int,
             request: AgentResumeRequest,
         ):
-            """恢复执行（人工输入后）"""
-
-            async def stream():
-                async for event in agent_executor_service.resume_stream(
+            """启动人工输入后的后台恢复执行。"""
+            try:
+                run_id = agent_executor_service.start_resume_run(
                     session_id, request.human_input
-                ):
-                    yield event
+                )
+            except ValueError as exc:
+                return ApiResponse.error(msg=str(exc))
+            return ApiResponse.success(data={"run_id": run_id}, msg="执行已恢复")
 
+        @self.router.post(
+            "/{id}/sessions/{session_id}/events", summary="订阅Agent执行事件(SSE)"
+        )
+        async def subscribe_events(
+            id: int,
+            session_id: int,
+            request: AgentRunEventsRequest,
+        ):
+            """订阅后台执行，并按 after_event_id 回放断线期间的事件。"""
             return await create_sse_response(
-                stream(),
-                detach_on_disconnect=True,
-                task_store=agent_executor_service._streaming_tasks,
-                task_key=str(session_id),
+                agent_executor_service.subscribe_run(
+                    session_id,
+                    request.run_id,
+                    request.after_event_id,
+                )
             )
 
         @self.router.post("/{id}/sessions/{session_id}/cancel", summary="中断会话执行")
@@ -282,17 +281,19 @@ class AgentApi:
             interrupt_service.set_agent_interrupted(session_id)
             tool_approval_service.cancel(session_id)
             agent_executor_service._pending_save_sessions.add(session_id)
-            # 直接取消后台 streaming task，立即中断 LLM 请求
-            task = agent_executor_service._streaming_tasks.get(str(session_id))
-            if task and not task.done():
-                task.cancel()
-            # 同步清理 checkpoint，防止与 DB 消息不同步
-            try:
-                await agent_executor_service._cleanup_thread_checkpoint(session_id)
-            except Exception as e:
-                logger.warning(f"cancel清理checkpoint失败: {e}")
-            # 立即释放运行锁，防止阻塞后续消息
-            agent_executor_service._running_sessions.discard(session_id)
+            # 后台 Runner 负责保存消息和清理 checkpoint，避免与 API 并发清理。
+            managed_cancelled = await agent_executor_service.cancel_run(session_id)
+            if not managed_cancelled and not agent_executor_service.is_running(
+                session_id
+            ):
+                try:
+                    await agent_executor_service._cleanup_thread_checkpoint(session_id)
+                except Exception as e:
+                    logger.warning(f"cancel清理checkpoint失败: {e}")
+                agent_executor_service._running_sessions.discard(session_id)
+                agent_executor_service._waiting_sessions.discard(session_id)
+                agent_executor_service._waiting_events.pop(session_id, None)
+                agent_executor_service._pending_save_sessions.discard(session_id)
             return ApiResponse.success(msg="已发送中断信号")
 
         @self.router.post("/{id}/sessions/{session_id}/tool_approval")
@@ -319,16 +320,13 @@ class AgentApi:
             session = await agent_executor_service._get_session(db, session_id)
             if not session:
                 return ApiResponse.error(msg="会话不存在")
-            if session_id in agent_executor_service._compressing_sessions:
-                return ApiResponse.error(msg="正在压缩中，请稍后再试")
-            if session_id in agent_executor_service._running_sessions:
-                return ApiResponse.error(msg="会话正在执行中，请稍后再试")
             custom_prompt = (req.prompt if req else "").strip()
-            asyncio.create_task(
-                agent_executor_service._run_compress_background(
+            try:
+                agent_executor_service.start_compress_background(
                     session_id, custom_prompt
                 )
-            )
+            except ValueError as exc:
+                return ApiResponse.error(msg=str(exc))
             return ApiResponse.success(msg="开始压缩")
 
         @self.router.get(
@@ -348,8 +346,9 @@ class AgentApi:
         )
         async def check_running(id: int, session_id: int):
             """页面刷新后检测会话是否仍在后台执行，前端据此显示停止按钮"""
-            running = agent_executor_service.is_running(session_id)
-            return ApiResponse.success(data={"running": running})
+            return ApiResponse.success(
+                data=agent_executor_service.get_run_status(session_id)
+            )
 
         @self.router.get(
             "/{id}/sessions/{session_id}/compressing",

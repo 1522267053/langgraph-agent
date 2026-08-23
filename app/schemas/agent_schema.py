@@ -3,7 +3,7 @@ Agent相关的Pydantic Schema
 """
 
 from typing import Optional, List, Any
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import AliasChoices, BaseModel, Field, ConfigDict, field_validator
 from app.schemas.base_schema import ChinaDateTime
 from app.schemas.flow_schema import FlowIOSchema
 
@@ -34,14 +34,23 @@ class AgentSessionResponse(AgentSessionBase):
     id: int = Field(..., description="会话ID")
     flow_id: int = Field(..., description="关联的Agent Flow ID")
     status: int = Field(..., description="状态：1=活跃，0=已归档")
-    created_at: Optional[ChinaDateTime] = Field(default=None, description="创建时间")
-    updated_at: Optional[ChinaDateTime] = Field(default=None, description="更新时间")
+    created_at: Optional[ChinaDateTime] = Field(
+        default=None,
+        validation_alias=AliasChoices("created_at", "create_time"),
+        description="创建时间",
+    )
+    updated_at: Optional[ChinaDateTime] = Field(
+        default=None,
+        validation_alias=AliasChoices("updated_at", "modify_time"),
+        description="更新时间",
+    )
 
 
 class AgentMessageBase(BaseModel):
     """Agent消息基础Schema"""
 
     role: str = Field(..., description="human/ai/tool")
+    message_type: Optional[str] = Field(default=None, description="内部消息类型")
     content: str = Field(..., description="消息内容")
     original_content: Optional[str] = Field(
         default=None, description="原始用户消息（未渲染模板）"
@@ -62,6 +71,9 @@ class AgentMessageBase(BaseModel):
     completion_tokens: Optional[int] = Field(default=None, description="输出token数")
     total_tokens: Optional[int] = Field(default=None, description="总token数")
     files: Optional[List[dict]] = Field(default=None, description="附件文件列表")
+    input_data: Optional[dict[str, Any]] = Field(
+        default=None, description="用户输入参数或内部消息元数据"
+    )
     """创建Agent消息"""
 
     pass
@@ -75,7 +87,11 @@ class AgentMessageResponse(AgentMessageBase):
     id: int = Field(..., description="消息ID")
     session_id: int = Field(..., description="会话ID")
     sequence: int = Field(..., description="排序序号")
-    created_at: Optional[ChinaDateTime] = Field(default=None, description="创建时间")
+    created_at: Optional[ChinaDateTime] = Field(
+        default=None,
+        validation_alias=AliasChoices("created_at", "create_time"),
+        description="创建时间",
+    )
 
 
 class AgentChatRequest(BaseModel):
@@ -138,8 +154,16 @@ class AgentFlowResponse(BaseModel):
     suggested_prompts: Optional[List[str]] = Field(
         default=None, description="建议提示词列表"
     )
-    created_at: Optional[ChinaDateTime] = Field(default=None, description="创建时间")
-    updated_at: Optional[ChinaDateTime] = Field(default=None, description="更新时间")
+    created_at: Optional[ChinaDateTime] = Field(
+        default=None,
+        validation_alias=AliasChoices("created_at", "create_time"),
+        description="创建时间",
+    )
+    updated_at: Optional[ChinaDateTime] = Field(
+        default=None,
+        validation_alias=AliasChoices("updated_at", "modify_time"),
+        description="更新时间",
+    )
 
     @field_validator("input_schema", mode="before")
     @classmethod

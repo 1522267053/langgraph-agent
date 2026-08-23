@@ -42,12 +42,6 @@ function getSavedPasswordHash(): string | null {
 }
 
 onMounted(async () => {
-  try {
-    await authApi.check()
-  } catch {
-    // ignore
-  }
-
   const isAutoLogin = localStorage.getItem(AUTO_LOGIN_KEY) === '1'
   if (!isAutoLogin) return
 

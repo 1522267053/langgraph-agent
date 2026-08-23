@@ -26,6 +26,7 @@ const store = useAgentStore()
 const toolOutputStore = useToolOutputStore()
 
 const scrollbarRef = ref<ScrollbarInstance>()
+const messagesContentRef = ref<HTMLElement | null>(null)
 const messagesContainer = computed<HTMLElement | null>(
   () => (scrollbarRef.value?.wrapRef as HTMLElement | undefined) ?? null
 )
@@ -34,6 +35,7 @@ const {
   autoScroll,
   isAtBottom,
   scrollToBottom,
+  maybeScrollToBottom,
   handleScroll,
   onUserScrollIntent,
   resetAutoScrollState
@@ -55,6 +57,21 @@ const {
   () => store.isStreaming,
   () => store.todos.length
 ])
+
+let messagesResizeObserver: ResizeObserver | null = null
+
+watch(
+  messagesContentRef,
+  (content, previous) => {
+    if (previous) messagesResizeObserver?.unobserve(previous)
+    if (!content) return
+    messagesResizeObserver ??= new ResizeObserver(() => {
+      if (!store.messagesLoading) maybeScrollToBottom()
+    })
+    messagesResizeObserver.observe(content)
+  },
+  { flush: 'post' }
+)
 
 const humanInputValue = ref('')
 
@@ -256,6 +273,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  messagesResizeObserver?.disconnect()
+  messagesResizeObserver = null
   store.cancelStream()
   store.resetState()
   store.stopCompressPolling()
@@ -272,16 +291,6 @@ watch(
       resetAutoScrollState()
       await nextTick()
       scrollToBottom()
-    }
-  }
-)
-
-watch(
-  () => store.currentSession?.id,
-  newId => {
-    store.stopCompressPolling()
-    if (newId && agentId.value) {
-      store.startCompressPolling(agentId.value, newId)
     }
   }
 )
@@ -577,7 +586,7 @@ function handleRejectTools() {
         @wheel="onUserScrollIntent"
         @touchmove="onUserScrollIntent"
       >
-        <div v-show="!store.messagesLoading" class="messages-container">
+        <div v-show="!store.messagesLoading" ref="messagesContentRef" class="messages-container">
           <div v-if="store.hasMoreMessages" class="load-more-sentinel">
             <div v-show="isLoadingMore" class="load-more-dots">
               <span></span>

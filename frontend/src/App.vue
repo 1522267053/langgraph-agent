@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import {
   Setting,
   DataLine,
@@ -25,7 +26,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage, ElNotification, ElButton } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import { useAgentStore } from '@/stores'
+import { useAgentStore, useAuthStore } from '@/stores'
 import { authApi } from '@/api/auth'
 import { updateApi, type UpdateStatus } from '@/api/config'
 import {
@@ -45,6 +46,8 @@ import KnowledgeReferenceDrawer from '@/components/common/KnowledgeReferenceDraw
 const route = useRoute()
 const router = useRouter()
 const store = useAgentStore()
+const authStore = useAuthStore()
+const { currentUser } = storeToRefs(authStore)
 const {
   visible: knowledgeReferenceDrawerVisible,
   reference: selectedKnowledgeReference,
@@ -73,7 +76,6 @@ const DEFAULT_AGENT_KEY = 'default_agent_id'
 
 const builtinAgentId = ref<number | null>(null)
 const defaultAgentId = ref<number | null>(null)
-const currentUser = ref<string | null>(null)
 const updateStatus = ref<UpdateStatus | null>(null)
 let statusTimer: ReturnType<typeof setInterval> | null = null
 let forceRemindTimer: ReturnType<typeof setInterval> | null = null
@@ -81,15 +83,6 @@ let forceRemindTimer: ReturnType<typeof setInterval> | null = null
 function loadDefaultAgentId(): number | null {
   const val = localStorage.getItem(DEFAULT_AGENT_KEY)
   return val ? parseInt(val) : null
-}
-
-async function loadCurrentUser(): Promise<void> {
-  try {
-    const res = await authApi.check()
-    currentUser.value = res.data.data?.username ?? null
-  } catch {
-    currentUser.value = null
-  }
 }
 
 async function checkAppUpdate(): Promise<void> {
@@ -250,7 +243,7 @@ async function handleLogout(): Promise<void> {
       type: 'warning'
     })
     await authApi.logout()
-    currentUser.value = null
+    authStore.clear()
     localStorage.removeItem('auto_login')
     localStorage.removeItem('saved_password_hash')
     localStorage.removeItem('saved_password')
@@ -272,7 +265,6 @@ watch(
       builtinAgentId.value = builtin?.id ?? null
       defaultAgentId.value = loadDefaultAgentId()
     }
-    if (!currentUser.value) loadCurrentUser()
     if (!updateChecked) {
       updateChecked = true
       checkAppUpdate()
