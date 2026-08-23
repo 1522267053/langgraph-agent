@@ -119,6 +119,7 @@ async def startup() -> None:
     # ---- 更新收尾：若由 updater 拉起且最终结果未写入，后台轮询判定成功/中断 ----
     from app.services.update_service import update_service
 
+    update_service.initialize_http_client()
     update_service.start_pending_result_resolver()
 
     # ---- 加载通知配置 ----
@@ -165,6 +166,7 @@ async def shutdown() -> None:
     from app.agent_flow.mcp_manager import mcp_tool_manager
     from app.services.agent_executor_service import agent_executor_service
     from app.services.scheduler_service import scheduler_service
+    from app.services.update_service import update_service
 
     # ---- 先停止任务生产者，避免 Agent 清理期间产生新执行 ----
     logger.info("Closing scheduler...")
@@ -180,6 +182,9 @@ async def shutdown() -> None:
     logger.info("Closing MCP connections...")
     await mcp_tool_manager.clear_all_cache()
     logger.info("[OK] MCP connections closed")
+
+    # ---- 关闭自动更新 HTTP 客户端 ----
+    await update_service.close_http_client()
 
     # ---- 关闭数据库连接 ----
     logger.info("Closing database connection...")
