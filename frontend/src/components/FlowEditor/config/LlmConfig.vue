@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { LlmConfig } from './types'
 import { variableFormatHint, fieldTypeOptions } from './types'
-import { flowApi, type ConnectedToolInfo } from '@/api/flow'
+import { flowApi, type ConnectedToolInfo, type ConnectedToolNodeInput } from '@/api/flow'
 import { useFlowStore } from '@/stores/flowStore'
 import { useConfigBase } from '@/composables/useConfigBase'
 import { useInputVariables } from '@/composables/useInputVariables'
@@ -45,6 +45,9 @@ if (!localConfig.value.required_tools_max_retries) {
 if (localConfig.value.required_tools_hint === undefined) {
   localConfig.value.required_tools_hint = ''
 }
+if (!localConfig.value.approval_required_tools) {
+  localConfig.value.approval_required_tools = []
+}
 
 watch(
   () => props.config,
@@ -70,6 +73,9 @@ watch(
     }
     if (localConfig.value.required_tools_hint === undefined) {
       localConfig.value.required_tools_hint = ''
+    }
+    if (!localConfig.value.approval_required_tools) {
+      localConfig.value.approval_required_tools = []
     }
     if (!localConfig.value.file_inputs) {
       localConfig.value.file_inputs = []
@@ -109,33 +115,64 @@ watch(requiredToolsMode, val => {
 
 const flowStore = useFlowStore()
 
-const connectedToolGroups = ref<ConnectedToolInfo[]>([])
+const resolvedToolGroups = ref<ConnectedToolInfo[]>([])
+
+const connectedToolNodes = computed<ConnectedToolNodeInput[]>(() => {
+  const sourceNodeIds = new Set(
+    flowStore.edges
+      .filter(edge => edge.target === props.currentNodeId && edge.sourceHandle === 'tools')
+      .map(edge => edge.source)
+  )
+
+  return flowStore.nodes
+    .filter(node => sourceNodeIds.has(node.id) && node.type)
+    .map(node => ({
+      node_key: node.id,
+      node_type: node.type!,
+      node_name: typeof node.data?.label === 'string' ? node.data.label : undefined,
+      base_config: (node.data?.config as Record<string, unknown>) || {}
+    }))
+})
+
+const connectedToolGroups = computed(() => {
+  const connectedNodeKeys = new Set(connectedToolNodes.value.map(node => node.node_key))
+  return resolvedToolGroups.value.filter(group => connectedNodeKeys.has(group.node_key))
+})
+
+let connectedToolsRequestVersion = 0
 
 async function fetchConnectedTools(): Promise<void> {
+  const requestVersion = ++connectedToolsRequestVersion
   const flowId = flowStore.flowInfo?.id
-  if (!flowId || !props.currentNodeId) {
-    connectedToolGroups.value = []
+  const nodes = connectedToolNodes.value
+  if (!flowId || !props.currentNodeId || nodes.length === 0) {
+    resolvedToolGroups.value = []
     return
   }
   try {
-    const res = await flowApi.getConnectedTools(flowId, props.currentNodeId)
+    const res = await flowApi.resolveConnectedTools(flowId, nodes)
+    if (requestVersion !== connectedToolsRequestVersion) return
     if (res.data.code === 1 && res.data.data) {
-      connectedToolGroups.value = res.data.data
+      resolvedToolGroups.value = res.data.data
     } else {
-      connectedToolGroups.value = []
+      resolvedToolGroups.value = []
     }
   } catch {
-    connectedToolGroups.value = []
+    if (requestVersion === connectedToolsRequestVersion) {
+      resolvedToolGroups.value = []
+    }
   }
 }
 
-watch(
-  () => props.currentNodeId,
-  () => {
-    fetchConnectedTools()
-  },
-  { immediate: true }
-)
+function updateApprovalRequiredTools(): void {
+  const names = localConfig.value.approval_required_tools || []
+  localConfig.value.approval_required_tools = [
+    ...new Set(names.map(name => name.trim()).filter(Boolean))
+  ]
+  updateConfig()
+}
+
+watch(connectedToolNodes, fetchConnectedTools, { immediate: true, deep: true })
 </script>
 
 <template>
@@ -323,15 +360,38 @@ watch(
         </template>
         <template v-if="isAgentMode">
           <el-form-item label="工具确认">
-            <el-switch v-model="localConfig.require_tool_approval" @change="updateConfig" />
-            <el-text size="small" type="info" style="margin-left: 8px">
-              Shell/Python工具执行前需用户确认
-            </el-text>
+            <el-select
+              v-model="localConfig.approval_required_tools"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              placeholder="选择或输入需确认的完整工具名（留空不审批）"
+              style="width: 100%"
+              @change="updateApprovalRequiredTools"
+            >
+              <el-option-group
+                v-for="group in connectedToolGroups"
+                :key="group.node_key"
+                :label="group.node_label"
+              >
+                <el-option
+                  v-for="tool in group.tools"
+                  :key="tool.name"
+                  :label="tool.name"
+                  :value="tool.name"
+                />
+              </el-option-group>
+            </el-select>
           </el-form-item>
         </template>
       </el-form>
       <div class="config-hint">
         <el-text size="small" type="info">
+          <template v-if="isAgentMode">
+            工具确认：选择已连接工具或手动输入完整工具名，仅匹配的工具执行前需要批准
+            <br />
+          </template>
           工具调用：通过拖动MCP节点连接到此LLM节点
           <br />
           人工协助：通过拖动Human节点连接到此LLM节点

@@ -31,7 +31,7 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.types import StreamWriter
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.models.flow_node import FlowNode
 from app.services.agent_conversation_service import AgentConversationService
@@ -174,8 +174,9 @@ class LlmNodeConfig(BaseNodeConfig):
         ...,
         description="用户提示词模板（必填，否则 LLM 收不到消息。支持变量插值，如: {{message}}）",
     )
-    require_tool_approval: bool = Field(
-        default=False, description="危险工具执行前需要用户确认（仅 Agent 模式生效）"
+    approval_required_tools: list[str] = Field(
+        default_factory=list,
+        description="执行前需要用户确认的完整工具名列表（仅 Agent 模式生效）",
     )
     extra_body: dict = Field(
         default_factory=dict, description="附加请求参数（JSON 对象，会合并到请求体中）"
@@ -205,6 +206,12 @@ class LlmNodeConfig(BaseNodeConfig):
         default="",
         description="提醒消息模板，{{tools}} 占位符替换为缺失工具名（留空使用默认模板）",
     )
+
+    @field_validator("approval_required_tools")
+    @classmethod
+    def normalize_approval_required_tools(cls, value: list[str]) -> list[str]:
+        """清理手动输入的工具名并保持原顺序去重。"""
+        return list(dict.fromkeys(name.strip() for name in value if name.strip()))
 
 
 class LlmToolNodeHandler(BaseNodeHandler):
@@ -568,6 +575,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 writer,
                 max_tool_iterations,
                 context_length=cfg_context_length,
+                approval_required_tools=cfg.approval_required_tools,
                 required_tools=plan_required_tools,
                 tool_check_script=cfg.tool_check_script,
                 required_tools_max_retries=cfg.required_tools_max_retries,
@@ -708,6 +716,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
         max_tool_iterations: int,
         *,
         context_length: int = 0,
+        approval_required_tools: Optional[list[str]] = None,
         required_tools: Optional[list[str]] = None,
         tool_check_script: str = "",
         required_tools_max_retries: int = 2,
@@ -932,6 +941,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 max_tool_iterations,
                 session_id=self.session_id,
                 check_interrupted_fn=self._check_interrupted,
+                approval_required_tools=approval_required_tools,
                 emit_fn=self._emit,
                 emit_tool_start_fn=self._emit_tool_start,
                 emit_tool_end_fn=self._emit_tool_end,

@@ -36,3 +36,12 @@ class FlowNodeUpdate(FlowNodeBase):
     """更新流程节点"""
 
     id: int = Field(..., description="ID")
+
+
+class ConnectedToolNodeInput(BaseView):
+    """前端当前已连接工具节点快照"""
+
+    node_key: str = Field(..., description="节点唯一标识")
+    node_type: str = Field(..., description="节点类型")
+    node_name: Optional[str] = Field(default=None, description="节点名称")
+    base_config: dict = Field(default_factory=dict, description="节点配置")

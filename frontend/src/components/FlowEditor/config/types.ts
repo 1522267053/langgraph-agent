@@ -66,7 +66,7 @@ export interface LlmConfig {
   max_tokens: number
   history_mode: 'node' | 'flow' | 'none'
   max_history_turns: number
-  require_tool_approval?: boolean
+  approval_required_tools?: string[]
   extra_body?: Record<string, unknown>
   reasoning_effort?: string
   context_length?: number

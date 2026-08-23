@@ -327,10 +327,14 @@ const registry: Record<string, NodeRegistryEntry> = {
       max_tool_iterations: 200,
       max_tokens: 8192,
       history_mode: 'node',
-      max_history_turns: 10
+      max_history_turns: 10,
+      approval_required_tools: []
     }),
     initConfig: (rawConfig, ctx) => {
       const config = { ...rawConfig }
+      if (!Array.isArray(config.approval_required_tools)) {
+        config.approval_required_tools = []
+      }
       config.input_variables = ensureInputVars(resolveInputVars(rawConfig, 'llm', ctx))
       if (config.output_variables) {
         // 已有 output_variables，直接用

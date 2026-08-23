@@ -178,9 +178,14 @@ def resolve_connected_tool_info(
     Returns:
         list[dict]: [{node_key, node_type, node_label, tools: [{name, description}]}]
     """
+    tool_nodes = get_connected_tool_nodes(flow, llm_node_key)
+    return resolve_tool_node_info(tool_nodes)
+
+
+def resolve_tool_node_info(tool_nodes: list[FlowNode]) -> list[dict]:
+    """解析给定工具节点的工具名称和描述，不依赖已保存的边。"""
     from app.agent_flow.handler_registry import NodeHandlerRegistry
 
-    tool_nodes = get_connected_tool_nodes(flow, llm_node_key)
     result: list[dict] = []
 
     for tool_node in tool_nodes:
