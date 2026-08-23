@@ -324,7 +324,7 @@ const registry: Record<string, NodeRegistryEntry> = {
       system_prompt: '',
       user_prompt: '',
       temperature: 0.7,
-      max_tool_iterations: 5,
+      max_tool_iterations: 200,
       max_tokens: 8192,
       history_mode: 'node',
       max_history_turns: 10

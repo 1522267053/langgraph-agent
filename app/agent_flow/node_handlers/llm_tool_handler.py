@@ -150,7 +150,7 @@ class LlmNodeConfig(BaseNodeConfig):
     )
     temperature: float = Field(default=0.7, description="温度参数（0-2），越高越随机")
     max_tokens: int = Field(default=8192, description="最大生成 token 数")
-    max_tool_iterations: int = Field(default=20, description="最大工具调用轮次")
+    max_tool_iterations: int = Field(default=200, description="最大工具调用轮次")
     history_mode: str = Field(
         default="node",
         description="对话历史模式",
