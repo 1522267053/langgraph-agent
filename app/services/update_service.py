@@ -93,6 +93,7 @@ class UpdateService:
         self._file_size: int = 0
         self._download_task: Optional[asyncio.Task] = None
         self._download_lock = asyncio.Lock()
+        self._http_client: Optional[httpx.AsyncClient] = None
 
         self._latest_info: dict = _no_update_result()
         self._last_result: Optional[dict] = None
@@ -100,6 +101,25 @@ class UpdateService:
         self._resolve_task: Optional[asyncio.Task] = None
 
         self._restore_from_disk()
+
+    def initialize_http_client(self) -> None:
+        """启动期创建并复用客户端，避免请求中同步加载 CA 证书阻塞事件循环。"""
+        if self._http_client is not None and not self._http_client.is_closed:
+            return
+        ssl_context = httpx.create_ssl_context()
+        self._http_client = httpx.AsyncClient(timeout=10, verify=ssl_context)
+
+    async def close_http_client(self) -> None:
+        """关闭更新检查使用的持久 HTTP 客户端。"""
+        if self._http_client is not None and not self._http_client.is_closed:
+            await self._http_client.aclose()
+        self._http_client = None
+
+    def _get_http_client(self) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self.initialize_http_client()
+        assert self._http_client is not None
+        return self._http_client
 
     # ---- 版本检查 ----
 
@@ -124,9 +144,8 @@ class UpdateService:
 
             async with AsyncSessionLocal() as db:
                 await global_config_service.ensure_marketplace_cache(db)
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(request_url)
-                resp.raise_for_status()
+            resp = await self._get_http_client().get(request_url)
+            resp.raise_for_status()
             body = resp.json()
             remote = body.get("data")
             if not remote:
