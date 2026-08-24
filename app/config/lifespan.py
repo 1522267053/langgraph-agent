@@ -117,10 +117,12 @@ async def startup() -> None:
         await agent_executor_service.migrate_legacy_compression_messages(db)
 
     # ---- 更新收尾：若由 updater 拉起且最终结果未写入，后台轮询判定成功/中断 ----
+    # ---- 更新续传：进程重启前处于下载中的，重新拉起下载任务 ----
     from app.services.update_service import update_service
 
     update_service.initialize_http_client()
     update_service.start_pending_result_resolver()
+    update_service.start_pending_download_resume()
 
     # ---- 加载通知配置 ----
     await _load_notification_config()
