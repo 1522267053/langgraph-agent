@@ -114,10 +114,11 @@ class OpenAICompatibleProvider(BaseAIProvider):
 
     def create_chat_model(self, model: str, **kwargs) -> BaseChatModel:
         base_url = self.base_url or self.default_base_url
+        # 可通过 create_llm(stream_usage=...) 或节点配置覆盖；默认开启以统计流式 token 用量
         return ChatOpenAIReasoning(
             model=model,
             api_key=self.api_key,
             base_url=base_url,
-            stream_usage=True,
+            stream_usage=kwargs.pop("stream_usage", True),
             **kwargs,
         )

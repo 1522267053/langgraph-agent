@@ -346,7 +346,12 @@ function openDownloadUrl(): void {
                 "
               />
 
-              <el-button type="primary" :loading="saving" style="margin-top: 16px" @click="handleSave">
+              <el-button
+                type="primary"
+                :loading="saving"
+                style="margin-top: 16px"
+                @click="handleSave"
+              >
                 保存配置
               </el-button>
             </el-form>
@@ -512,7 +517,10 @@ function openDownloadUrl(): void {
 
         <el-tab-pane label="资源市场" name="marketplace">
           <div class="settings-card">
-            <div class="card-title" style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px">
+            <div
+              class="card-title"
+              style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px"
+            >
               <el-icon><Link /></el-icon>
               <span>资源市场</span>
               <el-tag
@@ -566,7 +574,12 @@ function openDownloadUrl(): void {
           <div class="settings-card">
             <div
               class="card-title"
-              style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px"
+              style="
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 16px;
+              "
             >
               <span>版本更新</span>
               <el-tag size="small" type="info">v{{ currentVersion }}</el-tag>
@@ -615,7 +628,11 @@ function openDownloadUrl(): void {
                 <div class="update-progress-info">
                   正在下载 v{{ updateStatus.version }}... {{ updateStatus.progress }}%
                 </div>
-                <el-progress :percentage="updateStatus.progress" :stroke-width="8" :show-text="false" />
+                <el-progress
+                  :percentage="updateStatus.progress"
+                  :stroke-width="8"
+                  :show-text="false"
+                />
                 <div class="update-download-row">
                   <el-button size="small" @click="cancelDownload">取消下载</el-button>
                 </div>

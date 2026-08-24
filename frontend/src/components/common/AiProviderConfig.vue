@@ -14,6 +14,7 @@ const props = withDefaults(
     showTemperature?: boolean
     showReasoningEffort?: boolean
     showExtraBody?: boolean
+    showStreamUsage?: boolean
     resetOnProviderChange?: boolean
     disabled?: boolean
     apiKeyPlaceholder?: string
@@ -29,6 +30,7 @@ const props = withDefaults(
     showTemperature: false,
     showReasoningEffort: false,
     showExtraBody: false,
+    showStreamUsage: false,
     resetOnProviderChange: true,
     disabled: false,
     apiKeyPlaceholder: '请输入 API Key',
@@ -53,6 +55,15 @@ const maxTokens = defineModel<number | undefined>('maxTokens')
 const temperature = defineModel<number | undefined>('temperature')
 const reasoningEffort = defineModel<string | undefined>('reasoningEffort')
 const extraBody = defineModel<Record<string, unknown> | undefined>('extraBody')
+const streamUsage = defineModel<boolean | undefined>('streamUsage')
+
+// undefined 视为开启（默认 true 语义），未配置的老节点显示为开
+const streamUsageSwitch = computed({
+  get: () => streamUsage.value !== false,
+  set: (val: boolean) => {
+    streamUsage.value = val
+  }
+})
 
 const _init = ref(true)
 const providerList = ref<ProviderInfo[]>([])
@@ -360,6 +371,17 @@ function handleExtraBodyBlur() {
         <el-option label="high" value="high" />
       </el-select>
     </el-form-item>
+    <el-form-item v-if="showStreamUsage">
+      <template #label>
+        流式用量
+        <el-tooltip
+          content="开启后流式请求发送 stream_options.include_usage 以统计 token 用量；部分 OpenAI 兼容 API 不支持该参数会导致流式请求报错，此时可关闭"
+        >
+          <el-icon class="context-tip-icon"><QuestionFilled /></el-icon>
+        </el-tooltip>
+      </template>
+      <el-switch v-model="streamUsageSwitch" :disabled="disabled" @change="onFieldChange" />
+    </el-form-item>
     <el-form-item v-if="showExtraBody" label="附加参数">
       <el-input
         v-model="extraBodyText"
@@ -497,6 +519,14 @@ function handleExtraBodyBlur() {
         <el-option label="medium" value="medium" />
         <el-option label="high" value="high" />
       </el-select>
+    </el-form-item>
+    <el-form-item v-if="showStreamUsage" label="流式用量">
+      <el-switch v-model="streamUsageSwitch" :disabled="disabled" @change="onFieldChange" />
+      <el-tooltip
+        content="开启后流式请求发送 stream_options.include_usage 以统计 token 用量；部分 OpenAI 兼容 API 不支持该参数会导致流式请求报错，此时可关闭"
+      >
+        <el-icon class="context-tip-icon" style="margin-left: 8px"><QuestionFilled /></el-icon>
+      </el-tooltip>
     </el-form-item>
     <el-form-item v-if="showExtraBody" label="附加参数">
       <el-input
