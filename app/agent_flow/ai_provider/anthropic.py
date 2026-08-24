@@ -44,6 +44,9 @@ class AnthropicProvider(BaseAIProvider):
                 "Claude 如需深度推理请使用 thinking 机制。",
                 dropped,
             )
+        # stream_usage 是 OpenAI 的 stream_options.include_usage 参数，
+        # Anthropic 流式响应始终携带 usage，直接丢弃避免 SDK 校验报错
+        kwargs.pop("stream_usage", None)
         llm_kwargs.update(kwargs)
         # model/model_provider 必须作为显式 kwargs 传入：
         # init_chat_model 是 @overload 函数，靠 model_provider 字面量分发重载，

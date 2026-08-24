@@ -186,6 +186,11 @@ class LlmNodeConfig(BaseNodeConfig):
         description="推理深度（low/medium/high），部分模型支持",
         json_schema_extra={"options": ["low", "medium", "high"]},
     )
+    stream_usage: Optional[bool] = Field(
+        default=None,
+        description="流式请求是否发送 stream_options.include_usage"
+        "（None 继承系统全局配置，部分 OpenAI 兼容 API 不支持需关闭）",
+    )
     context_length: int = Field(
         default=0, description="模型上下文窗口大小（token 数，0 表示不限制）"
     )

@@ -26,6 +26,7 @@ def create_llm(
     extra_body: Optional[dict] = None,
     reasoning_effort: Optional[str] = None,
     streaming: bool = True,
+    stream_usage: Optional[bool] = None,
 ) -> BaseChatModel:
     """通过 AI 提供商创建 LLM 实例
 
@@ -39,6 +40,8 @@ def create_llm(
         extra_body: 附加请求参数
         reasoning_effort: 推理深度（low/medium/high）
         streaming: 是否启用流式输出（分类等一次性场景传 False）
+        stream_usage: 流式请求是否发送 stream_options.include_usage
+            （None 使用供应商默认行为，仅 OpenAI 兼容提供商生效）
 
     Returns:
         BaseChatModel 实例
@@ -55,6 +58,8 @@ def create_llm(
         kwargs["extra_body"] = extra_body
     if reasoning_effort:
         kwargs["reasoning_effort"] = reasoning_effort
+    if stream_usage is not None:
+        kwargs["stream_usage"] = stream_usage
     return provider.create_chat_model(**kwargs)
 
 
@@ -83,6 +88,8 @@ def prepare_llm(
     provider_name = node_config.get("provider", "")
     extra_body = node_config.get("extra_body")
     reasoning_effort = node_config.get("reasoning_effort")
+    # 节点未配置时使用供应商默认（openai_compatible 默认开启）
+    stream_usage = node_config.get("stream_usage")
 
     llm = create_llm(
         cast(str, api_key),
@@ -93,6 +100,7 @@ def prepare_llm(
         temperature,
         extra_body=extra_body,
         reasoning_effort=reasoning_effort,
+        stream_usage=stream_usage,
     )
 
     has_tools = len(tools) > 0

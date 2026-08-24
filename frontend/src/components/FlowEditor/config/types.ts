@@ -69,6 +69,7 @@ export interface LlmConfig {
   approval_required_tools?: string[]
   extra_body?: Record<string, unknown>
   reasoning_effort?: string
+  stream_usage?: boolean
   context_length?: number
   required_tools?: string[]
   tool_check_script?: string

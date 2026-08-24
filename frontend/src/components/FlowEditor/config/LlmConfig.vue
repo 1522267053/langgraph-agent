@@ -276,12 +276,14 @@ watch(connectedToolNodes, fetchConnectedTools, { immediate: true, deep: true })
         v-model:temperature="localConfig.temperature"
         v-model:reasoning-effort="localConfig.reasoning_effort"
         v-model:extra-body="localConfig.extra_body"
+        v-model:stream-usage="localConfig.stream_usage"
         show-capabilities
         show-context-length
         show-max-tokens
         show-temperature
         show-reasoning-effort
         show-extra-body
+        show-stream-usage
         :reset-on-provider-change="false"
         api-key-placeholder="留空使用全局默认 API Key"
         @change="updateConfig"
