@@ -100,6 +100,8 @@ class UpdateService:
         self._last_result: Optional[dict] = None
         self._pending_result: bool = False
         self._resolve_task: Optional[asyncio.Task] = None
+        self._pending_download_resume: bool = False
+        self._resume_task: Optional[asyncio.Task] = None
 
         self._restore_from_disk()
 
@@ -193,10 +195,21 @@ class UpdateService:
             return self.get_status()
 
         latest = info["latest_version"]
+        download_alive = (
+            self._download_task is not None and not self._download_task.done()
+        )
         if (
             self._state in (UpdateState.DOWNLOADING.value, UpdateState.READY.value)
             and self._version == latest
         ):
+            if self._state == UpdateState.DOWNLOADING.value and not download_alive:
+                # 孤儿 downloading 态（进程重启恢复后无下载任务）：重新拉起下载
+                await self._start_download(
+                    latest,
+                    info["download_url"],
+                    info.get("sha256", ""),
+                    info.get("file_size", 0),
+                )
             return self.get_status()
 
         await self._start_download(
@@ -236,7 +249,9 @@ class UpdateService:
             ) as client:
                 async with client.stream("GET", url) as resp:
                     resp.raise_for_status()
-                    total = int(resp.headers.get("content-length", 0))
+                    content_length = int(resp.headers.get("content-length", 0))
+                    # 服务端 chunked 传输无 Content-Length 时，退回市场元数据大小计算进度
+                    total = content_length or self._file_size or 0
                     downloaded = 0
                     with open(tmp_path, "wb") as f:
                         async for chunk in resp.aiter_bytes(chunk_size=256 * 1024):
@@ -258,7 +273,8 @@ class UpdateService:
                 bad = zf.testzip()
                 if bad is not None:
                     raise ValueError(f"压缩包损坏: {bad}")
-            if total > 0 and tmp_path.stat().st_size != total:
+            # 大小校验只认响应头 Content-Length（元数据大小仅供参考，不作硬校验）
+            if content_length > 0 and tmp_path.stat().st_size != content_length:
                 raise ValueError("下载大小与 Content-Length 不匹配")
 
             tmp_path.replace(zip_path)
@@ -454,6 +470,12 @@ class UpdateService:
             self._resolve_update_result(result)
             return
 
+        if self._state == UpdateState.DOWNLOADING.value:
+            # 上次进程在下载中退出：下载任务随进程消失，状态是孤儿态。
+            # 标记待恢复，由 lifespan 在事件循环就绪后重新拉起下载
+            self._pending_download_resume = True
+            return
+
         self._discard_obsolete_update(get_version())
 
     def _discard_obsolete_update(self, current: str) -> bool:
@@ -573,6 +595,36 @@ class UpdateService:
         if not self._pending_result or self._resolve_task:
             return
         self._resolve_task = asyncio.create_task(self.resolve_pending_result())
+
+    def start_pending_download_resume(self) -> None:
+        """由 lifespan 在事件循环就绪后调用，恢复进程重启前未完成的下载"""
+        if not self._pending_download_resume or self._resume_task:
+            return
+        self._resume_task = asyncio.create_task(self._resume_pending_download())
+
+    async def _resume_pending_download(self) -> None:
+        """用持久化的版本元数据重新拉起中断的下载。
+
+        __init__ 阶段无事件循环，无法创建下载任务，故延迟到 lifespan 阶段执行。
+        元数据缺失（老版 status.json）或版本已过期时回退 idle，等待下次检查更新。
+        """
+        self._pending_download_resume = False
+        info = self._latest_info
+        url = info.get("download_url", "")
+        version = self._version
+        if (
+            not url
+            or not version
+            or not info.get("has_update")
+            or not is_newer(version, get_version())
+        ):
+            self._progress = 0
+            self._set_state(UpdateState.IDLE)
+            return
+        logger.info("恢复中断的更新包下载: v%s", version)
+        await self._start_download(
+            version, url, info.get("sha256", ""), info.get("file_size", 0)
+        )
 
     async def resolve_pending_result(self) -> None:
         """后台轮询 updater 的最终更新结果
