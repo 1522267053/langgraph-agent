@@ -89,15 +89,30 @@ async function checkAppUpdate(): Promise<void> {
   try {
     const res = await updateApi.checkUpdate()
     const info = res.data.data
-    if (!info?.has_update) return
+    if (!info?.has_update) {
+      // 无更新时也同步一次本地状态，后端处于 ready（如失败后恢复）时仍能展示横幅
+      await refreshUpdateStatus()
+      return
+    }
     // 仅强制更新自动后台下载并周期提醒，普通更新只在设置页由用户手动下载
     if (info.force_upgrade) {
-      await updateApi.download().catch(() => {})
+      try {
+        await updateApi.download()
+      } catch (err) {
+        // 会话过期时 download 接口 401：重置标记，登录后路由变化时重试，
+        // 避免强制升级横幅丢失
+        if ((err as { response?: { status?: number } })?.response?.status === 401) {
+          updateChecked = false
+        }
+        await refreshUpdateStatus()
+        return
+      }
       await refreshUpdateStatus()
       startStatusPolling()
     }
   } catch {
-    // 静默失败
+    // 检查失败（网络异常等）时仍拉取本地状态，已就绪的更新不因此丢失横幅
+    await refreshUpdateStatus()
   }
 }
 

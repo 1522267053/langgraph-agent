@@ -656,11 +656,11 @@ function openDownloadUrl(): void {
               </div>
             </template>
 
-            <!-- 下载失败 -->
+            <!-- 下载/更新失败（更新包校验不过时同样进入此态，可重新下载） -->
             <template v-else-if="updateStatus?.state === 'failed'">
               <div class="update-notice update-notice--force">
                 <div class="update-notice-body">
-                  <div class="update-notice-title">下载失败</div>
+                  <div class="update-notice-title">更新失败</div>
                   <div v-if="updateStatus.error" class="update-notice-desc">
                     {{ updateStatus.error }}
                   </div>

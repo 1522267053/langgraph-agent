@@ -3,9 +3,10 @@
 
 负责版本检查、后台下载、状态管理与更新触发。
 更新流程: 检查新版本 → 后台下载整包 → CRC 校验 → 触发 updater 替换重启。
+更新失败/中断时保留通过校验的更新包，重启后恢复 ready 态，重试无需重新下载。
 
 状态机: idle → downloading → ready → applying → (done|failed|rolled_back)
-跨进程持久化: status.json（运行状态）+ result.json（updater 写入的最终结果）
+跨进程持久化: status.json（运行状态 + 版本元数据）+ result.json（updater 写入的最终结果）
 """
 
 import asyncio
@@ -413,6 +414,9 @@ class UpdateService:
             "version": self._version,
             "progress": self._progress,
             "error": self._error,
+            "sha256": self._sha256,
+            "file_size": self._file_size,
+            "latest_info": self._latest_info,
         }
         try:
             self._status_file.write_text(
@@ -426,26 +430,31 @@ class UpdateService:
         result = self._consume_result_file()
         if result is not None:
             self._last_result = result
-            return
-
         try:
             if self._status_file.exists():
                 data = json.loads(self._status_file.read_text(encoding="utf-8"))
-                if data.get("state") == UpdateState.APPLYING.value:
-                    # 更新正在进行：正常流程中新版主进程先于 updater 的健康检查
-                    # 启动（result.json 在健康检查通过后才写入），此处不能立即判定
-                    # 中断，保持 applying 态，由 lifespan 拉起后台轮询等待最终结果
-                    self._state = UpdateState.APPLYING.value
-                    self._version = data.get("version", "")
-                    self._pending_result = True
-                else:
-                    self._state = data.get("state", UpdateState.IDLE.value)
-                    self._version = data.get("version", "")
-                    self._progress = data.get("progress", 0)
-                    self._error = data.get("error", "")
-                self._discard_obsolete_update(get_version())
+                self._state = data.get("state", UpdateState.IDLE.value)
+                self._version = data.get("version", "")
+                self._progress = data.get("progress", 0)
+                self._error = data.get("error", "")
+                self._sha256 = data.get("sha256", "")
+                self._file_size = data.get("file_size", 0)
+                self._latest_info = data.get("latest_info") or _no_update_result()
         except Exception:
             logger.debug("读取 status.json 失败", exc_info=True)
+
+        if self._state == UpdateState.APPLYING.value and result is None:
+            # 更新正在进行：正常流程中新版主进程先于 updater 的健康检查
+            # 启动（result.json 在健康检查通过后才写入），此处不能立即判定
+            # 中断，保持 applying 态，由 lifespan 拉起后台轮询等待最终结果
+            self._pending_result = True
+            return
+
+        if result is not None:
+            self._resolve_update_result(result)
+            return
+
+        self._discard_obsolete_update(get_version())
 
     def _discard_obsolete_update(self, current: str) -> bool:
         """清理目标版本不高于当前版本的已就绪更新包。"""
@@ -458,6 +467,7 @@ class UpdateService:
         self._error = ""
         self._sha256 = ""
         self._file_size = 0
+        self._latest_info = _no_update_result()
         self._set_state(UpdateState.IDLE)
         self._cleanup_download_files()
         logger.info(
@@ -473,12 +483,90 @@ class UpdateService:
             if self._result_file.exists():
                 data = json.loads(self._result_file.read_text(encoding="utf-8"))
                 self._result_file.unlink(missing_ok=True)
-                self._cleanup_download_files()
-                self._status_file.unlink(missing_ok=True)
                 return data
         except Exception:
             logger.debug("读取 result.json 失败", exc_info=True)
         return None
+
+    def _resolve_update_result(self, result: dict) -> None:
+        """根据 updater 的最终结果收敛状态。
+
+        成功：清空更新状态并清理下载包；
+        失败/回滚/中断：尝试复用已下载的更新包恢复 READY（重试免重新下载），
+        包缺失或校验不通过时置 FAILED 引导重新下载。
+        """
+        if result.get("result") == "success":
+            self._latest_info = _no_update_result()
+            self._version = ""
+            self._progress = 0
+            self._error = ""
+            self._sha256 = ""
+            self._file_size = 0
+            self._set_state(UpdateState.IDLE)
+            self._cleanup_download_files()
+            self._status_file.unlink(missing_ok=True)
+            return
+        self._error = result.get("error", "")
+        self._recover_download_package()
+
+    def _recover_download_package(self) -> None:
+        """更新失败后尝试复用已下载的更新包，免去重新下载。
+
+        包存在且校验通过时恢复 READY，重试入口（横幅/设置页）直接用本地包重试；
+        包缺失、版本过期或校验不通过时清理残留并置 FAILED，引导重新下载。
+        """
+        zip_path = self._find_cached_zip()
+        if zip_path is None:
+            self._set_state(UpdateState.FAILED)
+            return
+        version = zip_path.stem.removeprefix("download_")
+        if not version or not is_newer(version, get_version()):
+            self._cleanup_download_files()
+            self._error = "更新包已过期，请重新检查更新"
+            self._set_state(UpdateState.FAILED)
+            return
+        if not self._validate_cached_zip(zip_path):
+            self._cleanup_download_files()
+            self._error = "更新包校验失败，已清理，请重新下载"
+            self._set_state(UpdateState.FAILED)
+            return
+        self._version = version
+        self._progress = 100
+        self._error = ""
+        self._set_state(UpdateState.READY)
+        logger.info("更新包 v%s 校验通过，恢复 ready 态可直接重试更新", version)
+
+    def _find_cached_zip(self) -> Optional[Path]:
+        """定位可复用的更新包：优先目标版本文件，其次按修改时间取最新"""
+        cache_dir = get_update_cache_dir()
+        if self._version:
+            expected = cache_dir / f"download_{self._version}.zip"
+            if expected.exists():
+                return expected
+        candidates = [
+            p for p in cache_dir.glob("download_*.zip") if p.stem != "download_"
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda p: p.stat().st_mtime)
+
+    def _validate_cached_zip(self, zip_path: Path) -> bool:
+        """校验更新包完整性：已知 SHA256 时严格比对（防篡改/防损坏），否则退回 zip 校验"""
+        try:
+            if self._sha256:
+                h = hashlib.sha256()
+                with open(zip_path, "rb") as f:
+                    for block in iter(lambda: f.read(1024 * 1024), b""):
+                        h.update(block)
+                if h.hexdigest().lower() != self._sha256.lower():
+                    logger.warning("更新包 SHA256 校验失败: %s", zip_path)
+                    return False
+                return True
+            with zipfile.ZipFile(zip_path) as zf:
+                return zf.testzip() is None
+        except Exception:
+            logger.warning("更新包校验异常: %s", zip_path, exc_info=True)
+            return False
 
     def start_pending_result_resolver(self) -> None:
         """由 lifespan 在事件循环就绪后调用，拉起更新结果轮询（持有强引用防 GC）"""
@@ -498,18 +586,11 @@ class UpdateService:
             result = self._consume_result_file()
             if result is not None:
                 self._last_result = result
-                if result.get("result") == "success":
-                    self._error = ""
-                    self._progress = 0
-                    self._set_state(UpdateState.IDLE)
-                else:
-                    self._error = result.get("error", "")
-                    self._set_state(UpdateState.FAILED)
+                self._resolve_update_result(result)
                 return
             await asyncio.sleep(2)
-        self._error = "上次更新被中断，请重新检查更新"
         self._last_result = {"result": "interrupted", "error": "更新过程被中断"}
-        self._set_state(UpdateState.FAILED)
+        self._resolve_update_result(self._last_result)
 
     def _cleanup_download_files(self) -> None:
         """清理下载的 zip 包（更新完成后调用）"""
