@@ -19,7 +19,7 @@ export function useAutoScroll(
   watchSources: WatchSource[],
   options: UseAutoScrollOptions = {}
 ) {
-  const { threshold = 50, throttleMs = 400 } = options
+  const { threshold = 50, throttleMs = 200 } = options
   const autoScroll = ref(true)
   const isAtBottom = ref(true)
   const userScrolledUp = ref(false)
