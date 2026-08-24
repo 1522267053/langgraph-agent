@@ -1,7 +1,9 @@
 """OpenAI 兼容提供商，使用 openai SDK 实现 LLM"""
 
+import logging
 from typing import Any, Optional
 
+import httpx
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessageChunk
 from langchain_openai.chat_models.base import BaseChatOpenAI
@@ -10,6 +12,36 @@ from app.agent_flow.ai_provider.base import (
     AIProviderRegistry,
     BaseAIProvider,
 )
+
+logger = logging.getLogger(__name__)
+
+
+# ---- 临时调试：打印真实请求（URL / headers / body） ----
+
+
+def _mask(value: str) -> str:
+    return value if len(value) <= 12 else f"{value[:8]}...{value[-4:]}"
+
+
+def _log_openai_request(request: httpx.Request) -> None:
+    """httpx request hook：打印真实 URL / headers / body（Authorization 脱敏）"""
+    headers = {
+        k: _mask(v) if k.lower() in ("authorization", "api-key") else v
+        for k, v in request.headers.items()
+    }
+    body = request.read().decode("utf-8", errors="replace")
+    logger.info(
+        "[OpenAI兼容] %s %s\nheaders: %s\nbody: %s",
+        request.method,
+        str(request.url),
+        headers,
+        body,
+    )
+
+
+def _install_request_logger(llm: "ChatOpenAIReasoning") -> None:
+    for client in (llm.root_client._client, llm.root_async_client._client):
+        client.event_hooks["request"].append(_log_openai_request)
 
 
 # ---- 支持 reasoning_content 的 OpenAI 兼容聊天模型 ----
@@ -61,7 +93,13 @@ class ChatOpenAIReasoning(BaseChatOpenAI):
         extra_body = kwargs.pop("extra_body", None) or {}
         extra_body.setdefault("reasoning_split", True)
         kwargs["extra_body"] = extra_body
+        # 覆盖 SDK 默认的 Accept: application/json 为 */*（兼容 SSE 流式网关）
+        default_headers = kwargs.pop("default_headers", None) or {}
+        default_headers.setdefault("Accept", "*/*")
+        kwargs["default_headers"] = default_headers
         super().__init__(**kwargs)
+        # 临时调试：挂载 httpx request hook 打印真实请求
+        # _install_request_logger(self)
 
     def _convert_chunk_to_generation_chunk(
         self,
