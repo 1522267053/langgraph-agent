@@ -187,7 +187,7 @@ class LlmNodeConfig(BaseNodeConfig):
         json_schema_extra={"options": ["low", "medium", "high"]},
     )
     stream_usage: Optional[bool] = Field(
-        default=None,
+        default=True,
         description="流式请求是否发送 stream_options.include_usage"
         "（None 继承系统全局配置，部分 OpenAI 兼容 API 不支持需关闭）",
     )
