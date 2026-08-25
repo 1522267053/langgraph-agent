@@ -66,7 +66,7 @@ export const useFlowStore = defineStore('flow', () => {
 
     history.value = history.value.slice(0, historyIndex.value + 1)
     history.value.push(snapshotState())
-    if (history.value.length > 35) {
+    if (history.value.length > 50) {
       history.value.shift()
     }
     historyIndex.value = history.value.length - 1

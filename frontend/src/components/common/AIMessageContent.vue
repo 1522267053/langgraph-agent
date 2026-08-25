@@ -24,7 +24,7 @@ const emit = defineEmits<{
   (e: 'revert', dbMsgId: number): void
 }>()
 
-const MAX_VISIBLE_SEGMENTS = 50
+const MAX_VISIBLE_SEGMENTS = 35
 
 const visibleSegments = computed(() =>
   props.isStreaming && props.segments.length > MAX_VISIBLE_SEGMENTS
