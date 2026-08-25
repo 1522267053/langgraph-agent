@@ -32,7 +32,7 @@ class NodeVariable(BaseModel):
 
     name: str = Field(default="", description="变量名")
     source: str = Field(default="", description="来源路径")
-    type: Optional[str] = Field(default=None, description="数据类型")
+    type: Optional[str] = Field(default=None, description="数据类型(string/number/boolean/object/array/file_list)")
 
 
 class BaseNodeConfig(BaseModel):
