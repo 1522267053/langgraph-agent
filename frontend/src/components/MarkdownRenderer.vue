@@ -260,8 +260,8 @@ let mermaidInitialized = false
 let renderCount = 0
 let mermaidTimer: ReturnType<typeof setTimeout> | null = null
 
-/** 流式期间 markdown 重渲染的最小间隔（ms），将 O(n²) 全量重渲频率从 token 级降到 ~7次/秒 */
-const STREAM_RENDER_INTERVAL = 150
+/** 流式期间 markdown 重渲染的最小间隔（ms），降低全量 Markdown 重渲染频率 */
+const STREAM_RENDER_INTERVAL = 500
 let streamRenderTimer: ReturnType<typeof setTimeout> | null = null
 let lastStreamRenderAt = 0
 let hasPendingStreamRender = false
