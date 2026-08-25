@@ -227,7 +227,7 @@ async function handleDeleteSelected(): Promise<void> {
       type: 'warning'
     })
     await memoryApi.deleteBatch(selectedIds.value)
-    ElMessage.success(`已删除 ${selectedIds.value.length} 条记忆`)
+    ElMessage.success({ message: `已删除 ${selectedIds.value.length} 条记忆`, duration: 5000 })
     if (searchActive.value) {
       doSearch()
     } else {
@@ -246,7 +246,10 @@ async function handleRevectorizeSelected(): Promise<void> {
     const res = await memoryApi.revectorize(props.agentId, selectedIds.value)
     if (res.data.code === 1 && res.data.data) {
       const { success, failed } = res.data.data
-      ElMessage.success(`向量化完成：成功 ${success} 条${failed > 0 ? `，失败 ${failed} 条` : ''}`)
+      ElMessage.success({
+        message: `向量化完成：成功 ${success} 条${failed > 0 ? `，失败 ${failed} 条` : ''}`,
+        duration: 5000
+      })
       loadMemories()
     }
   } catch {
@@ -282,7 +285,7 @@ async function handleExport(): Promise<void> {
       a.download = `memory_agent_${props.agentId}_${date}.json`
       a.click()
       URL.revokeObjectURL(url)
-      ElMessage.success(`已导出 ${total} 条记忆`)
+      ElMessage.success({ message: `已导出 ${total} 条记忆`, duration: 5000 })
     }
   } catch (e) {
     console.error('导出失败详情:', e)
@@ -304,35 +307,38 @@ async function handleImportFile(e: Event): Promise<void> {
     const text = await file.text()
     const data = JSON.parse(text)
     if (!data.memories || !Array.isArray(data.memories)) {
-      ElMessage.error('无效的导入文件格式：缺少 memories 数组')
+      ElMessage.error({ message: '无效的导入文件格式：缺少 memories 数组', duration: 5000 })
       return
     }
     const items: MemoryExportItem[] = data.memories
     if (items.length === 0) {
-      ElMessage.warning('导入文件没有包含记忆数据')
+      ElMessage.warning({ message: '导入文件没有包含记忆数据', duration: 5000 })
       return
     }
     if (!items.every((m: Record<string, unknown>) => m.title && m.content)) {
-      ElMessage.error('无效的导入文件格式：每条记忆需要 title 和 content')
+      ElMessage.error({
+        message: '无效的导入文件格式：每条记忆需要 title 和 content',
+        duration: 5000
+      })
       return
     }
     const res = await memoryApi.importMemory({ agent_id: props.agentId, memories: items })
     if (res.data.code === 1 && res.data.data) {
       const { imported, failed, errors } = res.data.data
       if (failed > 0) {
-        ElMessage.warning(`导入 ${imported} 条，${failed} 条失败`)
+        ElMessage.warning({ message: `导入 ${imported} 条，${failed} 条失败`, duration: 5000 })
         if (errors.length > 0) {
           console.error('导入失败详情:', errors)
         }
       } else {
-        ElMessage.success(`成功导入 ${imported} 条记忆`)
+        ElMessage.success({ message: `成功导入 ${imported} 条记忆`, duration: 5000 })
       }
       loadMemories()
       loadStats()
     }
   } catch (e) {
     if (e instanceof SyntaxError) {
-      ElMessage.error('文件格式错误，不是有效的 JSON')
+      ElMessage.error({ message: '文件格式错误，不是有效的 JSON', duration: 5000 })
     }
     console.error('导入失败详情:', e)
   } finally {
@@ -345,7 +351,7 @@ async function handleDelete(memory: Memory): Promise<void> {
   try {
     await ElMessageBox.confirm(`确定删除记忆「${memory.title}」？`, '提示', { type: 'warning' })
     await memoryApi.delete(memory.id)
-    ElMessage.success('已删除')
+    ElMessage.success({ message: '已删除', duration: 5000 })
     if (searchActive.value) {
       doSearch()
     } else {

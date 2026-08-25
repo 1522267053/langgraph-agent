@@ -76,12 +76,15 @@ function getTemplateDescription(id: string): string {
 
 async function handleCreate(): Promise<void> {
   if (!flowName.value.trim()) {
-    ElMessage.warning(props.isAgentMode ? '请输入Agent名称' : '请输入流程名称')
+    ElMessage.warning({
+      message: props.isAgentMode ? '请输入Agent名称' : '请输入流程名称',
+      duration: 5000
+    })
     return
   }
 
   if (!selectedTemplateId.value) {
-    ElMessage.warning('请选择一个模板')
+    ElMessage.warning({ message: '请选择一个模板', duration: 5000 })
     return
   }
 
@@ -102,7 +105,7 @@ async function handleCreate(): Promise<void> {
       }
       emit('created', flowId)
       emit('update:visible', false)
-      ElMessage.success('创建成功')
+      ElMessage.success({ message: '创建成功', duration: 5000 })
     }
   } catch {
     // ignore

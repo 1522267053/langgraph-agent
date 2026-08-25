@@ -92,13 +92,13 @@ async function handleImport(resource: any) {
           confirmButtonText: '确定'
         })
       } else {
-        ElMessage.success(data.message || '导入成功')
+        ElMessage.success({ message: data.message || '导入成功', duration: 5000 })
       }
     } else {
-      ElMessage.error(data?.message || '导入失败')
+      ElMessage.error({ message: data?.message || '导入失败', duration: 5000 })
     }
   } catch {
-    ElMessage.error('导入失败')
+    ElMessage.error({ message: '导入失败', duration: 5000 })
   } finally {
     importing.value = null
   }
@@ -121,7 +121,11 @@ const isImporting = (id: number) => importing.value === id
         <el-icon :size="48" color="#94a3b8"><Shop /></el-icon>
         <h2>资源市场未连接</h2>
         <p>请先在系统设置中配置市场服务器地址</p>
-        <el-button type="primary" size="large" @click="$router.push({ path: '/settings', query: { tab: 'marketplace' } })">
+        <el-button
+          type="primary"
+          size="large"
+          @click="$router.push({ path: '/settings', query: { tab: 'marketplace' } })"
+        >
           前往设置
         </el-button>
       </div>

@@ -139,9 +139,9 @@ const copyText = computed(() => {
 async function handleCopy() {
   try {
     await navigator.clipboard.writeText(copyText.value)
-    ElMessage.success('已复制')
+    ElMessage.success({ message: '已复制', duration: 5000 })
   } catch {
-    ElMessage.error('复制失败')
+    ElMessage.error({ message: '复制失败', duration: 5000 })
   }
 }
 
@@ -171,9 +171,9 @@ const fallbackText = computed(() => {
 async function handleFallbackCopy() {
   try {
     await navigator.clipboard.writeText(fallbackText.value)
-    ElMessage.success('已复制')
+    ElMessage.success({ message: '已复制', duration: 5000 })
   } catch {
-    ElMessage.error('复制失败')
+    ElMessage.error({ message: '复制失败', duration: 5000 })
   }
 }
 

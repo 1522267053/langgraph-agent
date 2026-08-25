@@ -867,7 +867,7 @@ export const useAgentStore = defineStore('agent', () => {
           pendingToolCalls.value = []
           pendingApprovalNeeded.value = []
           stopApprovalCountdown()
-          ElMessage.warning('工具确认超时，连接已断开')
+          ElMessage.warning({ message: '工具确认超时，连接已断开', duration: 5000 })
         }
         if (isResume) {
           isResume = false
@@ -920,7 +920,7 @@ export const useAgentStore = defineStore('agent', () => {
         } catch {
           // 错误提示仍使用原始执行错误。
         }
-        ElMessage.error(event.data.message || '发送失败')
+        ElMessage.error({ message: event.data.message || '发送失败', duration: 5000 })
       }
     }
 
@@ -1141,7 +1141,7 @@ export const useAgentStore = defineStore('agent', () => {
           ) {
             isStopping.value = false
             startRunningPolling(agentId, sessionId)
-            ElMessage.error('停止请求失败，请稍后重试')
+            ElMessage.error({ message: '停止请求失败，请稍后重试', duration: 5000 })
           }
         })
     }
@@ -1165,7 +1165,7 @@ export const useAgentStore = defineStore('agent', () => {
       if (!isCurrentPoll()) return
       stopStreaming()
       isStopping.value = false
-      ElMessage.success('停止成功')
+      ElMessage.success({ message: '停止成功', duration: 5000 })
     }
     const poll = async () => {
       if (!isCurrentPoll()) return
@@ -1390,7 +1390,7 @@ export const useAgentStore = defineStore('agent', () => {
           isCompressing.value = false
           stopCompressPolling()
           if (data?.status === 'failed') {
-            ElMessage.error(data?.error || '上下文压缩失败')
+            ElMessage.error({ message: data?.error || '上下文压缩失败', duration: 5000 })
           } else if (currentSession.value) {
             await selectSession(agentId, currentSession.value)
           }

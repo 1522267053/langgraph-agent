@@ -182,11 +182,11 @@ function openEdit(row: WsGatewayConfig) {
 
 async function handleSubmit() {
   if (!formData.name.trim()) {
-    ElMessage.warning('请输入名称')
+    ElMessage.warning({ message: '请输入名称', duration: 5000 })
     return
   }
   if (!formData.flow_id) {
-    ElMessage.warning('请选择流程')
+    ElMessage.warning({ message: '请选择流程', duration: 5000 })
     return
   }
 
@@ -194,7 +194,7 @@ async function handleSubmit() {
     try {
       formData.input_config = JSON.parse(inputConfigText.value)
     } catch {
-      ElMessage.warning('输入参数模板 JSON 格式错误')
+      ElMessage.warning({ message: '输入参数模板 JSON 格式错误', duration: 5000 })
       return
     }
   } else {
@@ -212,7 +212,7 @@ async function handleSubmit() {
         input_config: formData.input_config,
         is_enabled: formData.is_enabled
       })
-      ElMessage.success('更新成功')
+      ElMessage.success({ message: '更新成功', duration: 5000 })
     } else {
       await wsGatewayApi.create({
         flow_id: formData.flow_id,
@@ -221,7 +221,7 @@ async function handleSubmit() {
         input_config: formData.input_config,
         is_enabled: formData.is_enabled
       })
-      ElMessage.success('创建成功')
+      ElMessage.success({ message: '创建成功', duration: 5000 })
     }
     dialogVisible.value = false
     await loadData()
@@ -237,7 +237,7 @@ async function handleDelete(row: WsGatewayConfig) {
       type: 'warning'
     })
     await wsGatewayApi.delete(row.id!)
-    ElMessage.success('删除成功')
+    ElMessage.success({ message: '删除成功', duration: 5000 })
     await loadData()
   } catch {
     // cancelled
@@ -262,12 +262,14 @@ function getWsUrl(row: WsGatewayConfig): string {
 async function copyUrl(url: string) {
   try {
     await navigator.clipboard.writeText(url)
-    ElMessage.success('已复制到剪贴板')
+    ElMessage.success({ message: '已复制到剪贴板', duration: 5000 })
   } catch {
     ElMessageBox.alert(url, 'WebSocket URL', {
       confirmButtonText: '复制',
       callback: () => {
-        navigator.clipboard.writeText(url).then(() => ElMessage.success('已复制'))
+        navigator.clipboard
+          .writeText(url)
+          .then(() => ElMessage.success({ message: '已复制', duration: 5000 }))
       }
     })
   }

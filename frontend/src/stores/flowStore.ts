@@ -66,7 +66,7 @@ export const useFlowStore = defineStore('flow', () => {
 
     history.value = history.value.slice(0, historyIndex.value + 1)
     history.value.push(snapshotState())
-    if (history.value.length > 50) {
+    if (history.value.length > 35) {
       history.value.shift()
     }
     historyIndex.value = history.value.length - 1
@@ -432,7 +432,7 @@ export const useFlowStore = defineStore('flow', () => {
         await flowEdgeApi.batchUpdate(edgesToUpdate)
       }
 
-      ElMessage.success('保存成功')
+      ElMessage.success({ message: '保存成功', duration: 5000 })
       await loadFlow(flowInfo.value.id!)
       return true
     } catch {
@@ -445,7 +445,7 @@ export const useFlowStore = defineStore('flow', () => {
   async function saveAsCard(): Promise<boolean> {
     if (!flowInfo.value?.id) return false
     if ((flowInfo.value as { flow_type?: string }).flow_type === 'agent') {
-      ElMessage.warning('智能体类型的流程不能保存为能力卡片')
+      ElMessage.warning({ message: '智能体类型的流程不能保存为能力卡片', duration: 5000 })
       return false
     }
 
@@ -456,7 +456,7 @@ export const useFlowStore = defineStore('flow', () => {
       const res = await flowApi.saveAsCard(flowInfo.value.id!)
       if (res.data.code === 1) {
         flowInfo.value.saved_as_card = 1
-        ElMessage.success('已保存为能力卡片')
+        ElMessage.success({ message: '已保存为能力卡片', duration: 5000 })
         return true
       }
       return false

@@ -113,20 +113,20 @@ watch(
 
 onConnect(params => {
   if (params.source === params.target) {
-    ElMessage.warning('不允许自连接')
+    ElMessage.warning({ message: '不允许自连接', duration: 5000 })
     return
   }
   const isSourceTool = params.sourceHandle === 'tools'
   const isTargetTool = params.targetHandle === 'tools'
   if (isSourceTool !== isTargetTool) {
-    ElMessage.warning('工具连接只能与工具连接点相连')
+    ElMessage.warning({ message: '工具连接只能与工具连接点相连', duration: 5000 })
     return
   }
   const isToolEdge = isSourceTool
   if (isToolEdge) {
     const targetNode = findNode(params.target)
     if (targetNode?.type !== 'llm') {
-      ElMessage.warning('工具边只能连接到大模型调用节点')
+      ElMessage.warning({ message: '工具边只能连接到大模型调用节点', duration: 5000 })
       return
     }
   }

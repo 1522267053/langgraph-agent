@@ -217,7 +217,7 @@ function handleFileRemove(uploadFile: UploadFile, uploadFiles: UploadFiles) {
 
 async function handleUpload() {
   if (fileList.value.length === 0) {
-    ElMessage.warning('请选择要上传的文件')
+    ElMessage.warning({ message: '请选择要上传的文件', duration: 5000 })
     return
   }
 
@@ -227,7 +227,7 @@ async function handleUpload() {
 
     for (const uploadFile of fileList.value) {
       if (!uploadFile.raw) {
-        ElMessage.warning(`文件 ${uploadFile.name} 无效`)
+        ElMessage.warning({ message: `文件 ${uploadFile.name} 无效`, duration: 5000 })
         continue
       }
       const res = await knowledgeDocumentApi.upload(uploadFile.raw, selectedKb.value!.id!)
@@ -236,7 +236,7 @@ async function handleUpload() {
       }
     }
 
-    ElMessage.success(`已上传 ${successCount} 个文件，后台处理中`)
+    ElMessage.success({ message: `已上传 ${successCount} 个文件，后台处理中`, duration: 5000 })
     uploadRef.value?.clearFiles()
     fileList.value = []
     uploadDialogVisible.value = false
@@ -290,7 +290,7 @@ async function handleVectorize(row: KnowledgeDocument) {
     vectorizeLoading.value = row.id!
     const res = await knowledgeDocumentApi.vectorizeDocument(row.id!, true)
     if (res.data.code === 1) {
-      ElMessage.success('重新向量化任务已提交，后台处理中')
+      ElMessage.success({ message: '重新向量化任务已提交，后台处理中', duration: 5000 })
       loadDocData()
     }
   } catch (error) {
@@ -311,14 +311,14 @@ async function submitKbForm() {
       description: kbForm.description,
       status: kbForm.status
     })
-    ElMessage.success('更新成功')
+    ElMessage.success({ message: '更新成功', duration: 5000 })
   } else {
     await knowledgeBaseApi.create({
       name: kbForm.name,
       description: kbForm.description,
       status: kbForm.status
     })
-    ElMessage.success('创建成功')
+    ElMessage.success({ message: '创建成功', duration: 5000 })
   }
   kbDialogVisible.value = false
   loadKbData()
@@ -334,7 +334,7 @@ function handleDeleteKb(row: KnowledgeBase) {
   )
     .then(async () => {
       await knowledgeBaseApi.delete(row.id!)
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
       if (selectedKb.value?.id === row.id) {
         selectedKb.value = null
       }
@@ -349,7 +349,7 @@ function handleDeleteDoc(row: KnowledgeDocument) {
   })
     .then(async () => {
       await knowledgeDocumentApi.delete(row.id!)
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
       loadDocData()
     })
     .catch(() => {})
@@ -358,7 +358,7 @@ function handleDeleteDoc(row: KnowledgeDocument) {
 async function handleReprocess(row: KnowledgeDocument) {
   try {
     await knowledgeDocumentApi.reprocess(row.id!)
-    ElMessage.success('已重置，等待后台处理')
+    ElMessage.success({ message: '已重置，等待后台处理', duration: 5000 })
     loadDocData()
   } catch {
     // error handled by interceptor

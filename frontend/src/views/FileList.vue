@@ -76,7 +76,7 @@ async function handleUpload(options: UploadRequestOptions): Promise<void> {
 
 async function submitUpload(): Promise<void> {
   if (!uploadFileList.value.length) {
-    ElMessage.warning('请先选择文件')
+    ElMessage.warning({ message: '请先选择文件', duration: 5000 })
     return
   }
   uploading.value = true
@@ -86,7 +86,7 @@ async function submitUpload(): Promise<void> {
     await Promise.all(uploadPromises)
     const failed = uploadFileList.value.filter(f => f.status === 'fail')
     if (failed.length === 0) {
-      ElMessage.success('全部上传成功')
+      ElMessage.success({ message: '全部上传成功', duration: 5000 })
       uploadVisible.value = false
     }
   } finally {
@@ -187,7 +187,7 @@ async function handleDelete(row: FileInfo): Promise<void> {
     })
     const res = await fileApi.delete(row.id)
     if (res.data.code === 1) {
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
       loadFiles()
     }
   } catch {
@@ -204,7 +204,7 @@ async function handleBatchDelete(): Promise<void> {
     const ids = selectedRows.value.map(r => r.id)
     const res = await fileApi.batchDelete(ids)
     if (res.data.code === 1) {
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
       selectedRows.value = []
       loadFiles()
     }

@@ -187,7 +187,7 @@ async function applyUpdate(): Promise<void> {
       )
       return
     }
-    ElMessage.success('更新已启动，服务即将重启...')
+    ElMessage.success({ message: '更新已启动，服务即将重启...', duration: 5000 })
   } catch {
     // handled by interceptor
   }
@@ -242,7 +242,10 @@ function handleAppClick() {
   notifyPermissionRequested = true
   requestNotifyPermission().then(granted => {
     if (!granted && isDenied()) {
-      ElMessage.warning('浏览器通知权限已被拒绝，请在浏览器设置中允许通知')
+      ElMessage.warning({
+        message: '浏览器通知权限已被拒绝，请在浏览器设置中允许通知',
+        duration: 5000
+      })
     }
   })
 }

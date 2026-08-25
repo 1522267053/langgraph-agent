@@ -59,7 +59,7 @@ async function handleCreate() {
       description: newDescription.value.trim() || undefined
     })
     if (res.data.code === 1) {
-      ElMessage.success('快照已创建')
+      ElMessage.success({ message: '快照已创建', duration: 5000 })
       showCreateDialog.value = false
       newName.value = ''
       newDescription.value = ''
@@ -83,7 +83,7 @@ async function handleRestore(snapshot: FlowSnapshot) {
     )
     const res = await flowApi.restoreSnapshot(snapshot.id!)
     if (res.data.code === 1) {
-      ElMessage.success('恢复成功')
+      ElMessage.success({ message: '恢复成功', duration: 5000 })
       emit('restored')
       handleClose()
     }
@@ -100,7 +100,7 @@ async function handleDelete(snapshot: FlowSnapshot) {
       type: 'warning'
     })
     await flowApi.deleteSnapshot(snapshot.id!)
-    ElMessage.success('删除成功')
+    ElMessage.success({ message: '删除成功', duration: 5000 })
     await loadSnapshots()
   } catch {
     // cancelled

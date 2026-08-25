@@ -453,7 +453,7 @@ async function handleBatchComplete() {
     })
     const res = await agendaApi.batchComplete(ids)
     if (res.data.code === 1) {
-      ElMessage.success(res.data.msg || '批量完成成功')
+      ElMessage.success({ message: res.data.msg || '批量完成成功', duration: 5000 })
       selectedIds.value = new Set()
       refreshAfterChange()
     }
@@ -471,7 +471,7 @@ async function handleBatchDelete() {
     })
     const res = await agendaApi.batchDelete(ids)
     if (res.data.code === 1) {
-      ElMessage.success('批量删除成功')
+      ElMessage.success({ message: '批量删除成功', duration: 5000 })
       selectedIds.value = new Set()
       refreshAfterChange()
     }
@@ -502,7 +502,7 @@ async function handleComplete(row: Agenda) {
     })
     const res = await agendaApi.complete(row.id!)
     if (res.data.code === 1) {
-      ElMessage.success('已完成')
+      ElMessage.success({ message: '已完成', duration: 5000 })
       refreshAfterChange()
     }
   } catch {
@@ -517,7 +517,7 @@ async function handleDelete(row: Agenda) {
     })
     const res = await agendaApi.delete(row.id!)
     if (res.data.code === 1) {
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
       refreshAfterChange()
     }
   } catch {
@@ -605,7 +605,7 @@ function onDateRangeChange(val: [Date, Date] | null) {
 
 async function handleSubmit() {
   if (!form.title.trim()) {
-    ElMessage.warning('请输入标题')
+    ElMessage.warning({ message: '请输入标题', duration: 5000 })
     return
   }
   form.remind_at = formatDatetime(remindDate.value)
@@ -620,14 +620,14 @@ async function handleSubmit() {
     if (isEdit.value && editId.value) {
       const res = await agendaApi.update({ id: editId.value, ...(payload as Partial<Agenda>) })
       if (res.data.code === 1) {
-        ElMessage.success('更新成功')
+        ElMessage.success({ message: '更新成功', duration: 5000 })
         dialogVisible.value = false
         refreshAfterChange()
       }
     } else {
       const res = await agendaApi.create(payload as Partial<Agenda>)
       if (res.data.code === 1) {
-        ElMessage.success('创建成功')
+        ElMessage.success({ message: '创建成功', duration: 5000 })
         dialogVisible.value = false
         refreshAfterChange()
       }

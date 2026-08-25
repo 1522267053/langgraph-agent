@@ -23,7 +23,7 @@ function emitUpdate(files: FileInfo[]): void {
 
 function beforeUpload(rawFile: UploadRawFile): boolean {
   if (props.maxSize && rawFile.size > props.maxSize * 1024 * 1024) {
-    ElMessage.error(`文件大小不能超过 ${props.maxSize}MB`)
+    ElMessage.error({ message: `文件大小不能超过 ${props.maxSize}MB`, duration: 5000 })
     return false
   }
   return true
@@ -50,7 +50,7 @@ async function handleRemove(fileInfo: FileInfo): Promise<void> {
     if (res.data.code === 1) {
       const newFiles = props.modelValue.filter(f => f.id !== fileInfo.id)
       emitUpdate(newFiles)
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
     }
   } catch {
     // error handled by interceptor

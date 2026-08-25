@@ -17,7 +17,7 @@ interface RequestOptions {
 /** 创建axios实例 */
 const request: AxiosInstance = axios.create({
   baseURL: '/api',
-  timeout: 30000
+  timeout: 60000
 })
 
 /** 响应拦截器 */
@@ -30,7 +30,7 @@ request.interceptors.response.use(
     const res = response.data as ApiResponse
     if (res.code !== 1) {
       if ((response.config as Record<string, unknown>).showError !== false) {
-        ElMessage.error(res.msg || '请求失败')
+        ElMessage.error({ message: res.msg || '请求失败', duration: 5000 })
       }
       return Promise.reject(new Error(res.msg || '请求失败'))
     }
@@ -46,7 +46,7 @@ request.interceptors.response.use(
       return Promise.reject(error)
     }
     if ((error.config as Record<string, unknown>)?.showError !== false) {
-      ElMessage.error(error.message || '网络错误')
+      ElMessage.error({ message: error.message || '网络错误', duration: 5000 })
     }
     return Promise.reject(error)
   }

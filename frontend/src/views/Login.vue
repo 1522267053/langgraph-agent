@@ -61,7 +61,7 @@ onMounted(async () => {
     const redirect = (route.query.redirect as string) || '/'
     router.replace(redirect)
   } catch {
-    ElMessage.error('自动登录失败，请手动输入')
+    ElMessage.error({ message: '自动登录失败，请手动输入', duration: 5000 })
     clearAutoLogin()
     autoLogging.value = false
   }
@@ -81,7 +81,7 @@ async function handleLogin() {
       clearAutoLogin()
     }
 
-    ElMessage.success('登录成功')
+    ElMessage.success({ message: '登录成功', duration: 5000 })
     const redirect = (route.query.redirect as string) || '/'
     router.replace(redirect)
   } catch {
@@ -130,7 +130,9 @@ async function handleLogin() {
           </el-form-item>
 
           <el-form-item>
-            <el-checkbox v-model="rememberMe" :disabled="autoLogging">记住密码并自动登录</el-checkbox>
+            <el-checkbox v-model="rememberMe" :disabled="autoLogging">
+              记住密码并自动登录
+            </el-checkbox>
           </el-form-item>
 
           <el-button

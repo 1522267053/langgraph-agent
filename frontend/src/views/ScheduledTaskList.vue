@@ -120,7 +120,7 @@ async function handleToggle(row: ScheduledTask) {
   try {
     const res = await scheduledTaskApi.toggle(row.id!)
     if (res.data.code === 1) {
-      ElMessage.success(row.is_enabled === 1 ? '已禁用' : '已启用')
+      ElMessage.success({ message: row.is_enabled === 1 ? '已禁用' : '已启用', duration: 5000 })
       loadData()
     }
   } catch {
@@ -137,7 +137,7 @@ async function handleTrigger(row: ScheduledTask) {
     })
     const res = await scheduledTaskApi.trigger(row.id!)
     if (res.data.code === 1) {
-      ElMessage.success('已触发执行')
+      ElMessage.success({ message: '已触发执行', duration: 5000 })
       loadData()
     }
   } catch {
@@ -154,7 +154,7 @@ async function handleDelete(row: ScheduledTask) {
     })
     const res = await scheduledTaskApi.delete(row.id!)
     if (res.data.code === 1) {
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
       loadData()
     }
   } catch {
@@ -289,7 +289,10 @@ async function loadInputSchema(targetId: number) {
       const flow = res.data.data as FlowDetail
       inputFields.value = flow.input_schema?.fields || []
       if (form.target_type === 'flow' && flow.nodes?.some(n => n.node_type === 'human')) {
-        ElMessage.warning('该流程包含人类帮助节点，不支持作为定时任务目标')
+        ElMessage.warning({
+          message: '该流程包含人类帮助节点，不支持作为定时任务目标',
+          duration: 5000
+        })
         form.target_id = undefined
         inputFields.value = []
         inputFormData.value = {}
@@ -367,26 +370,26 @@ function applyPreset(cron: string) {
 
 async function handleSubmit() {
   if (!form.name.trim()) {
-    ElMessage.warning('请输入任务名称')
+    ElMessage.warning({ message: '请输入任务名称', duration: 5000 })
     return
   }
   if (form.schedule_type === 'cron') {
     if (!form.cron_expression.trim()) {
-      ElMessage.warning('请输入Cron表达式')
+      ElMessage.warning({ message: '请输入Cron表达式', duration: 5000 })
       return
     }
   } else {
     if (!form.run_at) {
-      ElMessage.warning('请选择运行时间')
+      ElMessage.warning({ message: '请选择运行时间', duration: 5000 })
       return
     }
     if (new Date(form.run_at).getTime() < Date.now()) {
-      ElMessage.warning('运行时间不能早于当前时间')
+      ElMessage.warning({ message: '运行时间不能早于当前时间', duration: 5000 })
       return
     }
   }
   if (!form.target_id) {
-    ElMessage.warning('请选择执行目标')
+    ElMessage.warning({ message: '请选择执行目标', duration: 5000 })
     return
   }
 
@@ -394,7 +397,7 @@ async function handleSubmit() {
   if (inputFormRef.value && inputFields.value.length > 0) {
     const error = inputFormRef.value.validate()
     if (error) {
-      ElMessage.warning(error)
+      ElMessage.warning({ message: error, duration: 5000 })
       return
     }
     const { input } = inputFormRef.value.collect()
@@ -416,14 +419,14 @@ async function handleSubmit() {
     if (isEdit.value) {
       const res = await scheduledTaskApi.update({ id: editId.value, ...payload })
       if (res.data.code === 1) {
-        ElMessage.success('更新成功')
+        ElMessage.success({ message: '更新成功', duration: 5000 })
         dialogVisible.value = false
         loadData()
       }
     } else {
       const res = await scheduledTaskApi.create(payload)
       if (res.data.code === 1) {
-        ElMessage.success('创建成功')
+        ElMessage.success({ message: '创建成功', duration: 5000 })
         dialogVisible.value = false
         loadData()
       }

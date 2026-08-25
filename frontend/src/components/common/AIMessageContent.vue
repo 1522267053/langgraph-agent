@@ -74,9 +74,9 @@ function isArgsExpanded(segment: Segment, idx: number): boolean {
 async function handleCopy(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制')
+    ElMessage.success({ message: '已复制', duration: 5000 })
   } catch {
-    ElMessage.error('复制失败')
+    ElMessage.error({ message: '复制失败', duration: 5000 })
   }
 }
 </script>
@@ -154,8 +154,7 @@ async function handleCopy(text: string): Promise<void> {
           :result="segment.tool.result"
         />
         <pre v-else-if="segment.tool.status === 'error'" class="tool-content tool-content-error">
-执行失败</pre
-        >
+执行失败</pre>
       </template>
       <div v-else-if="segment.tool.status === 'running'" class="tool-content tool-loading-text">
         执行中...

@@ -28,12 +28,7 @@ const loginUsername = ref('')
 
 const canGoNextStep1 = computed(
   () =>
-    !!(
-      selectedProvider.value &&
-      apiKey.value.trim() &&
-      model.value.trim() &&
-      baseUrl.value.trim()
-    )
+    !!(selectedProvider.value && apiKey.value.trim() && model.value.trim() && baseUrl.value.trim())
 )
 
 const canSubmit = computed(() => {
@@ -58,7 +53,10 @@ function nextStep() {
   if (currentStep.value === 1) {
     if (!canGoNextStep1.value) return
     if (!isContextLengthValid()) {
-      ElMessage.error('上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）')
+      ElMessage.error({
+        message: '上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）',
+        duration: 5000
+      })
       return
     }
   }
@@ -77,7 +75,10 @@ async function handleSubmit() {
   if (!canSubmit.value) return
 
   if (!isContextLengthValid()) {
-    ElMessage.error('上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）')
+    ElMessage.error({
+      message: '上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）',
+      duration: 5000
+    })
     return
   }
 
@@ -99,7 +100,7 @@ async function handleSubmit() {
       login_username: loginUsername.value.trim()
     }
     await configApi.initConfig(data)
-    ElMessage.success('配置成功')
+    ElMessage.success({ message: '配置成功', duration: 5000 })
     router.replace('/chat')
   } catch {
     // error already handled by interceptor
@@ -218,12 +219,7 @@ async function handleSubmit() {
           </div>
 
           <div class="setup-actions">
-            <el-button
-              v-if="currentStep > 1"
-              size="large"
-              class="action-btn"
-              @click="prevStep"
-            >
+            <el-button v-if="currentStep > 1" size="large" class="action-btn" @click="prevStep">
               上一步
             </el-button>
             <el-button
