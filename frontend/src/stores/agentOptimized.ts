@@ -408,6 +408,7 @@ export const useAgentStore = defineStore('agent', () => {
         const removedCount = Number(msg.input_data?.removed_count || 0)
         result.push({
           id: `msg-${msg.id}`,
+          dbMsgId: msg.id,
           role: 'ai',
           displayType: 'context-summary',
           removedCount: Number.isFinite(removedCount) ? removedCount : 0,
@@ -425,6 +426,7 @@ export const useAgentStore = defineStore('agent', () => {
         }
         result.push({
           id: `msg-${msg.id}`,
+          dbMsgId: msg.id,
           role: 'human',
           content: msg.original_content || msg.content,
           segments: [{ type: 'content', content: msg.original_content || msg.content }],
@@ -435,6 +437,7 @@ export const useAgentStore = defineStore('agent', () => {
         if (!currentAssistant) {
           currentAssistant = {
             id: `msg-${msg.id}`,
+            dbMsgId: msg.id,
             role: 'ai',
             content: '',
             segments: [],
@@ -584,8 +587,12 @@ export const useAgentStore = defineStore('agent', () => {
    * 比较两条聊天消息是否等价：等价则跳过 Object.assign，
    * 保留旧 segments 引用使 Vue 跳过该消息的重渲染（避免回合结束全量 markdown 重渲尖峰）
    */
+  function logicalMessageId(m: StreamingMessage): string {
+    return m.dbMsgId != null ? `msg-${m.dbMsgId}` : m.id
+  }
+
   function isSameMessage(a: StreamingMessage, b: StreamingMessage): boolean {
-    if (a.id !== b.id) return false
+    if (logicalMessageId(a) !== logicalMessageId(b)) return false
     if (
       a.role !== b.role ||
       a.displayType !== b.displayType ||
@@ -608,6 +615,20 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   /**
+   * 按位置 + 类型过继旧分段 id：流式分段带 genSegmentId，重建分段无 id，
+   * 保持分段 key 稳定（key 变化会卸载重挂分段组件，触发 markdown/hljs 全量重跑）
+   */
+  function inheritSegmentIds(existing: StreamingMessage, rebuilt: StreamingMessage): void {
+    for (let i = 0; i < rebuilt.segments.length && i < existing.segments.length; i++) {
+      const prev = existing.segments[i]
+      const next = rebuilt.segments[i]
+      if (prev.type === next.type && prev.id && !next.id) {
+        next.id = prev.id
+      }
+    }
+  }
+
+  /**
    * 从历史消息就地 diff 更新聊天消息列表（不 clearMessages，保留 Vue DOM 稳定性）
    * 用于 selectSession、onFlowDone、loadMoreMessages 等场景
    */
@@ -616,8 +637,19 @@ export const useAgentStore = defineStore('agent', () => {
 
     for (let i = 0; i < rebuilt.length; i++) {
       if (i < chatMessages.value.length) {
-        if (!isSameMessage(chatMessages.value[i], rebuilt[i])) {
-          Object.assign(chatMessages.value[i], rebuilt[i])
+        const existing = chatMessages.value[i]
+        if (!isSameMessage(existing, rebuilt[i])) {
+          // 流式临时消息（streaming-/user- 前缀）保留原 id，DB id 写入 dbMsgId，
+          // 避免回合结束时气泡整体卸载重挂
+          const isEphemeral =
+            existing.role === rebuilt[i].role &&
+            (existing.id.startsWith('streaming-') || existing.id.startsWith('user-'))
+          if (isEphemeral) {
+            inheritSegmentIds(existing, rebuilt[i])
+            Object.assign(existing, rebuilt[i], { id: existing.id })
+          } else {
+            Object.assign(existing, rebuilt[i])
+          }
         }
       } else {
         chatMessages.value.push(rebuilt[i])

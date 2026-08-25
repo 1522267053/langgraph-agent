@@ -24,13 +24,26 @@ const emit = defineEmits<{
   (e: 'revert', dbMsgId: number): void
 }>()
 
-const MAX_VISIBLE_SEGMENTS = 35
+const MAX_VISIBLE_SEGMENTS = 50
+/** 非流式（历史加载/回合结束）默认最多渲染的分段数，超出折叠，避免长回合全量挂载 */
+const MAX_FINAL_SEGMENTS = 100
+const expanded = ref(false)
 
-const visibleSegments = computed(() =>
-  props.isStreaming && props.segments.length > MAX_VISIBLE_SEGMENTS
-    ? props.segments.slice(-MAX_VISIBLE_SEGMENTS)
-    : props.segments
-)
+const visibleSegments = computed(() => {
+  if (props.isStreaming) {
+    return props.segments.length > MAX_VISIBLE_SEGMENTS
+      ? props.segments.slice(-MAX_VISIBLE_SEGMENTS)
+      : props.segments
+  }
+  if (expanded.value || props.segments.length <= MAX_FINAL_SEGMENTS) return props.segments
+  return props.segments.slice(-MAX_FINAL_SEGMENTS)
+})
+
+/** 被折叠的更早分段数量（流式期间不提供展开入口） */
+const hiddenSegmentCount = computed(() => {
+  if (props.isStreaming || expanded.value) return 0
+  return Math.max(0, props.segments.length - MAX_FINAL_SEGMENTS)
+})
 
 const lastContentIdx = computed(() => {
   for (let i = visibleSegments.value.length - 1; i >= 0; i--) {
@@ -82,6 +95,9 @@ async function handleCopy(text: string): Promise<void> {
 </script>
 
 <template>
+  <div v-if="hiddenSegmentCount > 0" class="expand-earlier" @click="expanded = true">
+    展开更早的 {{ hiddenSegmentCount }} 个分段
+  </div>
   <template v-for="(segment, idx) in visibleSegments" :key="segmentKey(segment, idx)">
     <div v-if="segment.type === 'thinking'" class="thinking-block">
       <div class="code-block-header">
@@ -211,6 +227,27 @@ async function handleCopy(text: string): Promise<void> {
 </template>
 
 <style scoped>
+.expand-earlier {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+  padding: 8px 0;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s;
+}
+
+.expand-earlier:hover {
+  color: #409eff;
+  border-color: #409eff;
+  background: #f8fafc;
+}
+
 .thinking-block,
 .tool-block {
   border-radius: 12px;
