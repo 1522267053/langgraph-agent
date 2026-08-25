@@ -134,13 +134,16 @@ function toggleSelect(id: number): void {
     !localSelected.value.has(id) &&
     localSelected.value.size >= props.maxSelect
   ) {
-    ElMessage.warning(`最多选择 ${props.maxSelect} 个文件`)
+    ElMessage.warning({ message: `最多选择 ${props.maxSelect} 个文件`, duration: 5000 })
     return
   }
   if (props.maxSize > 0 && !localSelected.value.has(id)) {
     const file = fileList.value.find(f => f.id === id)
     if (file && file.file_size > props.maxSize * 1024 * 1024) {
-      ElMessage.warning(`文件 "${file.original_name}" 超过 ${props.maxSize}MB 限制`)
+      ElMessage.warning({
+        message: `文件 "${file.original_name}" 超过 ${props.maxSize}MB 限制`,
+        duration: 5000
+      })
       return
     }
   }
@@ -162,7 +165,7 @@ async function handleDelete(file: FileInfo): Promise<void> {
       fileList.value = fileList.value.filter(item => item.id !== file.id)
       localSelected.value.delete(file.id)
       total.value = Math.max(0, total.value - 1)
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
     }
   } catch {
     // 用户取消删除或请求失败
@@ -171,11 +174,11 @@ async function handleDelete(file: FileInfo): Promise<void> {
 
 async function uploadFile(file: File, validateAccept = false): Promise<FileInfo | null> {
   if (validateAccept && !isAcceptedFile(file)) {
-    ElMessage.warning('剪切板中的图片类型不符合当前文件限制')
+    ElMessage.warning({ message: '剪切板中的图片类型不符合当前文件限制', duration: 5000 })
     return null
   }
   if (props.maxSize > 0 && file.size > props.maxSize * 1024 * 1024) {
-    ElMessage.warning(`文件大小不能超过 ${props.maxSize}MB`)
+    ElMessage.warning({ message: `文件大小不能超过 ${props.maxSize}MB`, duration: 5000 })
     return null
   }
 
@@ -183,12 +186,12 @@ async function uploadFile(file: File, validateAccept = false): Promise<FileInfo 
   try {
     const res = await fileApi.upload(file, '')
     if (res.data.code !== 1 || !res.data.data) {
-      ElMessage.error(res.data.msg || '上传失败')
+      ElMessage.error({ message: res.data.msg || '上传失败', duration: 5000 })
       return null
     }
     return res.data.data
   } catch {
-    ElMessage.error('上传失败')
+    ElMessage.error({ message: '上传失败', duration: 5000 })
     return null
   } finally {
     uploading.value = false
@@ -202,7 +205,7 @@ function selectUploadedFile(file: FileInfo): void {
       !localSelected.value.has(file.id) &&
       localSelected.value.size >= props.maxSelect
     ) {
-      ElMessage.warning(`最多选择 ${props.maxSelect} 个文件`)
+      ElMessage.warning({ message: `最多选择 ${props.maxSelect} 个文件`, duration: 5000 })
       return
     }
   } else {
@@ -224,7 +227,7 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
   const blob = item.getAsFile()
   if (!blob) return
   if (props.multiple && props.maxSelect > 0 && localSelected.value.size >= props.maxSelect) {
-    ElMessage.warning(`最多选择 ${props.maxSelect} 个文件`)
+    ElMessage.warning({ message: `最多选择 ${props.maxSelect} 个文件`, duration: 5000 })
     return
   }
 
@@ -233,7 +236,7 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
   const uploadedFile = await uploadFile(file, true)
   if (!uploadedFile) return
   selectUploadedFile(uploadedFile)
-  ElMessage.success('剪切板图片已上传并选中')
+  ElMessage.success({ message: '剪切板图片已上传并选中', duration: 5000 })
 }
 
 async function handleUpload(options: {

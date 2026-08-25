@@ -47,7 +47,10 @@ const notifyPermission = computed(() => {
 async function handleRequestNotifyPermission() {
   const granted = await requestBrowserNotifyPermission()
   if (!granted) {
-    ElMessage.warning('浏览器通知权限已被拒绝，请在浏览器设置中允许通知')
+    ElMessage.warning({
+      message: '浏览器通知权限已被拒绝，请在浏览器设置中允许通知',
+      duration: 5000
+    })
   }
 }
 
@@ -106,7 +109,10 @@ async function handleSave() {
     contextLength.value !== '' &&
     parseContextLength(contextLength.value) === undefined
   ) {
-    ElMessage.error('上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）')
+    ElMessage.error({
+      message: '上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）',
+      duration: 5000
+    })
     return
   }
 
@@ -130,15 +136,15 @@ async function handleSave() {
     }
     if (loginPassword.value) {
       if (!currentPassword.value) {
-        ElMessage.error('请输入当前密码')
+        ElMessage.error({ message: '请输入当前密码', duration: 5000 })
         return
       }
       if (loginPassword.value !== loginPasswordConfirm.value) {
-        ElMessage.error('两次输入的密码不一致')
+        ElMessage.error({ message: '两次输入的密码不一致', duration: 5000 })
         return
       }
       if (!hasUsername.value && !loginUsername.value.trim()) {
-        ElMessage.error('请输入用户名')
+        ElMessage.error({ message: '请输入用户名', duration: 5000 })
         return
       }
       data.current_password = await hashPassword(currentPassword.value)
@@ -148,7 +154,7 @@ async function handleSave() {
       }
     }
     await configApi.updateConfig(data)
-    ElMessage.success('配置已保存')
+    ElMessage.success({ message: '配置已保存', duration: 5000 })
     await loadConfig()
     apiKey.value = ''
     embeddingApiKey.value = ''
@@ -160,7 +166,7 @@ async function handleSave() {
       config.value.has_password = true
       config.value.has_username = true
       clearAutoLoginData()
-      ElMessage.success('密码已修改，请重新登录')
+      ElMessage.success({ message: '密码已修改，请重新登录', duration: 5000 })
       router.replace('/login')
       return
     }
@@ -175,7 +181,7 @@ async function handleSaveMarketplace() {
   try {
     const result = await marketplaceStore.saveConfig(marketplaceStore.serverUrl)
     if (marketplaceStore.connected) {
-      ElMessage.success(result?.msg || '连接成功')
+      ElMessage.success({ message: result?.msg || '连接成功', duration: 5000 })
     }
   } catch {
     // 连接失败时 axios 拦截器已弹出具体错误提示（如"注册失败: 用户名已存在"）
@@ -184,7 +190,7 @@ async function handleSaveMarketplace() {
 
 function handleDisconnectMarketplace() {
   marketplaceStore.disconnect()
-  ElMessage.success('已断开连接')
+  ElMessage.success({ message: '已断开连接', duration: 5000 })
 }
 
 async function loadUpdateStatus(): Promise<void> {
@@ -260,7 +266,7 @@ async function applyUpdate(): Promise<void> {
       )
       return
     }
-    ElMessage.success('更新已启动，服务即将重启...')
+    ElMessage.success({ message: '更新已启动，服务即将重启...', duration: 5000 })
   } catch {
     // handled by interceptor
   }

@@ -240,7 +240,7 @@ onMounted(async () => {
           const agents = res.data.data?.list || []
           const builtin = agents.find((a: { is_builtin?: number }) => a.is_builtin === 1)
           if (!builtin) {
-            ElMessage.error('内置 Agent 不存在')
+            ElMessage.error({ message: '内置 Agent 不存在', duration: 5000 })
             return
           }
           agentId.value = builtin.id
@@ -339,7 +339,7 @@ function handleStop() {
 
 function handleHumanInputSubmit() {
   if (!humanInputValue.value.trim()) {
-    ElMessage.warning('请输入内容')
+    ElMessage.warning({ message: '请输入内容', duration: 5000 })
     return
   }
   store.resumeWithInput(humanInputValue.value.trim())
@@ -349,11 +349,11 @@ function handleHumanInputSubmit() {
 async function handleCompress() {
   if (!agentId.value || !store.currentSession) return
   if (store.isStreaming) {
-    ElMessage.warning('请等待回复完成')
+    ElMessage.warning({ message: '请等待回复完成', duration: 5000 })
     return
   }
   if (store.chatMessages.length === 0) {
-    ElMessage.warning('暂无对话记录')
+    ElMessage.warning({ message: '暂无对话记录', duration: 5000 })
     return
   }
   let compressPrompt = ''
@@ -379,7 +379,7 @@ async function handleCompress() {
       compressPrompt
     )
     if (started) {
-      ElMessage.info('正在压缩上下文...')
+      ElMessage.info({ message: '正在压缩上下文...', duration: 5000 })
     }
   } catch {
     // store.compressSession handles error internally
@@ -389,12 +389,12 @@ async function handleCompress() {
 function handleDeleteMessage(msg: (typeof store.chatMessages)[0]) {
   if (!store.currentSession || !store.currentAgent) return
   if (store.isStreaming) {
-    ElMessage.warning('请等待回复完成')
+    ElMessage.warning({ message: '请等待回复完成', duration: 5000 })
     return
   }
   const match = msg.id.match(/msg-(\d+)/)
   if (!match?.[1]) {
-    ElMessage.warning('该消息不支持删除')
+    ElMessage.warning({ message: '该消息不支持删除', duration: 5000 })
     return
   }
   const msgId = parseInt(match[1])
@@ -406,14 +406,14 @@ function handleDeleteMessage(msg: (typeof store.chatMessages)[0]) {
         inputMessage.value = deleted.content
         restoreInputParams(deleted)
       }
-      ElMessage.success('已删除，可重新发送')
+      ElMessage.success({ message: '已删除，可重新发送', duration: 5000 })
     })
     .catch(() => {})
 }
 
 function handleRevertFrom(dbMsgId: number) {
   if (store.isStreaming) {
-    ElMessage.warning('请等待回复完成')
+    ElMessage.warning({ message: '请等待回复完成', duration: 5000 })
     return
   }
   ElMessageBox.confirm('将删除此条及之后的所有内容，确定继续？', '确定', { type: 'warning' })
@@ -423,7 +423,7 @@ function handleRevertFrom(dbMsgId: number) {
         inputMessage.value = deleted.content
         restoreInputParams(deleted)
       }
-      ElMessage.success('已删除')
+      ElMessage.success({ message: '已删除', duration: 5000 })
     })
     .catch(() => {})
 }

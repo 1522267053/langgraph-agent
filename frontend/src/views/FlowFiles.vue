@@ -103,7 +103,7 @@ async function loadFiles(): Promise<void> {
 function beforeUpload(rawFile: UploadRawFile): boolean {
   const maxSize = 100
   if (rawFile.size > maxSize * 1024 * 1024) {
-    ElMessage.error(`文件大小不能超过 ${maxSize}MB`)
+    ElMessage.error({ message: `文件大小不能超过 ${maxSize}MB`, duration: 5000 })
     return false
   }
   return true
@@ -113,7 +113,7 @@ async function handleUpload(options: UploadRequestOptions): Promise<void> {
   try {
     const res = await fileApi.upload(options.file, 'flow')
     if (res.data.code === 1) {
-      ElMessage.success('上传成功')
+      ElMessage.success({ message: '上传成功', duration: 5000 })
       options.onSuccess(res.data.data)
       loadFiles()
     } else {
@@ -149,7 +149,7 @@ async function handleDelete(row: FileInfo): Promise<void> {
     })
     const res = await fileApi.delete(row.id)
     if (res.data.code === 1) {
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
       loadFiles()
     }
   } catch {

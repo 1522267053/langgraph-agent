@@ -50,7 +50,7 @@ async function handleCancel(taskId: string) {
   cancellingIds.value.add(taskId)
   try {
     await store.cancelTask(taskId)
-    ElMessage.success('已取消')
+    ElMessage.success({ message: '已取消', duration: 5000 })
   } finally {
     cancellingIds.value.delete(taskId)
   }

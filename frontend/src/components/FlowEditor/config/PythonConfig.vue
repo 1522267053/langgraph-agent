@@ -49,7 +49,10 @@ function updateDefaultValue(index: number, val: unknown): void {
 function validateToolName(): void {
   const name = (localConfig.value.tool_name || '').trim()
   if (name && !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name)) {
-    ElMessage.warning('工具名需以字母开头，仅含字母、数字、下划线；非法名称将回退默认名')
+    ElMessage.warning({
+      message: '工具名需以字母开头，仅含字母、数字、下划线；非法名称将回退默认名',
+      duration: 5000
+    })
   }
   updateConfig()
 }
@@ -118,14 +121,21 @@ function validateToolName(): void {
                 :model-value="!!variable.required"
                 active-text="是"
                 inactive-text="否"
-                @change="(val: boolean | string) => { variable.required = !!val; updateConfig() }"
+                @change="
+                  (val: boolean | string) => {
+                    variable.required = !!val
+                    updateConfig()
+                  }
+                "
               />
             </el-form-item>
             <!-- 默认值：按参数类型切换输入控件，未绑定来源或值为空时兜底 -->
             <el-form-item label="默认值">
               <el-input-number
                 v-if="variable.type === 'number'"
-                :model-value="typeof variable.default_value === 'number' ? variable.default_value : undefined"
+                :model-value="
+                  typeof variable.default_value === 'number' ? variable.default_value : undefined
+                "
                 placeholder="未设置"
                 style="width: 100%"
                 @change="(val: number | undefined) => updateDefaultValue(index, val)"
@@ -144,7 +154,9 @@ function validateToolName(): void {
                 v-else
                 :model-value="variable.default_value == null ? '' : String(variable.default_value)"
                 placeholder="未绑定来源或值为空时使用"
-                @blur="(e: FocusEvent) => updateDefaultValue(index, (e.target as HTMLInputElement).value)"
+                @blur="
+                  (e: FocusEvent) => updateDefaultValue(index, (e.target as HTMLInputElement).value)
+                "
               />
             </el-form-item>
           </el-form>
@@ -180,7 +192,8 @@ function validateToolName(): void {
       </el-form>
       <div class="config-hint">
         <el-text size="small" type="info">
-          定义 main 函数，参数名与输入变量名称一致，return 返回结果；可在顶层导入模块、定义辅助函数供 main 调用
+          定义 main 函数，参数名与输入变量名称一致，return
+          返回结果；可在顶层导入模块、定义辅助函数供 main 调用
           <br />
           输出: {stdout: str, stderr: str, result: 函数返回的结果, success: true / false}
           <br />

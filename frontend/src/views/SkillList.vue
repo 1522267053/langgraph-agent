@@ -157,7 +157,7 @@ async function handleSubmit() {
       icon: formData.icon || undefined,
       is_enabled: formData.is_enabled
     })
-    ElMessage.success('更新成功')
+    ElMessage.success({ message: '更新成功', duration: 5000 })
     dialogVisible.value = false
     loadData()
   } catch {
@@ -167,7 +167,7 @@ async function handleSubmit() {
 
 function handleDelete(row: Skill) {
   if (row.is_system === 1) {
-    ElMessage.warning('系统预置 Skill 不能删除')
+    ElMessage.warning({ message: '系统预置 Skill 不能删除', duration: 5000 })
     return
   }
 
@@ -176,7 +176,7 @@ function handleDelete(row: Skill) {
   })
     .then(async () => {
       await skillApi.delete(row.id)
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
       loadData()
     })
     .catch(() => {})
@@ -189,7 +189,7 @@ async function handleToggleStatus(row: Skill) {
       id: row.id,
       is_enabled: newStatus
     })
-    ElMessage.success(newStatus === 1 ? '已启用' : '已禁用')
+    ElMessage.success({ message: newStatus === 1 ? '已启用' : '已禁用', duration: 5000 })
     loadData()
   } catch {
     // Error handled by interceptor
@@ -198,7 +198,7 @@ async function handleToggleStatus(row: Skill) {
 
 async function handleViewContent(row: Skill) {
   if (!row.skill_path) {
-    ElMessage.warning('该 Skill 没有文件路径')
+    ElMessage.warning({ message: '该 Skill 没有文件路径', duration: 5000 })
     return
   }
   contentTitle.value = row.name
@@ -223,12 +223,12 @@ function handleSelectionChange(rows: Skill[]): void {
 
 async function handleReload(row: Skill) {
   if (!row.skill_path) {
-    ElMessage.warning('该 Skill 没有文件路径')
+    ElMessage.warning({ message: '该 Skill 没有文件路径', duration: 5000 })
     return
   }
   try {
     await skillApi.reload(row.id)
-    ElMessage.success('重新加载成功')
+    ElMessage.success({ message: '重新加载成功', duration: 5000 })
     loadData()
   } catch {
     // Error handled by interceptor
@@ -239,7 +239,7 @@ async function handleBatchReload(): Promise<void> {
   if (selectedRows.value.length === 0) return
   const ids = selectedRows.value.filter(row => !!row.skill_path).map(row => row.id)
   if (ids.length === 0) {
-    ElMessage.warning('选中的 Skill 均无文件路径')
+    ElMessage.warning({ message: '选中的 Skill 均无文件路径', duration: 5000 })
     return
   }
   batchReloadLoading.value = true
@@ -247,12 +247,18 @@ async function handleBatchReload(): Promise<void> {
     const res = await skillApi.reloadBatch(ids)
     const data = res.data.data
     if (data.failed_count === 0) {
-      ElMessage.success(`已成功重新加载 ${data.success_count} 个 Skill`)
+      ElMessage.success({
+        message: `已成功重新加载 ${data.success_count} 个 Skill`,
+        duration: 5000
+      })
     } else {
       const details = data.failed_items
         .map((item: { id: number; reason: string }) => `ID ${item.id}（${item.reason}）`)
         .join('；')
-      ElMessage.warning(`成功 ${data.success_count} 个，失败 ${data.failed_count} 个：${details}`)
+      ElMessage.warning({
+        message: `成功 ${data.success_count} 个，失败 ${data.failed_count} 个：${details}`,
+        duration: 5000
+      })
     }
     selectedRows.value = []
     loadData()
@@ -267,7 +273,7 @@ async function handleBatchDelete(): Promise<void> {
   if (selectedRows.value.length === 0) return
   const deletableRows = selectedRows.value.filter(row => row.is_system !== 1)
   if (deletableRows.length === 0) {
-    ElMessage.warning('选中的 Skill 均为系统预置，不可删除')
+    ElMessage.warning({ message: '选中的 Skill 均为系统预置，不可删除', duration: 5000 })
     return
   }
   try {
@@ -276,7 +282,7 @@ async function handleBatchDelete(): Promise<void> {
     })
     const ids = deletableRows.map(row => row.id)
     await skillApi.deleteBatch(ids)
-    ElMessage.success('删除成功')
+    ElMessage.success({ message: '删除成功', duration: 5000 })
     selectedRows.value = []
     loadData()
   } catch {
@@ -302,7 +308,7 @@ function handleFileRemove(_uploadFile: UploadFile, uploadFiles: UploadFiles) {
 
 async function handleBatchUpload() {
   if (uploadFileList.value.length === 0) {
-    ElMessage.warning('请选择要上传的文件')
+    ElMessage.warning({ message: '请选择要上传的文件', duration: 5000 })
     return
   }
 
@@ -320,19 +326,23 @@ async function handleBatchUpload() {
         const details = result.failed_items
           .map((item: { filename: string; reason: string }) => `${item.filename}（${item.reason}）`)
           .join('；')
-        ElMessage.warning(
-          `成功 ${result.success_count} 个，失败 ${result.failed_count} 个：${details}`
-        )
+        ElMessage.warning({
+          message: `成功 ${result.success_count} 个，失败 ${result.failed_count} 个：${details}`,
+          duration: 5000
+        })
       } else {
-        ElMessage.success(`已成功上传 ${result.success_count} 个 Skill`)
+        ElMessage.success({
+          message: `已成功上传 ${result.success_count} 个 Skill`,
+          duration: 5000
+        })
       }
       uploadDialogVisible.value = false
       loadData()
     } else {
-      ElMessage.error(data.msg || '上传失败')
+      ElMessage.error({ message: data.msg || '上传失败', duration: 5000 })
     }
   } catch {
-    ElMessage.error('上传失败')
+    ElMessage.error({ message: '上传失败', duration: 5000 })
   } finally {
     uploadLoading.value = false
   }

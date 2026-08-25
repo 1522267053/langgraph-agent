@@ -221,10 +221,10 @@ async function handleSubmit() {
 
     if (isEdit.value) {
       await mcpServerApi.update(data as Parameters<typeof mcpServerApi.update>[0])
-      ElMessage.success('更新成功')
+      ElMessage.success({ message: '更新成功', duration: 5000 })
     } else {
       await mcpServerApi.create(data)
-      ElMessage.success('创建成功')
+      ElMessage.success({ message: '创建成功', duration: 5000 })
     }
     dialogVisible.value = false
     loadData()
@@ -259,7 +259,7 @@ function handleDelete(row: McpServer) {
   })
     .then(async () => {
       await mcpServerApi.delete(row.id!)
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
       loadData()
     })
     .catch(() => {})
@@ -286,7 +286,7 @@ async function handleRefresh(row: McpServer) {
     const res = await mcpServerApi.refresh(row.id!)
     if (res.data.code === 1) {
       testResult.value = res.data.data
-      ElMessage.success('刷新完成')
+      ElMessage.success({ message: '刷新完成', duration: 5000 })
       loadData()
     } else {
       testResult.value = { success: false, tools: [], error: res.data.msg }
@@ -417,19 +417,19 @@ function _applyJsonEntry(key: string, entry: Record<string, unknown>): void {
 
 function parseJson(): void {
   if (!jsonInput.value.trim()) {
-    ElMessage.warning('请输入JSON配置')
+    ElMessage.warning({ message: '请输入JSON配置', duration: 5000 })
     return
   }
   try {
     const parsed = JSON.parse(jsonInput.value) as Record<string, unknown>
     const servers = parsed.mcpServers as Record<string, Record<string, unknown>> | undefined
     if (!servers || typeof servers !== 'object') {
-      ElMessage.error('JSON格式错误：缺少 mcpServers 字段')
+      ElMessage.error({ message: 'JSON格式错误：缺少 mcpServers 字段', duration: 5000 })
       return
     }
     const entries = Object.entries(servers)
     if (entries.length === 0) {
-      ElMessage.error('mcpServers 为空')
+      ElMessage.error({ message: 'mcpServers 为空', duration: 5000 })
       return
     }
     if (entries.length === 1) {
@@ -467,13 +467,13 @@ function parseJson(): void {
         const radios = document.querySelectorAll<HTMLInputElement>('input[name="mcp-select"]')
         const selectedIndex = Array.from(radios).findIndex(r => r.checked)
         if (selectedIndex < 0) {
-          ElMessage.warning('请选择一个服务器')
+          ElMessage.warning({ message: '请选择一个服务器', duration: 5000 })
           return
         }
         _applyJsonEntry(entries[selectedIndex][0], entries[selectedIndex][1])
       })
   } catch {
-    ElMessage.error('JSON解析失败，请检查格式')
+    ElMessage.error({ message: 'JSON解析失败，请检查格式', duration: 5000 })
   }
 }
 

@@ -162,7 +162,10 @@ function handleSend() {
         try {
           params[field.name] = JSON.parse(value)
         } catch {
-          ElMessage.error(`参数 "${field.name}" 格式错误，请输入有效的JSON`)
+          ElMessage.error({
+            message: `参数 "${field.name}" 格式错误，请输入有效的JSON`,
+            duration: 5000
+          })
           return
         }
       } else {

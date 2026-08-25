@@ -29,6 +29,6 @@ export async function downloadKnowledgeDocument(
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
   } catch (error) {
     const message = error instanceof Error ? error.message : '下载失败'
-    ElMessage.error(message)
+    ElMessage.error({ message: message, duration: 5000 })
   }
 }

@@ -117,7 +117,10 @@ function handleNotification(msg: WSMessage) {
     // 浏览器通知权限被拒时提示一次
     if (msg.browser_notify !== false && isDenied() && !deniedNotified) {
       deniedNotified = true
-      ElMessage.warning('浏览器通知权限已被拒绝，请在浏览器设置中允许通知以接收桌面通知')
+      ElMessage.warning({
+        message: '浏览器通知权限已被拒绝，请在浏览器设置中允许通知以接收桌面通知',
+        duration: 5000
+      })
     }
 
     if (status === 'success') {

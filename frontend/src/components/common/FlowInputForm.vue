@@ -138,7 +138,10 @@ function collect(): {
         try {
           input[field.name] = JSON.parse(value)
         } catch {
-          ElMessage.error(`字段 "${field.name}" 格式错误，请输入有效的JSON`)
+          ElMessage.error({
+            message: `字段 "${field.name}" 格式错误，请输入有效的JSON`,
+            duration: 5000
+          })
           throw new Error(`字段 "${field.name}" JSON格式错误`)
         }
       } else {

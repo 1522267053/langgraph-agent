@@ -199,7 +199,7 @@ async function handleFlowCreated(id: number) {
 
 async function handleSave() {
   if (!flowId.value) {
-    ElMessage.warning('请先创建流程')
+    ElMessage.warning({ message: '请先创建流程', duration: 5000 })
     return
   }
   await store.saveFlow()
@@ -207,7 +207,10 @@ async function handleSave() {
 
 async function handleExecute() {
   if (!flowId.value) {
-    ElMessage.warning(isAgentMode.value ? '请先创建Agent' : '请先创建流程')
+    ElMessage.warning({
+      message: isAgentMode.value ? '请先创建Agent' : '请先创建流程',
+      duration: 5000
+    })
     return
   }
   await store.saveFlow()
@@ -352,7 +355,7 @@ async function handleResetBuiltin() {
   try {
     const res = await agentApi.resetBuiltin()
     if (res.data.code === 1) {
-      ElMessage.success('已恢复出厂设置')
+      ElMessage.success({ message: '已恢复出厂设置', duration: 5000 })
       if (flowId.value) {
         await store.loadFlow(flowId.value)
       }

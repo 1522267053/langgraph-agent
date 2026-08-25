@@ -227,7 +227,7 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
         if (event.data.execution_id) {
           currentExecution.value.id = event.data.execution_id
         }
-        ElMessage.success('执行完成')
+        ElMessage.success({ message: '执行完成', duration: 5000 })
         options.onFlowDone?.()
       },
       onLlmRetry: createOnLlmRetryHandler(),
@@ -242,7 +242,7 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
         if (event.data.execution_id) {
           currentExecution.value.id = event.data.execution_id
         }
-        ElMessage.error(event.data.message || '执行失败')
+        ElMessage.error({ message: event.data.message || '执行失败', duration: 5000 })
         const lastIndex = nodeExecutions.value.length - 1
         if (lastIndex >= 0) {
           const node = nodeExecutions.value[lastIndex]
@@ -297,11 +297,11 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
 
   function submitHumanInput(value: string): void {
     if (!value.trim()) {
-      ElMessage.warning('请输入内容')
+      ElMessage.warning({ message: '请输入内容', duration: 5000 })
       return
     }
     if (!currentExecution.value?.id) {
-      ElMessage.error('执行记录不存在')
+      ElMessage.error({ message: '执行记录不存在', duration: 5000 })
       return
     }
     humanInputLoading.value = true

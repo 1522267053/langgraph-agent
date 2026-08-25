@@ -124,7 +124,7 @@ async function handleCancel(row: FlowExecution) {
   ElMessageBox.confirm('确定要取消该执行吗？', '提示', { type: 'warning' })
     .then(async () => {
       await executionApi.cancel(row.id!)
-      ElMessage.success('已取消')
+      ElMessage.success({ message: '已取消', duration: 5000 })
       loadData()
     })
     .catch(() => {})

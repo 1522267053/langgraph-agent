@@ -107,7 +107,10 @@ function onContextLengthChange(val: string | number | undefined) {
   if (val !== undefined && val !== null && val !== '') {
     const parsed = parseContextLength(val)
     if (parsed === undefined) {
-      ElMessage.error('上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）')
+      ElMessage.error({
+        message: '上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）',
+        duration: 5000
+      })
       nextTick(() => {
         contextLength.value = undefined
       })

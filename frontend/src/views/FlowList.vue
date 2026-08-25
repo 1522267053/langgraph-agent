@@ -94,7 +94,7 @@ async function handleDuplicate(row: Flow) {
   try {
     const res = await flowApi.duplicate(row.id!)
     if (res.data.code === 1) {
-      ElMessage.success('复制成功')
+      ElMessage.success({ message: '复制成功', duration: 5000 })
       await loadData()
     }
   } catch {
@@ -158,7 +158,7 @@ function handleDelete(row: Flow) {
   })
     .then(async () => {
       await flowApi.delete(row.id!)
-      ElMessage.success('删除成功')
+      ElMessage.success({ message: '删除成功', duration: 5000 })
       loadData()
     })
     .catch(() => {})
@@ -232,9 +232,9 @@ async function handleConfirmExport() {
       const text = await blob.text()
       try {
         const errData = JSON.parse(text)
-        ElMessage.error(errData.msg || '导出失败')
+        ElMessage.error({ message: errData.msg || '导出失败', duration: 5000 })
       } catch {
-        ElMessage.error('导出失败')
+        ElMessage.error({ message: '导出失败', duration: 5000 })
       }
       return
     }
@@ -248,9 +248,9 @@ async function handleConfirmExport() {
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
     exportDialogVisible.value = false
-    ElMessage.success('导出成功')
+    ElMessage.success({ message: '导出成功', duration: 5000 })
   } catch {
-    ElMessage.error('导出失败')
+    ElMessage.error({ message: '导出失败', duration: 5000 })
   } finally {
     exportLoading.value = false
   }
@@ -290,7 +290,7 @@ async function handleImportFileChange(file: File) {
       const zip = await JSZip.loadAsync(file)
       const manifestFile = zip.file('manifest.json')
       if (!manifestFile) {
-        ElMessage.error('.lga 文件中缺少 manifest.json')
+        ElMessage.error({ message: '.lga 文件中缺少 manifest.json', duration: 5000 })
         importFile.value = null
         importFileName.value = ''
         return
@@ -298,14 +298,14 @@ async function handleImportFileChange(file: File) {
       const text = await manifestFile.async('text')
       const data = JSON.parse(text) as FlowExportData
       if (!data.version || !data.flows || !Array.isArray(data.flows)) {
-        ElMessage.error('无效的 .lga 文件格式')
+        ElMessage.error({ message: '无效的 .lga 文件格式', duration: 5000 })
         importFile.value = null
         importFileName.value = ''
         return
       }
       importFileData.value = data
     } catch {
-      ElMessage.error('.lga 文件解析失败，请检查文件格式')
+      ElMessage.error({ message: '.lga 文件解析失败，请检查文件格式', duration: 5000 })
       importFile.value = null
       importFileName.value = ''
     }
@@ -317,14 +317,14 @@ async function handleImportFileChange(file: File) {
     try {
       const data = JSON.parse(e.target?.result as string) as FlowExportData
       if (!data.version || !data.flows || !Array.isArray(data.flows)) {
-        ElMessage.error('无效的导入文件格式')
+        ElMessage.error({ message: '无效的导入文件格式', duration: 5000 })
         importFile.value = null
         importFileName.value = ''
         return
       }
       importFileData.value = data
     } catch {
-      ElMessage.error('文件解析失败，请检查文件格式')
+      ElMessage.error({ message: '文件解析失败，请检查文件格式', duration: 5000 })
       importFile.value = null
       importFileName.value = ''
     }
@@ -378,11 +378,11 @@ async function handleConfirmImport() {
           confirmButtonText: '确定'
         })
       } else {
-        ElMessage.success(`成功导入 ${result.created.length} 个流程`)
+        ElMessage.success({ message: `成功导入 ${result.created.length} 个流程`, duration: 5000 })
       }
     }
   } catch {
-    ElMessage.error('导入失败')
+    ElMessage.error({ message: '导入失败', duration: 5000 })
   } finally {
     importLoading.value = false
   }
