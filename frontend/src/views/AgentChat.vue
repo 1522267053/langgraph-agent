@@ -574,7 +574,7 @@ function handleRejectTools() {
         v-loading="store.messagesLoading"
         element-loading-text="加载中..."
         class="messages-scrollbar"
-        :distance="100"
+        :distance="50"
         wrap-style="overflow-anchor: none"
         @scroll="handleScroll"
         @end-reached="onEndReached"
