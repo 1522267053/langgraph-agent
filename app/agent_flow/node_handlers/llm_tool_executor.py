@@ -154,6 +154,18 @@ async def setup_tool_handlers(
         ):
             handler._working_dir = get_agent_work_dir(flow_id)
 
+        # 注入 _media_caps（view_media 可注入的媒体类型，仅 Agent 类型——
+        # flow 侧 conversation_message 无 message_type 列，无法标记内部注入消息）
+        if hasattr(handler, "_media_caps") and flow_type == "agent":
+            from app.services.ai_provider_service import get_adapter_type
+            from app.utils.media_resolver import get_injectable_media_types
+
+            adapter = (
+                get_adapter_type(cfg.provider) if cfg.provider else "openai_compatible"
+            )
+            capabilities = (node.base_config or {}).get("capabilities") or {}
+            handler._media_caps = get_injectable_media_types(capabilities, adapter)
+
         # 注入 writer、resolve_context、llm_config
         if hasattr(handler, "_writer"):
             handler._writer = writer
@@ -532,6 +544,9 @@ async def handle_tool_calls(
         _run_parallel(),
         *(_run_serial(indices) for indices in serial_groups.values()),
     )
+    # view_media 成功项收集：本轮所有 ToolMessage 落地后统一注入多模态 HumanMessage
+    # （HumanMessage 必须在全部 tool_result 之后，避免破坏 tool_call 配对约束）
+    pending_media_sources: list[str] = []
 
     for item in results:
         if isinstance(item, BaseException):
@@ -561,6 +576,15 @@ async def handle_tool_calls(
                     tool_status = "success"
             except (json.JSONDecodeError, TypeError):
                 tool_status = "success"
+
+        # view_media 成功 → 记录待注入的媒体路径（解析后的绝对路径或 URL）
+        if (
+            tool_name == "view_media"
+            and tool_status == "success"
+            and isinstance(raw_result, dict)
+            and raw_result.get("file_path")
+        ):
+            pending_media_sources.append(str(raw_result["file_path"]))
 
         # 知识正文参与截断，引用元数据独立保存在 artifact 中。
         tool = tool_map.get(tool_name)
@@ -608,6 +632,15 @@ async def handle_tool_calls(
                 tool_status,
                 tool_call_id=tool_id,
             )
+
+    # ---- view_media 注入：构建多模态 HumanMessage（在全部 ToolMessage 之后） ----
+    if pending_media_sources:
+        from app.utils.media_resolver import build_media_human_message
+
+        try:
+            msg_buf.append(await build_media_human_message(pending_media_sources))
+        except Exception as e:
+            logger.warning(f"view_media 媒体注入失败: {e}")
 
     # ---- 检测流程变更并发送预览事件 ----
     if emit_flow_preview_fn and writer:

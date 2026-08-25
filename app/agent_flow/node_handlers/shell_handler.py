@@ -15,7 +15,7 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
@@ -434,6 +434,18 @@ class UploadToFileManagerInput(BaseModel):
     )
 
 
+class ViewMediaInput(BaseModel):
+    """查看媒体文件工具输入参数"""
+
+    file_path: str = Field(
+        ...,
+        description=(
+            "要查看的媒体文件路径（图片/音频/PDF），相对当前工作目录（也可用绝对路径）；"
+            "网络图片可直接传 URL"
+        ),
+    )
+
+
 def _decode_output(data: bytes) -> str:
     """三重解码：UTF-8 → GBK → 逐行混合解码（处理管道输出中 UTF-8/GBK 混合的情况）"""
     try:
@@ -781,6 +793,8 @@ class ShellNodeHandler(BaseNodeHandler):
     ConfigClass = ShellNodeConfig
 
     _working_dir: Optional[Path] = None
+    # view_media 可注入的媒体类型集合（由 llm_tool_executor 按模型能力×适配器注入；空则不注册工具）
+    _media_caps: set = set()
 
     def _resolve_working_dir(self) -> Optional[Path]:
         """解析当前 Shell 执行的工作目录
@@ -973,7 +987,7 @@ class ShellNodeHandler(BaseNodeHandler):
         """Shell 节点使用固定工具名，不允许同一 LLM 连接多个 Shell 节点"""
         return False
 
-    async def get_tool(self, node: FlowNode) -> list[BaseTool]:
+    async def get_tool(self, node: FlowNode) -> Sequence[BaseTool]:
         """返回工具列表：Shell执行(异步) + 任务状态查询 + 任务输入 + 文件读取 + 文本编辑 + 文件写入"""
         cfg = self._get_config(node)
         timeout = cfg.timeout
@@ -1890,7 +1904,113 @@ class ShellNodeHandler(BaseNodeHandler):
             args_schema=UploadToFileManagerInput,
         )
 
-        return [
+        # ---- view_media：将媒体文件注入下一轮对话（多模态查看） ----
+
+        media_tool = None
+        if self._media_caps:
+            from urllib.parse import urlparse as _urlparse
+
+            from app.utils.media_resolver import (
+                MAX_FILE_SIZE as MEDIA_MAX_FILE_SIZE,
+                _classify_by_ext,
+                _is_url,
+            )
+
+            supported_labels: list[str] = []
+            if "image" in self._media_caps:
+                supported_labels.append("图片（png/jpg/jpeg/gif/webp/bmp/svg）")
+            if "audio" in self._media_caps:
+                supported_labels.append("音频（mp3/wav/ogg/flac/aac）")
+            if "pdf" in self._media_caps:
+                supported_labels.append("PDF 文档")
+            caps_desc = "、".join(supported_labels)
+
+            async def view_media(file_path: str) -> dict:
+                raw = (file_path or "").strip()
+                if not raw:
+                    return {"success": False, "error": "file_path 不能为空"}
+
+                if _is_url(raw):
+                    # URL 仅支持图片（OpenAI Chat Completions 对 file URL 抛错）
+                    from app.utils.media_resolver import _classify_by_ext as _cbe
+
+                    capability = _cbe(_urlparse(raw).path)
+                    if capability != "image":
+                        return {
+                            "success": False,
+                            "error": "URL 仅支持图片文件，其他类型请先下载到本地再传入路径",
+                        }
+                    if "image" not in self._media_caps:
+                        return {
+                            "success": False,
+                            "error": f"当前模型不支持图片输入，支持: {caps_desc}",
+                        }
+                    return {
+                        "success": True,
+                        "file_path": raw,
+                        "media_type": "image",
+                        "message": "图片 URL 已注入，将在下一轮对话中可见",
+                    }
+
+                is_valid, error_msg = _validate_file_path(raw)
+                if not is_valid:
+                    return {"success": False, "error": error_msg}
+
+                candidate = Path(raw)
+                work_dir = self._resolve_working_dir()
+                if not candidate.is_absolute() and work_dir is not None:
+                    candidate = Path(work_dir) / raw
+                candidate = candidate.resolve()
+
+                if not candidate.exists() or not candidate.is_file():
+                    return {"success": False, "error": f"文件不存在: {file_path}"}
+
+                capability = _classify_by_ext(candidate.name)
+                if capability is None or capability == "video":
+                    return {
+                        "success": False,
+                        "error": (
+                            f"不支持的文件类型（视频暂不支持），当前支持: {caps_desc}"
+                        ),
+                    }
+                if capability not in self._media_caps:
+                    return {
+                        "success": False,
+                        "error": f"当前模型不支持{capability}输入，支持: {caps_desc}",
+                    }
+
+                file_size = candidate.stat().st_size
+                if file_size > MEDIA_MAX_FILE_SIZE:
+                    return {
+                        "success": False,
+                        "error": (
+                            f"文件大小 {file_size / 1024 / 1024:.1f}MB 超过限制"
+                            f"（最大 {MEDIA_MAX_FILE_SIZE // 1024 // 1024}MB）"
+                        ),
+                    }
+
+                return {
+                    "success": True,
+                    "file_path": str(candidate),
+                    "media_type": capability,
+                    "message": "媒体内容已注入，将在下一轮对话中可见",
+                }
+
+            media_tool = StructuredTool(
+                name="view_media",
+                description=(
+                    f"查看媒体文件内容（{caps_desc}），文件内容将以多模态形式注入下一轮对话。"
+                    "需要理解图片/PDF/音频的具体内容时使用此工具，不要用 file_read 读取二进制文件。"
+                    "file_path 支持相对当前工作目录或绝对路径；网络图片可直接传 URL。"
+                    "单文件最大 20MB。"
+                ),
+                func=None,
+                coroutine=view_media,
+                args_schema=ViewMediaInput,
+                metadata={"media_tool": True},
+            )
+
+        tool_list = [
             shell_tool,
             shell_task_status_tool,
             shell_task_input_tool,
@@ -1902,10 +2022,13 @@ class ShellNodeHandler(BaseNodeHandler):
             list_files_tool,
             upload_to_file_manager_tool,
         ]
+        if media_tool is not None:
+            tool_list.append(media_tool)
+        return tool_list
 
     @classmethod
     def get_tool_info(cls, node: FlowNode) -> list[dict]:
-        return [
+        info = [
             {"name": "shell_executor", "description": "在受限环境中执行Shell命令"},
             {"name": "shell_task_status", "description": "查询后台Shell任务状态"},
             {"name": "shell_task_input", "description": "向后台Shell任务发送输入"},
@@ -1920,6 +2043,14 @@ class ShellNodeHandler(BaseNodeHandler):
                 "description": "将生成的文件导入文件管理并返回下载链接",
             },
         ]
+        if cls._media_caps:
+            info.append(
+                {
+                    "name": "view_media",
+                    "description": "以多模态形式查看图片/音频/PDF 文件内容",
+                }
+            )
+        return info
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
         """返回临时文件目录说明和文件工具使用指南，追加到 LLM system_prompt"""
@@ -1951,6 +2082,7 @@ class ShellNodeHandler(BaseNodeHandler):
             "- file_search 搜索文件内容（正则匹配），支持目录递归或单个文件路径\n"
             "- list_files 按文件名 glob 匹配（如 **/*.py），用于查找文件或了解目录结构\n"
             "- 禁止用 cat 读取大文件，始终使用 file_read\n"
+            "- 需要理解图片/PDF/音频内容时用 view_media 注入查看，禁止用 file_read 读二进制文件\n"
             "- Shell 每次调用都是独立进程；切换目录时传入 shell_executor 的 workdir 参数，不要依赖 cd 影响后续调用\n"
             + windows_compat_hint
             + f"\n临时文件输出目录: `{temp_dir}`（会被定时清理，勿存放重要数据）"
