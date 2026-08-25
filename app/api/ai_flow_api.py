@@ -237,7 +237,9 @@ class AiFlowApi:
                 if isinstance(partial, dict):
                     bc.update(partial)
                 if node_type in ("llm", "intent_router"):
-                    bc = inject_llm_defaults(bc, global_cfg)
+                    bc = await inject_llm_defaults(
+                        bc, global_cfg, db, node_type=node_type
+                    )
                 nd["base_config"] = bc
             count = await flow_service.batch_update_nodes_by_keys(
                 db, flow_id, nodes_data

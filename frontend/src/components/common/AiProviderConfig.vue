@@ -149,7 +149,7 @@ async function loadModels(providerId: string) {
           image: inputModalities.includes('image'),
           video: inputModalities.includes('video'),
           audio: inputModalities.includes('audio'),
-          pdf: false,
+          pdf: inputModalities.includes('pdf'),
           xlsx: false
         },
         context_length: m.limits?.context,
