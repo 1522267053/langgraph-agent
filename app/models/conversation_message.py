@@ -26,6 +26,11 @@ class ConversationMessage(DbBaseModel):
     role: Mapped[str] = mapped_column(
         String(20), nullable=False, comment="消息角色：human/ai/tool"
     )
+    message_type: Mapped[Optional[str]] = mapped_column(
+        String(30),
+        nullable=True,
+        comment="内部消息类型，如 media_injected（view_media 注入）",
+    )
     thinking: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, comment="思考内容"
     )
@@ -69,6 +74,9 @@ class ConversationMessage(DbBaseModel):
     )
     files: Mapped[Optional[dict]] = mapped_column(
         JSON, nullable=True, comment="附件文件列表"
+    )
+    input_data: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True, comment="扩展数据（media_injected 存 media_sources）"
     )
     create_time: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, nullable=False, comment="创建时间"

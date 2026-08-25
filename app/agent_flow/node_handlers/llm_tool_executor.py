@@ -154,9 +154,8 @@ async def setup_tool_handlers(
         ):
             handler._working_dir = get_agent_work_dir(flow_id)
 
-        # 注入 _media_caps（view_media 可注入的媒体类型，仅 Agent 类型——
-        # flow 侧 conversation_message 无 message_type 列，无法标记内部注入消息）
-        if hasattr(handler, "_media_caps") and flow_type == "agent":
+        # 注入 _media_caps（view_media 可注入的媒体类型，模型能力×适配器交集）
+        if hasattr(handler, "_media_caps"):
             from app.services.ai_provider_service import get_adapter_type
             from app.utils.media_resolver import get_injectable_media_types
 
