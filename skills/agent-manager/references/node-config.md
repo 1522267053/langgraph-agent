@@ -18,7 +18,7 @@ GET /api/ai/flow/node-types/{node_type}/config-schema
 
 - `name`：当前节点中的参数名或输出名。
 - `source`：输入变量或最终输出从哪里取值。
-- `type`：供配置、展示和工具参数使用的数据类型。
+- `type`：供配置、展示和工具参数使用的数据类型(string/number/boolean/object/array/file_list)。
 
 节点输出写入 `nodes.<node_key>.<output_name>`。常用路径：
 
@@ -141,11 +141,19 @@ GET /api/ai/flow/node-types/{node_type}/config-schema
 执行模式常用字段为 `api_url`、`method`、`headers`、`body`、`content_type`、`form_fields` 和 `file_config`。URL、请求头和请求体支持变量模板。
 
 - 默认输出：`body`、`status_code`、`headers`。
-- `use_preset_for_tool=true` 时，LLM 只提供 `input_variables` 定义的业务参数，不能改预设 URL、Headers 和 Body。
-- `use_preset_for_tool=false` 时提供通用 API 工具，由 LLM 提供 URL、方法、请求体和上传文件。
+- `use_preset_for_tool` 控制节点作为 **LLM 工具** 时是否使用预设参数：
+  - `true`：节点配置中的 `api_url/method/headers/body` 等被当作**预设**（封装好的固定 API 端点）。LLM 工具调用时只能填 `input_variables` 里声明的业务参数，**不能改 URL/Headers/Body**。适合"封装一个外部服务（如天气、汇率、issue 列表）"作为受限工具，避免 LLM 误改端点。
+  - `false`（默认）：节点配置**不当作预设**，通过工具边 `tools → tools` 连接到 LLM 后，LLM 工具调用时可以**自由提供** url/method/headers/body 等参数，变成一个通用 HTTP 工具。
+- API 节点作为 **Workflow 独立执行节点**（`default → default` 连边）时，无论 `use_preset_for_tool` 取值，都会按节点配置发送预设请求；此时 `use_preset_for_tool` 只影响是否同时被 LLM 当工具看到。
 - `description` 应明确工具用途、输入约束和副作用。
 - 下载响应文件时使用实时 Schema 中的下载配置，结果会进入文件管理。
 - 凭据应放在受控配置中，不要写进提示词或用户可见输出。
+
+### 踩坑：API 工具无参数时不要留下划线占位
+
+- 当 `use_preset_for_tool=true` 且 `input_variables` 为空，框架可能注入 `_dummy` 之类的占位字段触发 `Fields must not use names with leading underscores` 校验。
+- 如果想要"通用 API 工具让 LLM 自己传参"，把 `use_preset_for_tool` 设为 `false` 即可，避免框架注入下划线占位。
+- 如果确实需要 `true` 但又没有业务参数，加一个 `dummy` 占位字段：`{"name": "dummy", "type": "string", "required": false}`。
 
 ## Python 节点
 
