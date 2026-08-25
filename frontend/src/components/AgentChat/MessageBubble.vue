@@ -54,7 +54,8 @@ const emit = defineEmits<{
           :segments="msg.segments"
           :show-thinking="showThinking"
           :show-tool-calls="showToolCalls"
-          :is-streaming="isStreaming"
+          :is-streaming="isStreaming && isLast"
+          :disable-actions="isStreaming"
           @revert="dbMsgId => emit('revert', dbMsgId)"
         />
         <div v-if="msg.total_tokens && !(isStreaming && isLast)" class="token-info">

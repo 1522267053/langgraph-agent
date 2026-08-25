@@ -31,32 +31,23 @@ const messagesContainer = computed<HTMLElement | null>(
   () => (scrollbarRef.value?.wrapRef as HTMLElement | undefined) ?? null
 )
 
+// SSE 状态早于 Markdown DOM 更新，底部跟随以 ResizeObserver 的真实高度变化为准。
 const {
   autoScroll,
   isAtBottom,
+  userScrolledUp,
   scrollToBottom,
-  maybeScrollToBottom,
   handleScroll,
   onUserScrollIntent,
   resetAutoScrollState
-} = useAutoScroll(messagesContainer, [
-  () => store.chatMessages.length,
-  () => store.textContent,
-  () => store.thinkingContent,
-  // 只观察最后一条消息的分段变化（流式增长只发生在末尾），避免每 token 全列表 reduce
-  () => store.chatMessages.at(-1)?.segments.length || 0,
-  () =>
-    (store.chatMessages.at(-1)?.segments || []).filter(
-      s => s.type === 'tool' && s.tool?.status !== 'running'
-    ).length,
-  () =>
-    (store.chatMessages.at(-1)?.segments || []).reduce(
-      (count, segment) => count + (segment.knowledge_citations?.length || 0),
-      0
-    ),
-  () => store.isStreaming,
-  () => store.todos.length
-])
+} = useAutoScroll(messagesContainer, [])
+
+function handleScrollbarPointerDown(event: PointerEvent): void {
+  const target = event.target
+  if (target instanceof Element && target.closest('.el-scrollbar__bar')) {
+    onUserScrollIntent(event)
+  }
+}
 
 let messagesResizeObserver: ResizeObserver | null = null
 
@@ -66,7 +57,9 @@ watch(
     if (previous) messagesResizeObserver?.unobserve(previous)
     if (!content) return
     messagesResizeObserver ??= new ResizeObserver(() => {
-      if (!store.messagesLoading) maybeScrollToBottom()
+      if (!store.messagesLoading && autoScroll.value && !userScrolledUp.value) {
+        scrollToBottom()
+      }
     })
     messagesResizeObserver.observe(content)
   },
@@ -582,10 +575,12 @@ function handleRejectTools() {
         element-loading-text="加载中..."
         class="messages-scrollbar"
         :distance="100"
+        wrap-style="overflow-anchor: none"
         @scroll="handleScroll"
         @end-reached="onEndReached"
         @wheel="onUserScrollIntent"
         @touchmove="onUserScrollIntent"
+        @pointerdown.capture="handleScrollbarPointerDown"
       >
         <div v-show="!store.messagesLoading" ref="messagesContentRef" class="messages-container">
           <div v-if="store.hasMoreMessages" class="load-more-sentinel">

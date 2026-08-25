@@ -16,8 +16,9 @@ const props = withDefaults(
     showThinking?: boolean
     showToolCalls?: boolean
     isStreaming?: boolean
+    disableActions?: boolean
   }>(),
-  { showThinking: true, showToolCalls: true, isStreaming: false }
+  { showThinking: true, showToolCalls: true, isStreaming: false, disableActions: false }
 )
 
 const emit = defineEmits<{
@@ -112,7 +113,7 @@ async function handleCopy(text: string): Promise<void> {
             思考中...
           </span>
           <el-tooltip
-            v-if="!isStreaming && segment.dbMsgId && !isLastSegment(idx)"
+            v-if="!disableActions && segment.dbMsgId && !isLastSegment(idx)"
             content="删除此条及之后的内容"
             placement="top"
           >
@@ -179,7 +180,7 @@ async function handleCopy(text: string): Promise<void> {
 
     <div v-else-if="segment.type === 'content'" class="message-content">
       <div class="content-actions">
-        <el-tooltip v-if="!isStreaming && segment.content" content="复制源文本" placement="top">
+        <el-tooltip v-if="!disableActions && segment.content" content="复制源文本" placement="top">
           <el-button
             :icon="CopyDocument"
             link
@@ -189,7 +190,7 @@ async function handleCopy(text: string): Promise<void> {
           />
         </el-tooltip>
         <el-tooltip
-          v-if="!isStreaming && segment.dbMsgId && idx !== lastContentIdx"
+          v-if="!disableActions && segment.dbMsgId && idx !== lastContentIdx"
           content="删除此条及之后的内容"
           placement="top"
         >
