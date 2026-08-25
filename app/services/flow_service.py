@@ -1767,7 +1767,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
 
             bc = fill_node_defaults(node_type, nd.get("base_config"))
             if node_type in ("llm", "intent_router"):
-                bc = inject_llm_defaults(bc, global_cfg)
+                bc = await inject_llm_defaults(bc, global_cfg, db, node_type=node_type)
 
             nodes_to_create.append(
                 FlowNodeCreate(

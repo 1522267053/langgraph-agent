@@ -1015,8 +1015,11 @@ class FlowTransferService:
             return
         for node in nodes:
             if node.get("node_type") in ("llm", "intent_router"):
-                node["base_config"] = inject_llm_defaults(
-                    node.get("base_config") or {}, global_cfg
+                node["base_config"] = await inject_llm_defaults(
+                    node.get("base_config") or {},
+                    global_cfg,
+                    db,
+                    node_type=node.get("node_type", ""),
                 )
 
     def _resolve_node_refs(

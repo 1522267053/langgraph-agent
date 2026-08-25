@@ -477,20 +477,15 @@ class BuiltinAgentService:
 
         返回:
             {
-                "capabilities": 多模态能力开关（modalities.input 映射 image/video/audio/pdf，xlsx 恒 False），
+                "capabilities": 多模态能力开关（公共函数按 modalities.input 推导），
                 "max_tokens": 输出上限（limits.output），无则 0，
                 "context_length": 上下文窗口（limits.context），无则 0，
             }
         """
         from app.models.ai_model import AIModel
+        from app.services.node_config_helper import derive_model_capabilities
 
-        caps = {
-            "image": False,
-            "video": False,
-            "audio": False,
-            "pdf": False,
-            "xlsx": False,
-        }
+        caps = await derive_model_capabilities(db, provider, model)
         metadata = {"capabilities": caps, "max_tokens": 0, "context_length": 0}
         if not provider or not model:
             return metadata
@@ -504,12 +499,6 @@ class BuiltinAgentService:
         ai_model = result.scalar_one_or_none()
         if not ai_model:
             return metadata
-
-        modalities = ai_model.modalities or {}
-        input_mods = modalities.get("input") if isinstance(modalities, dict) else None
-        if isinstance(input_mods, list):
-            for modality in ("image", "video", "audio", "pdf"):
-                caps[modality] = modality in input_mods
 
         limits = ai_model.limits or {}
         if isinstance(limits, dict):
