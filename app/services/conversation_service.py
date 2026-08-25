@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.conversation_message import ConversationMessage
 from app.utils.media_resolver import (
     build_content_from_db_files,
+    build_media_blocks,
     extract_files_from_params,
 )
 from app.utils.message_utils import (
@@ -71,6 +72,13 @@ class ConversationService:
                 "content": serialize_content(msg.content),
                 "sequence": start_sequence + i,
             }
+            # view_media 注入的多模态消息标记为内部消息；
+            # media_sources 存入 input_data，历史加载时按 capabilities 重建媒体块
+            if msg.additional_kwargs.get("_media_injected"):
+                kwargs["message_type"] = "media_injected"
+                media_sources = msg.additional_kwargs.get("_media_sources")
+                if isinstance(media_sources, list) and media_sources:
+                    kwargs["input_data"] = {"media_sources": media_sources}
             if tool_calls is not None:
                 kwargs["tool_calls"] = tool_calls
             if tool_call_id is not None:
@@ -169,6 +177,12 @@ class ConversationService:
             message: BaseMessage = SystemMessage(content=msg.content or "")
         elif msg.role == "human":
             content = msg.content or ""
+            # view_media 注入消息：按 sources 重建媒体块（capabilities 为空时
+            # 保持纯文本）
+            if msg.message_type == "media_injected" and capabilities:
+                media_sources = (msg.input_data or {}).get("media_sources")
+                if isinstance(media_sources, list) and media_sources:
+                    content = await build_media_blocks(media_sources, capabilities)
             files = msg.files if isinstance(msg.files, list) else None
             if files:
                 content = await build_content_from_db_files(

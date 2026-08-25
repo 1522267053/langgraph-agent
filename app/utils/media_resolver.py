@@ -9,7 +9,7 @@ import asyncio
 import base64
 import logging
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Sequence
+from typing import Any, Awaitable, Callable, cast
 from urllib.parse import urlparse
 
 from langchain_core.messages import HumanMessage
@@ -204,7 +204,7 @@ def get_injectable_media_types(capabilities: dict, adapter_type: str) -> set[str
 
 async def build_media_blocks(
     sources: list[str], capabilities: dict | None = None
-) -> Sequence[dict]:
+) -> list[dict[str,Any]]:
     """将文件路径/URL 列表构建为多模态 content blocks
 
     本地 image/audio → base64 媒体块；本地 pdf → file 块（带 filename）；
@@ -291,7 +291,8 @@ async def build_media_human_message(sources: list[str]) -> HumanMessage:
         additional_kwargs 带 _media_injected 标记（持久化时写 message_type）
         和 _media_sources（持久化到 input_data，历史加载时重建媒体块）
     """
-    message = HumanMessage(content=await build_media_blocks(sources) or "[空媒体注入]")
+    blocks: list[dict[str,Any]] = await build_media_blocks(sources)
+    message = HumanMessage(content=cast(list[dict[str,Any] | str], blocks) or "[空媒体注入]")
     message.additional_kwargs["_media_injected"] = True
     message.additional_kwargs["_media_sources"] = list(sources)
     return message
