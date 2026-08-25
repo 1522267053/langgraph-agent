@@ -69,6 +69,9 @@ class FileService(BaseService[File, FileBase, FileUpdate]):
             ext_types = []
             exact_types = []
             for rule in rules:
+                if rule == "*/*":
+                    # Universal MIME wildcard means that no file type filter is needed.
+                    continue
                 if rule.endswith("/*"):
                     like_patterns.append(rule[:-1] + "%")
                 elif rule.startswith("."):
