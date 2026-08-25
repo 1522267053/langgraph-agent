@@ -2,13 +2,13 @@
 子Agent节点处理器
 
 将Agent作为工具提供给父Agent调用。
-阻塞模式执行，执行期间通过 writer 发送心跳事件保持 SSE 连接。
+子Agent使用独立托管 Run 执行，父Agent仅等待最终结果。
 """
 
 import asyncio
 import json
 import logging
-from typing import Any, Literal, Optional, TYPE_CHECKING
+from typing import Any, Callable, Literal, Optional, TYPE_CHECKING
 
 from langchain_core.tools import StructuredTool
 from langchain_core.runnables import RunnableConfig
@@ -20,15 +20,17 @@ from app.models.flow_node import FlowNode
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.node_handlers.base_handler import BaseNodeHandler, BaseNodeConfig
 from app.agent_flow.handler_registry import NodeHandlerRegistry
-from app.agent_flow.flow_event import NodeStartEvent, NodeDoneEvent
+from app.agent_flow.flow_event import (
+    NodeStartEvent,
+    NodeDoneEvent,
+    SubAgentToolApprovalEvent,
+)
 from app.services.flow_service import flow_service
 
 if TYPE_CHECKING:
     from app.agent_flow.tool_resolver import LlmToolConfig
 
 logger = logging.getLogger(__name__)
-
-HEARTBEAT_INTERVAL = 20
 
 _TYPE_MAP = {
     "string": str,
@@ -102,8 +104,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
     """子Agent节点处理器
 
     将Agent作为工具提供给父Agent调用。
-    阻塞模式执行子Agent，期间通过 writer 心跳保持 SSE 活跃。
-    取消由父Agent的中断机制传播（CancelledError）。
+    子Agent事件由自身 Session 的 SSE 独立订阅，父Agent仅阻塞等待结果。
     """
 
     ConfigClass = SubAgentNodeConfig
@@ -187,7 +188,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
 
         tools: list[StructuredTool] = []
 
-        # ---- ask 工具（阻塞 + 心跳） ----
+        # ---- ask 工具（阻塞等待托管子Agent） ----
         ask_desc = (
             f"将任务委派给子Agent「{agent_name}」执行。\n\n"
             f"{description}\n\n"
@@ -196,10 +197,11 @@ class SubAgentNodeHandler(BaseNodeHandler):
             "session_mode=new 时每次创建独立会话，适合互不依赖的并行任务。"
         )
 
-        handler_ref = self
         _agent_id = agent_id
         _agent_name = agent_name
         _file_list_fields = file_list_fields
+        _parent_session_id = self._parent_session_id
+        _parent_writer = self._writer
 
         async def ask_agent(**kwargs) -> dict | str:
             from app.services.agent_executor_service import agent_executor_service
@@ -212,16 +214,14 @@ class SubAgentNodeHandler(BaseNodeHandler):
                 if k not in {"task", "session_mode"} and v is not None
             }
 
-            session_id = 0
             try:
-                parent_session_id = handler_ref._parent_session_id
                 # 创建子Agent session（标题标记来源）
                 async with AsyncSessionLocal() as db:
-                    if session_mode == "resume" and parent_session_id:
+                    if session_mode == "resume" and _parent_session_id:
                         session = await agent_executor_service.get_or_create_sub_agent_session(
                             db,
                             _agent_id,
-                            parent_session_id,
+                            _parent_session_id,
                             node.node_key,
                         )
                     else:
@@ -236,51 +236,34 @@ class SubAgentNodeHandler(BaseNodeHandler):
                         session.title = title
                         await db.commit()
 
-                # 在后台执行子Agent（传入 handler_ref 以转发工具审批事件）
-                agent_task = asyncio.create_task(
-                    _run_sub_agent(
-                        session_id,
-                        task,
-                        extra_params,
-                        handler_ref=handler_ref,
-                        agent_id=_agent_id,
-                        agent_name=_agent_name,
-                    )
-                )
-
-                # 阻塞等待，定期发心跳保持 SSE
-                while True:
-                    try:
-                        result = await asyncio.wait_for(
-                            asyncio.shield(agent_task), timeout=HEARTBEAT_INTERVAL
+                def forward_approval(event: dict[str, Any]) -> None:
+                    event_data = event.get("data") or {}
+                    if not _parent_writer:
+                        return
+                    _parent_writer(
+                        SubAgentToolApprovalEvent(
+                            node_key=event_data.get("node_key", ""),
+                            tool_calls=event_data.get("tool_calls", []),
+                            approval_needed=event_data.get("approval_needed", []),
+                            sub_agent_id=_agent_id,
+                            sub_session_id=session_id,
+                            sub_agent_name=_agent_name,
                         )
-                        return result
-                    except asyncio.TimeoutError:
-                        # 通过 writer 发心跳事件保持 SSE 连接
-                        if hasattr(handler_ref, "_writer") and handler_ref._writer:
-                            try:
-                                handler_ref._writer(
-                                    {
-                                        "type": "sub_agent_progress",
-                                        "data": {"agent": _agent_name},
-                                    }
-                                )
-                            except Exception:
-                                pass
+                    )
 
-            except asyncio.CancelledError:
-                # 父Agent被取消 → 中断子Agent + 取消子Agent的工具审批等待
-                if session_id:
-                    from app.services.interrupt_service import interrupt_service
-                    from app.services.tool_approval_service import tool_approval_service
-
-                    interrupt_service.set_agent_interrupted(session_id)
-                    tool_approval_service.cancel(session_id)
-                raise
-
+                return await _run_sub_agent(
+                    session_id,
+                    task,
+                    extra_params,
+                    approval_callback=forward_approval if _parent_writer else None,
+                )
             except Exception as e:
                 logger.error(f"子Agent执行失败: {e}", exc_info=True)
-                return {"error": f"子Agent执行失败: {str(e)}"}
+                return {
+                    "success": False,
+                    "status": "error",
+                    "error": f"子Agent执行失败: {str(e)}",
+                }
 
         tool = StructuredTool(
             name=f"ask_{tool_prefix}",
@@ -320,52 +303,78 @@ async def _run_sub_agent(
     session_id: int,
     task: str,
     params: dict | None = None,
-    handler_ref: Optional["SubAgentNodeHandler"] = None,
-    agent_id: int = 0,
-    agent_name: str = "",
+    approval_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict | str:
-    """执行子Agent并返回结果
-
-    当子Agent产生 tool_approval_required 事件时，通过父Agent的 writer 转发到父SSE流，
-    附加 is_sub_agent / sub_agent_id / sub_session_id 上下文，供前端路由到正确的审批端点。
-    转发后 await future.event.wait() 阻塞，直到前端完成审批。
-    """
+    """启动托管子Agent并等待最终结果，不消费其 SSE 事件。"""
     from app.services.agent_executor_service import agent_executor_service
-    from app.services.tool_approval_service import tool_approval_service
 
-    content = ""
-    error_result: dict | None = None
-    async for event in agent_executor_service.chat_stream(
-        session_id, task, params or {}
-    ):
-        event_type = event.get("type", "")
-        if event_type == "flow_done":
-            output = event.get("data", {}).get("output_data", {})
-            content = output.get("content", "") if isinstance(output, dict) else ""
-        elif event_type == "error":
-            error_msg = event.get("data", {}).get("message", "未知错误")
-            error_result = {"error": f"子Agent执行出错: {error_msg}"}
-        elif event_type == "tool_approval_required":
-            if handler_ref and hasattr(handler_ref, "_writer") and handler_ref._writer:
-                from app.agent_flow.flow_event import SubAgentToolApprovalEvent
+    run_id = agent_executor_service.start_chat_run(
+        session_id,
+        task,
+        params or {},
+        approval_callback=approval_callback,
+    )
+    try:
+        result = await agent_executor_service.wait_run_result(session_id, run_id)
+    except asyncio.CancelledError:
+        cancel_error = await agent_executor_service._await_cancellation_safe(
+            agent_executor_service.cancel_run(
+                session_id,
+                expected_run_id=run_id,
+            )
+        )
+        if cancel_error:
+            logger.warning(
+                "父Agent取消时级联取消子Agent失败: session_id=%s, run_id=%s, error=%s",
+                session_id,
+                run_id,
+                cancel_error,
+            )
+        raise
+    except Exception:
+        try:
+            await agent_executor_service.cancel_run(
+                session_id,
+                expected_run_id=run_id,
+            )
+        except Exception:
+            logger.warning(
+                "异常退出时取消子Agent失败: session_id=%s, run_id=%s",
+                session_id,
+                run_id,
+                exc_info=True,
+            )
+        raise
 
-                event_data = event.get("data", {})
-                handler_ref._writer(
-                    SubAgentToolApprovalEvent(
-                        node_key=event_data.get("node_key", ""),
-                        tool_calls=event_data.get("tool_calls", []),
-                        approval_needed=event_data.get("approval_needed", []),
-                        sub_agent_id=agent_id,
-                        sub_session_id=session_id,
-                        sub_agent_name=agent_name,
-                    )
-                )
+    status = result.get("status", "error")
+    if status == "success":
+        output_data = result.get("output_data") or {}
+        content = output_data.get("content", "")
+        return content if isinstance(content, str) else str(content or "")
 
-            future = tool_approval_service.get_pending(session_id)
-            if future:
-                try:
-                    await asyncio.wait_for(future.event.wait(), timeout=300)
-                except asyncio.TimeoutError:
-                    tool_approval_service.remove(session_id)
+    if status == "cancelled":
+        return {
+            "success": False,
+            "status": "cancelled",
+            "error": "子Agent执行已取消",
+        }
 
-    return error_result or content
+    if status == "waiting_human":
+        waiting_data = result.get("waiting_data") or {}
+        question = waiting_data.get("question") or "等待人工输入"
+        return {
+            "success": False,
+            "status": "waiting_human",
+            "error": f"子Agent已暂停并等待人工输入: {question}",
+        }
+
+    error_result = {
+        "success": False,
+        "status": str(status),
+        "error": f"子Agent执行出错: {result.get('error') or '未知错误'}",
+    }
+    output_data = result.get("output_data") or {}
+    content = output_data.get("content")
+    if content:
+        error_result["content"] = content
+    return error_result

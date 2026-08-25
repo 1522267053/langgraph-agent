@@ -50,8 +50,13 @@ class _AgentRun:
 
     run_id: str
     session_id: int
+    approval_callback: Callable[[dict[str, Any]], None] | None = None
     events: list[dict[str, Any]] = dataclass_field(default_factory=list)
     subscribers: set[asyncio.Event] = dataclass_field(default_factory=set)
+    result_ready: asyncio.Event = dataclass_field(default_factory=asyncio.Event)
+    result: dict[str, Any] | None = None
+    failure_status: str | None = None
+    failure_error: str | None = None
     task: asyncio.Task[None] | None = None
     started: bool = False
     cancel_requested: bool = False
@@ -111,8 +116,52 @@ class AgentExecutorService(BaseExecutorService):
         }
         run.next_event_id += 1
         run.events.append(stored_event)
+        if stored_event["type"] == "tool_approval_required" and run.approval_callback:
+            try:
+                run.approval_callback(stored_event)
+            except Exception:
+                logger.warning(
+                    "转发子Agent工具审批事件失败: session_id=%s, run_id=%s",
+                    run.session_id,
+                    run.run_id,
+                    exc_info=True,
+                )
         for wake_event in tuple(run.subscribers):
             wake_event.set()
+
+    @staticmethod
+    def _build_agent_run_result(terminal_event: dict) -> dict[str, Any]:
+        """将结束事件转换为不依赖 SSE 消费的执行结果。"""
+        event_type = terminal_event.get("type", "error")
+        raw_data = terminal_event.get("data")
+        data = dict(raw_data) if isinstance(raw_data, dict) else {}
+
+        if event_type == "flow_done":
+            raw_output_data = data.get("output_data")
+            output_data = (
+                dict(raw_output_data) if isinstance(raw_output_data, dict) else {}
+            )
+            return {
+                "status": str(data.get("status") or "failed"),
+                "output_data": output_data,
+                "error": None,
+                "waiting_data": None,
+            }
+
+        if event_type == "waiting_human":
+            return {
+                "status": "waiting_human",
+                "output_data": {},
+                "error": None,
+                "waiting_data": data,
+            }
+
+        return {
+            "status": "error",
+            "output_data": {},
+            "error": str(data.get("message") or "Agent 执行失败"),
+            "waiting_data": None,
+        }
 
     @staticmethod
     async def _await_cancellation_safe(
@@ -135,6 +184,10 @@ class AgentExecutorService(BaseExecutorService):
         """原子发布结束事件并释放所有订阅者。"""
         if run.done:
             return
+        result = self._build_agent_run_result(terminal_event)
+        if result["status"] == "success" and run.failure_status:
+            result["status"] = run.failure_status
+            result["error"] = run.failure_error
         run.terminal_event_type = terminal_event.get("type", "error")
         if run.terminal_event_type == "waiting_human":
             self._waiting_sessions.add(run.session_id)
@@ -142,8 +195,11 @@ class AgentExecutorService(BaseExecutorService):
         try:
             self._publish_agent_run_event(run, terminal_event)
         finally:
+            run.approval_callback = None
+            run.result = result
             run.done = True
             run.completed_at = time.monotonic()
+            run.result_ready.set()
             for wake_event in tuple(run.subscribers):
                 wake_event.set()
 
@@ -157,7 +213,16 @@ class AgentExecutorService(BaseExecutorService):
         terminal_event: dict | None = None
         try:
             async for event in stream_generator:
-                if event.get("type") in _RUN_END_EVENT_TYPES:
+                event_type = event.get("type")
+                if event_type == "tool_call_limit":
+                    event_data = event.get("data") or {}
+                    max_iterations = event_data.get("max_iterations")
+                    node_key = event_data.get("node_key") or "未知节点"
+                    run.failure_status = "tool_call_limit"
+                    run.failure_error = (
+                        f"子Agent节点 {node_key} 超过最大工具调用次数: {max_iterations}"
+                    )
+                if event_type in _RUN_END_EVENT_TYPES:
                     terminal_event = event
                     break
                 else:
@@ -212,6 +277,7 @@ class AgentExecutorService(BaseExecutorService):
         stream_factory: Callable[[], AsyncGenerator[Dict[str, Any], None]],
         *,
         allow_waiting: bool = False,
+        approval_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
         """启动单个会话的后台执行并返回 run_id。"""
         if self._shutting_down:
@@ -227,7 +293,11 @@ class AgentExecutorService(BaseExecutorService):
         if session_id in self._waiting_sessions and not allow_waiting:
             raise ValueError("会话正在等待人工输入，请使用恢复执行")
 
-        run = _AgentRun(run_id=uuid.uuid4().hex, session_id=session_id)
+        run = _AgentRun(
+            run_id=uuid.uuid4().hex,
+            session_id=session_id,
+            approval_callback=approval_callback,
+        )
         self._agent_runs[session_id] = run
         stream_generator = stream_factory()
         task = asyncio.create_task(self._consume_agent_run(run, stream_generator))
@@ -263,6 +333,8 @@ class AgentExecutorService(BaseExecutorService):
         session_id: int,
         user_message: str,
         params: dict | None = None,
+        *,
+        approval_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
         """启动后台 Agent 对话。"""
         return self._start_agent_run(
@@ -273,6 +345,7 @@ class AgentExecutorService(BaseExecutorService):
                 dict(params or {}),
                 _managed_run=True,
             ),
+            approval_callback=approval_callback,
         )
 
     def start_resume_run(self, session_id: int, human_input: str) -> str:
@@ -290,14 +363,28 @@ class AgentExecutorService(BaseExecutorService):
             allow_waiting=True,
         )
 
-    async def cancel_run(self, session_id: int) -> bool:
+    async def cancel_run(
+        self,
+        session_id: int,
+        *,
+        expected_run_id: str | None = None,
+    ) -> bool:
         """标记并取消当前托管执行，由 Runner 完成保存和结束事件。"""
         run = self._agent_runs.get(session_id)
         if not run or not run.task:
             return False
+        if expected_run_id is not None and run.run_id != expected_run_id:
+            return False
+        if run.done and not self.is_waiting(session_id):
+            return False
+
+        interrupt_service.set_agent_interrupted(session_id)
+        from app.services.tool_approval_service import tool_approval_service
+
+        tool_approval_service.cancel(session_id)
+        self._pending_save_sessions.add(session_id)
+
         if run.done:
-            if not self.is_waiting(session_id):
-                return False
             if session_id in self._running_sessions:
                 return True
             self._running_sessions.add(session_id)
@@ -340,6 +427,37 @@ class AgentExecutorService(BaseExecutorService):
                 ),
             )
         return True
+
+    async def wait_run_result(
+        self,
+        session_id: int,
+        run_id: str,
+    ) -> dict[str, Any]:
+        """等待托管执行完成，但不消费或订阅其 SSE 事件。"""
+        self._prune_agent_runs()
+        run = self._agent_runs.get(session_id)
+        if not run or run.run_id != run_id:
+            raise ValueError("Agent 执行不存在或结果已过期")
+
+        if not run.done:
+            await run.result_ready.wait()
+
+        result = run.result
+        if result is None:
+            raise RuntimeError("Agent 执行已结束但没有最终结果")
+
+        raw_output_data = result.get("output_data")
+        raw_waiting_data = result.get("waiting_data")
+        return {
+            "status": result.get("status", "error"),
+            "output_data": (
+                dict(raw_output_data) if isinstance(raw_output_data, dict) else {}
+            ),
+            "error": result.get("error"),
+            "waiting_data": (
+                dict(raw_waiting_data) if isinstance(raw_waiting_data, dict) else None
+            ),
+        }
 
     async def subscribe_run(
         self,
