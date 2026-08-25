@@ -25,6 +25,8 @@ import { ElMessage } from 'element-plus'
 
 const MESSAGE_REFRESH_LIMIT = 100
 const CONTEXT_SUMMARY_MESSAGE_TYPE = 'context_summary'
+/** view_media 注入的多模态内部消息（后端标记，前端不渲染为用户气泡） */
+const MEDIA_INJECTED_MESSAGE_TYPE = 'media_injected'
 
 interface AgentStreamContext {
   agentId: number
@@ -420,6 +422,10 @@ export const useAgentStore = defineStore('agent', () => {
           createdAt: new Date(msg.created_at || Date.now())
         })
       } else if (role === 'human') {
+        // view_media 注入的内部消息：不渲染为用户气泡（LLM 历史中仍保留标注文本）
+        if (msg.message_type === MEDIA_INJECTED_MESSAGE_TYPE) {
+          continue
+        }
         if (currentAssistant) {
           result.push(currentAssistant)
           currentAssistant = null

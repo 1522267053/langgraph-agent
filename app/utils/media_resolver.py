@@ -9,8 +9,10 @@ import asyncio
 import base64
 import logging
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Sequence
 from urllib.parse import urlparse
+
+from langchain_core.messages import HumanMessage
 
 from app.config.settings import settings
 
@@ -188,6 +190,111 @@ def filter_capabilities_by_adapter(capabilities: dict, adapter_type: str) -> dic
     return {
         key: bool(value) and key in supported for key, value in capabilities.items()
     }
+
+
+def get_injectable_media_types(capabilities: dict, adapter_type: str) -> set[str]:
+    """计算 view_media 工具可注入的媒体类型集合（模型能力 × 适配器交集）
+
+    Returns:
+        可注入类型子集，可能为空（此时工具不注册）
+    """
+    filtered = filter_capabilities_by_adapter(capabilities or {}, adapter_type)
+    return {key for key, enabled in filtered.items() if enabled}
+
+
+async def build_media_blocks(
+    sources: list[str], capabilities: dict | None = None
+) -> Sequence[dict]:
+    """将文件路径/URL 列表构建为多模态 content blocks
+
+    本地 image/audio → base64 媒体块；本地 pdf → file 块（带 filename）；
+    URL 仅图片支持（OpenAI Chat Completions 对 file URL 抛错）。
+    单项失败降级为文本标注，不影响其余项注入。
+
+    Args:
+        sources: view_media 工具成功返回的文件路径或 URL 列表
+        capabilities: 模型能力开关；非 None 时逐项过滤（模态未开启降级文本），
+            None 时不过滤（注入路径，工具调用时已按能力 gate）
+
+    Returns:
+        [标注文本块, 媒体块, ...] 列表
+    """
+    blocks: list[dict] = []
+
+    def _label(text: str) -> dict:
+        return {"type": "text", "text": text}
+
+    def _cap_enabled(capability: str) -> bool:
+        return capabilities is None or bool(capabilities.get(capability))
+
+    for source in sources:
+        if _is_url(source):
+            capability = _classify_by_ext(urlparse(source).path)
+            if capability != "image":
+                blocks.append(
+                    _label(f"[无法注入 {source}: URL 仅支持图片，请先下载到本地]")
+                )
+            elif not _cap_enabled("image"):
+                blocks.append(_label(f"[无法注入 {source}: 当前模型不支持图片输入]"))
+            else:
+                blocks.append(_label(f"[图片 url: {source}]"))
+                blocks.append({"type": "image", "url": source})
+            continue
+
+        path = Path(source)
+        capability = _classify_by_ext(path.name)
+        if capability is None:
+            blocks.append(_label(f"[无法注入 {source}: 不支持的文件类型]"))
+            continue
+        if not _cap_enabled(capability):
+            blocks.append(
+                _label(f"[无法注入 {source}: 当前模型不支持{capability}输入]")
+            )
+            continue
+        result = await _read_file_as_base64(source)
+        if not result:
+            blocks.append(
+                _label(
+                    f"[无法注入 {source}: 文件不存在、不可读或超过 {MAX_FILE_SIZE // 1024 // 1024}MB]"
+                )
+            )
+            continue
+        b64_data, mime_type = result
+        if capability == "pdf":
+            blocks.append(_label(f"[PDF 文档: {path.name}]"))
+            blocks.append(
+                {
+                    "type": "file",
+                    "base64": b64_data,
+                    "mime_type": "application/pdf",
+                    "filename": path.name,
+                }
+            )
+        else:
+            label = "图片" if capability == "image" else "音频"
+            blocks.append(_label(f"[{label} {path.name}: {path}]"))
+            blocks.append(
+                {"type": capability, "base64": b64_data, "mime_type": mime_type}
+            )
+
+    return blocks
+
+
+async def build_media_human_message(sources: list[str]) -> HumanMessage:
+    """将 view_media 收集的文件路径/URL 构建为一条多模态 HumanMessage
+
+    Args:
+        sources: view_media 工具成功返回的文件路径或 URL 列表
+
+    Returns:
+        content 为 [标注文本块, 媒体块, ...] 的 HumanMessage，
+        additional_kwargs 带 _media_injected 标记（持久化时写 message_type）
+        和 _media_sources（持久化到 input_data，历史加载时重建媒体块）
+    """
+    message = HumanMessage(content=await build_media_blocks(sources) or "[空媒体注入]")
+    message.additional_kwargs["_media_injected"] = True
+    message.additional_kwargs["_media_sources"] = list(sources)
+    return message
 
 
 async def _resolve_file_info_to_block(

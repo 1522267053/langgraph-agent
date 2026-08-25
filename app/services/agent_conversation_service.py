@@ -23,6 +23,7 @@ from app.models.agent_message import AgentMessage
 
 from app.utils.media_resolver import (
     build_content_from_db_files,
+    build_media_blocks,
     extract_files_from_params,
 )
 from app.utils.message_utils import (
@@ -81,6 +82,13 @@ class AgentConversationService:
                 "content": serialize_content(msg.content),
                 "sequence": start_sequence + i,
             }
+            # view_media 注入的多模态消息标记为内部消息（前端不渲染为用户气泡）；
+            # media_sources 存入 input_data，历史加载时按 capabilities 重建媒体块
+            if msg.additional_kwargs.get("_media_injected"):
+                kwargs["message_type"] = "media_injected"
+                media_sources = msg.additional_kwargs.get("_media_sources")
+                if isinstance(media_sources, list) and media_sources:
+                    kwargs["input_data"] = {"media_sources": media_sources}
             raw_user = msg.additional_kwargs.get("_raw_user_content")
             if raw_user and role == "human":
                 kwargs["original_content"] = raw_user
@@ -236,6 +244,12 @@ class AgentConversationService:
                     f"[上下文压缩] 共 {removed_count} 条历史对话已压缩为以下摘要："
                     f"\n\n{content}"
                 )
+            # view_media 注入消息：按 sources 重建媒体块（capabilities 为空时
+            # 保持纯文本，压缩等内部路径不重放媒体）
+            if msg.message_type == "media_injected" and capabilities:
+                media_sources = (msg.input_data or {}).get("media_sources")
+                if isinstance(media_sources, list) and media_sources:
+                    content = await build_media_blocks(media_sources, capabilities)
             files = msg.files if isinstance(msg.files, list) else None
             if files:
                 content = await build_content_from_db_files(

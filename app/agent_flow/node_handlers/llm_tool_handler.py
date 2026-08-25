@@ -114,7 +114,7 @@ def _build_mode_prompt(is_plan_mode: bool) -> str:
 
     return f"""
 
-# 当前运行模式：普通执行模式（Normal Mode）
+# 当前运行模式：普通执行模式（非计划模式，Normal Mode）
 
 你现在处于「普通执行模式」，可以根据用户需求执行任务并使用当前已提供的工具。
 以下工具在计划模式下会被禁用，但在当前普通执行模式下可用：{disabled_tools}。
