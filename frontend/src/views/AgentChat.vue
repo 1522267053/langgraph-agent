@@ -393,11 +393,12 @@ function handleDeleteMessage(msg: (typeof store.chatMessages)[0]) {
     return
   }
   const match = msg.id.match(/msg-(\d+)/)
-  if (!match?.[1]) {
+  // 消息 id 可能保留流式临时前缀（streaming-/user-），优先取 dbMsgId
+  const msgId = msg.dbMsgId ?? (match ? parseInt(match[1]) : null)
+  if (msgId == null) {
     ElMessage.warning({ message: '该消息不支持删除', duration: 5000 })
     return
   }
-  const msgId = parseInt(match[1])
 
   ElMessageBox.confirm('删除此消息及之后的对话？', '确定', { type: 'warning' })
     .then(async () => {
