@@ -17,6 +17,7 @@ import time
 from typing import Any, Optional
 from datetime import datetime
 
+from anyio import BrokenResourceError, ClosedResourceError, EndOfStream
 import httpx
 from langchain_core.tools import BaseTool, StructuredTool
 from langchain_mcp_adapters.sessions import (
@@ -25,6 +26,8 @@ from langchain_mcp_adapters.sessions import (
     StreamableHttpConnection,
     WebsocketConnection,
 )
+from mcp.shared.exceptions import McpError
+from mcp.types import CONNECTION_CLOSED
 from sqlalchemy import false
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +42,7 @@ MCP_TOOL_CALL_TIMEOUT = 120
 MCP_REMOTE_TOOL_CALL_TIMEOUT = 60
 MAX_CONNECTION_AGE = 600
 STDIO_CONSECUTIVE_TIMEOUT_LIMIT = 2
+_EXPECTED_HOLDER_UNSET = object()
 
 # 常见 MCP 启动命令 → 依赖运行环境映射（命令缺失时给出友好提示与下载链接）
 COMMAND_DEPENDENCIES: dict[str, dict[str, str]] = {
@@ -86,6 +90,66 @@ def _extract_error_message(exc: Exception) -> str:
     if sys.version_info >= (3, 11) and isinstance(exc, ExceptionGroup):
         return "; ".join(_extract_error_message(e) for e in exc.exceptions)
     return str(exc)
+
+
+def _iter_nested_exceptions(exc: BaseException):
+    """遍历异常链及 ExceptionGroup，供传输错误分类使用。"""
+    pending = [exc]
+    visited: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in visited:
+            continue
+        visited.add(id(current))
+        yield current
+
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(current.exceptions)
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        elif current.__context__ is not None:
+            pending.append(current.__context__)
+
+
+def _is_session_expired_error(exc: BaseException, transport: str) -> bool:
+    """判断服务端是否明确拒绝了已失效的 MCP Session。"""
+    if transport != "streamable-http":
+        return False
+    for current in _iter_nested_exceptions(exc):
+        if isinstance(current, McpError):
+            message = str(current).strip().lower()
+            code = getattr(current.error, "code", None)
+            if message == "session terminated" and code == 32600:
+                return True
+        if isinstance(current, httpx.HTTPStatusError):
+            response = current.response
+            request = response.request
+            if response.status_code in {404, 410} and request.headers.get(
+                "mcp-session-id"
+            ):
+                return True
+    return False
+
+
+def _is_transport_error(exc: BaseException) -> bool:
+    """判断连接是否已不可继续复用，但不代表当前调用可安全重放。"""
+    transport_errors = (
+        BrokenPipeError,
+        ConnectionError,
+        ConnectionResetError,
+        BrokenResourceError,
+        ClosedResourceError,
+        EndOfStream,
+        httpx.TransportError,
+    )
+    for current in _iter_nested_exceptions(exc):
+        if isinstance(current, transport_errors):
+            return True
+        if isinstance(current, McpError):
+            code = getattr(current.error, "code", None)
+            if code == CONNECTION_CLOSED:
+                return True
+    return False
 
 
 def check_command(command: str) -> dict:
@@ -149,6 +213,10 @@ class ConnectionHolder:
         """刷新连接活跃时间"""
         self.created_at = time.monotonic()
 
+    def is_alive(self) -> bool:
+        """后台生命周期任务仍在运行时，连接才可继续复用。"""
+        return not self.lifecycle_task.done()
+
     async def close(self) -> None:
         """通知后台 Task 退出并等待清理完成"""
         self.close_event.set()
@@ -180,6 +248,7 @@ class McpToolManager:
     _instance_lock = threading.Lock()
     _connections: dict[int, ConnectionHolder] = {}
     _tools_cache: dict[int, list[BaseTool]] = {}
+    _raw_tools: dict[int, dict[str, BaseTool]] = {}
     _call_locks: dict[int, asyncio.Lock] = {}
     _lock: asyncio.Lock = asyncio.Lock()
     _consecutive_timeouts: dict[int, int] = {}
@@ -208,6 +277,88 @@ class McpToolManager:
         """重置连续超时计数"""
         self._consecutive_timeouts.pop(server_id, None)
 
+    async def _get_bound_tool(
+        self, server_id: int, tool_name: str
+    ) -> tuple[ConnectionHolder | None, StructuredTool | None]:
+        """获取当前连接及绑定到该连接的原始工具。"""
+        async with self._lock:
+            holder = self._connections.get(server_id)
+            tool = self._raw_tools.get(server_id, {}).get(tool_name)
+        if not isinstance(tool, StructuredTool) or not tool.coroutine:
+            return holder, None
+        return holder, tool
+
+    async def _discard_connection(
+        self,
+        server_id: int,
+        *,
+        expected_holder: ConnectionHolder | None | object = _EXPECTED_HOLDER_UNSET,
+    ) -> bool:
+        """按连接身份清理失效连接，避免关闭并发创建的新 Session。"""
+        async with self._lock:
+            current = self._connections.get(server_id)
+            if (
+                expected_holder is not _EXPECTED_HOLDER_UNSET
+                and current is not expected_holder
+            ):
+                return False
+            holder = self._connections.pop(server_id, None)
+            self._tools_cache.pop(server_id, None)
+            self._raw_tools.pop(server_id, None)
+        if holder is not None:
+            await holder.close()
+        return True
+
+    async def _rebuild_tool_connection(
+        self,
+        server_id: int,
+        tool_name: str,
+        stale_holder: ConnectionHolder | None,
+    ) -> tuple[ConnectionHolder, StructuredTool]:
+        """重建 MCP Session，并解析同名工具在新 Session 上的闭包。"""
+        current_holder, current_tool = await self._get_bound_tool(server_id, tool_name)
+        if (
+            current_holder is not None
+            and current_holder is not stale_holder
+            and current_holder.is_alive()
+            and current_tool is not None
+        ):
+            return current_holder, current_tool
+
+        discarded = await self._discard_connection(
+            server_id,
+            expected_holder=stale_holder,
+        )
+        if not discarded:
+            current_holder, current_tool = await self._get_bound_tool(
+                server_id, tool_name
+            )
+            if (
+                current_holder is not None
+                and current_holder.is_alive()
+                and current_tool is not None
+            ):
+                return current_holder, current_tool
+            raise McpConnectionError("MCP Session 已被替换，但新连接不可用")
+
+        from app.config.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            server = await self._get_server(db, server_id)
+            if not server or not server.is_enabled:
+                raise McpConnectionError(f"MCP服务器 {server_id} 不存在或已禁用")
+            await self._load_tools_from_server(db, server)
+
+        holder, tool = await self._get_bound_tool(server_id, tool_name)
+        if holder is None or not holder.is_alive() or tool is None:
+            if holder is not None:
+                await self._discard_connection(
+                    server_id,
+                    expected_holder=holder,
+                )
+            raise McpConnectionError(f"MCP Session 重建后未找到工具: {tool_name}")
+        return holder, tool
+
     def _wrap_tool_with_lock(
         self,
         tool: BaseTool,
@@ -230,9 +381,9 @@ class McpToolManager:
         """
         if not isinstance(tool, StructuredTool):
             return tool
-        original_coro = tool.coroutine
-        if not original_coro:
+        if not tool.coroutine:
             return tool
+        original_name = tool.name
         is_stdio = transport == "stdio"
 
         async def locked_coro(**kwargs):
@@ -248,69 +399,113 @@ class McpToolManager:
                     )
                 )
 
-                # ---- 连接老化检查 ----
-                async with self._lock:
-                    holder = self._connections.get(server_id)
-                if holder and holder.age() > MAX_CONNECTION_AGE:
+                holder, bound_tool = await self._get_bound_tool(
+                    server_id, original_name
+                )
+                if (
+                    holder is None
+                    or not holder.is_alive()
+                    or holder.age() > MAX_CONNECTION_AGE
+                    or bound_tool is None
+                ):
+                    reason = "连接不存在"
+                    if holder is not None and not holder.is_alive():
+                        reason = "连接已关闭"
+                    elif holder is not None and holder.age() > MAX_CONNECTION_AGE:
+                        reason = f"连接已超过 {MAX_CONNECTION_AGE}s"
                     logger.info(
-                        f"MCP服务器 {server_name} 连接已超过 {MAX_CONNECTION_AGE}s，自动断开重建"
+                        "MCP服务器 %s %s，自动重建 Session",
+                        server_name,
+                        reason,
                     )
-                    await self._close_connection(server_id)
-                    async with self._lock:
-                        self._tools_cache.pop(server_id, None)
+                    holder, bound_tool = await self._rebuild_tool_connection(
+                        server_id,
+                        original_name,
+                        holder,
+                    )
 
                 try:
-                    result = await asyncio.wait_for(
-                        original_coro(**kwargs), timeout=effective_timeout
-                    )
-                except (
-                    BrokenPipeError,
-                    ConnectionError,
-                    ConnectionResetError,
-                    httpx.RemoteProtocolError,
-                    httpx.ConnectError,
-                    httpx.ReadTimeout,
-                ):
-                    await self._close_connection(server_id)
-                    async with self._lock:
-                        self._tools_cache.pop(server_id, None)
-                    raise
-                except asyncio.TimeoutError:
-                    self._reset_timeouts(server_id) if not is_stdio else None
-                    should_disconnect = not is_stdio
-                    if is_stdio:
-                        count = self._record_timeout(server_id)
-                        if count >= STDIO_CONSECUTIVE_TIMEOUT_LIMIT:
-                            should_disconnect = True
-                            logger.warning(
-                                f"MCP服务器 {server_name} 连续超时 {count} 次，断开连接"
+                    retry_count = 0
+                    while True:
+                        coroutine = bound_tool.coroutine
+                        if coroutine is None:
+                            raise McpConnectionError(
+                                f"MCP工具 {original_name} 缺少异步调用入口"
                             )
-                            self._reset_timeouts(server_id)
-                    if should_disconnect:
-                        await self._close_connection(server_id)
-                        async with self._lock:
-                            self._tools_cache.pop(server_id, None)
-                    raise TimeoutError(
-                        f"MCP工具调用超时({effective_timeout}s)"
-                        + ("，已断开连接" if should_disconnect else "")
-                    )
+                        try:
+                            result = await asyncio.wait_for(
+                                coroutine(**kwargs), timeout=effective_timeout
+                            )
+                            break
+                        except asyncio.TimeoutError:
+                            if not is_stdio:
+                                self._reset_timeouts(server_id)
+                            should_disconnect = not is_stdio
+                            if is_stdio:
+                                count = self._record_timeout(server_id)
+                                if count >= STDIO_CONSECUTIVE_TIMEOUT_LIMIT:
+                                    should_disconnect = True
+                                    logger.warning(
+                                        "MCP服务器 %s 连续超时 %s 次，断开连接",
+                                        server_name,
+                                        count,
+                                    )
+                                    self._reset_timeouts(server_id)
+                            if should_disconnect:
+                                await self._discard_connection(
+                                    server_id,
+                                    expected_holder=holder,
+                                )
+                            raise TimeoutError(
+                                f"MCP工具调用超时({effective_timeout}s)"
+                                + ("，已断开连接" if should_disconnect else "")
+                            )
+                        except Exception as exc:
+                            if (
+                                _is_session_expired_error(exc, transport)
+                                and retry_count == 0
+                            ):
+                                retry_count += 1
+                                logger.info(
+                                    "MCP服务器 %s Session 已失效，重建后重试工具 %s",
+                                    server_name,
+                                    original_name,
+                                )
+                                (
+                                    holder,
+                                    bound_tool,
+                                ) = await self._rebuild_tool_connection(
+                                    server_id,
+                                    original_name,
+                                    holder,
+                                )
+                                continue
 
-                # 调用成功，重置超时计数 + 刷新连接活跃时间
-                self._reset_timeouts(server_id)
-                async with self._lock:
-                    holder = self._connections.get(server_id)
-                if holder:
-                    holder.touch()
+                            if _is_session_expired_error(
+                                exc, transport
+                            ) or _is_transport_error(exc):
+                                await self._discard_connection(
+                                    server_id,
+                                    expected_holder=holder,
+                                )
+                            raise
 
-                if not keep_alive:
-                    logger.debug(
-                        f"MCP服务器 {server_name} keep_alive=False，调用后释放连接"
-                    )
-                    await self._close_connection(server_id)
+                    # 调用成功，重置超时计数 + 刷新连接活跃时间
+                    self._reset_timeouts(server_id)
                     async with self._lock:
-                        self._tools_cache.pop(server_id, None)
-
-                return result
+                        current_holder = self._connections.get(server_id)
+                        if current_holder is holder:
+                            holder.touch()
+                    return result
+                finally:
+                    if not keep_alive:
+                        logger.debug(
+                            f"MCP服务器 {server_name} keep_alive=False，调用后释放连接"
+                        )
+                        await self._discard_connection(
+                            server_id,
+                            expected_holder=holder,
+                        )
 
         prefixed_name = f"mcp__{server_name}__{tool.name}" if server_name else tool.name
 
@@ -363,7 +558,7 @@ class McpToolManager:
         async with self._lock:
             if server_id in self._tools_cache and server_id in self._connections:
                 holder = self._connections[server_id]
-                if holder.age() <= MAX_CONNECTION_AGE:
+                if holder.is_alive() and holder.age() <= MAX_CONNECTION_AGE:
                     cached_tools = self._tools_cache[server_id]
 
         if cached_tools is not None:
@@ -378,18 +573,41 @@ class McpToolManager:
                 if t.name.replace("mcp__", "", 1).split("__", 1)[-1] not in disabled
             ]
 
-        # ---- 慢路径：需要加载/重建 ----
-        server = await self._get_server(db, server_id)
-        if not server or not server.is_enabled:
-            return []
+        # ---- 慢路径：同一服务器只允许一个建连任务 ----
+        async with self._get_call_lock(server_id):
+            async with self._lock:
+                holder = self._connections.get(server_id)
+                cached_tools = self._tools_cache.get(server_id)
+                cache_available = bool(
+                    holder
+                    and holder.is_alive()
+                    and holder.age() <= MAX_CONNECTION_AGE
+                    and cached_tools is not None
+                )
+            if cache_available and cached_tools is not None:
+                from app.services.mcp_server_service import mcp_server_service
 
-        try:
-            tools = await self._load_tools_from_server(db, server)
-            return tools
-        except Exception as e:
-            raise McpConnectionError(
-                f"无法从MCP服务器 {server.name} 加载工具: {str(e)}"
-            )
+                disabled = await mcp_server_service.get_disabled_tool_names(
+                    db, server_id
+                )
+                if not disabled:
+                    return cached_tools
+                return [
+                    t
+                    for t in cached_tools
+                    if t.name.replace("mcp__", "", 1).split("__", 1)[-1] not in disabled
+                ]
+
+            server = await self._get_server(db, server_id)
+            if not server or not server.is_enabled:
+                return []
+
+            try:
+                return await self._load_tools_from_server(db, server)
+            except Exception as e:
+                raise McpConnectionError(
+                    f"无法从MCP服务器 {server.name} 加载工具: {str(e)}"
+                )
 
     async def _get_server(
         self, db: AsyncSession, server_id: int
@@ -467,6 +685,11 @@ class McpToolManager:
         task = asyncio.create_task(_lifecycle(), name=f"mcp-lifecycle-{server.id}")
         try:
             await asyncio.wait_for(ready_event.wait(), timeout=MCP_CONNECT_TIMEOUT)
+        except asyncio.CancelledError:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
         except asyncio.TimeoutError:
             if not task.done():
                 task.cancel()
@@ -506,7 +729,14 @@ class McpToolManager:
         config = await self._get_server_config(db, server.id)
         connection, timeout = self._build_connection(server.transport, config)
         holder = await self._start_connection(server, connection)
-        tools = await load_mcp_tools(holder.session, server_name=server.name)
+        try:
+            tools = await load_mcp_tools(holder.session, server_name=server.name)
+        except BaseException:
+            await holder.close()
+            async with self._lock:
+                self._tools_cache.pop(server.id, None)
+                self._raw_tools.pop(server.id, None)
+            raise
 
         wrapped_tools = [
             self._wrap_tool_with_lock(
@@ -523,6 +753,7 @@ class McpToolManager:
         async with self._lock:
             self._connections[server.id] = holder
             self._tools_cache[server.id] = wrapped_tools
+            self._raw_tools[server.id] = {tool.name: tool for tool in tools}
 
         await self._save_tools_cache(db, server.id, tools)
 
@@ -561,6 +792,7 @@ class McpToolManager:
         """关闭指定 MCP 服务器的持久连接，通过后台 Task 安全退出上下文"""
         async with self._lock:
             holder = self._connections.pop(server_id, None)
+            self._raw_tools.pop(server_id, None)
         if holder is not None:
             await holder.close()
 
@@ -610,6 +842,13 @@ class McpToolManager:
     async def test_connection(
         self, db: AsyncSession, server_id: int
     ) -> tuple[bool, list[McpToolInfo], Optional[str]]:
+        """串行刷新指定服务器的连接和工具缓存。"""
+        async with self._get_call_lock(server_id):
+            return await self._test_connection_locked(db, server_id)
+
+    async def _test_connection_locked(
+        self, db: AsyncSession, server_id: int
+    ) -> tuple[bool, list[McpToolInfo], Optional[str]]:
         """
         测试MCP服务器连接
 
@@ -629,9 +868,9 @@ class McpToolManager:
         # 读取已有的工具启用状态，刷新后保留
         old_enabled_map = await mcp_server_service.get_tool_enabled_map(db, server_id)
 
-        await self._close_connection(server_id)
-        self._tools_cache.pop(server_id, None)
+        await self._discard_connection(server_id)
 
+        holder: ConnectionHolder | None = None
         try:
             config = await self._get_server_config(db, server_id)
             connection, timeout = self._build_connection(server.transport, config)
@@ -662,6 +901,7 @@ class McpToolManager:
 
             async with self._lock:
                 self._connections[server_id] = holder
+                self._raw_tools[server_id] = {tool.name: tool for tool in tools}
                 self._tools_cache[server_id] = [
                     self._wrap_tool_with_lock(
                         t,
@@ -677,17 +917,23 @@ class McpToolManager:
 
             return True, tool_infos, None
 
+        except asyncio.CancelledError:
+            if holder is not None:
+                await holder.close()
+            await self._discard_connection(server_id)
+            raise
         except Exception as e:
             logger.exception(e)
-            await self._close_connection(server_id)
+            if holder is not None:
+                await holder.close()
+            await self._discard_connection(server_id)
             return False, [], _extract_error_message(e)
 
     async def clear_cache(self, server_id: int) -> None:
         """清除服务器缓存并关闭连接"""
-        await self._close_connection(server_id)
-        async with self._lock:
-            self._tools_cache.pop(server_id, None)
-        self._consecutive_timeouts.pop(server_id, None)
+        async with self._get_call_lock(server_id):
+            await self._discard_connection(server_id)
+            self._consecutive_timeouts.pop(server_id, None)
 
     async def clear_all_cache(self) -> None:
         """清除所有缓存并关闭所有连接（应用关闭时调用）"""
@@ -695,6 +941,7 @@ class McpToolManager:
             connections_snapshot = dict(self._connections)
             self._connections.clear()
             self._tools_cache.clear()
+            self._raw_tools.clear()
         tasks = []
         for server_id, holder in connections_snapshot.items():
             tasks.append(holder.close())
