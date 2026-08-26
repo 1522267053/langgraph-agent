@@ -29,6 +29,14 @@ export interface KnowledgeDocumentSegment extends BaseEntity {
   word_count?: number
 }
 
+export interface KnowledgeInsight extends BaseEntity {
+  knowledge_base_id?: number
+  question?: string
+  answer?: string
+  keywords?: string
+  source_segment_ids?: number[]
+}
+
 export interface KnowledgeDocumentUploadResult {
   id: number
   title: string

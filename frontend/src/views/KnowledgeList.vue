@@ -11,7 +11,7 @@ import {
   Refresh,
   SetUp
 } from '@element-plus/icons-vue'
-import { knowledgeBaseApi, knowledgeDocumentApi } from '@/api/knowledge'
+import { knowledgeBaseApi, knowledgeDocumentApi, knowledgeInsightApi } from '@/api/knowledge'
 import { configApi } from '@/api/config'
 import { downloadKnowledgeDocument } from '@/utils/knowledgeDownload'
 import ActionColumn from '@/components/common/ActionColumn.vue'
@@ -20,6 +20,7 @@ import type {
   KnowledgeBase,
   KnowledgeDocument,
   KnowledgeDocumentSegment,
+  KnowledgeInsight,
   KnowledgeBaseStatus,
   SegmentSearchResult
 } from '@/types/knowledge'
@@ -31,12 +32,15 @@ const { isMobile } = useIsMobile()
 
 const kbLoading = ref(false)
 const docLoading = ref(false)
+const insightLoading = ref(false)
 const uploadLoading = ref(false)
 const vectorizeLoading = ref<number | null>(null)
 const kbTableData = ref<KnowledgeBase[]>([])
 const docTableData = ref<KnowledgeDocument[]>([])
+const insightTableData = ref<KnowledgeInsight[]>([])
 const kbTotal = ref(0)
 const docTotal = ref(0)
+const insightTotal = ref(0)
 const selectedKb = ref<KnowledgeBase | null>(null)
 
 const kbQueryParams = reactive({
@@ -57,10 +61,21 @@ const docQueryParams = reactive({
   }
 })
 
+const insightQueryParams = reactive({
+  page: 1,
+  page_size: 10,
+  condition: {
+    knowledge_base_id: undefined as number | undefined,
+    question: '',
+    keywords: ''
+  }
+})
+
 const kbDialogVisible = ref(false)
 const uploadDialogVisible = ref(false)
 const segmentDialogVisible = ref(false)
 const contentDialogVisible = ref(false)
+const insightDialogVisible = ref(false)
 const kbFormRef = ref()
 const uploadRef = ref()
 const fileList = ref<UploadFiles>([])
@@ -69,6 +84,7 @@ const currentSegments = ref<KnowledgeDocumentSegment[]>([])
 const segmentDocTitle = ref('')
 const currentContent = ref('')
 const contentDocTitle = ref('')
+const currentInsight = ref<KnowledgeInsight | null>(null)
 const searchQuery = ref('')
 const searchResults = ref<SegmentSearchResult[]>([])
 const activeTab = ref('documents')
@@ -126,6 +142,26 @@ async function loadDocData() {
   }
 }
 
+async function loadInsightData() {
+  if (!selectedKb.value) {
+    insightTableData.value = []
+    insightTotal.value = 0
+    return
+  }
+  insightLoading.value = true
+  insightQueryParams.condition.knowledge_base_id = selectedKb.value.id
+  try {
+    const res = await knowledgeInsightApi.page(insightQueryParams)
+    if (res.data.code === 1) {
+      const data = res.data.data as PaginatedResponse<KnowledgeInsight>
+      insightTableData.value = data.items
+      insightTotal.value = data.total
+    }
+  } finally {
+    insightLoading.value = false
+  }
+}
+
 function handleKbSearch() {
   kbQueryParams.page = 1
   loadKbData()
@@ -153,6 +189,9 @@ function openKbDetail(row: KnowledgeBase) {
   selectedKb.value = row
   docQueryParams.page = 1
   docQueryParams.condition.title = ''
+  insightQueryParams.page = 1
+  insightQueryParams.condition.question = ''
+  insightQueryParams.condition.keywords = ''
   activeTab.value = 'documents'
   clearSearch()
   loadDocData()
@@ -185,6 +224,29 @@ function handleDocSizeChange(size: number) {
   docQueryParams.page_size = size
   docQueryParams.page = 1
   loadDocData()
+}
+
+function handleInsightSearch() {
+  insightQueryParams.page = 1
+  loadInsightData()
+}
+
+function handleInsightReset() {
+  insightQueryParams.condition.question = ''
+  insightQueryParams.condition.keywords = ''
+  insightQueryParams.page = 1
+  loadInsightData()
+}
+
+function handleInsightPageChange(page: number) {
+  insightQueryParams.page = page
+  loadInsightData()
+}
+
+function handleInsightSizeChange(size: number) {
+  insightQueryParams.page_size = size
+  insightQueryParams.page = 1
+  loadInsightData()
 }
 
 function openKbDialog(row?: KnowledgeBase) {
@@ -355,6 +417,23 @@ function handleDeleteDoc(row: KnowledgeDocument) {
     .catch(() => {})
 }
 
+function viewInsight(row: KnowledgeInsight) {
+  currentInsight.value = row
+  insightDialogVisible.value = true
+}
+
+function handleDeleteInsight(row: KnowledgeInsight) {
+  ElMessageBox.confirm(`确定要删除这条知识沉淀「${row.question}」吗？`, '提示', {
+    type: 'warning'
+  })
+    .then(async () => {
+      await knowledgeInsightApi.delete(row.id!)
+      ElMessage.success({ message: '删除成功', duration: 5000 })
+      loadInsightData()
+    })
+    .catch(() => {})
+}
+
 async function handleReprocess(row: KnowledgeDocument) {
   try {
     await knowledgeDocumentApi.reprocess(row.id!)
@@ -392,6 +471,9 @@ function clearSearch() {
 function handleTabChange(tab: string) {
   if (tab !== 'search' && searchQuery.value) {
     clearSearch()
+  }
+  if (tab === 'insights') {
+    loadInsightData()
   }
 }
 
@@ -475,6 +557,13 @@ function getDocActions(row: any) {
   ]
 }
 
+function getInsightActions(_row: KnowledgeInsight) {
+  return [
+    { key: 'view', label: '查看', icon: View, btnClass: 'action-view' },
+    { key: 'delete', label: '删除', icon: Delete, btnClass: 'action-delete', danger: true }
+  ]
+}
+
 function onDocAction(row: any, key: string) {
   switch (key) {
     case 'view':
@@ -493,6 +582,11 @@ function onDocAction(row: any, key: string) {
       handleDeleteDoc(row)
       break
   }
+}
+
+function onInsightAction(row: KnowledgeInsight, key: string) {
+  if (key === 'view') viewInsight(row)
+  if (key === 'delete') handleDeleteInsight(row)
 }
 
 onMounted(() => {
@@ -695,6 +789,72 @@ onMounted(() => {
             </div>
           </el-tab-pane>
 
+          <el-tab-pane label="知识沉淀" name="insights">
+            <div class="inner-search-bar">
+              <el-form inline>
+                <el-form-item label="问题">
+                  <el-input
+                    v-model="insightQueryParams.condition.question"
+                    placeholder="搜索沉淀问题或答案"
+                    clearable
+                    @keyup.enter="handleInsightSearch"
+                  />
+                </el-form-item>
+                <el-form-item label="关键词">
+                  <el-input
+                    v-model="insightQueryParams.condition.keywords"
+                    placeholder="搜索关键词"
+                    clearable
+                    @keyup.enter="handleInsightSearch"
+                  />
+                </el-form-item>
+                <el-form-item>
+                  <el-button class="btn-search" @click="handleInsightSearch">查询</el-button>
+                  <el-button class="btn-reset" @click="handleInsightReset">重置</el-button>
+                </el-form-item>
+              </el-form>
+            </div>
+
+            <div v-loading="insightLoading" class="table-container">
+              <el-table :data="insightTableData" stripe>
+                <el-table-column
+                  prop="question"
+                  label="问题"
+                  min-width="220"
+                  show-overflow-tooltip
+                />
+                <el-table-column prop="answer" label="答案" min-width="360" show-overflow-tooltip />
+                <el-table-column
+                  prop="keywords"
+                  label="关键词"
+                  min-width="160"
+                  show-overflow-tooltip
+                />
+                <el-table-column prop="create_time" label="创建时间" width="170" />
+                <el-table-column label="操作" :width="isMobile ? 60 : 140" fixed="right">
+                  <template #default="{ row }">
+                    <ActionColumn
+                      :actions="getInsightActions(row)"
+                      @action="onInsightAction(row, $event)"
+                    />
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <div class="pagination">
+                <el-pagination
+                  v-model:current-page="insightQueryParams.page"
+                  v-model:page-size="insightQueryParams.page_size"
+                  :total="insightTotal"
+                  :page-sizes="[10, 20, 50]"
+                  layout="total, sizes, prev, pager, next, jumper"
+                  @current-change="handleInsightPageChange"
+                  @size-change="handleInsightSizeChange"
+                />
+              </div>
+            </div>
+          </el-tab-pane>
+
           <el-tab-pane label="分段搜索" name="search">
             <div class="inner-search-bar">
               <el-form inline>
@@ -840,6 +1000,22 @@ onMounted(() => {
       </div>
       <template #footer>
         <el-button @click="contentDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="insightDialogVisible" title="知识沉淀详情" width="800px">
+      <div v-if="currentInsight" class="insight-detail">
+        <div class="insight-detail-label">问题</div>
+        <div class="insight-detail-question">{{ currentInsight.question }}</div>
+        <div class="insight-detail-label">答案</div>
+        <div class="insight-detail-answer">{{ currentInsight.answer }}</div>
+        <template v-if="currentInsight.keywords">
+          <div class="insight-detail-label">关键词</div>
+          <div class="insight-detail-keywords">{{ currentInsight.keywords }}</div>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="insightDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -1097,6 +1273,33 @@ onMounted(() => {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: inherit;
+}
+
+/* ---- 知识沉淀详情 ---- */
+
+.insight-detail {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.insight-detail-label {
+  margin-bottom: 6px;
+  color: #909399;
+  font-size: 12px;
+}
+
+.insight-detail-question,
+.insight-detail-answer,
+.insight-detail-keywords {
+  margin-bottom: 18px;
+  color: #303133;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.insight-detail-question {
+  font-weight: 600;
 }
 
 @media (max-width: 768px) {

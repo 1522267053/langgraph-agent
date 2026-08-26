@@ -70,9 +70,13 @@ class KnowledgeInsightService(
                 )
 
             if condition.question:
-                query, count_query = self._apply_like_filter(
-                    query, count_query, "question", condition.question
+                pattern = f"%{condition.question}%"
+                question_or_answer = or_(
+                    KnowledgeInsight.question.like(pattern),
+                    KnowledgeInsight.answer.like(pattern),
                 )
+                query = query.where(question_or_answer)
+                count_query = count_query.where(question_or_answer)
 
             if condition.keywords:
                 query, count_query = self._apply_like_filter(
