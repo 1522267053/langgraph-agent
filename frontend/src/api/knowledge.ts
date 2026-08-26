@@ -4,6 +4,7 @@ import type {
   KnowledgeBase,
   KnowledgeDocument,
   KnowledgeDocumentSegment,
+  KnowledgeInsight,
   KnowledgeBaseCreate,
   KnowledgeBaseUpdate,
   KnowledgeDocumentCreate,
@@ -134,5 +135,22 @@ export const knowledgeDocumentApi = {
       '/knowledge/document/search-segments',
       data
     )
+  }
+}
+
+export const knowledgeInsightApi = {
+  page(params: PaginationParams<KnowledgeInsight>) {
+    return request.post<ApiResponse<PaginatedResponse<KnowledgeInsight>>>(
+      '/knowledge/insight/page',
+      params
+    )
+  },
+
+  get(id: number) {
+    return request.get<ApiResponse<KnowledgeInsight>>(`/knowledge/insight/get/${id}`)
+  },
+
+  delete(id: number) {
+    return get<void>(`/knowledge/insight/delete/${id}`)
   }
 }
