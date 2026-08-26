@@ -44,6 +44,8 @@ export const useAgentStore = defineStore('agent', () => {
   const sessions = ref<AgentSession[]>([])
   const currentSession = ref<AgentSession | null>(null)
   const messages = ref<AgentMessage[]>([])
+  // SSE 结束后从接口回载消息完成的版本号，供聊天页面在渲染后同步滚动。
+  const messageRefreshVersion = ref(0)
 
   // ========== 消息分页状态 ==========
   const messageTotal = ref(0)
@@ -727,6 +729,7 @@ export const useAgentStore = defineStore('agent', () => {
       replace,
       preserveStreaming
     )
+    messageRefreshVersion.value++
   }
 
   /**
@@ -1245,6 +1248,7 @@ export const useAgentStore = defineStore('agent', () => {
             currentSession.value?.id === sessionId
           ) {
             applyLatestMessages(res.data.data?.list || [], res.data.data?.total || 0)
+            messageRefreshVersion.value++
           }
         })
         .catch(() => {})
@@ -1487,6 +1491,7 @@ export const useAgentStore = defineStore('agent', () => {
     // 消息分页
     hasMoreMessages,
     loadingMoreMessages,
+    messageRefreshVersion,
     // 方法
     loadAgents,
     loadAgent,

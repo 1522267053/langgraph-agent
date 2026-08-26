@@ -21,6 +21,7 @@ from app.services.flow_transfer_service import FlowExportOptions, flow_transfer_
 from app.schemas.flow_schema import FlowBase, FlowCreate, FlowUpdate, FlowDetail
 from app.schemas.flow_node_schema import ConnectedToolNodeInput, FlowNodeBase
 from app.schemas.flow_edge_schema import FlowEdgeBase
+from app.utils.secret_mask import mask_api_keys
 from app.schemas.flow_schema import (
     VueFlowGraph,
     VueFlowNode,
@@ -77,7 +78,9 @@ class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
                     id=node.node_key,
                     type=node.node_type,
                     position={"x": node.position_x, "y": node.position_y},
-                    data=VueFlowNodeData(label=node.node_name, config=node.base_config),
+                    data=VueFlowNodeData(
+                        label=node.node_name, config=mask_api_keys(node.base_config)
+                    ),
                 )
                 nodes.append(vue_node)
 

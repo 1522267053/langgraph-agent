@@ -5,6 +5,7 @@
 from typing import Optional
 from pydantic import Field
 from app.schemas.base_schema import BaseView
+from app.utils.secret_mask import mask_api_keys
 
 
 class FlowNodeBase(BaseView):
@@ -22,6 +23,12 @@ class FlowNodeBase(BaseView):
     ref_flow_id: Optional[int] = Field(
         default=None, description="引用的流程ID(能力卡片节点用)"
     )
+
+    @classmethod
+    def model_to_view(cls, model_instance):
+        view = super().model_to_view(model_instance)
+        view.base_config = mask_api_keys(view.base_config)
+        return view
 
 
 class FlowNodeCreate(FlowNodeBase):

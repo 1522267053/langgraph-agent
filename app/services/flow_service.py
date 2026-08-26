@@ -55,6 +55,7 @@ from app.schemas.flow_schema import (
 )
 from app.schemas.flow_node_schema import FlowNodeCreate, FlowNodeUpdate
 from app.schemas.flow_edge_schema import FlowEdgeCreate, FlowEdgeUpdate
+from app.utils.secret_mask import restore_masked_api_keys
 
 logger = logging.getLogger(__name__)
 
@@ -459,6 +460,10 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         if not node:
             return None
         update_data = node_data.model_dump(exclude={"id"}, exclude_unset=True)
+        if "base_config" in update_data:
+            update_data["base_config"] = restore_masked_api_keys(
+                update_data["base_config"], node.base_config
+            )
         for field, value in update_data.items():
             setattr(node, field, value)
         if node.base_config and node.node_type != NodeType.END:
