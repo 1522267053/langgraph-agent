@@ -429,7 +429,7 @@ function attachCodeCopyBtns(): void {
     'pre:not(.mermaid-block):not(.mermaid-container)'
   )
   for (const pre of preBlocks) {
-    if (pre.querySelector('.code-copy-btn')) continue
+    if (pre.parentElement?.classList.contains('code-block-wrapper')) continue
     const wrapper = document.createElement('div')
     wrapper.className = 'code-block-wrapper'
     pre.parentNode?.insertBefore(wrapper, pre)

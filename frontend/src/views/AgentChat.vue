@@ -288,6 +288,14 @@ watch(
   }
 )
 
+watch(
+  () => store.messageRefreshVersion,
+  async () => {
+    await nextTick()
+    scrollToBottom()
+  }
+)
+
 function onEndReached(direction: ScrollbarDirection) {
   if (direction !== 'top') return
   if (isLoadingMore.value || !store.hasMoreMessages || store.messagesLoading) return

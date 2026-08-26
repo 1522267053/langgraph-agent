@@ -26,6 +26,7 @@ from app.schemas.ai_flow_schema import (
     AiFlowEdgesDeleteReq,
     AiFlowDetailResponse,
 )
+from app.utils.secret_mask import restore_masked_api_keys
 from app.services.flow_service import flow_service
 from app.services.global_config_service import global_config_service
 from app.services.node_config_helper import fill_node_defaults, inject_llm_defaults
@@ -236,6 +237,7 @@ class AiFlowApi:
                 bc = fill_node_defaults(node_type, key_to_config.get(node_key) or {})
                 if isinstance(partial, dict):
                     bc.update(partial)
+                bc = restore_masked_api_keys(bc, key_to_config.get(node_key) or {})
                 if node_type in ("llm", "intent_router"):
                     bc = await inject_llm_defaults(
                         bc, global_cfg, db, node_type=node_type

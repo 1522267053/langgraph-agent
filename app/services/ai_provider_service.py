@@ -196,6 +196,23 @@ class AIProviderService(BaseService[AIProvider, AIProviderCreate, AIProviderUpda
 
         providers, models = parse_models_dev_data(data)
         await self._store_sync_data(providers, models)
+        self._write_local_data(providers, models)
+
+    @staticmethod
+    def _write_local_data(providers: List[dict], models: List[dict]) -> None:
+        """将同步后的数据写入本地缓存，供启动时离线初始化使用。"""
+        try:
+            with LOCAL_DATA_FILE.open("w", encoding="utf-8") as f:
+                json.dump(
+                    {"providers": providers, "models": models},
+                    f,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                f.write("\n")
+        except Exception as e:
+            logger.error("写入本地模型数据文件失败: %s", e, exc_info=True)
+            raise
 
     async def sync_from_local(self) -> None:
         """从本地 models.dev.api.json 初始化数据（仅供首次启动，不回写该文件）"""
