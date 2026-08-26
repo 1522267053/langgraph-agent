@@ -120,7 +120,8 @@ Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router` 及工�
 ## 高频陷阱
 
 - `input_schema` 不是说明文档，它决定 `{{变量}}` 能否从输入解析。
-- LLM 必须有 `user_prompt`；上下文可用 `{{input}}`、`{{query}}` 或上游变量。
+- LLM 必须有 `user_prompt`；引用变量用 `{{input.<field>}}`、`{{nodes.<key>.<output>}}`、`{{variables.<name>}}` 或裸名 `{{<field>}}`（走 input_variables 别名映射）。完整路径表见 [节点配置 - 通用变量模型](references/node-config.md#通用变量模型)。
+- `source` 字段写裸路径（不加花括号）：`"source": "input.message"`；模板里才写 `{{input.message}}`。
 - `required_tools` 使用 `connected-tools` 返回的实际工具 `name`，不是节点 `node_key` 或显示名。
 - 工具调用通常还需要 `tools -> tools` 边；遗漏后 LLM 看不到工具。
 - 条件节点分支使用 `true` / `false` handle；意图路由使用动态 intent key。

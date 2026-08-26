@@ -17,21 +17,78 @@ GET /api/ai/flow/node-types/{node_type}/config-schema
 ```
 
 - `name`：当前节点中的参数名或输出名。
-- `source`：输入变量或最终输出从哪里取值。
+- `source`：输入变量或最终输出从哪里取值（裸路径，不加花括号）。
 - `type`：供配置、展示和工具参数使用的数据类型(string/number/boolean/object/array/file_list)。
 
-节点输出写入 `nodes.<node_key>.<output_name>`。常用路径：
+### 变量来源（路径全集）
 
-| 路径 | 含义 |
-|---|---|
-| `input` | 完整流程输入对象 |
-| `input.content` | 输入对象字段 |
-| `nodes.assistant.result` | 节点输出 |
-| `variables.custom_key` | 流程全局变量 |
-| `output.summary` | 当前输出对象字段 |
-| `nodes.fetch.result.items[0].id` | 嵌套对象和数组索引 |
+任何变量都来自以下五类之一。**写 `source` 字段用裸路径，写 `{{模板}}` 用同一路径加双花括号**。
 
-无前缀路径按 `input_variables` 映射上下文、流程输入、全局变量的顺序解析。模板字符串使用 `{{input.content}}`；`source` 字段则直接写 `input.content`，不要加花括号。
+| 来源 | 路径格式（裸） | 含义 | 示例 |
+|---|---|---|---|
+| 流程输入对象 | `input.<field>` 或 `input` | 流程入口 `input_schema` 声明的字段；`input` 本身是完整对象 | `input.message`、`input.file_list`、`input` |
+| 上游节点输出 | `nodes.<node_key>.<output_name>` | 任意上游节点的输出项。node_key 用创建时给的稳定 key（不要用显示名） | `nodes.llm_dev.result`、`nodes.normalize.result.result.text`、`nodes.fetch.result.items[0].id` |
+| 当前节点输出 | `output.<field>` | 仅在结束节点的 `output_variables` 里写，用于组装最终结果 | `output.summary` |
+| 流程全局变量 | `variables.<key>` | 通过 set_variable 等节点设置的全局变量 | `variables.user_id`、`variables.env` |
+| 上下文 / 裸名 | `<bare_name>` | 没有前缀的路径，按 `input_variables` 映射 → 流程输入 → 全局变量 的顺序解析 | `message`、`file_list` |
+
+**嵌套路径**：支持 `.` 进入对象/字典，`[N]` 进入数组索引，混合使用。例如：
+
+- `nodes.api_dev.result.body.items[0].id`
+- `nodes.python_x.result.result.users[2].email`
+
+### 两种语法的对照
+
+| 用途 | 字段 | 写法 | 例子 |
+|---|---|---|---|
+| `input_variables`、`output_variables`、`form_fields`、`form` 字段映射 | `source` | 裸路径 | `{"name": "msg", "source": "input.message"}` |
+| LLM 的 `user_prompt` / `system_prompt` | `{{模板}}` | 同路径加 `{{...}}` | `请总结：{{input.content}}` |
+| API 节点的 `api_url` / `headers` / `body` | `{{模板}}` | 同路径加 `{{...}}` | `{"url": "https://x.com/{{nodes.fetch.result.id}}"}` |
+| Condition / IntentRouter 表达式 | 表达式字符串 | 裸路径 | `nodes.score.result >= 60` |
+
+**易错点**：
+
+- `source` 是裸路径，不写花括号：`source: "input.message"`，不是 `source: "{{input.message}}"`。
+- 模板里**没有花括号就只是字面量**，`{{message}}` 才会被解析成变量；如果字段名是 `message` 而你想引用它，**两种写法都行**：`{{message}}`（走"裸名"解析）或 `{{input.message}}`（走"流程输入"路径）。建议显式写 `input.<字段名>`，意图更清楚，避免和 input_variables 别名冲突。
+- LLM 节点的 `{{msg}}` 这种模板名是**局部别名**——只有当你在该 LLM 的 `input_variables` 里声明了 `{"name": "msg", "source": "input.message"}` 时才能解析。直接用 `{{input.message}}` 也可以，跳过别名层。
+- `output.<field>` 只在结束节点里有效，别的节点用会得到空值。
+- Python 节点返回字典后，访问 `main` 的返回值要走 `nodes.python_key.result.result.<你的字段>`（外层包了执行包装），详见 [Python 节点](#python-节点)。
+
+### 实际示例
+
+把"用户输入"原样塞进 LLM 提示词：
+
+```json
+{
+  "input_variables": [{"name": "message", "type": "string"}],
+  "user_prompt": "{{message}}"
+}
+```
+
+把上游节点输出喂给下一个节点：
+
+```json
+{"name": "summary_text", "source": "nodes.writer.result"}
+```
+
+组装结束节点的最终输出：
+
+```json
+{
+  "output_variables": [
+    {"name": "summary", "source": "nodes.writer.result", "type": "string"},
+    {"name": "score",   "source": "nodes.score.result",   "type": "number"}
+  ]
+}
+```
+
+API 节点的请求体里嵌入上游变量：
+
+```json
+{
+  "body": "{\"user_id\": {{nodes.fetch.result.id}}, \"name\": \"{{input.name}}\"}"
+}
+```
 
 ## 输入与输出
 
