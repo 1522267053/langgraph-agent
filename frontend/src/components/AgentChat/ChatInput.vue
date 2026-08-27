@@ -88,6 +88,8 @@ function resetParams(): void {
   }
 }
 
+defineExpose({ resetParams })
+
 function isFieldFilled(field: FlowIOField): boolean {
   const value = paramFormData[field.name]
   if (field.type === 'boolean') return value === true

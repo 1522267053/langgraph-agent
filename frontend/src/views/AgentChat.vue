@@ -35,8 +35,8 @@ const messagesContainer = computed<HTMLElement | null>(
 const {
   autoScroll,
   isAtBottom,
-  userScrolledUp,
   scrollToBottom,
+  maybeScrollToBottom,
   handleScroll,
   onUserScrollIntent,
   resetAutoScrollState
@@ -52,16 +52,16 @@ function handleScrollbarPointerDown(event: PointerEvent): void {
 let messagesResizeObserver: ResizeObserver | null = null
 
 watch(
-  messagesContentRef,
-  (content, previous) => {
-    if (previous) messagesResizeObserver?.unobserve(previous)
-    if (!content) return
+  [messagesContentRef, messagesContainer],
+  ([content, container], [previousContent, previousContainer]) => {
+    if (previousContent) messagesResizeObserver?.unobserve(previousContent)
+    if (previousContainer) messagesResizeObserver?.unobserve(previousContainer)
+    if (!content || !container) return
     messagesResizeObserver ??= new ResizeObserver(() => {
-      if (!store.messagesLoading && autoScroll.value && !userScrolledUp.value) {
-        scrollToBottom()
-      }
+      if (!store.messagesLoading) maybeScrollToBottom()
     })
     messagesResizeObserver.observe(content)
+    messagesResizeObserver.observe(container)
   },
   { flush: 'post' }
 )
@@ -97,6 +97,7 @@ function handleSuggestedPrompt(prompt: string) {
   inputMessage.value = prompt
   handleChatSend({}, [], prompt)
   inputMessage.value = ''
+  chatInputRef.value?.resetParams()
 }
 
 const STORAGE_KEY = 'agent-chat-display'
@@ -198,6 +199,7 @@ const dynamicFields = computed<FlowIOField[]>(() => {
 })
 
 const inputMessage = ref('')
+const chatInputRef = ref<InstanceType<typeof ChatInput>>()
 const showMemory = ref(false)
 /** 回退恢复信号：每次回退生成新对象，通知当前挂载的 ChatInput 恢复参数 */
 const restoreParamsSignal = ref<Record<string, unknown> | null>(null)
@@ -292,7 +294,7 @@ watch(
   () => store.messageRefreshVersion,
   async () => {
     await nextTick()
-    scrollToBottom()
+    maybeScrollToBottom()
   }
 )
 
@@ -503,237 +505,225 @@ function handleRejectTools() {
 
 <template>
   <div class="chat-content" :class="{ 'welcome-mode': isWelcomeMode }">
-    <template v-if="isWelcomeMode">
-      <div class="welcome-wrapper">
+    <header class="chat-header glass-blur">
+      <div class="header-center">
+        <div class="status-dot"></div>
+        <div class="header-title">
+          <div class="agent-name-row">
+            <h1>{{ store.currentAgent?.name || 'AI 助手' }}</h1>
+            <el-tag v-if="store.planMode" size="small" type="warning" effect="light" round>
+              计划模式
+            </el-tag>
+          </div>
+          <span
+            v-if="store.currentSession"
+            class="session-name"
+            :title="store.currentSession.title"
+          >
+            {{ store.currentSession.title || '新会话' }}
+          </span>
+        </div>
+      </div>
+      <div class="header-right">
+        <DisplayToggle
+          v-model:auto-scroll="autoScroll"
+          v-model:show-thinking="showThinking"
+          v-model:show-tool-calls="showToolCalls"
+        />
+        <el-tooltip content="记忆" placement="bottom">
+          <button class="header-action-btn" @click="showMemory = true">
+            <el-icon :size="18">
+              <Notebook />
+            </el-icon>
+            <span>记忆</span>
+          </button>
+        </el-tooltip>
+        <el-tooltip content="压缩" placement="bottom">
+          <button class="header-action-btn" @click="handleCompress">
+            <el-icon :size="18" :class="{ 'is-loading': store.isCompressing }">
+              <Operation />
+            </el-icon>
+            <span>压缩</span>
+          </button>
+        </el-tooltip>
+        <RunningToolBadge />
+      </div>
+    </header>
+
+    <el-scrollbar
+      ref="scrollbarRef"
+      v-loading="store.messagesLoading"
+      element-loading-text="加载中..."
+      class="messages-scrollbar"
+      :distance="50"
+      wrap-style="overflow-anchor: none"
+      @scroll="handleScroll"
+      @end-reached="onEndReached"
+      @wheel="onUserScrollIntent"
+      @touchmove="onUserScrollIntent"
+      @pointerdown.capture="handleScrollbarPointerDown"
+    >
+      <div v-if="isWelcomeMode" class="welcome-wrapper">
         <WelcomePage
           :agent-name="store.currentAgent?.name || 'AI 助手'"
           :agent-description="store.currentAgent?.description"
           :suggested-prompts="store.currentAgent?.suggested_prompts || []"
           @select-prompt="handleSuggestedPrompt"
         />
-        <div class="input-wrapper welcome-input">
-          <ChatInput
-            v-model:input-message="inputMessage"
-            :fields="dynamicFields"
-            :is-streaming="store.isStreaming"
-            :is-stopping="store.isStopping"
-            :is-waiting-human="false"
-            :total-tokens="store.totalSessionTokens"
-            :latest-prompt-tokens="store.latestPromptTokens"
-            :plan-mode="store.planMode"
-            :restore-params="restoreParamsSignal"
-            @send="handleChatSend"
-            @stop="handleStop"
-            @toggle-plan-mode="store.togglePlanMode"
-            @restore-consumed="restoreParamsSignal = null"
-          />
-        </div>
       </div>
-    </template>
-
-    <template v-else>
-      <header class="chat-header glass-blur">
-        <div class="header-center">
-          <div class="status-dot"></div>
-          <div class="header-title">
-            <div class="agent-name-row">
-              <h1>{{ store.currentAgent?.name || 'AI 助手' }}</h1>
-              <el-tag v-if="store.planMode" size="small" type="warning" effect="light" round>
-                计划模式
-              </el-tag>
-            </div>
-            <span
-              v-if="store.currentSession"
-              class="session-name"
-              :title="store.currentSession.title"
-            >
-              {{ store.currentSession.title || '新会话' }}
-            </span>
-          </div>
-        </div>
-        <div class="header-right">
-          <DisplayToggle
-            v-model:auto-scroll="autoScroll"
-            v-model:show-thinking="showThinking"
-            v-model:show-tool-calls="showToolCalls"
-          />
-          <el-tooltip content="记忆" placement="bottom">
-            <button class="header-action-btn" @click="showMemory = true">
-              <el-icon :size="18">
-                <Notebook />
-              </el-icon>
-              <span>记忆</span>
-            </button>
-          </el-tooltip>
-          <el-tooltip content="压缩" placement="bottom">
-            <button class="header-action-btn" @click="handleCompress">
-              <el-icon :size="18" :class="{ 'is-loading': store.isCompressing }">
-                <Operation />
-              </el-icon>
-              <span>压缩</span>
-            </button>
-          </el-tooltip>
-          <RunningToolBadge />
-        </div>
-      </header>
-
-      <el-scrollbar
-        ref="scrollbarRef"
-        v-loading="store.messagesLoading"
-        element-loading-text="加载中..."
-        class="messages-scrollbar"
-        :distance="50"
-        wrap-style="overflow-anchor: none"
-        @scroll="handleScroll"
-        @end-reached="onEndReached"
-        @wheel="onUserScrollIntent"
-        @touchmove="onUserScrollIntent"
-        @pointerdown.capture="handleScrollbarPointerDown"
+      <div
+        v-else
+        v-show="!store.messagesLoading"
+        ref="messagesContentRef"
+        class="messages-container"
       >
-        <div v-show="!store.messagesLoading" ref="messagesContentRef" class="messages-container">
-          <div v-if="store.hasMoreMessages" class="load-more-sentinel">
-            <div v-show="isLoadingMore" class="load-more-dots">
-              <span></span>
-              <span></span>
-              <span></span>
-            </div>
+        <div v-if="store.hasMoreMessages" class="load-more-sentinel">
+          <div v-show="isLoadingMore" class="load-more-dots">
+            <span></span>
+            <span></span>
+            <span></span>
           </div>
-          <MessageItem
-            :messages="store.chatMessages"
-            :show-thinking="showThinking"
-            :show-tool-calls="showToolCalls"
-            :is-streaming="store.isStreaming"
-            @delete="handleDeleteMessage"
-            @revert="handleRevertFrom"
-            @preview="handleImagePreview"
-          />
         </div>
-      </el-scrollbar>
-
-      <div :class="['scroll-to-bottom', { hidden: isAtBottom }]" @click="scrollToBottom">
-        <el-icon :size="16">
-          <Bottom />
-        </el-icon>
-      </div>
-
-      <div v-if="store.isCompressing" class="compress-overlay">
-        <div class="compress-overlay-card">
-          <el-icon :size="24" class="is-loading">
-            <Operation />
-          </el-icon>
-          <span>正在压缩上下文...</span>
-        </div>
-      </div>
-
-      <div v-if="store.isWaitingHuman" class="human-input-overlay">
-        <el-card class="human-input-card">
-          <div class="human-input-question">
-            <el-icon style="color: #e6a23c; margin-right: 8px">
-              <ChatDotRound />
-            </el-icon>
-            {{ store.currentWaitData?.question || '请提供输入' }}
-          </div>
-          <div v-if="store.currentWaitData?.context" class="human-input-context">
-            {{ store.currentWaitData.context }}
-          </div>
-          <el-input
-            v-model="humanInputValue"
-            type="textarea"
-            :rows="3"
-            placeholder="请输入您的回答..."
-            @keydown.enter.ctrl="handleHumanInputSubmit"
-          />
-          <template #footer>
-            <div style="display: flex; justify-content: space-between; width: 100%">
-              <el-button :disabled="store.isStopping" @click="handleStop">取消执行</el-button>
-              <el-button type="primary" @click="handleHumanInputSubmit">提交并继续</el-button>
-            </div>
-          </template>
-        </el-card>
-      </div>
-
-      <div v-if="store.isWaitingToolApproval" class="tool-approval-overlay">
-        <el-card class="tool-approval-card">
-          <div class="approval-header">
-            <el-icon style="color: #e6a23c; margin-right: 8px">
-              <Warning />
-            </el-icon>
-            <span v-if="store.subAgentApproval?.isSubAgent">
-              子Agent「{{ store.subAgentApproval.agentName }}」请求执行以下工具：
-            </span>
-            <span v-else>请求执行以下工具：</span>
-            <span class="approval-countdown">{{ formatCountdown(store.approvalCountdown) }}</span>
-          </div>
-          <div class="approval-tools">
-            <div
-              v-for="tc in store.pendingToolCalls"
-              :key="tc.id || tc.name"
-              class="approval-tool-item"
-            >
-              <div class="approval-tool-name">
-                <el-tag
-                  :type="store.pendingApprovalNeeded.includes(tc.name) ? 'danger' : 'info'"
-                  size="small"
-                  style="margin-right: 6px"
-                >
-                  {{ store.pendingApprovalNeeded.includes(tc.name) ? '需确认' : '普通' }}
-                </el-tag>
-                {{ tc.name }}
-              </div>
-              <pre class="approval-tool-args">{{ formatToolApprovalArgs(tc.args) }}</pre>
-            </div>
-          </div>
-          <template #footer>
-            <div style="display: flex; justify-content: space-between; width: 100%">
-              <el-button type="danger" @click="handleRejectTools">拒绝并停止</el-button>
-              <el-button type="primary" @click="handleApproveTools">批准执行</el-button>
-            </div>
-          </template>
-        </el-card>
-      </div>
-
-      <div v-if="store.flowPreview" class="flow-preview-wrapper">
-        <FlowPreviewCard
-          :flow-id="store.flowPreview.flow_id"
-          :flow-name="store.flowPreview.flow_name"
-          :nodes="store.flowPreview.nodes"
-          :edges="store.flowPreview.edges"
-          :deleted="store.flowPreview.deleted"
-          @close="store.flowPreview = null"
-        />
-      </div>
-
-      <div class="input-wrapper">
-        <ChatInput
-          v-model:input-message="inputMessage"
-          :fields="dynamicFields"
+        <MessageItem
+          :messages="store.chatMessages"
+          :show-thinking="showThinking"
+          :show-tool-calls="showToolCalls"
           :is-streaming="store.isStreaming"
-          :is-stopping="store.isStopping"
-          :is-waiting-human="store.isWaitingHuman || store.isWaitingToolApproval"
-          :total-tokens="store.totalSessionTokens"
-          :latest-prompt-tokens="store.latestPromptTokens"
-          :plan-mode="store.planMode"
-          :restore-params="restoreParamsSignal"
-          @send="handleChatSend"
-          @stop="handleStop"
-          @toggle-plan-mode="store.togglePlanMode"
-          @restore-consumed="restoreParamsSignal = null"
+          @delete="handleDeleteMessage"
+          @revert="handleRevertFrom"
+          @preview="handleImagePreview"
         />
       </div>
+    </el-scrollbar>
 
-      <MemoryPanel v-model:visible="showMemory" :agent-id="agentId" />
-      <ToolOutputDrawer />
+    <div
+      v-if="!isWelcomeMode"
+      :class="['scroll-to-bottom', { hidden: isAtBottom }]"
+      @click="scrollToBottom"
+    >
+      <el-icon :size="16">
+        <Bottom />
+      </el-icon>
+    </div>
 
-      <Teleport to="body">
-        <el-image-viewer
-          v-if="imagePreviewVisible"
-          :url-list="imagePreviewUrls"
-          :initial-index="imagePreviewIndex"
-          @close="closeImagePreview"
-          @switch="handlePreviewSwitch"
+    <div v-if="store.isCompressing" class="compress-overlay">
+      <div class="compress-overlay-card">
+        <el-icon :size="24" class="is-loading">
+          <Operation />
+        </el-icon>
+        <span>正在压缩上下文...</span>
+      </div>
+    </div>
+
+    <div v-if="store.isWaitingHuman" class="human-input-overlay">
+      <el-card class="human-input-card">
+        <div class="human-input-question">
+          <el-icon style="color: #e6a23c; margin-right: 8px">
+            <ChatDotRound />
+          </el-icon>
+          {{ store.currentWaitData?.question || '请提供输入' }}
+        </div>
+        <div v-if="store.currentWaitData?.context" class="human-input-context">
+          {{ store.currentWaitData.context }}
+        </div>
+        <el-input
+          v-model="humanInputValue"
+          type="textarea"
+          :rows="3"
+          placeholder="请输入您的回答..."
+          @keydown.enter.ctrl="handleHumanInputSubmit"
         />
-      </Teleport>
-    </template>
+        <template #footer>
+          <div style="display: flex; justify-content: space-between; width: 100%">
+            <el-button :disabled="store.isStopping" @click="handleStop">取消执行</el-button>
+            <el-button type="primary" @click="handleHumanInputSubmit">提交并继续</el-button>
+          </div>
+        </template>
+      </el-card>
+    </div>
+
+    <div v-if="store.isWaitingToolApproval" class="tool-approval-overlay">
+      <el-card class="tool-approval-card">
+        <div class="approval-header">
+          <el-icon style="color: #e6a23c; margin-right: 8px">
+            <Warning />
+          </el-icon>
+          <span v-if="store.subAgentApproval?.isSubAgent">
+            子Agent「{{ store.subAgentApproval.agentName }}」请求执行以下工具：
+          </span>
+          <span v-else>请求执行以下工具：</span>
+          <span class="approval-countdown">{{ formatCountdown(store.approvalCountdown) }}</span>
+        </div>
+        <div class="approval-tools">
+          <div
+            v-for="tc in store.pendingToolCalls"
+            :key="tc.id || tc.name"
+            class="approval-tool-item"
+          >
+            <div class="approval-tool-name">
+              <el-tag
+                :type="store.pendingApprovalNeeded.includes(tc.name) ? 'danger' : 'info'"
+                size="small"
+                style="margin-right: 6px"
+              >
+                {{ store.pendingApprovalNeeded.includes(tc.name) ? '需确认' : '普通' }}
+              </el-tag>
+              {{ tc.name }}
+            </div>
+            <pre class="approval-tool-args">{{ formatToolApprovalArgs(tc.args) }}</pre>
+          </div>
+        </div>
+        <template #footer>
+          <div style="display: flex; justify-content: space-between; width: 100%">
+            <el-button type="danger" @click="handleRejectTools">拒绝并停止</el-button>
+            <el-button type="primary" @click="handleApproveTools">批准执行</el-button>
+          </div>
+        </template>
+      </el-card>
+    </div>
+
+    <div v-if="store.flowPreview" class="flow-preview-wrapper">
+      <FlowPreviewCard
+        :flow-id="store.flowPreview.flow_id"
+        :flow-name="store.flowPreview.flow_name"
+        :nodes="store.flowPreview.nodes"
+        :edges="store.flowPreview.edges"
+        :deleted="store.flowPreview.deleted"
+        @close="store.flowPreview = null"
+      />
+    </div>
+
+    <div class="input-wrapper">
+      <ChatInput
+        ref="chatInputRef"
+        v-model:input-message="inputMessage"
+        :fields="dynamicFields"
+        :is-streaming="store.isStreaming"
+        :is-stopping="store.isStopping"
+        :is-waiting-human="store.isWaitingHuman || store.isWaitingToolApproval"
+        :total-tokens="store.totalSessionTokens"
+        :latest-prompt-tokens="store.latestPromptTokens"
+        :plan-mode="store.planMode"
+        :restore-params="restoreParamsSignal"
+        @send="handleChatSend"
+        @stop="handleStop"
+        @toggle-plan-mode="store.togglePlanMode"
+        @restore-consumed="restoreParamsSignal = null"
+      />
+    </div>
+
+    <MemoryPanel v-model:visible="showMemory" :agent-id="agentId" />
+    <ToolOutputDrawer />
+
+    <Teleport to="body">
+      <el-image-viewer
+        v-if="imagePreviewVisible"
+        :url-list="imagePreviewUrls"
+        :initial-index="imagePreviewIndex"
+        @close="closeImagePreview"
+        @switch="handlePreviewSwitch"
+      />
+    </Teleport>
   </div>
 </template>
 
@@ -766,8 +756,6 @@ export default {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  overflow-y: auto;
-  min-height: 0;
   padding-bottom: 24px;
 }
 
@@ -875,7 +863,14 @@ export default {
   flex: 1;
 }
 
+.messages-scrollbar :deep(.el-scrollbar__view) {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
 .messages-container {
+  flex-shrink: 0;
   padding: 32px 24px;
 }
 
@@ -1041,19 +1036,6 @@ export default {
   pointer-events: none;
 }
 
-.welcome-input {
-  border-top: none;
-  background: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  width: 100%;
-  padding-top: 8px;
-}
-
-.welcome-input::before {
-  display: none;
-}
-
 .tool-approval-overlay {
   position: absolute;
   top: 0;
@@ -1156,10 +1138,6 @@ export default {
   .session-name {
     max-width: 35vw;
     font-size: 11px;
-  }
-
-  .welcome-input {
-    padding: 8px 16px 16px;
   }
 }
 </style>

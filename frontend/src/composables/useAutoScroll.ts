@@ -27,9 +27,15 @@ export function useAutoScroll(
   let _lastScrollAt = 0
   let _trailingTimer: ReturnType<typeof setTimeout> | null = null
   let _scrollFrame: number | null = null
+  let _programmaticReleaseFrame: number | null = null
   let _lastUserScrollAt = 0
   let _lastScrollTop = 0
   let _lastScrollHeight = 0
+  let _wasScrollable = false
+
+  function hasScrollableOverflow(el: HTMLElement): boolean {
+    return el.scrollHeight - el.clientHeight > 1
+  }
 
   function cancelPendingScroll(): void {
     if (_trailingTimer) {
@@ -40,13 +46,40 @@ export function useAutoScroll(
       cancelAnimationFrame(_scrollFrame)
       _scrollFrame = null
     }
+    if (_programmaticReleaseFrame !== null) {
+      cancelAnimationFrame(_programmaticReleaseFrame)
+      _programmaticReleaseFrame = null
+    }
+    _programmaticScroll = false
+  }
+
+  function performScrollToBottom(): void {
+    if (!containerRef.value) return
+    if (_programmaticReleaseFrame !== null) {
+      cancelAnimationFrame(_programmaticReleaseFrame)
+    }
+    _programmaticScroll = true
+    const el = containerRef.value
+    el.scrollTop = el.scrollHeight
+    _lastScrollTop = el.scrollTop
+    _lastScrollHeight = el.scrollHeight
+    _wasScrollable = hasScrollableOverflow(el)
+    isAtBottom.value = true
+    userScrolledUp.value = false
+    _programmaticReleaseFrame = requestAnimationFrame(() => {
+      _programmaticReleaseFrame = null
+      _programmaticScroll = false
+    })
   }
 
   function scheduleScrollToBottom(): void {
     if (_scrollFrame !== null) return
     _scrollFrame = requestAnimationFrame(() => {
-      _scrollFrame = null
-      if (autoScroll.value && !userScrolledUp.value) scrollToBottom()
+      // 再等一帧，让工具结果、高亮和 Markdown 的后续 DOM 更新先完成。
+      _scrollFrame = requestAnimationFrame(() => {
+        _scrollFrame = null
+        if (autoScroll.value && !userScrolledUp.value) performScrollToBottom()
+      })
     })
   }
 
@@ -56,23 +89,32 @@ export function useAutoScroll(
   }
 
   function scrollToBottom(): void {
-    if (!containerRef.value) return
     cancelPendingScroll()
-    _programmaticScroll = true
-    const el = containerRef.value
-    el.scrollTop = el.scrollHeight
-    _lastScrollTop = el.scrollTop
-    _lastScrollHeight = el.scrollHeight
-    isAtBottom.value = true
-    userScrolledUp.value = false
-    requestAnimationFrame(() => {
-      _programmaticScroll = false
-    })
+    performScrollToBottom()
   }
 
   /** 内容变化时条件性滚动（autoScroll && !userScrolledUp），按 throttleMs 节流（leading + trailing） */
   function maybeScrollToBottom(): void {
-    if (!autoScroll.value || userScrolledUp.value) return
+    const el = containerRef.value
+    if (!el) return
+    const scrollable = hasScrollableOverflow(el)
+    const becameScrollable = !_wasScrollable && scrollable
+    _wasScrollable = scrollable
+
+    // 没有实际滚动范围时，用户不可能处于“主动上滚”状态。
+    if (!scrollable) {
+      userScrolledUp.value = false
+      isAtBottom.value = true
+      return
+    }
+    if (!autoScroll.value) return
+    if (becameScrollable) {
+      userScrolledUp.value = false
+      _lastScrollAt = Date.now()
+      scheduleScrollToBottom()
+      return
+    }
+    if (userScrolledUp.value) return
     const now = Date.now()
     // leading：距上次滚动超过阈值则立即触发
     if (now - _lastScrollAt >= throttleMs) {
@@ -100,18 +142,29 @@ export function useAutoScroll(
     _lastScrollAt = 0
     _lastScrollTop = containerRef.value?.scrollTop || 0
     _lastScrollHeight = containerRef.value?.scrollHeight || 0
+    _wasScrollable = containerRef.value ? hasScrollableOverflow(containerRef.value) : false
     cancelPendingScroll()
   }
 
   /** 绑定到容器 @wheel / @touchmove / @pointerdown 事件，标记用户主动滚动意图 */
   function onUserScrollIntent(event?: Event): void {
+    const el = containerRef.value
+    if (!el) return
+    _wasScrollable = hasScrollableOverflow(el)
+    if (!_wasScrollable) {
+      userScrolledUp.value = false
+      isAtBottom.value = true
+      _lastScrollTop = el.scrollTop
+      _lastScrollHeight = el.scrollHeight
+      return
+    }
+
     _lastUserScrollAt = Date.now()
     cancelPendingScroll()
 
-    const el = containerRef.value
     const wheelUp = event?.type === 'wheel' && (event as WheelEvent).deltaY < 0
     const scrollbarDrag = event?.type === 'pointerdown'
-    const awayFromBottom = el ? el.scrollHeight - el.scrollTop - el.clientHeight > threshold : false
+    const awayFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight > threshold
     if (wheelUp || scrollbarDrag || awayFromBottom) markUserScrolledUp()
   }
 
@@ -119,6 +172,15 @@ export function useAutoScroll(
   function handleScroll(): void {
     if (!containerRef.value) return
     const { scrollTop, scrollHeight, clientHeight } = containerRef.value
+    _wasScrollable = scrollHeight - clientHeight > 1
+    if (!_wasScrollable) {
+      userScrolledUp.value = false
+      isAtBottom.value = true
+      _lastScrollTop = scrollTop
+      _lastScrollHeight = scrollHeight
+      return
+    }
+
     const recentUserIntent = Date.now() - _lastUserScrollAt < 500
     if (_programmaticScroll && !recentUserIntent) {
       _lastScrollTop = scrollTop
