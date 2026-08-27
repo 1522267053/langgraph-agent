@@ -733,6 +733,43 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   /**
+   * SSE 正常结束时置空重建消息列表：不与旧数组做任何合并，
+   * 流式占位气泡（user-/streaming- 前缀）与向上翻页加载的更早历史一并丢弃，
+   * 仅以 DB 最新一页整表原子替换，杜绝按位置对齐合并导致的串位/重复观感。
+   */
+  async function replaceMessagesWithLatestPage(context: AgentStreamContext): Promise<void> {
+    const res = await agentApi.getMessages(
+      context.agentId,
+      context.sessionId,
+      undefined,
+      MESSAGE_REFRESH_LIMIT
+    )
+    if (res.data.code !== 1 || !isCurrentStream(context)) return
+
+    const latestMessages = res.data.data?.list || []
+    const total = res.data.data?.total || 0
+
+    // 渲染列表整表替换：占位气泡 key 不在新数组中自动卸载，由真实 DB 行替代
+    chatMessages.value = buildChatMessagesFromDB(latestMessages)
+    // 原始行同步重置为最新一页，分页状态（hasMoreMessages/再次「加载更多」的游标）随之自洽
+    messages.value = latestMessages
+    messageTotal.value = total
+
+    thinkingContent.value = ''
+    textContent.value = ''
+    currentSegmentType.value = null
+
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const m = messages.value[i]
+      if (m.role === 'ai' || m.message_type === CONTEXT_SUMMARY_MESSAGE_TYPE) {
+        latestPromptTokens.value = m.latest_prompt_tokens || m.prompt_tokens || 0
+        break
+      }
+    }
+    messageRefreshVersion.value++
+  }
+
+  /**
    * 创建SSE事件处理器
    */
   function createStreamHandlers(context: AgentStreamContext) {
@@ -914,7 +951,7 @@ export const useAgentStore = defineStore('agent', () => {
           isResume = false
         }
         try {
-          await refreshStreamMessages(context)
+          await replaceMessagesWithLatestPage(context)
         } catch (e) {
           console.error('[onFlowDone] 刷新消息失败', e)
         }
