@@ -201,6 +201,7 @@ export interface PythonConfig {
 export interface ShellConfig {
   command: string
   timeout: number
+  default_workdir?: string
   input_variables: NodeVariable[]
   output_variables: NodeVariable[]
 }

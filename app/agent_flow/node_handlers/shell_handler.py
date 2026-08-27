@@ -40,6 +40,13 @@ class ShellNodeConfig(BaseNodeConfig):
     command: str = ""
     timeout: int = 300
     async_wait: int = 8
+    default_workdir: str = Field(
+        "",
+        description=(
+            "默认工作目录（绝对路径，相对路径基于项目根目录解析）。"
+            "留空则使用 Agent 工作目录；每次调用 shell_executor 的 workdir 参数可临时覆盖此值"
+        ),
+    )
     output_variables: list[NodeVariable] = [
         NodeVariable(name="stdout", type="string"),
         NodeVariable(name="stderr", type="string"),
@@ -115,6 +122,13 @@ DANGEROUS_PATTERNS = [
     # 7. Linux 进程终止（仅保留杀 init 进程的保护）
     r"\bkill\s+(-9\s+)?1\b",  # 杀死 init 进程
     r"\bpkill\s+(-9\s+)?init",  # 杀死 init
+    # 8. PowerShell 高危行为（Windows 命令环境已迁移到 PowerShell）
+    r"\bFormat-Volume\b",  # 格式化卷
+    r"\bClear-Disk\b",  # 清空磁盘
+    r"\bInitialize-Disk\b",  # 初始化磁盘
+    r"\bRemove-Item\s+[^;\r\n]*-[Rr]ecurse[^;\r\n]*\s[\"']?[A-Za-z]:\\[\"';\s]*$",  # 递归强删盘根
+    r"\bRemove-Item\s+[\"']?[A-Za-z]:\\['\"\s;,]*$",  # 删除盘根（无论是否递归）
+    r"\bRemove-Item\s+[\"']?(?:~[/\\]?|/)[\"';\s]*$",  # 强删家目录/根目录
 ]
 
 
@@ -464,6 +478,105 @@ def _decode_output(data: bytes) -> str:
             return "\n".join(decoded)
 
 
+# ---- PowerShell 执行环境（Windows 统一走 PowerShell，不再经过 cmd.exe）----
+
+_powershell_path_cache: Optional[str] = None
+
+_PS_PRELUDE_PARTS = [
+    # 子进程输出强制 UTF-8（替代原 chcp 65001），避免中文乱码
+    "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8",
+    "$ErrorActionPreference='Continue'",
+    # 修复 PS 5.1 中 curl/wget 是 Invoke-WebRequest 别名的问题，还原为真实工具
+    # （内置别名带 AllScope 选项，覆盖必须显式指定 -Option AllScope）
+    "Set-Alias curl curl.exe -Force -Option AllScope",
+    "Set-Alias wget wget.exe -Force -Option AllScope",
+    # 补齐 PS 缺失的 head/tail 管道工具
+    "function head { param([int]$n = 10) $input | Select-Object -First $n }",
+    "function tail { param([int]$n = 10) $input | Select-Object -Last $n }",
+]
+
+
+def _get_powershell_path() -> str:
+    """定位 powershell.exe（结果缓存），找不到时抛异常"""
+    global _powershell_path_cache
+    if not _powershell_path_cache:
+        ps = shutil.which("powershell")
+        if not ps:
+            raise RuntimeError(
+                "未找到 PowerShell（powershell.exe）。Windows 上 shell 命令依赖 PowerShell 执行"
+            )
+        _powershell_path_cache = ps
+    return _powershell_path_cache
+
+
+def _wrap_powershell_command(command: str) -> str:
+    """包装用户命令：prelude 注入 + 退出码透传。
+
+    换行作为语句分隔符是安全的——本包装结果不经过 cmd.exe，
+    由 PowerShell 自身解析多行文本。
+    """
+    prelude = "; ".join(_PS_PRELUDE_PARTS)
+    return (
+        f"{prelude}\n{command}\n"
+        "if (Test-Path Variable:LASTEXITCODE) { exit $LASTEXITCODE } else { exit 0 }"
+    )
+
+
+async def _create_subprocess(
+    command: str,
+    *,
+    stdin: int,
+    cwd: Optional[Path] = None,
+) -> asyncio.subprocess.Process:
+    """跨平台创建子进程。
+
+    Windows: powershell -NoProfile -NonInteractive -Command <wrapped>（argv 列表直传，
+    绕开 cmd.exe 的引号解析层，从机制上消灭"引号内换行被截断、stdout 静默丢失"问题）。
+    POSIX: 维持 sh。
+    """
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+    common: dict = {
+        "stdin": stdin,
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+        "env": env,
+        "cwd": str(cwd) if cwd else None,
+    }
+    if platform.system() == "Windows":
+        executable = _get_powershell_path()
+        return await asyncio.create_subprocess_exec(
+            executable,
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            _wrap_powershell_command(command),
+            **common,
+        )
+    return await asyncio.create_subprocess_shell(command, **common)
+
+
+def _diagnose_empty_output(task: "BackgroundShellTask", command: str) -> Optional[str]:
+    """returncode=0 但 stdout/stderr 双空时生成诊断提示（仅提示，不自动重试）"""
+    if task.return_code != 0:
+        return None
+    if task.stdout.strip() or task.stderr.strip():
+        return None
+    if not command.strip():
+        return None
+    hints = ["命令执行成功（退出码 0）但 stdout 与 stderr 均为空。"]
+    stripped = command.strip()
+    if '"' in stripped or "'" in stripped:
+        hints.append(
+            "命令含引号：PowerShell 会展开双引号内的 $变量与反引号转义，必要时改用单引号包裹。"
+        )
+    if re.search(r"%[A-Za-z_][A-Za-z0-9_]*%", stripped):
+        hints.append("检测到 %VAR% 写法：这是 cmd 语法，PowerShell 中应使用 $env:VAR。")
+    hints.append(
+        "若预期有输出，请确认命令是否真的会产生输出，或先用 echo 类简单命令验证环境。"
+    )
+    return " ".join(hints)
+
+
 def _apply_shell_output_truncation(result: dict, task) -> None:
     """对 shell 工具返回的 stdout/stderr 应用统一截断，就地修改 result dict
 
@@ -634,10 +747,8 @@ async def _monitor_process(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
+        # PowerShell 宿主与用户子进程是树状结构，必须整树清杀防止孤儿进程
+        await _force_kill_process_tree(process)
         task.status = "timeout"
         task.return_code = -1
     except Exception:
@@ -732,19 +843,14 @@ async def cancel_task_by_id(task_id: str) -> dict:
         except Exception:
             pass
 
-    try:
-        process.kill()
-    except ProcessLookupError:
-        pass
+    # 必须整树清杀（taskkill /T）：直接 TerminateProcess 仅杀掉 shell 宿主，
+    # 其子进程（python/ping 等）会孤儿化继续运行
+    await _force_kill_process_tree(process)
 
     try:
         await asyncio.wait_for(asyncio.shield(process.wait()), timeout=5)
     except (asyncio.TimeoutError, Exception):
-        await _force_kill_process_tree(process)
-        try:
-            await asyncio.wait_for(process.wait(), timeout=3)
-        except (asyncio.TimeoutError, Exception):
-            pass
+        pass
 
     task.status = "cancelled"
     task.return_code = process.returncode
@@ -814,9 +920,45 @@ class ShellNodeHandler(BaseNodeHandler):
                 return get_agent_work_dir(flow_id)
         return None
 
-    def _resolve_tool_working_dir(self, workdir: Optional[str]) -> Optional[Path]:
+    def _configured_workdir(
+        self, cfg: BaseNodeConfig
+    ) -> tuple[Optional[Path], Optional[str]]:
+        """解析节点级 default_workdir 配置
+
+        Returns:
+            (目录, 警告信息)。未配置返回 (None, None)；配置非法时返回 (None, 警告)，
+            由调用方回退默认目录，警告仅透出到 system_prompt。
+        """
+        raw = (getattr(cfg, "default_workdir", "") or "").strip()
+        if not raw:
+            return None, None
+        try:
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                candidate = BASE_DIR / candidate
+            candidate = candidate.resolve()
+        except (OSError, RuntimeError):
+            return None, f"default_workdir 无法解析: {raw}"
+        if not candidate.is_dir():
+            return None, f"default_workdir 目录不存在: {candidate}"
+        is_valid, error_msg = _validate_file_path(str(candidate))
+        if not is_valid:
+            return None, f"default_workdir 校验失败: {error_msg}"
+        return candidate, None
+
+    def _effective_working_dir(self, cfg: BaseNodeConfig) -> Optional[Path]:
+        """按优先级解析工作目录：节点 default_workdir > Agent 注入 > ExecutionContext"""
+        configured_dir, _warn = self._configured_workdir(cfg)
+        if configured_dir is not None:
+            return configured_dir
+        return self._resolve_working_dir()
+
+    def _resolve_tool_working_dir(
+        self, workdir: Optional[str], default_dir: Optional[Path] = None
+    ) -> Optional[Path]:
         """解析单次 Shell 工具调用的工作目录。"""
-        default_dir = self._resolve_working_dir()
+        if default_dir is None:
+            default_dir = self._resolve_working_dir()
         if workdir is None or not workdir.strip():
             return default_dir
 
@@ -865,7 +1007,9 @@ class ShellNodeHandler(BaseNodeHandler):
             return state
 
         try:
-            result = await self._execute_shell(command, timeout)
+            result = await self._execute_shell(
+                command, timeout, self._effective_working_dir(cfg)
+            )
             output_names = self._get_output_var_names(
                 node, ["stdout", "stderr", "exit_code"]
             )
@@ -884,29 +1028,24 @@ class ShellNodeHandler(BaseNodeHandler):
 
         return state
 
-    async def _execute_shell(self, command: str, timeout: float) -> dict:
+    async def _execute_shell(
+        self, command: str, timeout: float, cwd: Optional[Path] = None
+    ) -> dict:
         """执行Shell命令（Flow 节点专用，stdin 重定向到 DEVNULL 防止交互阻塞）
+
+        Windows 经 PowerShell 执行（支持多行命令），POSIX 经 sh。
 
         Args:
             command: Shell命令字符串
             timeout: 超时时间（秒）
+            cwd: 工作目录（None 时继承服务进程目录）
 
         Returns:
             包含执行结果的字典
         """
         try:
-            if platform.system() == "Windows":
-                command = f"chcp 65001 >nul 2>&1 && {command}"
-
-            env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
-            process = await asyncio.create_subprocess_shell(
-                command,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                shell=True,
-                env=env,
-                cwd=self._resolve_working_dir(),
+            process = await _create_subprocess(
+                command, stdin=asyncio.subprocess.DEVNULL, cwd=cwd
             )
 
             try:
@@ -914,8 +1053,11 @@ class ShellNodeHandler(BaseNodeHandler):
                     process.communicate(), timeout=timeout
                 )
             except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+                await _force_kill_process_tree(process)
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=3)
+                except (asyncio.TimeoutError, Exception):
+                    pass
                 raise
 
             return {
@@ -924,6 +1066,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 "return_code": process.returncode,
                 "success": process.returncode == 0,
                 "command": command,
+                "cwd": str(cwd) if cwd else os.getcwd(),
             }
 
         except Exception as e:
@@ -993,6 +1136,14 @@ class ShellNodeHandler(BaseNodeHandler):
         timeout = cfg.timeout
         async_wait = cfg.async_wait
 
+        # 节点级 default_workdir 优先于 Agent 工作目录，供所有工具闭包共用
+        configured_dir, configured_dir_warn = self._configured_workdir(cfg)
+        base_working_dir = (
+            configured_dir
+            if configured_dir is not None
+            else self._resolve_working_dir()
+        )
+
         system_type = platform.system()
         system_info = f"当前系统: {system_type}"
 
@@ -1006,26 +1157,17 @@ class ShellNodeHandler(BaseNodeHandler):
                 return {"error": error_msg, "success": False}
 
             try:
-                command_working_dir = self._resolve_tool_working_dir(workdir)
+                command_working_dir = self._resolve_tool_working_dir(
+                    workdir, base_working_dir
+                )
             except ValueError as e:
                 return {"error": str(e), "success": False}
 
             _cleanup_expired_tasks()
 
-            actual_command = command
-            if platform.system() == "Windows":
-                actual_command = f"chcp 65001 >nul 2>&1 && {command}"
-
-            env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
             try:
-                process = await asyncio.create_subprocess_shell(
-                    actual_command,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    shell=True,
-                    env=env,
-                    cwd=command_working_dir,
+                process = await _create_subprocess(
+                    command, stdin=asyncio.subprocess.PIPE, cwd=command_working_dir
                 )
             except Exception as e:
                 return {"error": f"启动进程失败: {e}", "success": False}
@@ -1044,7 +1186,14 @@ class ShellNodeHandler(BaseNodeHandler):
 
             if monitor in done:
                 _background_tasks.pop(task.task_id, None)
-                result = {"success": True, **task.to_dict()}
+                result = {
+                    "success": True,
+                    "cwd": str(command_working_dir or Path.cwd()),
+                    **task.to_dict(),
+                }
+                note = _diagnose_empty_output(task, command)
+                if note:
+                    result["note"] = note
                 _apply_shell_output_truncation(result, task)
                 return result
 
@@ -1064,22 +1213,23 @@ class ShellNodeHandler(BaseNodeHandler):
             result = {
                 "success": True,
                 "async": True,
+                "cwd": str(command_working_dir or Path.cwd()),
                 "message": (
                     f"命令仍在后台执行中（task_id: {task.task_id}）。"
-                    f"可用 shell_task_status 查询进度，但建议最多查询1-2次。"
-                    f"若仍未完成，告知用户任务在后台运行（用户可在界面查看实时输出），"
-                    f"等待用户询问结果时再查询。"
+                    f"后台任务支持并发：等待期间可继续调用其他工具或启动新任务。"
+                    f"建议用 shell_task_status 设置较大 wait_time（60~120秒）阻塞等待完成；"
+                    f"用户可在界面查看实时输出。"
                 ),
                 **task.to_dict(),
             }
             _apply_shell_output_truncation(result, task)
             return result
 
-        windows_line_hint = (
+        ps_hint = (
             (
-                "命令必须为单行（禁止裸换行）：Windows 经 cmd.exe 执行，换行符会被当作命令分隔符，"
-                "导致命令在首个换行处被截断、输出被静默丢弃（returncode=0 但 stdout 为空）；"
-                "Python 多行代码用 `;` 连成单行或写入临时 .py 文件后执行。"
+                "Windows 上经 PowerShell 执行：支持多行命令与含换行的字符串；"
+                "禁止 cmd 特有语法（%VAR% 用 $env:VAR、dir /b 用 Get-ChildItem -Name、set X=Y 用 $env:X='Y'）；"
+                "curl/wget/head/tail 可直接使用。"
             )
             if system_type == "Windows"
             else ""
@@ -1088,15 +1238,15 @@ class ShellNodeHandler(BaseNodeHandler):
         shell_tool = StructuredTool(
             name="shell_executor",
             description=(
-                f"在受限环境中执行Shell命令。{system_info}。"
-                f"命令执行等待 {async_wait} 秒，若未完成则转为后台任务并返回 task_id。"
-                f"之后可用 shell_task_status 查询进度（建议最多1-2次），"
-                f"若仍未完成则告知用户任务在后台运行，等待用户询问结果时再查询。"
+                f"在受限环境中执行Shell命令（{system_info}）。"
+                f"命令执行等待 {async_wait} 秒，未完成则转为后台任务并返回 task_id；"
+                f"后台任务支持并发，等待期间可继续其他工具调用或启动新任务。"
+                f"用 shell_task_status 的 wait_time 参数（8~120秒）阻塞等待结果。"
                 f"用 shell_task_input 向进程发送输入，用 shell_task_cancel 终止任务。"
-                f"可用 workdir 指定本次命令的工作目录；相对路径基于当前Agent工作目录解析。"
+                f"可用 workdir 指定本次工作目录；返回的 cwd 字段是实际执行目录。"
                 f"每次调用均启动独立进程，cd不会影响后续调用，切换目录请传workdir。"
-                f"禁止危险命令: rm -rf /, format, mkfs, dd写入设备, fork炸弹等。"
-                f"{windows_line_hint}"
+                f"禁止危险命令: rm -rf /, format, Format-Volume, Clear-Disk, dd写入设备, fork炸弹等。"
+                f"{ps_hint}"
             ),
             func=None,
             coroutine=execute_shell,
@@ -1121,20 +1271,23 @@ class ShellNodeHandler(BaseNodeHandler):
                 _apply_shell_output_truncation(result, task)
             if task.status == "running":
                 result["hint"] = (
-                    "任务仍在后台运行中。请告知用户任务正在后台执行，"
-                    "用户可在聊天界面查看实时输出。不要继续轮询，"
-                    "等待用户主动询问结果时再调用此工具查询。"
+                    "任务仍在后台运行中。可选择：用更大的 wait_time（最长120秒）再次调用以继续阻塞等待；"
+                    "或先处理其他事务稍后再来查询（后台任务支持并发，不会互相阻塞）。"
+                    "同时告知用户任务正在后台执行，界面可查看实时输出。"
                 )
+            else:
+                note = _diagnose_empty_output(task, task.command)
+                if note:
+                    result["note"] = note
             return result
 
         shell_task_status_tool = StructuredTool(
             name="shell_task_status",
             description=(
                 "查询后台Shell任务的执行状态和输出。"
-                "当 shell_executor 返回 task_id 时使用此工具获取进度。"
-                "建议最多查询2次，若仍未完成则告知用户任务在后台运行，等待用户主动询问时再查询。"
+                "当 shell_executor 返回 task_id 时使用此工具获取进度；支持多次调用与多个任务并发查询。"
+                "wait_time 参数指定阻塞等待秒数（8~120秒），长任务建议设置较大值一次性等待完成。"
                 "返回字段: status(running/completed/failed/timeout), stdout, stderr, return_code, elapsed_seconds。"
-                "可通过 wait_time 参数指定等待秒数（最小8秒，最大120秒）。"
             ),
             func=None,
             coroutine=query_task_status,
@@ -1203,19 +1356,13 @@ class ShellNodeHandler(BaseNodeHandler):
                 except Exception:
                     pass
 
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
+            # 必须整树清杀（taskkill /T）：仅杀 shell 宿主会孤儿化其子进程
+            await _force_kill_process_tree(process)
 
             try:
                 await asyncio.wait_for(asyncio.shield(process.wait()), timeout=5)
             except (asyncio.TimeoutError, Exception):
-                await _force_kill_process_tree(process)
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=3)
-                except (asyncio.TimeoutError, Exception):
-                    pass
+                pass
 
             task.status = "cancelled"
             task.return_code = process.returncode
@@ -1523,29 +1670,23 @@ class ShellNodeHandler(BaseNodeHandler):
             search_root: Path, pattern: str, include: Optional[str], limit: int
         ) -> tuple[list[dict], int, bool]:
             """使用 ripgrep 搜索文件内容，返回 (结果列表, 总匹配数, 是否截断)"""
-            args = ["-H", "-n", "--no-heading", pattern]
+            rg_exe = shutil.which("rg")
+            if not rg_exe:
+                raise FileNotFoundError("ripgrep (rg) 未安装")
+
+            # 直接以 argv 列表执行 rg，不经过 shell（避免引号解析与编码包装问题）
+            cli_args = ["-H", "-n", "--no-heading"]
             if include:
-                args.extend(_build_include_args(include))
-            args.append(str(search_root))
+                cli_args.extend(_build_include_args(include))
+            cli_args.extend([pattern, str(search_root)])
 
-            actual_cmd = f"rg {' '.join(args)}"
-            if platform.system() == "Windows":
-                actual_cmd = f"chcp 65001 >nul 2>&1 && {actual_cmd}"
-
-            try:
-                process = await asyncio.create_subprocess_shell(
-                    actual_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    shell=True,
-                )
-                stdout, _stderr = await asyncio.wait_for(
-                    process.communicate(), timeout=60
-                )
-            except FileNotFoundError:
-                raise
-            except Exception:
-                raise
+            process = await asyncio.create_subprocess_exec(
+                rg_exe,
+                *cli_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=60)
 
             if process.returncode == 1:
                 return [], 0, False
@@ -1683,9 +1824,7 @@ class ShellNodeHandler(BaseNodeHandler):
             literal_text: bool = False,
         ) -> str:
             search_root = (
-                Path(path).resolve()
-                if path
-                else (self._resolve_working_dir() or BASE_DIR)
+                Path(path).resolve() if path else (base_working_dir or BASE_DIR)
             )
 
             is_valid, error_msg = _validate_file_path(str(search_root))
@@ -1770,9 +1909,7 @@ class ShellNodeHandler(BaseNodeHandler):
             include_dirs: bool = False,
         ) -> str:
             search_root = (
-                Path(path).resolve()
-                if path
-                else (self._resolve_working_dir() or BASE_DIR)
+                Path(path).resolve() if path else (base_working_dir or BASE_DIR)
             )
 
             is_valid, error_msg = _validate_file_path(str(search_root))
@@ -1846,7 +1983,7 @@ class ShellNodeHandler(BaseNodeHandler):
             if not raw_path:
                 return {"success": False, "error": "file_path 不能为空"}
             candidate = Path(raw_path)
-            work_dir = self._resolve_working_dir()
+            work_dir = base_working_dir
             if not candidate.is_absolute() and work_dir is not None:
                 candidate = Path(work_dir) / raw_path
             if not candidate.exists() or not candidate.is_file():
@@ -1957,7 +2094,7 @@ class ShellNodeHandler(BaseNodeHandler):
                     return {"success": False, "error": error_msg}
 
                 candidate = Path(raw)
-                work_dir = self._resolve_working_dir()
+                work_dir = base_working_dir
                 if not candidate.is_absolute() and work_dir is not None:
                     candidate = Path(work_dir) / raw
                 candidate = candidate.resolve()
@@ -2054,29 +2191,37 @@ class ShellNodeHandler(BaseNodeHandler):
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
         """返回临时文件目录说明和文件工具使用指南，追加到 LLM system_prompt"""
+        cfg = self._get_config(node)
+        configured_dir, configured_warn = self._configured_workdir(cfg)
+        working_dir = (
+            configured_dir
+            if configured_dir is not None
+            else self._resolve_working_dir()
+        )
         temp_dir = get_temp_dir()
-        working_dir = self._resolve_working_dir()
         current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        windows_compat_hint = (
+        ps_compat_hint = (
             (
-                "### Windows 命令兼容性（重要）\n"
-                "- 命令在 Windows 上经 cmd.exe 执行，cmd.exe 把换行符当作命令分隔符，双引号字符串不能跨行。\n"
-                "- 含裸换行的命令会在首个换行处被截断，表现为 returncode=0 但 stdout 完全为空（输出被静默丢弃）。\n"
-                "- 正确写法：\n"
-                "  - Python 多行代码改用 `;` 连成单行，例如 `python -c \"import json; print(json.dumps({'a':1}))\"`\n"
-                "  - 代码含 if/for/def 等无法压平的逻辑时，先用 file_write 写入 .py 文件，再 `python <文件路径>` 执行\n"
-                "  - 多条独立命令用 `&&` 在同一行连接，不要跨行\n"
-                "- 反例（禁止）：`python -c \"<换行>import json<换行>print('x')<换行>\"` 会被截断导致输出丢失\n"
+                "### Windows 命令环境（PowerShell）\n"
+                "- 命令经 Windows PowerShell 执行：多行命令与含换行的字符串均安全支持。\n"
+                "- 不要使用 cmd 特有语法：%VAR%（应用 $env:VAR）、dir /b（应用 Get-ChildItem -Name 或 ls）、set X=Y（应用 $env:X='Y'）。\n"
+                "- curl/wget 已还原为真实工具（非 Invoke-WebRequest 别名）；head/tail 已内置；更复杂过滤用 Where-Object/Select-Object。\n"
+                "- 返回的 exit_code 取自最后一个原生命令（如 python/curl/git）；纯 cmdlet 结尾时以是否报错为准。\n"
             )
             if platform.system() == "Windows"
             else ""
+        )
+        filter_hint = (
+            "| head / | tail / Select-Object -First / Where-Object"
+            if platform.system() == "Windows"
+            else "| head / | tail / grep"
         )
 
         lines = [
             "\n\n## Shell 与文件操作\n"
             "你已连接 Shell 执行节点。先用 file_search 在项目中搜索目标，再用 file_read 读取文件内容，用 text_editor 精确替换；创建新文件用 file_write\n"
             "### 输出控制（重要）\n"
-            "- 执行命令前先评估可能的输出量，大量输出务必用 | head、| tail、| grep 等管道过滤\n"
+            f"- 执行命令前先评估可能的输出量，大量输出务必先过滤（{filter_hint}），或重定向到文件后用 file_read 分段读取\n"
             "- 如果命令输出被截断（返回 _truncated 标记），完整内容已自动保存到临时文件，需要时用 file_read 读取\n"
             "- file_read 单次最多读取 100 行，大文件用 offset 参数分段读取\n"
             "- file_search 搜索文件内容（正则匹配），支持目录递归或单个文件路径\n"
@@ -2084,12 +2229,16 @@ class ShellNodeHandler(BaseNodeHandler):
             "- 禁止用 cat 读取大文件，始终使用 file_read\n"
             "- 需要理解图片/PDF/音频内容时用 view_media 注入查看，禁止用 file_read 读二进制文件\n"
             "- Shell 每次调用都是独立进程；切换目录时传入 shell_executor 的 workdir 参数，不要依赖 cd 影响后续调用\n"
-            + windows_compat_hint
+            "- 长时间任务超过等待秒数会转后台并返回 task_id：后台任务支持并发与多次长阻塞查询（wait_time 最长120秒），"
+            "期间可继续执行其他工具调用\n"
+            + ps_compat_hint
             + f"\n临时文件输出目录: `{temp_dir}`（会被定时清理，勿存放重要数据）"
         ]
         if working_dir is not None:
             lines.append(
                 f"默认工作目录: `{working_dir}`，Shell 未传 workdir 时在此目录下执行，文件操作优先使用此目录"
             )
+        if configured_warn:
+            lines.append(f"⚠️ {configured_warn}，已回退默认工作目录")
         lines.append(f"当前时间: {current_time_str}")
         return "\n".join(lines)
