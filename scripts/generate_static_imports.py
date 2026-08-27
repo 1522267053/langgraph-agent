@@ -19,6 +19,7 @@ SCAN_DIRS = [
     "app/constants",
     "app/utils",
     "app/agent_flow/node_handlers",
+    "app/agent_flow/tools",
     "app/agent_flow/ai_provider",
     "app/api",
 ]

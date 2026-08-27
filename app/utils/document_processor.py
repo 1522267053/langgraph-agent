@@ -116,6 +116,31 @@ class DocumentProcessor:
                 f"不支持的文件类型: {file_type}，仅支持 txt、md、docx、xlsx、pdf"
             )
 
+    def extract_text_from_bytes(self, content: bytes, file_type: str) -> str:
+        """
+        公开 API：按字节内容提取文本（供 LLM 工具等外部模块调用）
+
+        Args:
+            content: 文件字节内容
+            file_type: 文件类型（txt/md/docx/xlsx）
+
+        Returns:
+            提取的文本内容
+
+        Raises:
+            ValueError: 不支持的文件类型或无法识别编码
+        """
+        if file_type in ("txt", "md"):
+            return self._extract_from_txt(content)
+        elif file_type == "docx":
+            return self._extract_from_docx(content)
+        elif file_type == "xlsx":
+            return self._extract_from_xlsx(content)
+        else:
+            raise ValueError(
+                f"不支持的文件类型: {file_type}，仅支持 txt、md、docx、xlsx"
+            )
+
     def _get_file_extension(self, filename: str) -> str:
         """获取文件扩展名"""
         return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
