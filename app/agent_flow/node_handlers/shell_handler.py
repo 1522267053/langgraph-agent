@@ -12,6 +12,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import tempfile
 import uuid
 from pathlib import Path
@@ -31,6 +32,13 @@ from app.agent_flow.node_handlers.base_handler import (
     NodeVariable,
 )
 from app.agent_flow.tool_output_truncate import smart_truncate_output
+from app.agent_flow.tools.common import (
+    MAX_FILE_SIZE,
+    detect_and_read as _detect_and_read,
+    validate_file_path as _validate_file_path,
+    validate_writable_path as _validate_writable_path,
+)
+from app.agent_flow.tools.file_read import FileReadService
 from app.config.build_utils import BASE_DIR, get_agent_work_dir, get_temp_dir
 from app.config.settings import settings
 from app.models.flow_node import FlowNode
@@ -122,7 +130,7 @@ DANGEROUS_PATTERNS = [
     # 7. Linux 进程终止（仅保留杀 init 进程的保护）
     r"\bkill\s+(-9\s+)?1\b",  # 杀死 init 进程
     r"\bpkill\s+(-9\s+)?init",  # 杀死 init
-    # 8. PowerShell 高危行为（Windows 命令环境已迁移到 PowerShell）
+    # 8. PowerShell 高危行为（防御性保留：防止命令注入 PS 语法绕过 cmd 检测）
     r"\bFormat-Volume\b",  # 格式化卷
     r"\bClear-Disk\b",  # 清空磁盘
     r"\bInitialize-Disk\b",  # 初始化磁盘
@@ -183,28 +191,7 @@ def validate_command(command: str) -> tuple[bool, str]:
     return True, ""
 
 
-FORBIDDEN_PATH_PATTERNS = [
-    # Windows 系统关键路径
-    r"[Cc]:\\[Ww]indows",
-    r"[Cc]:\\[Pp]rogram\s+[Ff]iles",
-    r"[Cc]:\\[Pp]rogram\s+[Dd]ata",
-    r"[Cc]:\\[Pp]rogram\s+[Ff]iles\s*\(x86\)",
-    # Linux 系统关键路径
-    r"/etc/",
-    r"/usr/",
-    r"/bin/",
-    r"/sbin/",
-    r"/boot/",
-    r"/dev/",
-    r"/proc/",
-    r"/sys/",
-    r"/lib/",
-    r"/lib64/",
-]
-
-MAX_FILE_SIZE = 50 * 1024 * 1024
 MAX_CONTENT_SIZE = 50 * 1024 * 1024
-MAX_FILE_READ_LINE_LENGTH = 2000
 MAX_SEARCH_RESULTS = 50
 MAX_SEARCH_FILE_SIZE = 5 * 1024 * 1024
 MAX_LIST_RESULTS = 100
@@ -233,67 +220,6 @@ def _is_hidden_path(path: Path) -> bool:
     return any(part.startswith(".") for part in path.parts)
 
 
-def _validate_file_path(file_path: str) -> tuple[bool, str]:
-    """校验文件路径是否安全
-
-    禁止访问系统关键路径，禁止路径穿越。
-
-    Returns:
-        (是否安全, 错误消息)
-    """
-    path = Path(file_path).resolve()
-
-    # 路径穿越检测
-    if ".." in Path(file_path).parts:
-        return False, "文件路径不允许包含 '..' 路径穿越"
-
-    # 系统关键路径检测
-    path_str = str(path)
-    for pattern in FORBIDDEN_PATH_PATTERNS:
-        if re.search(pattern, path_str):
-            return False, f"不允许访问系统路径: {path_str}"
-
-    return True, ""
-
-
-def _validate_writable_path(file_path: str) -> tuple[bool, str]:
-    """校验文件写入路径是否安全
-
-    在通用路径校验基础上，额外禁止写入项目数据目录（data/ 下存放数据库、向量库等）。
-    读取操作不受此限制。
-
-    Returns:
-        (是否安全, 错误消息)
-    """
-    is_valid, error_msg = _validate_file_path(file_path)
-    if not is_valid:
-        return False, error_msg
-
-    path = Path(file_path).resolve()
-    data_dir = (BASE_DIR / "data").resolve()
-    if path.is_relative_to(data_dir):
-        return False, f"不允许写入数据目录: {path}"
-
-    return True, ""
-
-
-def _detect_and_read(path: Path) -> tuple[str, str]:
-    """读取文件内容，自动检测编码（UTF-8 优先并剥 BOM，GBK 回退）
-
-    utf-8-sig 对无 BOM 文件行为与 utf-8 完全一致，有 BOM 时自动剥离，
-    避免首行混入隐形 \\ufeff 污染模型上下文。
-
-    Returns:
-        (文件内容, 使用的编码名称)
-    """
-    try:
-        content = path.read_text(encoding="utf-8-sig")
-        return content, "utf-8-sig"
-    except UnicodeDecodeError:
-        content = path.read_text(encoding="gbk", errors="replace")
-        return content, "gbk"
-
-
 def _atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
     """原子写入文件：先写临时文件，再替换目标文件，避免写入中断导致文件损坏"""
     fd, tmp_path_str = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
@@ -318,76 +244,6 @@ class ShellToolInput(BaseModel):
         description=(
             "本次命令的工作目录。默认使用当前Agent工作目录；相对路径基于该目录解析。"
             "切换目录时使用此参数，不要依赖cd影响后续调用"
-        ),
-    )
-
-
-def _file_read_caps() -> tuple[int, int]:
-    """file_read 单次返回封顶值
-
-    与下游 smart_truncate_output 阈值（tool_output_truncate.py）同源透传：
-    直接引用同一份全局配置，内部封顶 == 下游截断阈值，字段级检查用严格大于号
-    且作用于原始字符串，故 file_read 结果恒可透传、不会触发二次截断。
-    若未来截断器 dict 路径增加 1× 序列化总量闸门，此处需重新预留 JSON 转义余量。
-
-    Returns:
-        (字节上限, 行数上限)
-    """
-    return (settings.tool_output_max_bytes, settings.tool_output_max_lines)
-
-
-def _shrink_end_to_bytes(text: str, start: int, end: int, max_bytes: int) -> int:
-    """收缩 end 直到 text[start:end] 的 UTF-8 字节数不超过 max_bytes"""
-    while end > start and len(text[start:end].encode("utf-8")) > max_bytes:
-        over = len(text[start:end].encode("utf-8")) - max_bytes
-        end = max(start, end - max(1, over // 3 + 1))
-    return end
-
-
-def _is_binary_sample(sample: bytes) -> bool:
-    """按前几 KB 采样判断文件是否为二进制：含 NUL 字节即判二进制；
-    否则不可打印控制字符占比 >30% 判二进制"""
-    if not sample:
-        return False
-    if b"\x00" in sample:
-        return True
-    non_printable = sum(1 for b in sample if b < 9 or (13 < b < 32))
-    return non_printable / len(sample) > 0.3
-
-
-def _truncate_line_length(line: str) -> str:
-    """单行超长截断（防止内嵌 base64 / 压缩 JS 等单行超长内容撑爆上下文）"""
-    if len(line) <= MAX_FILE_READ_LINE_LENGTH:
-        return line
-    return (
-        line[:MAX_FILE_READ_LINE_LENGTH]
-        + f"... (line truncated to {MAX_FILE_READ_LINE_LENGTH} chars)"
-    )
-
-
-class FileReadInput(BaseModel):
-    """文件读取工具输入参数"""
-
-    file_path: str = Field(..., description="文件绝对路径")
-    offset: Optional[int] = Field(
-        None, description="起始行号（从1开始），与start_char互斥"
-    )
-    limit: Optional[int] = Field(
-        None,
-        description=(
-            f"读取行数，单次最多 {settings.tool_output_max_lines} 行，"
-            "不传则读取上限行数，与end_char互斥"
-        ),
-    )
-    start_char: Optional[int] = Field(
-        None,
-        description="起始字符位置（0-indexed，包含），与offset互斥，适合读取单行大文件的特定片段",
-    )
-    end_char: Optional[int] = Field(
-        None,
-        description=(
-            "结束字符位置（0-indexed，不包含），与limit互斥，不传则读取到文件末尾。"
-            "单次读取有字节/行数封顶，超出会被截断并返回 truncated_hint 提示续读位置"
         ),
     )
 
@@ -495,48 +351,20 @@ def _decode_output(data: bytes) -> str:
             return "\n".join(decoded)
 
 
-# ---- PowerShell 执行环境（Windows 统一走 PowerShell，不再经过 cmd.exe）----
+# ---- Windows 命令执行环境（cmd.exe 直传，不再派生 powershell）----
+# 弃用 PowerShell 的原因：无信誉父进程隐藏派生 powershell + 动态多行 -Command
+# 是杀软（火绒/360 等）行为引擎的高危画像，导致每次执行弹窗拦截；
+# cmd 无 .NET 脚本引擎、无内存执行能力，杀软关注度低。
+# 代价与对策：cmd 会把换行符当命令分隔符导致截断丢输出——已在 execute_shell
+# 入口硬性拒绝含换行的命令并提示改写为单行。
 
-_powershell_path_cache: Optional[str] = None
-
-_PS_PRELUDE_PARTS = [
-    # 子进程输出强制 UTF-8（替代原 chcp 65001），避免中文乱码
-    "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8",
-    "$ErrorActionPreference='Continue'",
-    # 修复 PS 5.1 中 curl/wget 是 Invoke-WebRequest 别名的问题，还原为真实工具
-    # （内置别名带 AllScope 选项，覆盖必须显式指定 -Option AllScope）
-    "Set-Alias curl curl.exe -Force -Option AllScope",
-    "Set-Alias wget wget.exe -Force -Option AllScope",
-    # 补齐 PS 缺失的 head/tail 管道工具
-    "function head { param([int]$n = 10) $input | Select-Object -First $n }",
-    "function tail { param([int]$n = 10) $input | Select-Object -Last $n }",
-]
-
-
-def _get_powershell_path() -> str:
-    """定位 powershell.exe（结果缓存），找不到时抛异常"""
-    global _powershell_path_cache
-    if not _powershell_path_cache:
-        ps = shutil.which("powershell")
-        if not ps:
-            raise RuntimeError(
-                "未找到 PowerShell（powershell.exe）。Windows 上 shell 命令依赖 PowerShell 执行"
-            )
-        _powershell_path_cache = ps
-    return _powershell_path_cache
-
-
-def _wrap_powershell_command(command: str) -> str:
-    """包装用户命令：prelude 注入 + 退出码透传。
-
-    换行作为语句分隔符是安全的——本包装结果不经过 cmd.exe，
-    由 PowerShell 自身解析多行文本。
-    """
-    prelude = "; ".join(_PS_PRELUDE_PARTS)
-    return (
-        f"{prelude}\n{command}\n"
-        "if (Test-Path Variable:LASTEXITCODE) { exit $LASTEXITCODE } else { exit 0 }"
-    )
+# Windows 下禁止为控制台程序新建窗口（GUI/托盘宿主无控制台时子进程默认弹黑框）；
+# 仅影响控制台创建方式，stdout/stderr 管道捕获不受影响。POSIX 该参数必须缺省。
+_SUBPROCESS_WINDOW_FLAGS = (
+    {"creationflags": subprocess.CREATE_NO_WINDOW}
+    if platform.system() == "Windows"
+    else {}
+)
 
 
 async def _create_subprocess(
@@ -547,29 +375,21 @@ async def _create_subprocess(
 ) -> asyncio.subprocess.Process:
     """跨平台创建子进程。
 
-    Windows: powershell -NoProfile -NonInteractive -Command <wrapped>（argv 列表直传，
-    绕开 cmd.exe 的引号解析层，从机制上消灭"引号内换行被截断、stdout 静默丢失"问题）。
-    POSIX: 维持 sh。
+    统一经 create_subprocess_shell：Windows 解析为 cmd /c <command>（CPython 只在
+    命令外包一层引号，cmd 按"剥离首尾引号"规则后内部引号原样保留；不要改回
+    exec 直传——list2cmdline 会把内部双引号转义成 \\" ，cmd 不识别反斜杠转义）。
+    POSIX: sh -c。
     """
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
-    common: dict = {
-        "stdin": stdin,
-        "stdout": asyncio.subprocess.PIPE,
-        "stderr": asyncio.subprocess.PIPE,
-        "env": env,
-        "cwd": str(cwd) if cwd else None,
-    }
-    if platform.system() == "Windows":
-        executable = _get_powershell_path()
-        return await asyncio.create_subprocess_exec(
-            executable,
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            _wrap_powershell_command(command),
-            **common,
-        )
-    return await asyncio.create_subprocess_shell(command, **common)
+    return await asyncio.create_subprocess_shell(
+        command,
+        stdin=stdin,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+        cwd=str(cwd) if cwd else None,
+        **_SUBPROCESS_WINDOW_FLAGS,
+    )
 
 
 def _diagnose_empty_output(task: "BackgroundShellTask", command: str) -> Optional[str]:
@@ -582,12 +402,12 @@ def _diagnose_empty_output(task: "BackgroundShellTask", command: str) -> Optiona
         return None
     hints = ["命令执行成功（退出码 0）但 stdout 与 stderr 均为空。"]
     stripped = command.strip()
-    if '"' in stripped or "'" in stripped:
+    if re.search(r"\$env:[A-Za-z_]", stripped):
+        hints.append("检测到 $env:VAR 写法：这是 PowerShell 语法，cmd 中应使用 %VAR%。")
+    if re.search(r"\bGet-ChildItem\b|\bWrite-Output\b|\$PSItem", stripped):
         hints.append(
-            "命令含引号：PowerShell 会展开双引号内的 $变量与反引号转义，必要时改用单引号包裹。"
+            "检测到 PowerShell cmdlet/变量：当前经 cmd.exe 执行，应使用 cmd 等价命令。"
         )
-    if re.search(r"%[A-Za-z_][A-Za-z0-9_]*%", stripped):
-        hints.append("检测到 %VAR% 写法：这是 cmd 语法，PowerShell 中应使用 $env:VAR。")
     hints.append(
         "若预期有输出，请确认命令是否真的会产生输出，或先用 echo 类简单命令验证环境。"
     )
@@ -799,7 +619,7 @@ async def _monitor_process(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        # PowerShell 宿主与用户子进程是树状结构，必须整树清杀防止孤儿进程
+        # cmd 宿主与用户子进程是树状结构，必须整树清杀防止孤儿进程
         await _force_kill_process_tree(process)
         task.status = "timeout"
         task.return_code = -1
@@ -922,6 +742,7 @@ async def _force_kill_process_tree(process: asyncio.subprocess.Process) -> None:
                 f"taskkill /F /T /PID {pid}",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                **_SUBPROCESS_WINDOW_FLAGS,
             )
             await asyncio.wait_for(proc.wait(), timeout=5)
         else:
@@ -1085,7 +906,7 @@ class ShellNodeHandler(BaseNodeHandler):
     ) -> dict:
         """执行Shell命令（Flow 节点专用，stdin 重定向到 DEVNULL 防止交互阻塞）
 
-        Windows 经 PowerShell 执行（支持多行命令），POSIX 经 sh。
+        Windows 经 cmd.exe 单行执行，POSIX 经 sh。
 
         Args:
             command: Shell命令字符串
@@ -1204,6 +1025,20 @@ class ShellNodeHandler(BaseNodeHandler):
         async def execute_shell(
             command: str, workdir: Optional[str] = None
         ) -> str | dict:
+            # Windows cmd 会把换行符当命令分隔符，含换行的命令在首个换行处被截断、
+            # 输出静默丢失——直接拒绝并要求改写为单行（多条命令用 && 连接）
+            if system_type == "Windows" and "\n" in command:
+                return {
+                    "error": (
+                        "Windows 命令必须为单行（禁止裸换行）：cmd.exe 会把换行符当作"
+                        "命令分隔符，导致命令在首个换行处被截断、输出被静默丢弃。"
+                        "请将多条独立命令用 && 连成单行；多行 Python 代码先用 file_write "
+                        "写入 .py 文件后以 python <文件路径> 执行。"
+                    ),
+                    "success": False,
+                    "error_type": "multiline_command",
+                }
+
             is_valid, error_msg = validate_command(command)
             if not is_valid:
                 return {
@@ -1291,9 +1126,10 @@ class ShellNodeHandler(BaseNodeHandler):
 
         ps_hint = (
             (
-                "Windows 上经 PowerShell 执行：支持多行命令与含换行的字符串；"
-                "禁止 cmd 特有语法（%VAR% 用 $env:VAR、dir /b 用 Get-ChildItem -Name、set X=Y 用 $env:X='Y'）；"
-                "curl/wget/head/tail 可直接使用。"
+                "Windows 上经 cmd.exe 执行：命令必须为单行（含换行会被拒绝），"
+                "多条独立命令用 && 连接；多行 Python 先写入 .py 文件再执行；"
+                "%VAR% 与 curl（Win10+ 自带）直接可用（无 wget，下载用 curl -o）；"
+                "无 head/tail，输出过滤用 findstr 或重定向文件。"
             )
             if system_type == "Windows"
             else ""
@@ -1443,237 +1279,10 @@ class ShellNodeHandler(BaseNodeHandler):
             args_schema=ShellTaskCancelInput,
         )
 
-        # ---- file_read ----
+        # ---- file_read（实现在 tools/file_read.py，此处仅构造服务并注册）----
 
-        async def file_read(
-            file_path: str,
-            offset: Optional[int] = None,
-            limit: Optional[int] = None,
-            start_char: Optional[int] = None,
-            end_char: Optional[int] = None,
-        ) -> str | dict:
-            stripped_path = (file_path or "").strip()
-            if stripped_path.startswith(("http://", "https://")):
-                return {
-                    "success": False,
-                    "error": (
-                        "不支持直接读取网络资源，请先用 shell_executor"
-                        "（curl/wget）下载到本地后再读取本地路径"
-                    ),
-                }
-
-            is_valid, error_msg = _validate_file_path(file_path)
-            if not is_valid:
-                return {"error": error_msg, "success": False}
-
-            path = Path(file_path).resolve()
-            if not path.exists():
-                return {"error": f"文件不存在: {file_path}", "success": False}
-            if not path.is_file():
-                return {"error": f"路径不是文件: {file_path}", "success": False}
-
-            file_size = path.stat().st_size
-
-            # ---- L1 媒体自动注入：图片/音频/PDF 以多模态注入下一轮对话 ----
-            from app.utils.media_resolver import (
-                MAX_FILE_SIZE as MEDIA_MAX_FILE_SIZE,
-                _classify_by_ext,
-            )
-
-            capability = _classify_by_ext(path.name)
-            # 仅在模型具备媒体能力时才走媒体分支；否则视为普通文件，
-            # 由下方二进制拦截兜底（避免对不支持视觉的模型提示抽帧看图）
-            if capability and self._media_caps:
-                if capability == "video":
-                    return {
-                        "success": False,
-                        "error": "视频文件暂不支持查看，可用 shell/ffmpeg 抽帧为图片后读取",
-                    }
-                if capability in self._media_caps:
-                    if file_size > MEDIA_MAX_FILE_SIZE:
-                        return {
-                            "success": False,
-                            "error": (
-                                f"媒体文件过大（{file_size / 1024 / 1024:.1f}MB），"
-                                f"注入上限 {MEDIA_MAX_FILE_SIZE // 1024 // 1024}MB"
-                            ),
-                        }
-                    return {
-                        "success": True,
-                        "file_path": str(path),
-                        "media_type": capability,
-                        "injected": True,
-                        "message": "媒体内容已注入，将在下一轮对话中可见",
-                    }
-                return {
-                    "success": False,
-                    "error": f"当前模型不支持{capability}输入，无法查看该文件",
-                }
-
-            if file_size > MAX_FILE_SIZE:
-                return {
-                    "error": f"文件过大（{file_size} 字节），最大支持 {MAX_FILE_SIZE} 字节",
-                    "success": False,
-                }
-
-            # ---- L2 二进制拦截：前 4KB 采样检测，避免二进制被当文本读成乱码 ----
-            try:
-                with open(path, "rb") as fb:
-                    sample = fb.read(4096)
-                if _is_binary_sample(sample):
-                    return {
-                        "success": False,
-                        "error": (
-                            f"Cannot read binary file: {path}"
-                            "（二进制文件不适合按文本读取）。"
-                            "如需提取信息，请用 file_write 写入 python 脚本后"
-                            "用 shell_executor 执行处理"
-                        ),
-                    }
-            except OSError as e:
-                return {"error": f"文件读取失败: {e}", "success": False}
-
-            try:
-                raw, _encoding = _detect_and_read(path)
-            except Exception as e:
-                return {"error": f"文件读取失败: {e}", "success": False}
-
-            total_chars = len(raw)
-            cap_bytes, cap_lines = _file_read_caps()
-
-            # ---- 字符模式 ----
-            if start_char is not None:
-                if offset is not None:
-                    return {
-                        "error": "start_char 和 offset 不能同时使用，请选择一种模式",
-                        "success": False,
-                    }
-                s = max(0, start_char)
-                e = min(end_char, total_chars) if end_char is not None else total_chars
-
-                # 单次读取双维度封顶；续读位置始终基于原始文本，不受展示层截断影响
-                requested_e = e
-                e = _shrink_end_to_bytes(raw, s, e, cap_bytes)
-                content = raw[s:e]
-                if content.count("\n") >= cap_lines:
-                    content = "\n".join(content.split("\n")[:cap_lines])
-                    e = s + len(content)
-                truncated_by_limit = e < requested_e
-                line_cut = any(
-                    len(ln) > MAX_FILE_READ_LINE_LENGTH for ln in content.split("\n")
-                )
-                display = "\n".join(
-                    _truncate_line_length(ln) for ln in content.split("\n")
-                )
-                result: dict = {
-                    "success": True,
-                    "file_path": str(path),
-                    "total_chars": total_chars,
-                    "start_char": s,
-                    "end_char": e,
-                    "content": display,
-                }
-                if truncated_by_limit:
-                    result["truncated_hint"] = (
-                        f"(Output capped at {cap_bytes // 1024}KB / {cap_lines} lines. "
-                        f"Use start_char={e} to continue.)"
-                    )
-                elif line_cut:
-                    result["truncated_hint"] = (
-                        f"部分行超过 {MAX_FILE_READ_LINE_LENGTH} 字符仅展示前缀，"
-                        "如需完整内容请用 start_char/end_char 按字符位置精确读取"
-                    )
-                if e < total_chars:
-                    result["has_more"] = True
-                return result
-
-            # ---- 行模式 ----
-            lines = raw.splitlines()
-            total_lines = len(lines)
-            actual_limit = min(limit, cap_lines) if limit else cap_lines
-            start = (offset - 1) if offset and offset >= 1 else 0
-            end = min(start + actual_limit, len(lines))
-            selected = lines[start:end]
-
-            # 单行大文件：提示改用字符模式分段读取
-            if total_lines == 1 and len(raw.encode("utf-8")) > cap_bytes:
-                line_end = _shrink_end_to_bytes(raw, 0, total_chars, cap_bytes)
-                content = _truncate_line_length(f"1: {raw[:line_end]}")
-                result: dict = {
-                    "success": True,
-                    "file_path": str(path),
-                    "total_lines": total_lines,
-                    "total_chars": total_chars,
-                    "offset": 1,
-                    "limit": 1,
-                    "content": content,
-                    "truncated_hint": (
-                        f"(Output capped at {cap_bytes // 1024}KB."
-                        "单行大文件请用 start_char 和 end_char 参数按字符位置分段读取)"
-                    ),
-                }
-                return result
-
-            # 逐行累加字节封顶（含行号前缀，先做单行展示截断再计入预算），超限提前停止
-            content_lines: list[str] = []
-            byte_count = 0
-            for i, line in enumerate(selected):
-                formatted = _truncate_line_length(f"{start + i + 1}: {line}")
-                line_size = len(formatted.encode("utf-8")) + (1 if content_lines else 0)
-                if byte_count + line_size > cap_bytes:
-                    break
-                content_lines.append(formatted)
-                byte_count += line_size
-            returned = len(content_lines)
-            result: dict = {
-                "success": True,
-                "file_path": str(path),
-                "total_lines": total_lines,
-                "total_chars": total_chars,
-                "offset": start + 1,
-                "limit": returned,
-                "content": "\n".join(content_lines),
-            }
-            if start + returned < total_lines:
-                result["has_more"] = True
-                next_offset = start + returned + 1
-                if returned < len(selected):
-                    if returned == 0:
-                        result["truncated_hint"] = (
-                            f"(第 {start + 1} 行超过单次上限 {cap_bytes // 1024}KB，"
-                            "请用 start_char 和 end_char 参数读取该行片段)"
-                        )
-                    else:
-                        result["truncated_hint"] = (
-                            f"(Output capped at {cap_bytes // 1024}KB. Showing lines "
-                            f"{start + 1}-{start + returned}. "
-                            f"Use offset={next_offset} to continue.)"
-                        )
-                else:
-                    result["hint"] = (
-                        f"(Showing lines {start + 1}-{start + returned} of {total_lines}. "
-                        f"Use offset={next_offset} to continue.)"
-                    )
-            return result
-
-        file_read_tool = StructuredTool(
-            name="file_read",
-            description=(
-                "读取本地文件内容。图片/PDF/音频文件会自动以多模态形式注入下一轮对话"
-                "（模型支持时），无需其他工具；不支持网络 URL 和视频。\n"
-                "1. 行模式（默认）：返回带行号的文本(格式如 ```12: 文件内容的一行```)，"
-                f"单次默认读取 {settings.tool_output_max_lines} 行、总字节封顶约 "
-                f"{settings.tool_output_max_bytes // 1024}KB，超限提前停止并提示续读 offset。\n"
-                "2. 字符模式：传 start_char/end_char 按字符位置读取（0-indexed），"
-                "适合读取单行大文件的特定片段，不传 end_char 则读取到文件末尾，"
-                "超出封顶会在 truncated_hint 中提示续读的 start_char。\n"
-                "两种模式互斥（offset 与 start_char 不能同时传）。"
-                "超过 2000 字符的单行仅展示前缀。读取前无需校验文件是否存在。"
-            ),
-            func=None,
-            coroutine=file_read,
-            args_schema=FileReadInput,
-        )
+        file_read_service = FileReadService(self._media_caps)
+        file_read_tool = file_read_service.build_tool()
 
         # ---- text_editor ----
 
@@ -1828,6 +1437,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 *cli_args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **_SUBPROCESS_WINDOW_FLAGS,
             )
             stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=60)
 
@@ -2205,7 +1815,10 @@ class ShellNodeHandler(BaseNodeHandler):
             {"name": "shell_task_status", "description": "查询后台Shell任务状态"},
             {"name": "shell_task_input", "description": "向后台Shell任务发送输入"},
             {"name": "shell_task_cancel", "description": "取消后台Shell任务"},
-            {"name": "file_read", "description": "读取文件内容"},
+            {
+                "name": "file_read",
+                "description": "读取文件内容（图片/音频/PDF 多模态注入，xlsx/docx 转文本）",
+            },
             {"name": "text_editor", "description": "编辑文件内容"},
             {"name": "file_write", "description": "写入文件"},
             {"name": "file_search", "description": "搜索文件"},
@@ -2230,18 +1843,20 @@ class ShellNodeHandler(BaseNodeHandler):
         current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ps_compat_hint = (
             (
-                "### Windows 命令环境（PowerShell）\n"
-                "- 命令经 Windows PowerShell 执行：多行命令与含换行的字符串均安全支持。\n"
-                "- 不要使用 cmd 特有语法：%VAR%（应用 $env:VAR）、dir /b（应用 Get-ChildItem -Name 或 ls）、set X=Y（应用 $env:X='Y'）。\n"
-                "- curl/wget 已还原为真实工具（非 Invoke-WebRequest 别名）；head/tail 已内置；更复杂过滤用 Where-Object/Select-Object。\n"
-                "- curl/wget 接口响应常带 UTF-8 BOM：python 解析管道 JSON 禁止 json.load(sys.stdin)，改用 json.loads(sys.stdin.buffer.read().decode('utf-8-sig'))。\n"
-                "- 返回的 exit_code 取自最后一个原生命令（如 python/curl/git）；纯 cmdlet 结尾时以是否报错为准。\n"
+                "### Windows 命令环境（cmd.exe）\n"
+                "- 命令必须为单行：含裸换行的命令会被直接拒绝（cmd 把换行符当命令分隔符，会截断丢输出）。\n"
+                "- 多条独立命令用 && 连成单行（前一条失败则不继续）；不看成败的顺序执行用单个 &。\n"
+                '- 多行 Python 代码先用 file_write 写入 .py 文件，再 python <文件路径> 执行；单行可用 python -c "..."。\n'
+                "- 环境变量用 %VAR%（不是 $env:VAR）；目录列表用 dir；不要使用 PowerShell cmdlet（Get-ChildItem 等）。\n"
+                "- 大量输出先过滤（findstr / 重定向到文件后用 file_read 分段读取），不要依赖 head/tail（cmd 没有）。\n"
+                "- curl 接口响应常带 UTF-8 BOM：python 解析管道 JSON 禁止 json.load(sys.stdin)，改用 json.loads(sys.stdin.buffer.read().decode('utf-8-sig'))。\n"
+                "- 返回的 exit_code 取自最后一个原生命令（如 python/curl/git）；内部命令（dir/echo 等）固定返回 0。\n"
             )
             if platform.system() == "Windows"
             else ""
         )
         filter_hint = (
-            "| head / | tail / Select-Object -First / Where-Object"
+            "| findstr / 或重定向到文件后用 file_read 读取"
             if platform.system() == "Windows"
             else "| head / | tail / grep"
         )
@@ -2256,7 +1871,7 @@ class ShellNodeHandler(BaseNodeHandler):
             "- file_search 搜索文件内容（正则匹配），支持目录递归或单个文件路径\n"
             "- list_files 按文件名 glob 匹配（如 **/*.py），用于查找文件或了解目录结构\n"
             "- 禁止用 cat 读取大文件，始终使用 file_read\n"
-            "- 需要查看图片/PDF/音频时直接用 file_read 读本地路径（自动多模态注入下一轮对话）；不支持网络 URL 和视频，禁止用 file_read 读其他二进制文件\n"
+            "- 需要查看图片/PDF/音频时直接用 file_read 读本地路径（自动多模态注入下一轮对话）；xlsx/docx 自动转文本读取；不支持网络 URL、视频和 .xls/.doc 旧格式，禁止用 file_read 读其他二进制文件\n"
             "- Shell 每次调用都是独立进程；切换目录时传入 shell_executor 的 workdir 参数，不要依赖 cd 影响后续调用\n"
             "- 长时间任务超过等待秒数会转后台并返回 task_id：后台任务支持并发与多次长阻塞查询（wait_time 最长120秒），"
             "期间可继续执行其他工具调用\n"
