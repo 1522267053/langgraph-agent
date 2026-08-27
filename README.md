@@ -195,6 +195,9 @@ langgraph-agent/
 │   ├── agent_flow/             # LangGraph 流程执行引擎
 │   │   ├── node_handlers/      #   节点处理器（19 种，自动注册）
 │   │   │   ├── llm_*.py        #     LLM 节点模块化拆分（主入口 + factory + stream + message + executor）
+│   │   ├── tools/              #   LLM 工具实现（非自动扫描，显式导入）
+│   │   │   ├── common.py       #     文件类工具共享原语（路径校验/编码读取/大小上限）
+│   │   │   └── file_read.py    #     file_read 工具（多模态注入 + xlsx/docx 转文本 + 分段读取）
 │   │   ├── ai_provider/        #   AI 模型提供商（6 种，自动注册）
 │   │   ├── flow_context.py     #   FlowState 状态定义 + reducer
 │   │   ├── graph_builder.py    #   StateGraph 构建器

@@ -163,6 +163,15 @@ npm run format                          # Prettier 格式化
 - `llm_stream.py`: 流式调用 + 重试 + thinking 解析
 - `llm_tool_executor.py`: 工具执行（并行、人工交互、审批、截断）
 
+### agent_flow/tools/ 目录（LLM 工具实现）
+- **定位**: 存放以 `StructuredTool` 形式提供给 LLM 的工具实现，handler 只负责注册与依赖注入；与 node_handlers 内拆分子模块（llm_*）不同——tools 是独立工具实体，handler 是图的编排单元
+- **不参与自动扫描**：`tools/` 不在 loader 三个扫描目录内，全部显式 import
+- **现有成员**: `common.py`（文件类工具共享原语：路径校验/编码读取/大小上限）、`file_read.py`（FileReadService：媒体多模态注入 + xlsx/docx 转文本 + 行/字符分段读取）
+- **依赖方向（强制单向）**: `tools/* → app/utils/*`，`node_handlers/* → tools/*`，禁止反向或 tools 之间互引
+- **新工具入目录规则**: 一个工具一个文件；共享原语进 `common.py`；工具返回模型友好的 dict 协议（error/truncated_hint/media_type 等），不返回裸字符串
+- **编码探测**: `common.detect_and_read` 探测顺序 UTF-16 BOM（FF FE/FE FF，PowerShell 重定向产物）→ utf-8-sig → GBK；二进制拦截对带 UTF-16 BOM 的文本白名单放行
+- **Windows 子进程注意**: 工具内如需创建子进程，必须带 `_SUBPROCESS_WINDOW_FLAGS`（shell_handler.py 定义），否则 GUI/托盘宿主下每次调用弹出黑框
+
 ### 工具输出截断
 - 入口: `smart_truncate_output(result, prefix="tool_output")`，返回 JSON 字符串
 - 阈值: `.env` 中 `TOOL_OUTPUT_MAX_LINES`/`TOOL_OUTPUT_MAX_BYTES`
