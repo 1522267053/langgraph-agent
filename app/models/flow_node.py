@@ -32,6 +32,7 @@ class NodeType(str, Enum):
     INTENT_ROUTER = "intent_router"
     SUB_AGENT = "sub_agent"
     AGENDA = "agenda"
+    SSH = "ssh"
 
 
 BASIC_NODE_TYPES: List[NodeType] = [
@@ -52,6 +53,7 @@ BASIC_NODE_TYPES: List[NodeType] = [
     NodeType.INTENT_ROUTER,
     NodeType.SUB_AGENT,
     NodeType.AGENDA,
+    NodeType.SSH,
 ]
 
 AGENT_ALLOWED_NODE_TYPES: List[str] = [
@@ -70,6 +72,7 @@ AGENT_ALLOWED_NODE_TYPES: List[str] = [
     NodeType.INTENT_ROUTER.value,
     NodeType.SUB_AGENT.value,
     NodeType.AGENDA.value,
+    NodeType.SSH.value,
 ]
 
 AGENT_TOOL_NODE_TYPES: set[str] = {
@@ -83,6 +86,7 @@ AGENT_TOOL_NODE_TYPES: set[str] = {
     NodeType.API.value,
     NodeType.SUB_AGENT.value,
     NodeType.AGENDA.value,
+    NodeType.SSH.value,
 }
 
 TOOL_ONLY_NODE_TYPES: set[str] = {
@@ -92,6 +96,7 @@ TOOL_ONLY_NODE_TYPES: set[str] = {
     NodeType.TODO.value,
     NodeType.SUB_AGENT.value,
     NodeType.AGENDA.value,
+    NodeType.SSH.value,
 }
 
 NODE_SOURCE_HANDLES: dict[str, set[str]] = {
@@ -114,6 +119,7 @@ NODE_SOURCE_HANDLES: dict[str, set[str]] = {
     NodeType.INTENT_ROUTER.value: {"default"},
     NodeType.SUB_AGENT.value: {"tools"},
     NodeType.AGENDA.value: {"tools"},
+    NodeType.SSH.value: {"tools"},
 }
 
 NODE_TARGET_HANDLES: dict[str, set[str]] = {
@@ -135,6 +141,7 @@ NODE_TARGET_HANDLES: dict[str, set[str]] = {
     NodeType.INTENT_ROUTER.value: {"default"},
     NodeType.SUB_AGENT.value: set(),
     NodeType.AGENDA.value: set(),
+    NodeType.SSH.value: set(),
 }
 
 AGENT_UNIQUE_NODE_TYPES: set[str] = {

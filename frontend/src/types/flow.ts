@@ -18,6 +18,7 @@ export type CardNodeType =
   | 'skill'
   | 'python'
   | 'shell'
+  | 'ssh'
   | 'memory'
   | 'todo'
   | 'sub_agent'

@@ -5,9 +5,12 @@ from typing import Any
 
 MASK_MARKER = "****"
 
+# 需要脱敏的敏感字段（SSH 节点的 password/private_key/passphrase 与 api_key 同等对待）
+SENSITIVE_FIELD_NAMES = {"api_key", "password", "private_key", "passphrase"}
+
 
 def _is_api_key_field(key: Any) -> bool:
-    return isinstance(key, str) and key.lower() == "api_key"
+    return isinstance(key, str) and key.lower() in SENSITIVE_FIELD_NAMES
 
 
 def mask_secret(value: Any) -> Any:

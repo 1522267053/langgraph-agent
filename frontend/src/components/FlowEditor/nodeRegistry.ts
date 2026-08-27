@@ -25,7 +25,8 @@ import {
   List,
   Avatar,
   Calendar,
-  Postcard
+  Postcard,
+  Key
 } from '@element-plus/icons-vue'
 import type { NodeVariable, FlowIOField, FieldType } from '@/types/flow'
 
@@ -493,6 +494,40 @@ const registry: Record<string, NodeRegistryEntry> = {
       const config = { ...rawConfig }
       config.input_variables = resolveInputVars(rawConfig, 'shell', ctx)
       config.output_variables = resolveOutputVars(rawConfig, 'shell', ctx)
+      return config
+    }
+  },
+
+  ssh: {
+    label: 'SSH 命令',
+    description: '连接远程主机执行SSH命令与SFTP文件传输',
+    category: 'tool',
+    icon: Key,
+    iconColor: '#14b8a6',
+    iconBgColor: '#f0fdfa',
+    defaultConfig: () => ({
+      host: '',
+      port: 22,
+      username: '',
+      auth_type: 'password',
+      password: '',
+      private_key: '',
+      private_key_path: '',
+      passphrase: '',
+      connect_timeout: 10,
+      command_timeout: 300,
+      max_transfer_mb: 50,
+      input_variables: [],
+      output_variables: [
+        { name: 'stdout', source: '', type: 'string' },
+        { name: 'stderr', source: '', type: 'string' },
+        { name: 'exit_code', source: '', type: 'number' }
+      ]
+    }),
+    initConfig: (rawConfig, ctx) => {
+      const config = { ...rawConfig }
+      config.input_variables = resolveInputVars(rawConfig, 'ssh', ctx)
+      config.output_variables = resolveOutputVars(rawConfig, 'ssh', ctx)
       return config
     }
   },
