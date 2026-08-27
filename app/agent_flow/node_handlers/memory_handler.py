@@ -66,6 +66,7 @@ class MemoryNodeConfig(BaseModel):
     default_category: str = "event"
     max_index_lines: int = 200
     max_index_bytes: int = 25000
+    warm_recent_count: int = 10
     auto_promote_threshold: int = 5
     consolidate_threshold: int = 25
     hot_decay_days: int = 30
@@ -88,8 +89,9 @@ class MemoryNodeHandler(BaseNodeHandler):
     - max_results: search/list 工具的默认最大返回数
     - default_importance: save 工具的默认重要程度
     - default_category: save 工具的默认分类
-    - max_index_lines: 热记忆索引最大行数（默认200）
-    - max_index_bytes: 热记忆索引最大字节数（默认25000）
+     - max_index_lines: 热记忆索引最大行数（默认200）
+     - max_index_bytes: 热记忆索引最大字节数（默认25000）
+     - warm_recent_count: 注入 system_prompt 的温记忆最新标题条数（默认10，0=关闭）
     - auto_promote_threshold: 自动升温阈值（默认5次访问）
     - consolidate_threshold: 热记忆超过此数量时触发 AI 总结整理（默认50）
     - hot_decay_days: 热记忆衰减天数（默认30），超过此天数未更新则降为温记忆
@@ -140,7 +142,7 @@ class MemoryNodeHandler(BaseNodeHandler):
         return False
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
-        """异步获取热记忆索引并注入 system_prompt"""
+        """异步获取热记忆索引和温记忆最新标题并注入 system_prompt"""
         agent_id = self._agent_id
         if not agent_id:
             return None
@@ -155,7 +157,19 @@ class MemoryNodeHandler(BaseNodeHandler):
                     db, agent_id, max_lines=max_lines, max_bytes=max_bytes
                 )
 
-            if not hot_index:
+                # 温记忆最新标题：仅标题+ID+分类，完整内容由模型按需 memory_get 查询
+                warm_titles: list[str] = []
+                if cfg.warm_recent_count > 0:
+                    recent_warm = await memory_service.get_recent(
+                        db, agent_id, limit=cfg.warm_recent_count, tier="warm"
+                    )
+                    for m in recent_warm:
+                        if not m.title:
+                            continue
+                        cat = f", {m.category}" if m.category else ""
+                        warm_titles.append(f"- {m.title} (id={m.id}{cat})")
+
+            if not hot_index and not warm_titles:
                 return None
 
             valid_cats = ",".join(MemoryNodeConfig.VALID_CATEGORIES)
@@ -165,7 +179,15 @@ class MemoryNodeHandler(BaseNodeHandler):
                 f"save(保存,category:{valid_cats},importance=5→hot,3-4→warm,1-2→cold)\n"
                 f"主动保存用户偏好、重要决策、关键信息。\n"
             )
-            return f"{static_prefix}\n{hot_index}"
+            parts = [static_prefix]
+            if warm_titles:
+                parts.append(
+                    "### 温记忆最近标题（完整内容用 memory_get 按 ID 查询）\n"
+                    + "\n".join(warm_titles)
+                )
+            if hot_index:
+                parts.append(hot_index)
+            return "\n".join(parts)
         except Exception:
             return None
 
