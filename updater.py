@@ -38,17 +38,35 @@ def _log(log_file, msg: str) -> None:
 
 
 def _is_process_alive(pid: int) -> bool:
-    """跨平台检测进程是否存活"""
+    """跨平台检测进程是否存活
+
+    Windows 下 OpenProcess 成功不代表存活：进程终止后若句柄仍被其他进程
+    （杀软、监控等）持有，内核对象未销毁仍可打开，必须再查退出码确认。
+    """
     if IS_WIN:
         import ctypes
 
         kernel32 = ctypes.windll.kernel32
         SYNCHRONIZE = 0x00100000
-        handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 0x00000103
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetExitCodeProcess.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        handle = kernel32.OpenProcess(
+            SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
         if not handle:
             return False
-        kernel32.CloseHandle(handle)
-        return True
+        try:
+            exit_code = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return exit_code.value == STILL_ACTIVE
+            return True
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -88,11 +106,17 @@ def _force_kill(pid: int, log_file) -> None:
 
     try:
         if IS_WIN:
-            subprocess.run(
+            proc = subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
                 capture_output=True,
                 timeout=10,
             )
+            if proc.returncode != 0:
+                _log(
+                    log_file,
+                    f"taskkill 返回 {proc.returncode}: "
+                    f"{proc.stderr.decode(errors='ignore').strip()}",
+                )
         else:
             os.kill(pid, signal.SIGTERM)
             time.sleep(3)
@@ -248,11 +272,10 @@ def main() -> int:
             _log(log_file, "完整性校验通过，开始解压")
             for m in zf.infolist():
                 name = m.filename
-                if name == self_name:
-                    continue
                 if strip and name.startswith(strip):
                     name = name[len(strip) :]
-                if not name:
+                # 跳过自身必须在剥离前缀之后：包裹结构下条目为 "pkg/updater.exe"
+                if not name or name == self_name:
                     continue
                 target = (app_dir / name).resolve()
                 if not target.is_relative_to(app_dir_resolved):
