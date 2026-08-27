@@ -193,10 +193,10 @@ def filter_capabilities_by_adapter(capabilities: dict, adapter_type: str) -> dic
 
 
 def get_injectable_media_types(capabilities: dict, adapter_type: str) -> set[str]:
-    """计算 view_media 工具可注入的媒体类型集合（模型能力 × 适配器交集）
+    """计算 file_read 可自动注入的媒体类型集合（模型能力 × 适配器交集）
 
     Returns:
-        可注入类型子集，可能为空（此时工具不注册）
+        可注入类型子集，可能为空（此时媒体文件按普通文本文件处理）
     """
     filtered = filter_capabilities_by_adapter(capabilities or {}, adapter_type)
     return {key for key, enabled in filtered.items() if enabled}
@@ -204,7 +204,7 @@ def get_injectable_media_types(capabilities: dict, adapter_type: str) -> set[str
 
 async def build_media_blocks(
     sources: list[str], capabilities: dict | None = None
-) -> list[dict[str,Any]]:
+) -> list[dict[str, Any]]:
     """将文件路径/URL 列表构建为多模态 content blocks
 
     本地 image/audio → base64 媒体块；本地 pdf → file 块（带 filename）；
@@ -212,7 +212,7 @@ async def build_media_blocks(
     单项失败降级为文本标注，不影响其余项注入。
 
     Args:
-        sources: view_media 工具成功返回的文件路径或 URL 列表
+        sources: file_read 媒体注入成功返回的文件路径或 URL 列表
         capabilities: 模型能力开关；非 None 时逐项过滤（模态未开启降级文本），
             None 时不过滤（注入路径，工具调用时已按能力 gate）
 
@@ -281,18 +281,20 @@ async def build_media_blocks(
 
 
 async def build_media_human_message(sources: list[str]) -> HumanMessage:
-    """将 view_media 收集的文件路径/URL 构建为一条多模态 HumanMessage
+    """将 file_read 注入收集的文件路径/URL 构建为一条多模态 HumanMessage
 
     Args:
-        sources: view_media 工具成功返回的文件路径或 URL 列表
+        sources: file_read 媒体注入成功返回的文件路径或 URL 列表
 
     Returns:
         content 为 [标注文本块, 媒体块, ...] 的 HumanMessage，
         additional_kwargs 带 _media_injected 标记（持久化时写 message_type）
         和 _media_sources（持久化到 input_data，历史加载时重建媒体块）
     """
-    blocks: list[dict[str,Any]] = await build_media_blocks(sources)
-    message = HumanMessage(content=cast(list[dict[str,Any] | str], blocks) or "[空媒体注入]")
+    blocks: list[dict[str, Any]] = await build_media_blocks(sources)
+    message = HumanMessage(
+        content=cast(list[dict[str, Any] | str], blocks) or "[空媒体注入]"
+    )
     message.additional_kwargs["_media_injected"] = True
     message.additional_kwargs["_media_sources"] = list(sources)
     return message

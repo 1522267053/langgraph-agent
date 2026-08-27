@@ -204,7 +204,7 @@ FORBIDDEN_PATH_PATTERNS = [
 
 MAX_FILE_SIZE = 50 * 1024 * 1024
 MAX_CONTENT_SIZE = 50 * 1024 * 1024
-MAX_FILE_READ_LINES = 100
+MAX_FILE_READ_LINE_LENGTH = 2000
 MAX_SEARCH_RESULTS = 50
 MAX_SEARCH_FILE_SIZE = 5 * 1024 * 1024
 MAX_LIST_RESULTS = 100
@@ -320,15 +320,17 @@ class ShellToolInput(BaseModel):
 
 
 def _file_read_caps() -> tuple[int, int]:
-    """file_read 单次返回封顶值（字节预留 1024 余量给行号前缀/JSON 转义，避免下游二次截断）
+    """file_read 单次返回封顶值
+
+    与下游 smart_truncate_output 阈值（tool_output_truncate.py）同源透传：
+    直接引用同一份全局配置，内部封顶 == 下游截断阈值，字段级检查用严格大于号
+    且作用于原始字符串，故 file_read 结果恒可透传、不会触发二次截断。
+    若未来截断器 dict 路径增加 1× 序列化总量闸门，此处需重新预留 JSON 转义余量。
 
     Returns:
         (字节上限, 行数上限)
     """
-    return (
-        max(1024, settings.tool_output_max_bytes - 1024),
-        settings.tool_output_max_lines,
-    )
+    return (settings.tool_output_max_bytes, settings.tool_output_max_lines)
 
 
 def _shrink_end_to_bytes(text: str, start: int, end: int, max_bytes: int) -> int:
@@ -337,6 +339,27 @@ def _shrink_end_to_bytes(text: str, start: int, end: int, max_bytes: int) -> int
         over = len(text[start:end].encode("utf-8")) - max_bytes
         end = max(start, end - max(1, over // 3 + 1))
     return end
+
+
+def _is_binary_sample(sample: bytes) -> bool:
+    """按前几 KB 采样判断文件是否为二进制：含 NUL 字节即判二进制；
+    否则不可打印控制字符占比 >30% 判二进制"""
+    if not sample:
+        return False
+    if b"\x00" in sample:
+        return True
+    non_printable = sum(1 for b in sample if b < 9 or (13 < b < 32))
+    return non_printable / len(sample) > 0.3
+
+
+def _truncate_line_length(line: str) -> str:
+    """单行超长截断（防止内嵌 base64 / 压缩 JS 等单行超长内容撑爆上下文）"""
+    if len(line) <= MAX_FILE_READ_LINE_LENGTH:
+        return line
+    return (
+        line[:MAX_FILE_READ_LINE_LENGTH]
+        + f"... (line truncated to {MAX_FILE_READ_LINE_LENGTH} chars)"
+    )
 
 
 class FileReadInput(BaseModel):
@@ -348,7 +371,10 @@ class FileReadInput(BaseModel):
     )
     limit: Optional[int] = Field(
         None,
-        description="读取行数，单次最多 100 行，不传则读取 100 行，与end_char互斥",
+        description=(
+            f"读取行数，单次最多 {settings.tool_output_max_lines} 行，"
+            "不传则读取上限行数，与end_char互斥"
+        ),
     )
     start_char: Optional[int] = Field(
         None,
@@ -445,18 +471,6 @@ class UploadToFileManagerInput(BaseModel):
     file_path: str = Field(
         ...,
         description="要导入文件管理的文件路径，相对当前工作目录（也可用绝对路径）",
-    )
-
-
-class ViewMediaInput(BaseModel):
-    """查看媒体文件工具输入参数"""
-
-    file_path: str = Field(
-        ...,
-        description=(
-            "要查看的媒体文件路径（图片/音频/PDF），相对当前工作目录（也可用绝对路径）；"
-            "网络图片可直接传 URL"
-        ),
     )
 
 
@@ -577,6 +591,35 @@ def _diagnose_empty_output(task: "BackgroundShellTask", command: str) -> Optiona
     return " ".join(hints)
 
 
+_SHELL_ERR_NOT_FOUND = re.compile(
+    r"(command not found|is not recognized|无法识别|不是内部或外部命令)", re.IGNORECASE
+)
+_SHELL_ERR_PERMISSION = re.compile(
+    r"(permission denied|access is denied|拒绝访问|operation not permitted|eacces|eperm)",
+    re.IGNORECASE,
+)
+
+
+def _classify_shell_error(
+    status: str, return_code: Optional[int], stderr: str
+) -> Optional[str]:
+    """将任务终态归类为结构化错误类型，便于模型按类型决定 retry/fallback/上报
+
+    Returns:
+        timeout / not_found / permission_denied / runtime_error；
+        运行中或成功返回 None（成功且双空输出由 to_dict 补充 empty_stdout）
+    """
+    if status == "timeout":
+        return "timeout"
+    if return_code in (None, 0):
+        return None
+    if return_code in (127, 9009) or _SHELL_ERR_NOT_FOUND.search(stderr or ""):
+        return "not_found"
+    if _SHELL_ERR_PERMISSION.search(stderr or ""):
+        return "permission_denied"
+    return "runtime_error"
+
+
 def _apply_shell_output_truncation(result: dict, task) -> None:
     """对 shell 工具返回的 stdout/stderr 应用统一截断，就地修改 result dict
 
@@ -651,6 +694,12 @@ class BackgroundShellTask:
             "return_code": self.return_code,
             "elapsed_seconds": round(elapsed, 2) if elapsed else None,
         }
+        error_type = _classify_shell_error(self.status, self.return_code, self.stderr)
+        if error_type is None and self.return_code == 0:
+            if not self.stdout.strip() and not self.stderr.strip():
+                error_type = "empty_stdout"
+        if error_type:
+            result["error_type"] = error_type
         return result
 
 
@@ -899,7 +948,7 @@ class ShellNodeHandler(BaseNodeHandler):
     ConfigClass = ShellNodeConfig
 
     _working_dir: Optional[Path] = None
-    # view_media 可注入的媒体类型集合（由 llm_tool_executor 按模型能力×适配器注入；空则不注册工具）
+    # file_read 可自动注入的媒体类型集合（由 llm_tool_executor 按模型能力×适配器注入；空则媒体文件按普通文件处理）
     _media_caps: set = set()
 
     def _resolve_working_dir(self) -> Optional[Path]:
@@ -1154,14 +1203,22 @@ class ShellNodeHandler(BaseNodeHandler):
         ) -> str | dict:
             is_valid, error_msg = validate_command(command)
             if not is_valid:
-                return {"error": error_msg, "success": False}
+                return {
+                    "error": error_msg,
+                    "success": False,
+                    "error_type": "blocked_command",
+                }
 
             try:
                 command_working_dir = self._resolve_tool_working_dir(
                     workdir, base_working_dir
                 )
             except ValueError as e:
-                return {"error": str(e), "success": False}
+                return {
+                    "error": str(e),
+                    "success": False,
+                    "error_type": "invalid_workdir",
+                }
 
             _cleanup_expired_tasks()
 
@@ -1170,7 +1227,11 @@ class ShellNodeHandler(BaseNodeHandler):
                     command, stdin=asyncio.subprocess.PIPE, cwd=command_working_dir
                 )
             except Exception as e:
-                return {"error": f"启动进程失败: {e}", "success": False}
+                return {
+                    "error": f"启动进程失败: {e}",
+                    "success": False,
+                    "error_type": "spawn_error",
+                }
 
             task = BackgroundShellTask(
                 task_id=str(uuid.uuid4()),
@@ -1288,6 +1349,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 "当 shell_executor 返回 task_id 时使用此工具获取进度；支持多次调用与多个任务并发查询。"
                 "wait_time 参数指定阻塞等待秒数（8~120秒），长任务建议设置较大值一次性等待完成。"
                 "返回字段: status(running/completed/failed/timeout), stdout, stderr, return_code, elapsed_seconds。"
+                "失败时附带 error_type(timeout/not_found/permission_denied/runtime_error/empty_stdout)，可据此决定重试或换方案。"
             ),
             func=None,
             coroutine=query_task_status,
@@ -1387,6 +1449,16 @@ class ShellNodeHandler(BaseNodeHandler):
             start_char: Optional[int] = None,
             end_char: Optional[int] = None,
         ) -> str | dict:
+            stripped_path = (file_path or "").strip()
+            if stripped_path.startswith(("http://", "https://")):
+                return {
+                    "success": False,
+                    "error": (
+                        "不支持直接读取网络资源，请先用 shell_executor"
+                        "（curl/wget）下载到本地后再读取本地路径"
+                    ),
+                }
+
             is_valid, error_msg = _validate_file_path(file_path)
             if not is_valid:
                 return {"error": error_msg, "success": False}
@@ -1398,11 +1470,65 @@ class ShellNodeHandler(BaseNodeHandler):
                 return {"error": f"路径不是文件: {file_path}", "success": False}
 
             file_size = path.stat().st_size
+
+            # ---- L1 媒体自动注入：图片/音频/PDF 以多模态注入下一轮对话 ----
+            from app.utils.media_resolver import (
+                MAX_FILE_SIZE as MEDIA_MAX_FILE_SIZE,
+                _classify_by_ext,
+            )
+
+            capability = _classify_by_ext(path.name)
+            # 仅在模型具备媒体能力时才走媒体分支；否则视为普通文件，
+            # 由下方二进制拦截兜底（避免对不支持视觉的模型提示抽帧看图）
+            if capability and self._media_caps:
+                if capability == "video":
+                    return {
+                        "success": False,
+                        "error": "视频文件暂不支持查看，可用 shell/ffmpeg 抽帧为图片后读取",
+                    }
+                if capability in self._media_caps:
+                    if file_size > MEDIA_MAX_FILE_SIZE:
+                        return {
+                            "success": False,
+                            "error": (
+                                f"媒体文件过大（{file_size / 1024 / 1024:.1f}MB），"
+                                f"注入上限 {MEDIA_MAX_FILE_SIZE // 1024 // 1024}MB"
+                            ),
+                        }
+                    return {
+                        "success": True,
+                        "file_path": str(path),
+                        "media_type": capability,
+                        "injected": True,
+                        "message": "媒体内容已注入，将在下一轮对话中可见",
+                    }
+                return {
+                    "success": False,
+                    "error": f"当前模型不支持{capability}输入，无法查看该文件",
+                }
+
             if file_size > MAX_FILE_SIZE:
                 return {
                     "error": f"文件过大（{file_size} 字节），最大支持 {MAX_FILE_SIZE} 字节",
                     "success": False,
                 }
+
+            # ---- L2 二进制拦截：前 4KB 采样检测，避免二进制被当文本读成乱码 ----
+            try:
+                with open(path, "rb") as fb:
+                    sample = fb.read(4096)
+                if _is_binary_sample(sample):
+                    return {
+                        "success": False,
+                        "error": (
+                            f"Cannot read binary file: {path}"
+                            "（二进制文件不适合按文本读取）。"
+                            "如需提取信息，请用 file_write 写入 python 脚本后"
+                            "用 shell_executor 执行处理"
+                        ),
+                    }
+            except OSError as e:
+                return {"error": f"文件读取失败: {e}", "success": False}
 
             try:
                 raw, _encoding = _detect_and_read(path)
@@ -1410,6 +1536,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 return {"error": f"文件读取失败: {e}", "success": False}
 
             total_chars = len(raw)
+            cap_bytes, cap_lines = _file_read_caps()
 
             # ---- 字符模式 ----
             if start_char is not None:
@@ -1421,8 +1548,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 s = max(0, start_char)
                 e = min(end_char, total_chars) if end_char is not None else total_chars
 
-                # 单次读取双维度封顶（字节预留余量 + 行数），避免下游二次截断
-                cap_bytes, cap_lines = _file_read_caps()
+                # 单次读取双维度封顶；续读位置始终基于原始文本，不受展示层截断影响
                 requested_e = e
                 e = _shrink_end_to_bytes(raw, s, e, cap_bytes)
                 content = raw[s:e]
@@ -1430,18 +1556,29 @@ class ShellNodeHandler(BaseNodeHandler):
                     content = "\n".join(content.split("\n")[:cap_lines])
                     e = s + len(content)
                 truncated_by_limit = e < requested_e
+                line_cut = any(
+                    len(ln) > MAX_FILE_READ_LINE_LENGTH for ln in content.split("\n")
+                )
+                display = "\n".join(
+                    _truncate_line_length(ln) for ln in content.split("\n")
+                )
                 result: dict = {
                     "success": True,
                     "file_path": str(path),
                     "total_chars": total_chars,
                     "start_char": s,
                     "end_char": e,
-                    "content": content,
+                    "content": display,
                 }
                 if truncated_by_limit:
                     result["truncated_hint"] = (
-                        f"本次读取因超过单次上限（{cap_bytes} 字节 / {cap_lines} 行）被截断，"
-                        f"如需继续请用 start_char={e} 接着读取"
+                        f"(Output capped at {cap_bytes // 1024}KB / {cap_lines} lines. "
+                        f"Use start_char={e} to continue.)"
+                    )
+                elif line_cut:
+                    result["truncated_hint"] = (
+                        f"部分行超过 {MAX_FILE_READ_LINE_LENGTH} 字符仅展示前缀，"
+                        "如需完整内容请用 start_char/end_char 按字符位置精确读取"
                     )
                 if e < total_chars:
                     result["has_more"] = True
@@ -1450,19 +1587,15 @@ class ShellNodeHandler(BaseNodeHandler):
             # ---- 行模式 ----
             lines = raw.splitlines()
             total_lines = len(lines)
-            actual_limit = (
-                min(limit, MAX_FILE_READ_LINES) if limit else MAX_FILE_READ_LINES
-            )
+            actual_limit = min(limit, cap_lines) if limit else cap_lines
             start = (offset - 1) if offset and offset >= 1 else 0
             end = min(start + actual_limit, len(lines))
             selected = lines[start:end]
 
-            cap_bytes, _cap_lines = _file_read_caps()
-
-            # 单行大文件：截断该行并提示改用字符模式分段读取
+            # 单行大文件：提示改用字符模式分段读取
             if total_lines == 1 and len(raw.encode("utf-8")) > cap_bytes:
                 line_end = _shrink_end_to_bytes(raw, 0, total_chars, cap_bytes)
-                content = f"1: {raw[:line_end]}"
+                content = _truncate_line_length(f"1: {raw[:line_end]}")
                 result: dict = {
                     "success": True,
                     "file_path": str(path),
@@ -1472,24 +1605,23 @@ class ShellNodeHandler(BaseNodeHandler):
                     "limit": 1,
                     "content": content,
                     "truncated_hint": (
-                        f"目前文件只有单行（共 {total_chars} 字符），"
-                        "行模式无法分段读取，请使用 start_char 和 end_char 参数来读取"
+                        f"(Output capped at {cap_bytes // 1024}KB."
+                        "单行大文件请用 start_char 和 end_char 参数按字符位置分段读取)"
                     ),
                 }
                 return result
 
-            # 逐行累加字节封顶（含行号前缀），超限提前停止
+            # 逐行累加字节封顶（含行号前缀，先做单行展示截断再计入预算），超限提前停止
             content_lines: list[str] = []
             byte_count = 0
             for i, line in enumerate(selected):
-                formatted = f"{start + i + 1}: {line}"
+                formatted = _truncate_line_length(f"{start + i + 1}: {line}")
                 line_size = len(formatted.encode("utf-8")) + (1 if content_lines else 0)
                 if byte_count + line_size > cap_bytes:
                     break
                 content_lines.append(formatted)
                 byte_count += line_size
             returned = len(content_lines)
-            content = "\n".join(content_lines)
             result: dict = {
                 "success": True,
                 "file_path": str(path),
@@ -1497,35 +1629,43 @@ class ShellNodeHandler(BaseNodeHandler):
                 "total_chars": total_chars,
                 "offset": start + 1,
                 "limit": returned,
-                "content": content,
+                "content": "\n".join(content_lines),
             }
             if start + returned < total_lines:
                 result["has_more"] = True
+                next_offset = start + returned + 1
                 if returned < len(selected):
                     if returned == 0:
                         result["truncated_hint"] = (
-                            f"第 {start + 1} 行过大（超过单次上限 {cap_bytes} 字节），"
-                            "请使用 start_char 和 end_char 参数读取该行片段"
+                            f"(第 {start + 1} 行超过单次上限 {cap_bytes // 1024}KB，"
+                            "请用 start_char 和 end_char 参数读取该行片段)"
                         )
                     else:
                         result["truncated_hint"] = (
-                            f"本次读取因超过单次上限（{cap_bytes} 字节）提前停止，"
-                            f"如需继续请用 offset={start + returned + 1} 接着读取"
+                            f"(Output capped at {cap_bytes // 1024}KB. Showing lines "
+                            f"{start + 1}-{start + returned}. "
+                            f"Use offset={next_offset} to continue.)"
                         )
+                else:
+                    result["hint"] = (
+                        f"(Showing lines {start + 1}-{start + returned} of {total_lines}. "
+                        f"Use offset={next_offset} to continue.)"
+                    )
             return result
 
         file_read_tool = StructuredTool(
             name="file_read",
             description=(
-                "读取文件内容。支持两种模式：\n"
+                "读取本地文件内容。图片/PDF/音频文件会自动以多模态形式注入下一轮对话"
+                "（模型支持时），无需其他工具；不支持网络 URL 和视频。\n"
                 "1. 行模式（默认）：返回带行号的文本(格式如 ```12: 文件内容的一行```)，"
-                "单次最多读取 100 行且总字节超限（默认约 9KB）会提前停止，"
-                "大文件请多次调用并指定 offset 分段读取。\n"
+                f"单次默认读取 {settings.tool_output_max_lines} 行、总字节封顶约 "
+                f"{settings.tool_output_max_bytes // 1024}KB，超限提前停止并提示续读 offset。\n"
                 "2. 字符模式：传 start_char/end_char 按字符位置读取（0-indexed），"
-                "适合读取单行大文件的特定片段，不传 end_char 则读取到文件末尾。"
-                "单次读取有字节/行数封顶（默认约 9KB / 500 行），超出会截断并在 truncated_hint 中提示续读的 start_char。\n"
+                "适合读取单行大文件的特定片段，不传 end_char 则读取到文件末尾，"
+                "超出封顶会在 truncated_hint 中提示续读的 start_char。\n"
                 "两种模式互斥（offset 与 start_char 不能同时传）。"
-                "读取前无需校验文件是否存在，工具会自动处理。"
+                "超过 2000 字符的单行仅展示前缀。读取前无需校验文件是否存在。"
             ),
             func=None,
             coroutine=file_read,
@@ -2041,112 +2181,6 @@ class ShellNodeHandler(BaseNodeHandler):
             args_schema=UploadToFileManagerInput,
         )
 
-        # ---- view_media：将媒体文件注入下一轮对话（多模态查看） ----
-
-        media_tool = None
-        if self._media_caps:
-            from urllib.parse import urlparse as _urlparse
-
-            from app.utils.media_resolver import (
-                MAX_FILE_SIZE as MEDIA_MAX_FILE_SIZE,
-                _classify_by_ext,
-                _is_url,
-            )
-
-            supported_labels: list[str] = []
-            if "image" in self._media_caps:
-                supported_labels.append("图片（png/jpg/jpeg/gif/webp/bmp/svg）")
-            if "audio" in self._media_caps:
-                supported_labels.append("音频（mp3/wav/ogg/flac/aac）")
-            if "pdf" in self._media_caps:
-                supported_labels.append("PDF 文档")
-            caps_desc = "、".join(supported_labels)
-
-            async def view_media(file_path: str) -> dict:
-                raw = (file_path or "").strip()
-                if not raw:
-                    return {"success": False, "error": "file_path 不能为空"}
-
-                if _is_url(raw):
-                    # URL 仅支持图片（OpenAI Chat Completions 对 file URL 抛错）
-                    from app.utils.media_resolver import _classify_by_ext as _cbe
-
-                    capability = _cbe(_urlparse(raw).path)
-                    if capability != "image":
-                        return {
-                            "success": False,
-                            "error": "URL 仅支持图片文件，其他类型请先下载到本地再传入路径",
-                        }
-                    if "image" not in self._media_caps:
-                        return {
-                            "success": False,
-                            "error": f"当前模型不支持图片输入，支持: {caps_desc}",
-                        }
-                    return {
-                        "success": True,
-                        "file_path": raw,
-                        "media_type": "image",
-                        "message": "图片 URL 已注入，将在下一轮对话中可见",
-                    }
-
-                is_valid, error_msg = _validate_file_path(raw)
-                if not is_valid:
-                    return {"success": False, "error": error_msg}
-
-                candidate = Path(raw)
-                work_dir = base_working_dir
-                if not candidate.is_absolute() and work_dir is not None:
-                    candidate = Path(work_dir) / raw
-                candidate = candidate.resolve()
-
-                if not candidate.exists() or not candidate.is_file():
-                    return {"success": False, "error": f"文件不存在: {file_path}"}
-
-                capability = _classify_by_ext(candidate.name)
-                if capability is None or capability == "video":
-                    return {
-                        "success": False,
-                        "error": (
-                            f"不支持的文件类型（视频暂不支持），当前支持: {caps_desc}"
-                        ),
-                    }
-                if capability not in self._media_caps:
-                    return {
-                        "success": False,
-                        "error": f"当前模型不支持{capability}输入，支持: {caps_desc}",
-                    }
-
-                file_size = candidate.stat().st_size
-                if file_size > MEDIA_MAX_FILE_SIZE:
-                    return {
-                        "success": False,
-                        "error": (
-                            f"文件大小 {file_size / 1024 / 1024:.1f}MB 超过限制"
-                            f"（最大 {MEDIA_MAX_FILE_SIZE // 1024 // 1024}MB）"
-                        ),
-                    }
-
-                return {
-                    "success": True,
-                    "file_path": str(candidate),
-                    "media_type": capability,
-                    "message": "媒体内容已注入，将在下一轮对话中可见",
-                }
-
-            media_tool = StructuredTool(
-                name="view_media",
-                description=(
-                    f"查看媒体文件内容（{caps_desc}），文件内容将以多模态形式注入下一轮对话。"
-                    "需要理解图片/PDF/音频的具体内容时使用此工具，不要用 file_read 读取二进制文件。"
-                    "file_path 支持相对当前工作目录或绝对路径；网络图片可直接传 URL。"
-                    "单文件最大 20MB。"
-                ),
-                func=None,
-                coroutine=view_media,
-                args_schema=ViewMediaInput,
-                metadata={"media_tool": True},
-            )
-
         tool_list = [
             shell_tool,
             shell_task_status_tool,
@@ -2159,8 +2193,6 @@ class ShellNodeHandler(BaseNodeHandler):
             list_files_tool,
             upload_to_file_manager_tool,
         ]
-        if media_tool is not None:
-            tool_list.append(media_tool)
         return tool_list
 
     @classmethod
@@ -2180,13 +2212,6 @@ class ShellNodeHandler(BaseNodeHandler):
                 "description": "将生成的文件导入文件管理并返回下载链接",
             },
         ]
-        if cls._media_caps:
-            info.append(
-                {
-                    "name": "view_media",
-                    "description": "以多模态形式查看图片/音频/PDF 文件内容",
-                }
-            )
         return info
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
@@ -2223,11 +2248,11 @@ class ShellNodeHandler(BaseNodeHandler):
             "### 输出控制（重要）\n"
             f"- 执行命令前先评估可能的输出量，大量输出务必先过滤（{filter_hint}），或重定向到文件后用 file_read 分段读取\n"
             "- 如果命令输出被截断（返回 _truncated 标记），完整内容已自动保存到临时文件，需要时用 file_read 读取\n"
-            "- file_read 单次最多读取 100 行，大文件用 offset 参数分段读取\n"
+            f"- file_read 单次最多读取 {settings.tool_output_max_lines} 行，大文件用 offset 参数分段读取，续读位置见返回的提示信息\n"
             "- file_search 搜索文件内容（正则匹配），支持目录递归或单个文件路径\n"
             "- list_files 按文件名 glob 匹配（如 **/*.py），用于查找文件或了解目录结构\n"
             "- 禁止用 cat 读取大文件，始终使用 file_read\n"
-            "- 需要理解图片/PDF/音频内容时用 view_media 注入查看，禁止用 file_read 读二进制文件\n"
+            "- 需要查看图片/PDF/音频时直接用 file_read 读本地路径（自动多模态注入下一轮对话）；不支持网络 URL 和视频，禁止用 file_read 读其他二进制文件\n"
             "- Shell 每次调用都是独立进程；切换目录时传入 shell_executor 的 workdir 参数，不要依赖 cd 影响后续调用\n"
             "- 长时间任务超过等待秒数会转后台并返回 task_id：后台任务支持并发与多次长阻塞查询（wait_time 最长120秒），"
             "期间可继续执行其他工具调用\n"

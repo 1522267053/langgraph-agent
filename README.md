@@ -326,7 +326,7 @@ LOGIN_PASSWORD=your_password
 
 # 工具输出截断（超过阈值时保存到临时文件，返回预览）
 TOOL_OUTPUT_MAX_LINES=500
-TOOL_OUTPUT_MAX_BYTES=10240
+TOOL_OUTPUT_MAX_BYTES=30720
 ```
 
 完整配置见 [.env.example](.env.example)。

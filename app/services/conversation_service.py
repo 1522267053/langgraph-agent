@@ -72,7 +72,7 @@ class ConversationService:
                 "content": serialize_content(msg.content),
                 "sequence": start_sequence + i,
             }
-            # view_media 注入的多模态消息标记为内部消息；
+            # file_read 媒体注入的多模态消息标记为内部消息；
             # media_sources 存入 input_data，历史加载时按 capabilities 重建媒体块
             if msg.additional_kwargs.get("_media_injected"):
                 kwargs["message_type"] = "media_injected"
@@ -177,7 +177,7 @@ class ConversationService:
             message: BaseMessage = SystemMessage(content=msg.content or "")
         elif msg.role == "human":
             content = msg.content or ""
-            # view_media 注入消息：按 sources 重建媒体块（capabilities 为空时
+            # file_read 媒体注入消息：按 sources 重建媒体块（capabilities 为空时
             # 保持纯文本）
             if msg.message_type == "media_injected" and capabilities:
                 media_sources = (msg.input_data or {}).get("media_sources")
