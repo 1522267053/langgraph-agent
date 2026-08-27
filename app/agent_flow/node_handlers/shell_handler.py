@@ -278,14 +278,17 @@ def _validate_writable_path(file_path: str) -> tuple[bool, str]:
 
 
 def _detect_and_read(path: Path) -> tuple[str, str]:
-    """读取文件内容，自动检测编码（UTF-8 优先，GBK 回退）
+    """读取文件内容，自动检测编码（UTF-8 优先并剥 BOM，GBK 回退）
+
+    utf-8-sig 对无 BOM 文件行为与 utf-8 完全一致，有 BOM 时自动剥离，
+    避免首行混入隐形 \\ufeff 污染模型上下文。
 
     Returns:
         (文件内容, 使用的编码名称)
     """
     try:
-        content = path.read_text(encoding="utf-8")
-        return content, "utf-8"
+        content = path.read_text(encoding="utf-8-sig")
+        return content, "utf-8-sig"
     except UnicodeDecodeError:
         content = path.read_text(encoding="gbk", errors="replace")
         return content, "gbk"
@@ -2231,6 +2234,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 "- 命令经 Windows PowerShell 执行：多行命令与含换行的字符串均安全支持。\n"
                 "- 不要使用 cmd 特有语法：%VAR%（应用 $env:VAR）、dir /b（应用 Get-ChildItem -Name 或 ls）、set X=Y（应用 $env:X='Y'）。\n"
                 "- curl/wget 已还原为真实工具（非 Invoke-WebRequest 别名）；head/tail 已内置；更复杂过滤用 Where-Object/Select-Object。\n"
+                "- curl/wget 接口响应常带 UTF-8 BOM：python 解析管道 JSON 禁止 json.load(sys.stdin)，改用 json.loads(sys.stdin.buffer.read().decode('utf-8-sig'))。\n"
                 "- 返回的 exit_code 取自最后一个原生命令（如 python/curl/git）；纯 cmdlet 结尾时以是否报错为准。\n"
             )
             if platform.system() == "Windows"
