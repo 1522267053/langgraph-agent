@@ -16,6 +16,11 @@ import type {
 } from '@fullcalendar/core'
 import { agendaApi } from '@/api/agenda'
 import type { Agenda, AgendaCondition } from '@/api/agenda'
+import { useIsMobile } from '@/composables/useIsMobile'
+
+const { isMobile } = useIsMobile()
+/** 弹窗宽度：手机端近全屏，避免表单被压缩 */
+const dialogWidth = computed(() => (isMobile.value ? '94%' : '600px'))
 
 const loading = ref(false)
 const calendarLoading = ref(false)
@@ -640,16 +645,19 @@ async function handleSubmit() {
 // ---- 日历视图 ----
 let calendarApi: any = null
 
+// 手机端默认周视图 + 更矮的高度，避免月视图格子过挤（setup 时一次性判断）
+const isSmallScreen = window.matchMedia('(max-width: 767px)').matches
+
 const calendarOptions = reactive<CalendarOptions>({
   plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin],
-  initialView: 'dayGridMonth',
+  initialView: isSmallScreen ? 'timeGridWeek' : 'dayGridMonth',
   locale: zhCnLocale,
   headerToolbar: {
     left: 'prev,next today',
     center: 'title',
     right: 'dayGridMonth,timeGridWeek,timeGridDay'
   },
-  height: 700,
+  height: isSmallScreen ? 520 : 700,
   editable: true,
   dayMaxEvents: 3,
   events: [],
@@ -1071,7 +1079,7 @@ onBeforeUnmount(() => {
     </template>
 
     <!-- 新建/编辑 Dialog -->
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="600px" destroy-on-close>
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" :width="dialogWidth" destroy-on-close>
       <el-form label-width="90px" size="default">
         <el-form-item label="标题" required>
           <el-input v-model="form.title" placeholder="输入日程标题" />
@@ -1475,6 +1483,92 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 768px) {
+  /* 头部操作区允许换行 */
+  .header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* 搜索栏改为逐行堆叠，输入控件占满整行 */
+  .search-bar {
+    padding: 12px;
+  }
+
+  .search-bar :deep(.el-form-item) {
+    display: flex;
+    width: 100%;
+    margin-right: 0;
+    margin-bottom: 10px;
+  }
+
+  .search-bar :deep(.el-form-item:last-child) {
+    margin-bottom: 0;
+  }
+
+  .search-bar :deep(.el-form-item__content),
+  .search-bar :deep(.el-input),
+  .search-bar :deep(.el-select) {
+    width: 100%;
+  }
+
+  /* 列表面板取消内部滚动，改为随页面自然滚动（与全局 card-panel 移动端约定一致） */
+  .agenda-list-panel {
+    max-height: none;
+    overflow: visible;
+  }
+
+  /* Tab 栏紧凑化：隐藏 emoji 图标、缩小内边距与字号 */
+  .list-tab-item {
+    padding: 10px 4px;
+    font-size: 13px;
+    gap: 3px;
+  }
+
+  .tab-icon {
+    display: none;
+  }
+
+  /* 批量栏、分组头允许换行 */
+  .batch-bar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding: 8px 12px;
+  }
+
+  .group-header {
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    padding: 10px 12px 6px;
+  }
+
+  /* 卡片：标题放开单行截断、元信息自动折行，避免文字挤压 */
+  .agenda-card {
+    align-items: flex-start;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .card-left {
+    gap: 8px;
+  }
+
+  .card-title {
+    white-space: normal;
+    word-break: break-word;
+    flex-wrap: wrap;
+  }
+
+  .card-meta {
+    flex-wrap: wrap;
+    gap: 2px 10px;
+  }
+
+  .meta-time {
+    font-family: inherit;
+    white-space: normal;
+  }
+
   .card-right {
     flex-direction: column;
     align-items: flex-end;
@@ -1483,6 +1577,29 @@ onBeforeUnmount(() => {
 
   .card-actions {
     opacity: 1;
+  }
+
+  /* 日历视图紧凑化：工具栏纵向堆叠、缩小标题与按钮尺寸 */
+  .calendar-panel {
+    padding: 8px;
+  }
+
+  .calendar-panel :deep(.fc-toolbar.fc-header-toolbar) {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .calendar-panel :deep(.fc-toolbar-title) {
+    font-size: 1rem;
+  }
+
+  .calendar-panel :deep(.fc-button) {
+    padding: 2px 8px;
+    font-size: 12px;
+  }
+
+  .calendar-panel :deep(.fc-event) {
+    font-size: 11px;
   }
 }
 

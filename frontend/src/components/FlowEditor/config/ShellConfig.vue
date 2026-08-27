@@ -105,6 +105,13 @@ function updateVariableSource(index: number, source: string): void {
           />
           <span class="unit-label">秒</span>
         </el-form-item>
+        <el-form-item label="工作目录">
+          <el-input
+            v-model="localConfig.default_workdir"
+            placeholder="留空使用 Agent 工作目录；相对路径基于项目根目录解析"
+            @blur="updateConfig"
+          />
+        </el-form-item>
       </el-form>
       <div class="config-hint">
         <el-text size="small" type="info">
