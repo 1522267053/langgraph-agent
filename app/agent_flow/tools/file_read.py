@@ -9,6 +9,9 @@ file_read 工具实现
 不支持的输入（网络 URL、视频、.xls/.doc 旧格式）均返回明确错误引导。
 """
 
+import hashlib
+import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +24,7 @@ from app.agent_flow.tools.common import (
     has_utf16_bom,
     validate_file_path,
 )
+from app.config.build_utils import get_temp_dir
 from app.config.settings import settings
 from app.utils.document_processor import document_processor
 
@@ -68,6 +72,72 @@ def _truncate_line_length(line: str) -> str:
         line[:MAX_FILE_READ_LINE_LENGTH]
         + f"... (line truncated to {MAX_FILE_READ_LINE_LENGTH} chars)"
     )
+
+
+# ---- 文档全量落盘与 sections 目录索引 ----
+
+DOC_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$", flags=re.M)
+DOC_SECTION_NAME_MAX_CHARS = 100
+DOC_SECTIONS_MAX_ENTRIES = 200
+DOC_SECTIONS_BUDGET_BYTES = 8192
+
+
+def _extract_doc_meta(path: Path, raw: str, ext: str) -> Optional[dict]:
+    """文档全文落盘为 md，并构建 sections 目录索引（xlsx 的 sheet / docx 的标题）
+
+    缓存名含 路径+mtime+size 哈希：同文件重复读取直接命中不重写，
+    文件被修改后自动失效重建；存放于 get_temp_dir() 复用其定时清理。
+    sections 条目数与序列化字节双重封顶，保证响应整体仍低于下游截断阈值。
+    """
+    digest = hashlib.sha256(
+        f"{path}|{path.stat().st_mtime_ns}|{path.stat().st_size}".encode("utf-8")
+    ).hexdigest()[:10]
+    temp_path = get_temp_dir() / f"file_read_{ext}_{digest}.md"
+    if not temp_path.exists():
+        temp_path.write_text(raw, encoding="utf-8")
+
+    total = 0
+    budget = 0
+    entries: list[dict] = []
+    for match in DOC_HEADING_RE.finditer(raw):
+        total += 1
+        if (
+            len(entries) >= DOC_SECTIONS_MAX_ENTRIES
+            or budget > DOC_SECTIONS_BUDGET_BYTES
+        ):
+            continue
+        name = match.group(2).strip()
+        if len(name) > DOC_SECTION_NAME_MAX_CHARS:
+            name = name[:DOC_SECTION_NAME_MAX_CHARS] + "..."
+        entry = {
+            "name": name,
+            "level": len(match.group(1)),
+            "start_line": raw.count("\n", 0, match.start()) + 1,
+        }
+        budget += len(json.dumps(entry, ensure_ascii=False))
+        entries.append(entry)
+
+    meta: dict = {"full_content_file": str(temp_path), "sections": entries}
+    if total != len(entries):
+        meta["_sections_truncated"] = True
+        meta["_sections_total"] = total
+    return meta
+
+
+def _apply_doc_hint(result: dict, doc_meta: Optional[dict]) -> None:
+    """在结果已有/新建提示字段中追加落盘路径与 sections 用法说明"""
+    if not doc_meta:
+        return
+    suffix = (
+        f"全文已保存到: {doc_meta['full_content_file']}；"
+        "sections 含各章节起始行，可用 offset=<start_line> 直达目标章节/sheet"
+    )
+    if result.get("truncated_hint"):
+        result["truncated_hint"] += f"。{suffix}"
+    elif result.get("hint"):
+        result["hint"] += f"。{suffix}"
+    else:
+        result["hint"] = f"({suffix})"
 
 
 class FileReadInput(BaseModel):
@@ -168,11 +238,21 @@ class FileReadService:
         doc_result = self._try_extract_document(path)
         raw = None
         document_ext = None
+        doc_meta: Optional[dict] = None
         if isinstance(doc_result, dict):
             if doc_result.get("success") is False:
                 return doc_result
             raw = doc_result["raw"]
             document_ext = doc_result["ext"]
+            if not raw.strip():
+                return {
+                    "success": False,
+                    "error": f"文档内容为空或提取失败: {file_path}",
+                }
+            try:
+                doc_meta = _extract_doc_meta(path, raw, document_ext)
+            except OSError:
+                doc_meta = None
 
         # ---- L2 媒体自动注入：图片/音频/PDF 以多模态注入下一轮对话 ----
         if raw is None:
@@ -248,6 +328,8 @@ class FileReadService:
             if document_ext:
                 r["content_type"] = "document"
                 r["ext"] = document_ext
+                if doc_meta:
+                    r.update(doc_meta)
             return r
 
         # ---- L4 字符模式 ----
@@ -293,6 +375,7 @@ class FileReadService:
                 )
             if e < total_chars:
                 result["has_more"] = True
+            _apply_doc_hint(result, doc_meta)
             return result
 
         # ---- L4 行模式 ----
@@ -321,6 +404,7 @@ class FileReadService:
                     ),
                 }
             )
+            _apply_doc_hint(result, doc_meta)
             return result
 
         # 逐行累加字节封顶（含行号前缀，先做单行展示截断再计入预算），超限提前停止
@@ -364,6 +448,7 @@ class FileReadService:
                     f"(Showing lines {start + 1}-{start + returned} of {total_lines}. "
                     f"Use offset={next_offset} to continue.)"
                 )
+        _apply_doc_hint(result, doc_meta)
         return result
 
     def build_tool(self) -> StructuredTool:
@@ -374,6 +459,10 @@ class FileReadService:
                 "读取本地文件内容。图片/PDF/音频文件会自动以多模态形式注入下一轮对话"
                 "（模型支持时）；xlsx/docx 自动转为文本（markdown 表格/标题）读取；"
                 "不支持网络 URL、视频和 .xls/.doc 旧格式。\n"
+                "xlsx/docx 读取时返回 full_content_file（全文落盘路径）与 sections"
+                "（各章节目录：xlsx 的 sheet / docx 的标题，含 start_line 起始行号），"
+                "超出单次封顶时可用 offset=<start_line> 直达目标章节/sheet，"
+                "或对 full_content_file 分段读取。\n"
                 "1. 行模式（默认）：返回带行号的文本(格式如 ```12: 文件内容的一行```)，"
                 f"单次默认读取 {settings.tool_output_max_lines} 行、总字节封顶约 "
                 f"{settings.tool_output_max_bytes // 1024}KB，超限提前停止并提示续读 offset。\n"
