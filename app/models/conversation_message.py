@@ -29,7 +29,7 @@ class ConversationMessage(DbBaseModel):
     message_type: Mapped[Optional[str]] = mapped_column(
         String(30),
         nullable=True,
-        comment="内部消息类型，如 media_injected（view_media 注入）",
+        comment="内部消息类型，如 media_injected（file_read 媒体注入）",
     )
     thinking: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, comment="思考内容"
