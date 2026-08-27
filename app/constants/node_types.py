@@ -19,4 +19,5 @@ NODE_TYPE_LABELS: dict[str, str] = {
     "intent_router": "意图路由",
     "sub_agent": "子Agent",
     "agenda": "日程",
+    "ssh": "SSH",
 }

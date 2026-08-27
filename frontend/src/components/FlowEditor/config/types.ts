@@ -206,6 +206,23 @@ export interface ShellConfig {
   output_variables: NodeVariable[]
 }
 
+/** SSH节点配置 */
+export interface SshConfig {
+  host: string
+  port: number
+  username: string
+  auth_type: 'password' | 'private_key'
+  password?: string
+  private_key?: string
+  private_key_path?: string
+  passphrase?: string
+  connect_timeout: number
+  command_timeout: number
+  max_transfer_mb: number
+  input_variables: NodeVariable[]
+  output_variables: NodeVariable[]
+}
+
 /** 记忆节点配置 */
 export interface MemoryConfig {
   max_results: number
