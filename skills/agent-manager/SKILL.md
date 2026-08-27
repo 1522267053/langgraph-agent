@@ -16,7 +16,7 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
 5. **模型优先用全局默认值**：LLM 的 `provider/model/api_key/base_url` 可留空；系统有默认模型时会自动注入。
 6. **工具边不参与执行图**：`source_handle="tools"` 只声明工具能力；普通数据流使用 `default -> default`。
 7. **必须执行验证**：创建或修改后实际运行一次，检查 SSE 是否出现 `flow_done` 且 `data.status="success"`，不能只确认 API 返回成功。
-8. **不要泄露密钥**：响应中的 `api_key` 只用于原样保留，不在回复或日志中展示。
+8. **不要泄露密钥**：响应中的 `api_key`、`password`、`private_key`、`passphrase` 等敏感字段都是掩码展示，只用于原样保留回传，不在回复或日志中展示明文。
 
 ## 按需参考
 

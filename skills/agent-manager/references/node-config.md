@@ -119,6 +119,7 @@ API 节点的请求体里嵌入上游变量：
 | `card` / `loop` | Workflow 子图复用和迭代 | `default` 数据流 |
 | `mcp` / `skill` / `memory` / `todo` | Agent 工具提供者 | `tools -> tools` |
 | `shell` / `sub_agent` / `agenda` | Agent 工具提供者 | `tools -> tools` |
+| `ssh` | Agent 工具提供者（远程命令与 SFTP） | `tools -> tools` |
 
 `source_handle="tools"` 的边不加入 LangGraph 执行图。MCP 节点同样不执行，只负责向 LLM 提供工具。
 
@@ -259,6 +260,37 @@ Shell 节点通过工具边提供 `shell_executor`、后台任务控制和文件
 - 每次调用都是独立进程，`cd` 不会改变后续调用的目录，切换目录必须传 `workdir`。
 - 命令受危险模式和路径边界校验，不要尝试绕过（`Format-Volume`、`Clear-Disk`、递归强删盘根等 PowerShell 写法同样被拦截）。
 - 长时间命令会转为后台任务并返回 `task_id`；后台任务支持并发，`shell_task_status` 可用 `wait_time`（8~120秒）长阻塞等待，多次查询不受限制。
+
+## SSH 工具
+
+SSH 节点（`ssh`）是 Agent 专用工具提供者，仅支持工具边 `tools -> tools` 连接；它不参与执行图，保存校验会拒绝普通数据边。连接信息全部内联在节点配置：
+
+```json
+{
+  "host": "192.168.1.10",
+  "port": 22,
+  "username": "root",
+  "auth_type": "password",
+  "password": "...",
+  "connect_timeout": 10,
+  "command_timeout": 300,
+  "max_transfer_mb": 50
+}
+```
+
+- 工具集固定 4 个：`ssh_executor`（执行远程命令）、`ssh_upload` / `ssh_download`（SFTP 传文件）、`ssh_list_dir`（目录列表）。同一 LLM 只能连接一个 SSH 节点。
+- `auth_type=private_key` 时改填私钥：PEM 内容写 `private_key`，或本机文件路径写 `private_key_path`；私钥口令放 `passphrase`（不是 `password`）。
+- 每次调用独立建连，`cd` 不影响后续调用。命令默认超时 `command_timeout` 秒，调用时可传 `timeout`（1~3600）覆盖。
+- 远程路径必须是 POSIX 绝对路径（以 `/` 开头）。上传父目录不存在时自动逐级创建；单文件上限取 `max_transfer_mb` 与全局工具上限的较小值，超限直接拒绝。
+- `ssh_download` 成功后自动导入文件管理并返回 `download_url` / `preview_url`；本地保存路径缺省为 Agent 工作目录加远端文件名。
+- 输出统一截断（带截断提示），大量输出先过滤（`| head -100`、`grep xxx`）；长耗时任务用 `nohup ... &` 后台化后查日志。
+- 密码、私钥和私钥口令在读取接口中均以 `****` 掩码显示，回传掩码值不会覆盖数据库原值。
+
+### 踩坑：SFTP 无会话与状态
+
+- 上传/下载/列目录之间没有会话保持，也互不知晓对方结果：传输前先用 `ssh_list_dir` 或 `ssh_executor ls <dir>` 确认远程路径真实存在。
+- 不支持目录递归传输；目标是目录时 `ssh_download` 会报 `is_directory` 错误。
+- 连接失败细分：认证错误为 `auth_failed`（检查用户名/凭据），超时为 `timeout`（调大 `connect_timeout` 重试），其余网络问题为 `connection_error`。
 
 ## 卡片
 
