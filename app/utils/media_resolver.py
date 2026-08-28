@@ -25,9 +25,6 @@ IMAGE_TYPES = {
     "image/jpeg",
     "image/gif",
     "image/webp",
-    "image/bmp",
-    "image/tiff",
-    "image/svg+xml",
 }
 
 AUDIO_TYPES = {
@@ -37,7 +34,6 @@ AUDIO_TYPES = {
     "audio/ogg",
     "audio/mp4",
     "audio/webm",
-    "audio/flac",
     "audio/aac",
 }
 
@@ -45,16 +41,13 @@ VIDEO_TYPES = {
     "video/mp4",
     "video/webm",
     "video/avi",
-    "video/mpeg",
-    "video/quicktime",
-    "video/x-msvideo",
 }
 
 PDF_TYPE = "application/pdf"
 
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".svg"}
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".mp4", ".webm", ".flac", ".aac"}
-VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mpeg", ".mov", ".mkv"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".mp4", ".webm", ".aac"}
+VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi"}
 PDF_EXTENSIONS = {".pdf"}
 XLSX_EXTENSIONS = {".xlsx", ".xls"}
 
