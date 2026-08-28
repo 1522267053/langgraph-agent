@@ -239,7 +239,7 @@ class SchedulerService:
             logger.error(f"定时任务[{task_id}]执行异常: {e}", exc_info=True)
 
     async def _cleanup_temp_files(self) -> None:
-        """清理 temp 目录中超过 7 天的文件"""
+        """清理 temp 目录中超过 7 天的文件（递归子目录），并删除清理后变空的子目录"""
         import time
 
         from app.config.build_utils import get_temp_dir
@@ -252,7 +252,7 @@ class SchedulerService:
         max_age = 7 * 24 * 3600  # 7天
         deleted = 0
 
-        for entry in temp_dir.iterdir():
+        for entry in temp_dir.rglob("*"):
             if not entry.is_file():
                 continue
             try:
@@ -261,6 +261,18 @@ class SchedulerService:
                     deleted += 1
             except Exception as e:
                 logger.warning(f"清理临时文件失败: {entry.name}: {e}")
+
+        # 删除因清理而变空的子目录（最深层优先），temp 根目录保留
+        if temp_dir.is_dir():
+            for sub_dir in sorted(
+                (p for p in temp_dir.rglob("*") if p.is_dir()),
+                key=lambda p: len(p.parts),
+                reverse=True,
+            ):
+                try:
+                    sub_dir.rmdir()
+                except OSError:
+                    pass
 
         if deleted > 0:
             logger.info(f"已清理 {deleted} 个过期临时文件")

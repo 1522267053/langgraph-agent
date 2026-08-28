@@ -53,6 +53,19 @@ const isTextEditor = computed(() => {
   )
 })
 
+// dry_run 预览结果：未写入文件，头部展示匹配统计而非"替换 N 处"
+const isDryRun = computed(() => parsedResult.value?.dry_run === true)
+
+const textEditorInfo = computed(() => {
+  const r = parsedResult.value
+  if (!r) return ''
+  if (isDryRun.value) {
+    const lines = Array.isArray(r.match_lines) ? `（第 ${r.match_lines.join('、')} 行）` : ''
+    return `预览：匹配 ${r.match_count ?? 0} 处${lines}`
+  }
+  return `替换 ${r.replaced_count} 处`
+})
+
 const isSaveFile = computed(() => {
   return (
     !!parsedResult.value?.success &&
@@ -234,7 +247,7 @@ watch(
         <span class="tool-result-path" :title="parsedResult?.file_path">
           {{ parsedResult?.file_path }}
         </span>
-        <span class="tool-result-info">替换 {{ parsedResult?.replaced_count }} 处</span>
+        <span class="tool-result-info">{{ textEditorInfo }}</span>
       </div>
       <div class="tool-result-actions">
         <el-button :icon="CopyDocument" link size="small" @click="handleCopy">复制</el-button>
@@ -246,7 +259,13 @@ watch(
         <span class="diff-text">{{ line.text }}</span>
       </div>
     </div>
+    <!-- dry_run 多匹配警告：实际执行会因多处匹配被拒 -->
+    <div v-if="isDryRun && parsedResult?.warning" class="tool-edit-warning">
+      {{ parsedResult.warning }}
+    </div>
     <div v-if="parsedResult?.message" class="tool-edit-message">{{ parsedResult.message }}</div>
+    <!-- 行尾容错匹配说明 -->
+    <div v-if="parsedResult?.note" class="tool-edit-note">{{ parsedResult.note }}</div>
   </div>
 
   <div v-else class="tool-fallback-result">
@@ -446,6 +465,20 @@ watch(
   font-size: 12px;
   color: #059669;
   background: rgba(236, 253, 245, 0.6);
+}
+
+.tool-edit-warning {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: #b45309;
+  background: rgba(254, 243, 199, 0.6);
+}
+
+.tool-edit-note {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: #1d4ed8;
+  background: rgba(219, 234, 254, 0.5);
 }
 
 .tool-fallback-result {
