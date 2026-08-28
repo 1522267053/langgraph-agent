@@ -88,9 +88,9 @@ def has_utf16_bom(sample: bytes) -> bool:
 def detect_and_read(path: Path) -> tuple[str, str]:
     """读取文件内容，自动检测编码
 
-    探测顺序：UTF-16 BOM（FF FE/FE FF）→ UTF-8（utf-8-sig 剥 BOM）→ GBK 回退。
-    utf-8-sig 对无 BOM 文件行为与 utf-8 完全一致，有 BOM 时自动剥离，
-    避免首行混入隐形 \\ufeff 污染模型上下文。
+    探测顺序：UTF-16 BOM（FF FE/FE FF）→ UTF-8（有 BOM 用 utf-8-sig 剥离）→ GBK 回退。
+    返回的编码名反映真实编码：无 BOM 的 UTF-8 返回 "utf-8" 而非 "utf-8-sig"，
+    保证调用方以该编码写回时不会凭空追加 BOM（utf-8-sig codec 写入必带 BOM）。
 
     Returns:
         (文件内容, 使用的编码名称)
@@ -101,7 +101,38 @@ def detect_and_read(path: Path) -> tuple[str, str]:
         return raw.decode("utf-16"), "utf-16"
     if raw.startswith(b"\xfe\xff"):
         return raw.decode("utf-16"), "utf-16-be"
-    try:
+    if raw.startswith(b"\xef\xbb\xbf"):
         return raw.decode("utf-8-sig"), "utf-8-sig"
+    try:
+        return raw.decode("utf-8"), "utf-8"
     except UnicodeDecodeError:
         return raw.decode("gbk", errors="replace"), "gbk"
+
+
+def analyze_line_endings(text: str) -> tuple[int, int]:
+    """统计文本行尾分布
+
+    Returns:
+        (CRLF 数, 纯 LF 数)。纯 LF 指未被 CRLF 覆盖的 \n。
+    """
+    crlf = text.count("\r\n")
+    lf_only = text.count("\n") - crlf
+    return crlf, lf_only
+
+
+def detect_dominant_line_ending(text: str) -> str:
+    """检测文本的主导行尾，各半或无换行时返回 LF
+
+    Returns:
+        "\r\n"（CRLF 严格占多数）或 "\n"
+    """
+    crlf, lf_only = analyze_line_endings(text)
+    return "\r\n" if crlf > lf_only else "\n"
+
+
+def normalize_line_endings(text: str, target: str = "\n") -> str:
+    """将文本行尾统一为目标风格（先把 \r\n 与孤立 \r 归一为 \n，再转换）"""
+    unified = text.replace("\r\n", "\n").replace("\r", "\n")
+    if target == "\r\n":
+        return unified.replace("\n", "\r\n")
+    return unified

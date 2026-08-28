@@ -451,6 +451,9 @@ class FileReadService:
         return StructuredTool(
             name="file_read",
             description=(
+                "TL;DR: 常规文件（单行<2000字符）用 offset+limit 行模式；"
+                "单行超长文件（minified JSON/压缩JS/长日志）用 start_char+end_char 字符模式；"
+                "两种模式互斥。\n"
                 "读取本地文件内容。图片/PDF/视频/音频文件会自动以多模态形式注入下一轮对话"
                 "（模型支持时）；xlsx/docx 自动转为文本（markdown 表格/标题）读取；"
                 "不支持网络 URL、视频和 .xls/.doc 旧格式。\n"

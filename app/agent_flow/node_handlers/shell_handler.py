@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Literal, Optional, Sequence
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
@@ -34,7 +34,10 @@ from app.agent_flow.node_handlers.base_handler import (
 from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.agent_flow.tools.common import (
     MAX_FILE_SIZE,
+    analyze_line_endings as _analyze_line_endings,
     detect_and_read as _detect_and_read,
+    detect_dominant_line_ending as _detect_dominant_line_ending,
+    normalize_line_endings as _normalize_line_endings,
     validate_file_path as _validate_file_path,
     validate_writable_path as _validate_writable_path,
 )
@@ -221,10 +224,15 @@ def _is_hidden_path(path: Path) -> bool:
 
 
 def _atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
-    """原子写入文件：先写临时文件，再替换目标文件，避免写入中断导致文件损坏"""
+    """原子写入文件：先写临时文件，再替换目标文件，避免写入中断导致文件损坏
+
+    newline="" 禁用平台换行翻译：Windows 文本模式默认会把 \n 写成 \r\n、
+    并把内容中已有的 \r\n 损坏成 \r\r\n；关闭后写入字节与内容完全一致，
+    行尾风格完全由调用方通过 normalize_line_endings 显式控制。
+    """
     fd, tmp_path_str = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding=encoding) as f:
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as f:
             f.write(content)
         Path(tmp_path_str).replace(path)
     except Exception:
@@ -264,6 +272,13 @@ class FileWriteInput(BaseModel):
 
     file_path: str = Field(..., description="文件绝对路径")
     content: str = Field(..., description="要写入的文件内容（覆盖或新建）")
+    line_ending: Literal["auto", "lf", "crlf"] = Field(
+        "auto",
+        description=(
+            "行尾风格：auto（默认）已有文件跟随其主导行尾、新建文件用 LF；"
+            "lf/crlf 强制指定"
+        ),
+    )
 
 
 class ShellTaskStatusInput(BaseModel):
@@ -1058,6 +1073,17 @@ class ShellNodeHandler(BaseNodeHandler):
                     "error_type": "invalid_workdir",
                 }
 
+            if command_working_dir is not None and not command_working_dir.exists():
+                return {
+                    "error": (
+                        f"工作目录不存在: {command_working_dir}"
+                        "（可能已被删除、移动或权限变更）。"
+                        "请确认目录状态，或用 workdir 参数指定其他有效目录。"
+                    ),
+                    "success": False,
+                    "error_type": "working_dir_missing",
+                }
+
             _cleanup_expired_tasks()
 
             try:
@@ -1318,23 +1344,70 @@ class ShellNodeHandler(BaseNodeHandler):
             except Exception as e:
                 return {"error": f"文件读取失败: {e}", "success": False}
 
-            if old_string not in raw:
-                return {
-                    "error": "未找到要替换的原始文本（old_string），请检查是否与文件内容完全一致（包括缩进和换行）",
-                    "success": False,
-                }
-
-            count = raw.count(old_string)
-            if count > 1 and not replace_all:
-                return {
-                    "error": f"找到 {count} 处匹配，请缩小 old_string 范围使其唯一匹配，或设置 replace_all=True 替换所有匹配",
-                    "success": False,
-                }
-
-            if replace_all:
-                new_raw = raw.replace(old_string, new_string)
+            # 行尾感知：new_string 统一为文件主导行尾，避免引入混合行尾
+            dominant = _detect_dominant_line_ending(raw)
+            new_string = _normalize_line_endings(new_string, dominant)
+            crlf_count, lf_count = _analyze_line_endings(raw)
+            if crlf_count and lf_count:
+                ending_note = f"文件混用行尾（CRLF×{crlf_count}/LF×{lf_count}）"
+            elif crlf_count:
+                ending_note = "文件为 CRLF 行尾"
             else:
-                new_raw = raw.replace(old_string, new_string, 1)
+                ending_note = ""
+
+            match_mode = "exact"
+            count = raw.count(old_string)
+            tolerant_pattern: Optional[re.Pattern] = None
+
+            if count == 0:
+                # 行尾容错匹配：old_string 统一为 \n 后，将换行翻译为 \r?\n 再匹配
+                old_norm = _normalize_line_endings(old_string, "\n")
+                tolerant_pattern = re.compile(
+                    r"\r?\n".join(re.escape(part) for part in old_norm.split("\n"))
+                )
+                tolerant_count = len(tolerant_pattern.findall(raw))
+                if tolerant_count:
+                    count = tolerant_count
+                    match_mode = "line_ending_tolerant"
+                else:
+                    # 末尾换行差异诊断：old_string 尾部换行在文件中不存在
+                    stripped = old_norm.rstrip("\n")
+                    if stripped != old_norm and stripped in raw:
+                        return {
+                            "error": (
+                                "未找到匹配：old_string 末尾含换行符，但文件中对应文本"
+                                "末尾无换行（可能是文件末行）。请去掉 old_string 末尾的"
+                                f"换行后重试。{ending_note}"
+                            ),
+                            "success": False,
+                        }
+                    diag = "未找到要替换的原始文本（old_string），请检查是否与文件内容完全一致（包括缩进和换行）"
+                    if ending_note:
+                        diag += (
+                            f"。{ending_note}，old_string 的换行风格可能与文件不一致"
+                        )
+                    return {"error": diag, "success": False}
+
+            if count > 1 and not replace_all:
+                suffix = f"（{ending_note}）" if ending_note else ""
+                return {
+                    "error": (
+                        f"找到 {count} 处匹配，请缩小 old_string 范围使其唯一匹配，"
+                        f"或设置 replace_all=True 替换所有匹配{suffix}"
+                    ),
+                    "success": False,
+                }
+
+            if match_mode == "exact":
+                if replace_all:
+                    new_raw = raw.replace(old_string, new_string)
+                else:
+                    new_raw = raw.replace(old_string, new_string, 1)
+            else:
+                max_replace = 0 if replace_all else 1
+                new_raw, _ = tolerant_pattern.subn(
+                    lambda _m: new_string, raw, count=max_replace
+                )
 
             try:
                 _atomic_write(path, new_raw, encoding=encoding)
@@ -1343,13 +1416,21 @@ class ShellNodeHandler(BaseNodeHandler):
 
             replaced_count = count if replace_all else 1
             diff = _diff_preview(old_string, new_string)
-            return {
+            result = {
                 "success": True,
                 "file_path": str(path),
                 "replaced_count": replaced_count,
+                "match_mode": match_mode,
                 "message": f"成功替换 {replaced_count} 处文本",
                 "diff": diff,
             }
+            if match_mode == "line_ending_tolerant":
+                result["note"] = (
+                    "old_string 与文件行尾不一致，已按行尾容错匹配完成替换"
+                    + (f"；{ending_note}" if ending_note else "")
+                    + "。new_string 已统一为文件主导行尾"
+                )
+            return result
 
         text_editor_tool = StructuredTool(
             name="text_editor",
@@ -1357,7 +1438,9 @@ class ShellNodeHandler(BaseNodeHandler):
                 "精确替换文件中的文本。"
                 "传入 old_string（要替换的原始文本）和 new_string（替换后的新文本），必须精确匹配。"
                 "old_string 需与文件内容完全一致（包括缩进、空格和换行）。"
+                "old_string 与文件仅行尾不一致（CRLF/LF 混用）时会自动容错匹配并在结果中声明 match_mode。"
                 "如果 old_string 匹配多处且未设置 replace_all，会返回错误提示。"
+                "new_string 会自动统一为文件的主导行尾，无需关心行尾风格。"
                 "编辑文件前建议先使用 file_read 读取文件内容，确认要替换的文本。"
             ),
             func=None,
@@ -1367,17 +1450,40 @@ class ShellNodeHandler(BaseNodeHandler):
 
         # ---- file_write ----
 
-        async def file_write(file_path: str, content: str) -> str:
+        async def file_write(
+            file_path: str,
+            content: str,
+            line_ending: Literal["auto", "lf", "crlf"] = "auto",
+        ) -> str:
             is_valid, error_msg = _validate_writable_path(file_path)
             if not is_valid:
                 return f"路径校验失败: {error_msg}"
+
+            path = Path(file_path).resolve()
+            existed = path.exists()
+
+            # 行尾处理：auto 时已有文件跟随其主导行尾，新建文件用 LF
+            if line_ending == "crlf":
+                target_ending = "\r\n"
+            elif line_ending == "lf":
+                target_ending = "\n"
+            elif existed:
+                try:
+                    existing_raw, _enc = _detect_and_read(path)
+                except Exception:
+                    existing_raw = ""
+                target_ending = (
+                    _detect_dominant_line_ending(existing_raw) if existing_raw else "\n"
+                )
+            else:
+                target_ending = "\n"
+
+            content = _normalize_line_endings(content, target_ending)
 
             content_size = len(content.encode("utf-8"))
             if content_size > MAX_CONTENT_SIZE:
                 return f"写入内容过大（{content_size} 字节），最大支持 {MAX_CONTENT_SIZE} 字节"
 
-            path = Path(file_path).resolve()
-            existed = path.exists()
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 _atomic_write(path, content, encoding="utf-8")
@@ -1385,7 +1491,8 @@ class ShellNodeHandler(BaseNodeHandler):
                 return f"文件写入失败: {e}"
 
             action = "覆盖" if existed else "新建"
-            return f"文件{action}成功: {path}"
+            ending_label = "CRLF" if target_ending == "\r\n" else "LF"
+            return f"文件{action}成功: {path}（行尾 {ending_label}）"
 
         file_write_tool = StructuredTool(
             name="file_write",
@@ -1393,6 +1500,8 @@ class ShellNodeHandler(BaseNodeHandler):
                 "将内容写入文件。如果文件已存在则覆盖，不存在则新建。"
                 "父目录不存在时会自动创建。适用于创建新文件或完全重写文件内容。"
                 "如果只想修改文件中的部分文本，请使用 text_editor 工具。"
+                "行尾规则：line_ending=auto（默认）时已有文件自动跟随其主导行尾、"
+                "新建文件使用 LF；可显式传 lf 或 crlf 强制指定行尾。"
             ),
             func=None,
             coroutine=file_write,
