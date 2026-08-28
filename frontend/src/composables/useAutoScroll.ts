@@ -33,9 +33,31 @@ export function useAutoScroll(
   let _lastScrollHeight = 0
   let _wasScrollable = false
 
-  function hasScrollableOverflow(el: HTMLElement): boolean {
-    return el.scrollHeight - el.clientHeight > 1
+function hasScrollableOverflow(el: HTMLElement): boolean {
+  return el.scrollHeight - el.clientHeight > 1
+}
+
+/**
+ * 事件目标是否位于 root 内部的嵌套滚动容器（工具输出、思考块等）
+ * 这类事件是用户在滚动子容器，不应视为对主容器的滚动意图
+ */
+function isNestedScrollTarget(event: Event, root: HTMLElement): boolean {
+  const target = event.target
+  if (!(target instanceof Element) || target === root || !root.contains(target)) {
+    return false
   }
+  let node: Element | null = target
+  while (node && node !== root) {
+    if (node instanceof HTMLElement) {
+      const overflowY = getComputedStyle(node).overflowY
+      if ((overflowY === 'auto' || overflowY === 'scroll') && hasScrollableOverflow(node)) {
+        return true
+      }
+    }
+    node = node.parentElement
+  }
+  return false
+}
 
   function cancelPendingScroll(): void {
     if (_trailingTimer) {
@@ -150,6 +172,7 @@ export function useAutoScroll(
   function onUserScrollIntent(event?: Event): void {
     const el = containerRef.value
     if (!el) return
+    if (event && isNestedScrollTarget(event, el)) return
     _wasScrollable = hasScrollableOverflow(el)
     if (!_wasScrollable) {
       userScrolledUp.value = false
