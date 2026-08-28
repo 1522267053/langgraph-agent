@@ -40,6 +40,12 @@ from app.utils.message_utils import extract_text_content, extract_token_usage
 logger = logging.getLogger(__name__)
 
 
+def format_exception_message(e: BaseException) -> str:
+    """格式化异常信息，str() 为空时回退到 repr() 以保留异常类名。"""
+    msg = str(e).strip()
+    return msg if msg else repr(e)
+
+
 _RUN_END_EVENT_TYPES = frozenset({"error", "flow_done", "waiting_human"})
 _COMPLETED_RUN_RETENTION_SECONDS = 60
 
@@ -239,7 +245,9 @@ class AgentExecutorService(BaseExecutorService):
                 run.session_id,
                 run.run_id,
             )
-            terminal_event = FlowEventFactory.error(f"执行失败: {exc}")
+            terminal_event = FlowEventFactory.error(
+                f"执行失败: {format_exception_message(exc)}"
+            )
         finally:
             run.finalizing = True
             try:
@@ -319,7 +327,9 @@ class AgentExecutorService(BaseExecutorService):
                 else:
                     error = completed_task.exception()
                     terminal_event = FlowEventFactory.error(
-                        f"执行失败: {error}" if error else "Agent 执行异常结束"
+                        f"执行失败: {format_exception_message(error)}"
+                        if error
+                        else "Agent 执行异常结束"
                     )
                 self._waiting_sessions.discard(session_id)
                 self._pending_save_sessions.discard(session_id)
@@ -1370,7 +1380,7 @@ class AgentExecutorService(BaseExecutorService):
                 interrupt_service.clear_agent_interrupted(session_id)
 
             except Exception as e:
-                error_msg = str(e)
+                error_msg = format_exception_message(e)
                 logger.exception(f"Agent执行失败: {e}")
                 # ---- WebSocket 广播（chat 失败通知）----
                 try:
@@ -1655,7 +1665,7 @@ class AgentExecutorService(BaseExecutorService):
                 interrupt_service.clear_agent_interrupted(session_id)
 
             except Exception as e:
-                error_msg = str(e)
+                error_msg = format_exception_message(e)
                 logger.exception(f"Agent恢复执行失败: {e}")
                 # ---- WebSocket 广播（resume 失败通知）----
                 try:

@@ -26,6 +26,7 @@ from app.agent_flow.flow_event import (
     SubAgentToolApprovalEvent,
 )
 from app.services.flow_service import flow_service
+from app.services.agent_executor_service import format_exception_message
 
 if TYPE_CHECKING:
     from app.agent_flow.tool_resolver import LlmToolConfig
@@ -262,7 +263,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
                 return {
                     "success": False,
                     "status": "error",
-                    "error": f"子Agent执行失败: {str(e)}",
+                    "error": f"子Agent执行失败: {format_exception_message(e)}",
                 }
 
         tool = StructuredTool(
@@ -368,10 +369,14 @@ async def _run_sub_agent(
             "error": f"子Agent已暂停并等待人工输入: {question}",
         }
 
+    error_detail = (result.get("error") or "").strip()
+    if not error_detail.rstrip(":： "):
+        error_detail = "未知错误"
+
     error_result = {
         "success": False,
         "status": str(status),
-        "error": f"子Agent执行出错: {result.get('error') or '未知错误'}",
+        "error": f"子Agent执行出错: {error_detail}",
     }
     output_data = result.get("output_data") or {}
     content = output_data.get("content")
