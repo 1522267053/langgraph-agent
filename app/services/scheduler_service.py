@@ -77,7 +77,7 @@ class SchedulerService:
         )
         self._scheduler.add_job(
             self._sync_ai_models,
-            CronTrigger(hour="8,13,18", minute=0),
+            CronTrigger(hour="9,18", minute=0),
             id="sync_ai_models",
             name="同步AI模型与供应商数据",
             replace_existing=True,

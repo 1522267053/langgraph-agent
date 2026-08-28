@@ -68,6 +68,10 @@ class UpdateState(str, Enum):
     ROLLED_BACK = "rolled_back"
 
 
+class _TokenExpiredError(Exception):
+    """下载更新包时服务端返回 401（token 已失效）"""
+
+
 def _no_update_result() -> dict:
     current = get_version()
     return {
@@ -147,6 +151,10 @@ class UpdateService:
 
             async with AsyncSessionLocal() as db:
                 await global_config_service.ensure_marketplace_cache(db)
+                from app.services.marketplace_service import marketplace_service
+
+                # 过期自动重登（connect 含注册兜底），避免把过期 token 拼进下载地址
+                token = await marketplace_service.ensure_token(db)
             resp = await self._get_http_client().get(request_url)
             resp.raise_for_status()
             body = resp.json()
@@ -163,7 +171,6 @@ class UpdateService:
 
                 parsed = urlparse(check_url)
                 download_url = f"{parsed.scheme}://{parsed.netloc}{download_url}"
-                token = global_config_service.marketplace_token
                 if token:
                     qsep = "&" if "?" in download_url else "?"
                     download_url = f"{download_url}{qsep}token={token}"
@@ -236,7 +243,9 @@ class UpdateService:
             self._sha256 = sha256
             self._file_size = file_size
             self._set_state(UpdateState.DOWNLOADING)
-            self._download_task = asyncio.create_task(self._do_download(url))
+            self._download_task = asyncio.create_task(
+                self._do_download_with_relogin(url)
+            )
 
     async def _do_download(self, url: str) -> None:
         cache_dir = get_update_cache_dir()
@@ -248,6 +257,8 @@ class UpdateService:
                 timeout=timeout, follow_redirects=True
             ) as client:
                 async with client.stream("GET", url) as resp:
+                    if resp.status_code == 401:
+                        raise _TokenExpiredError("下载凭证已过期(HTTP 401)")
                     resp.raise_for_status()
                     content_length = int(resp.headers.get("content-length", 0))
                     # 服务端 chunked 传输无 Content-Length 时，退回市场元数据大小计算进度
@@ -286,11 +297,63 @@ class UpdateService:
             self._set_state(UpdateState.IDLE)
             tmp_path.unlink(missing_ok=True)
             raise
+        except _TokenExpiredError:
+            # 不在此处置 FAILED：保持 DOWNLOADING，交给 _do_download_with_relogin 重登重试
+            tmp_path.unlink(missing_ok=True)
+            raise
         except Exception as e:
             logger.exception("下载更新包失败")
             self._error = str(e)
             self._set_state(UpdateState.FAILED)
             tmp_path.unlink(missing_ok=True)
+
+    async def _do_download_with_relogin(self, url: str) -> None:
+        """下载更新包，收到 401（token 过期）时重新登录市场并重试一次"""
+        try:
+            await self._do_download(url)
+        except asyncio.CancelledError:
+            raise
+        except _TokenExpiredError:
+            new_url = await self._refresh_download_url()
+            if not new_url:
+                return
+            try:
+                await self._do_download(new_url)
+            except _TokenExpiredError:
+                # 重登后重试仍 401：凭证彻底失效，置 FAILED 收敛状态
+                self._error = "重新登录后重试仍返回 401，请检查市场账号状态"
+                self._set_state(UpdateState.FAILED)
+
+    async def _refresh_download_url(self) -> Optional[str]:
+        """401 后强制重登市场并重建带新 token 的下载地址；失败置 FAILED 返回 None"""
+        try:
+            from app.config.database import AsyncSessionLocal
+            from app.services.marketplace_service import marketplace_service
+
+            async with AsyncSessionLocal() as db:
+                await marketplace_service.clear_token(db)
+                token = await marketplace_service.connect(db)
+            if not token:
+                reason = marketplace_service.get_connect_error_msg() or "未知原因"
+                logger.warning("更新下载 401 后重新登录市场失败: %s", reason)
+                self._error = f"下载凭证过期且重新登录失败: {reason}"
+                self._set_state(UpdateState.FAILED)
+                return None
+        except Exception as e:
+            logger.warning("更新下载 401 后重登流程异常: %s", e)
+            self._error = f"下载凭证过期，重新登录市场异常: {e}"
+            self._set_state(UpdateState.FAILED)
+            return None
+
+        info = await self.fetch_latest_version()
+        self._latest_info = info
+        new_url = info.get("download_url", "")
+        if not info.get("has_update") or not new_url:
+            self._error = "重新登录后未获取到有效下载地址"
+            self._set_state(UpdateState.FAILED)
+            return None
+        logger.info("市场重登成功，已刷新下载地址重试更新包下载")
+        return new_url
 
     async def cancel_download(self) -> dict:
         if self._download_task and not self._download_task.done():
