@@ -265,6 +265,13 @@ class TextEditInput(BaseModel):
     )
     new_string: str = Field(..., description="替换后的新文本")
     replace_all: bool = Field(False, description="是否替换所有匹配项，默认仅替换第一个")
+    dry_run: bool = Field(
+        False,
+        description=(
+            "预览模式：只匹配并返回 match_count/match_lines/diff，不写入文件；"
+            "确认无误后去掉此参数执行替换"
+        ),
+    )
 
 
 class FileWriteInput(BaseModel):
@@ -496,6 +503,11 @@ def _diff_preview(
     if len(new_lines) > max_lines:
         diff_lines.append("+...")
     return "\n".join(diff_lines)
+
+
+def _collect_match_lines(raw: str, starts: list[int], max_lines: int = 10) -> list[int]:
+    """将匹配起始偏移换算为 1-based 行号，最多返回 max_lines 个"""
+    return sorted(raw.count("\n", 0, s) + 1 for s in starts[:max_lines])
 
 
 @dataclass
@@ -1317,6 +1329,7 @@ class ShellNodeHandler(BaseNodeHandler):
             old_string: str,
             new_string: str,
             replace_all: bool = False,
+            dry_run: bool = False,
         ) -> str | dict:
             is_valid, error_msg = _validate_writable_path(file_path)
             if not is_valid:
@@ -1356,7 +1369,10 @@ class ShellNodeHandler(BaseNodeHandler):
                 ending_note = ""
 
             match_mode = "exact"
-            count = raw.count(old_string)
+            match_starts: list[int] = [
+                m.start() for m in re.finditer(re.escape(old_string), raw)
+            ]
+            count = len(match_starts)
             tolerant_pattern: Optional[re.Pattern] = None
 
             if count == 0:
@@ -1365,9 +1381,10 @@ class ShellNodeHandler(BaseNodeHandler):
                 tolerant_pattern = re.compile(
                     r"\r?\n".join(re.escape(part) for part in old_norm.split("\n"))
                 )
-                tolerant_count = len(tolerant_pattern.findall(raw))
-                if tolerant_count:
-                    count = tolerant_count
+                tolerant_matches = list(tolerant_pattern.finditer(raw))
+                if tolerant_matches:
+                    match_starts = [m.start() for m in tolerant_matches]
+                    count = len(match_starts)
                     match_mode = "line_ending_tolerant"
                 else:
                     # 末尾换行差异诊断：old_string 尾部换行在文件中不存在
@@ -1375,27 +1392,59 @@ class ShellNodeHandler(BaseNodeHandler):
                     if stripped != old_norm and stripped in raw:
                         return {
                             "error": (
-                                "未找到匹配：old_string 末尾含换行符，但文件中对应文本"
+                                "找到 0 处匹配：old_string 末尾含换行符，但文件中对应文本"
                                 "末尾无换行（可能是文件末行）。请去掉 old_string 末尾的"
                                 f"换行后重试。{ending_note}"
                             ),
                             "success": False,
+                            "match_count": 0,
                         }
-                    diag = "未找到要替换的原始文本（old_string），请检查是否与文件内容完全一致（包括缩进和换行）"
+                    diag = "找到 0 处匹配：未找到要替换的原始文本（old_string），请检查是否与文件内容完全一致（包括缩进和换行）"
                     if ending_note:
                         diag += (
                             f"。{ending_note}，old_string 的换行风格可能与文件不一致"
                         )
-                    return {"error": diag, "success": False}
+                    return {"error": diag, "success": False, "match_count": 0}
+
+            match_lines = _collect_match_lines(raw, match_starts)
+
+            if dry_run:
+                result = {
+                    "success": True,
+                    "dry_run": True,
+                    "file_path": str(path),
+                    "match_count": count,
+                    "match_mode": match_mode,
+                    "match_lines": match_lines,
+                    "message": (
+                        f"预览模式：找到 {count} 处匹配，未写入文件。"
+                        "diff 为替换后将产生的变化；确认无误后去掉 dry_run 参数执行替换"
+                    ),
+                    "diff": _diff_preview(old_string, new_string),
+                }
+                if count > 1 and not replace_all:
+                    result["warning"] = (
+                        "当前匹配多处且未设置 replace_all，实际执行会报错；"
+                        "请缩小 old_string 范围或设置 replace_all=True"
+                    )
+                if match_mode == "line_ending_tolerant":
+                    result["note"] = (
+                        "old_string 与文件行尾不一致，将按行尾容错匹配完成替换"
+                        + (f"；{ending_note}" if ending_note else "")
+                        + "。new_string 会统一为文件主导行尾"
+                    )
+                return result
 
             if count > 1 and not replace_all:
                 suffix = f"（{ending_note}）" if ending_note else ""
                 return {
                     "error": (
-                        f"找到 {count} 处匹配，请缩小 old_string 范围使其唯一匹配，"
+                        f"找到 {count} 处匹配（未执行替换），请缩小 old_string 范围使其唯一匹配，"
                         f"或设置 replace_all=True 替换所有匹配{suffix}"
                     ),
                     "success": False,
+                    "match_count": count,
+                    "match_lines": match_lines,
                 }
 
             if match_mode == "exact":
@@ -1440,6 +1489,8 @@ class ShellNodeHandler(BaseNodeHandler):
                 "old_string 需与文件内容完全一致（包括缩进、空格和换行）。"
                 "old_string 与文件仅行尾不一致（CRLF/LF 混用）时会自动容错匹配并在结果中声明 match_mode。"
                 "如果 old_string 匹配多处且未设置 replace_all，会返回错误提示。"
+                "可传 dry_run=True 预览：只匹配不写入，返回 match_count、match_lines"
+                "（各匹配行号）和将产生的 diff，适合大范围替换前先确认。"
                 "new_string 会自动统一为文件的主导行尾，无需关心行尾风格。"
                 "编辑文件前建议先使用 file_read 读取文件内容，确认要替换的文本。"
             ),
@@ -1985,7 +2036,12 @@ class ShellNodeHandler(BaseNodeHandler):
             "- 长时间任务超过等待秒数会转后台并返回 task_id：后台任务支持并发与多次长阻塞查询（wait_time 最长120秒），"
             "期间可继续执行其他工具调用\n"
             + ps_compat_hint
-            + f"\n临时文件输出目录: `{temp_dir}`（会被定时清理，勿存放重要数据）"
+            + (
+                f"\n临时文件输出目录: `{temp_dir}`（7天后自动清理，勿存放重要数据）。"
+                "一次性验证/分析脚本（依赖检查、diff 对比、数据抽样等）一律用 file_write "
+                "写到该目录（文件名建议 _check/_tmp 前缀），禁止写入项目源码目录或工作目录，"
+                "用完无需手动删除"
+            )
         ]
         if working_dir is not None:
             lines.append(
