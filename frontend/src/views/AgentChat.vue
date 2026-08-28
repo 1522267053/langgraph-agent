@@ -43,8 +43,14 @@ const {
 } = useAutoScroll(messagesContainer, [])
 
 function handleScrollbarPointerDown(event: PointerEvent): void {
+  const root = scrollbarRef.value?.$el as Element | undefined
   const target = event.target
-  if (target instanceof Element && target.closest('.el-scrollbar__bar')) {
+  if (
+    root instanceof Element &&
+    target instanceof Element &&
+    target.closest('.el-scrollbar') === root &&
+    target.closest('.el-scrollbar__bar')
+  ) {
     onUserScrollIntent(event)
   }
 }
