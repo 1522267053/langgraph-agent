@@ -1,4 +1,4 @@
-import { get } from '@/api/index'
+import { get, post } from '@/api/index'
 import type { ApiResponse } from '@/types/common'
 
 export interface ProviderInfo {
@@ -41,5 +41,9 @@ export const aiProviderApi = {
 
   getModels(providerId: string): Promise<{ data: ApiResponse<ModelInfo[]> }> {
     return get<ModelInfo[]>(`/ai-provider/models/${providerId}`)
+  },
+
+  sync(): Promise<{ data: ApiResponse }> {
+    return post('/ai-provider/sync')
   }
 }

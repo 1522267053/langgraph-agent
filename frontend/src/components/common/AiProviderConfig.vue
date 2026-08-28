@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch, nextTick } from 'vue'
-import { QuestionFilled } from '@element-plus/icons-vue'
+import { QuestionFilled, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { aiProviderApi, type ProviderInfo, type ModelInfo } from '@/api/ai_provider'
 import type { ModelCapabilities } from '@/components/FlowEditor/config/types'
@@ -22,6 +22,7 @@ const props = withDefaults(
     modelClearable?: boolean
     autoSelectFirst?: boolean
     labelPosition?: 'left' | 'top'
+    showSyncButton?: boolean
   }>(),
   {
     showCapabilities: false,
@@ -37,7 +38,8 @@ const props = withDefaults(
     providerClearable: false,
     modelClearable: false,
     autoSelectFirst: false,
-    labelPosition: 'left'
+    labelPosition: 'left',
+    showSyncButton: false
   }
 )
 
@@ -161,6 +163,23 @@ async function loadModels(providerId: string) {
   }
 }
 
+const syncingModels = ref(false)
+
+async function handleSyncModels() {
+  if (syncingModels.value) return
+  syncingModels.value = true
+  try {
+    await aiProviderApi.sync()
+    await loadProviders()
+    if (provider.value) {
+      await loadModels(provider.value)
+    }
+    ElMessage.success('模型同步完成')
+  } finally {
+    syncingModels.value = false
+  }
+}
+
 async function onProviderChange(newVal: string, oldVal: string) {
   if (_init.value) return
   if (props.resetOnProviderChange) {
@@ -235,7 +254,30 @@ function handleExtraBodyBlur() {
 <template>
   <el-form v-if="labelPosition === 'left'" label-width="90px" size="small">
     <el-form-item label="供应商">
+      <div v-if="showSyncButton" class="provider-with-sync">
+        <el-select
+          v-model="provider"
+          placeholder="选择供应商"
+          filterable
+          :clearable="providerClearable"
+          :disabled="disabled"
+          @change="onFieldChange"
+        >
+          <el-option
+            v-for="item in providerList"
+            :key="item.name"
+            :label="item.label"
+            :value="item.name"
+          />
+        </el-select>
+        <el-tooltip content="从远端刷新供应商与模型列表" placement="top">
+          <el-button :loading="syncingModels" :disabled="disabled" @click="handleSyncModels">
+            <el-icon style="margin-right: 4px"><Refresh /></el-icon>同步
+          </el-button>
+        </el-tooltip>
+      </div>
       <el-select
+        v-else
         v-model="provider"
         placeholder="选择供应商"
         style="width: 100%"
@@ -399,7 +441,30 @@ function handleExtraBodyBlur() {
 
   <template v-else>
     <el-form-item label="AI 供应商">
+      <div v-if="showSyncButton" class="provider-with-sync">
+        <el-select
+          v-model="provider"
+          placeholder="请选择供应商"
+          filterable
+          :clearable="providerClearable"
+          :disabled="disabled"
+          @change="onFieldChange"
+        >
+          <el-option
+            v-for="item in providerList"
+            :key="item.name"
+            :label="item.label"
+            :value="item.name"
+          />
+        </el-select>
+        <el-tooltip content="从远端刷新供应商与模型列表" placement="top">
+          <el-button :loading="syncingModels" :disabled="disabled" @click="handleSyncModels">
+            <el-icon style="margin-right: 4px"><Refresh /></el-icon>同步
+          </el-button>
+        </el-tooltip>
+      </div>
       <el-select
+        v-else
         v-model="provider"
         placeholder="请选择供应商"
         style="width: 100%"
@@ -545,6 +610,14 @@ function handleExtraBodyBlur() {
 </template>
 
 <style scoped>
+.provider-with-sync {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.provider-with-sync .el-select {
+  flex: 1;
+}
 .context-length-unit {
   font-size: 12px;
   color: #909399;

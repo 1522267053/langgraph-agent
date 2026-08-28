@@ -265,11 +265,6 @@ class FileReadService:
             # 仅在模型具备媒体能力时才走媒体分支；否则视为普通文件，
             # 由下方二进制拦截兜底（避免对不支持视觉的模型提示抽帧看图）
             if capability and self._media_caps:
-                if capability == "video":
-                    return {
-                        "success": False,
-                        "error": "视频文件暂不支持查看，可用 shell/ffmpeg 抽帧为图片后读取",
-                    }
                 if capability in self._media_caps:
                     if file_size > MEDIA_MAX_FILE_SIZE:
                         return {

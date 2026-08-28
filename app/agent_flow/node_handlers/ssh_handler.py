@@ -143,6 +143,24 @@ class SshListDirInput(BaseModel):
     remote_dir: str = Field(".", description="远程目录绝对路径，`.` 为用户主目录")
 
 
+class SshSetConfigInput(BaseModel):
+    """ssh_set_config 输入参数（字段级合并，未传的保留节点原配置）"""
+
+    host: Optional[str] = Field(None, description="远程主机地址（IP 或域名）")
+    port: Optional[int] = Field(None, ge=1, le=65535, description="SSH 端口")
+    username: Optional[str] = Field(None, description="登录用户名")
+    auth_type: Optional[str] = Field(
+        None,
+        description="认证方式: password 或 private_key；不传则根据提供的凭据自动推导",
+    )
+    password: Optional[str] = Field(None, description="登录密码（密码认证）")
+    private_key: Optional[str] = Field(None, description="私钥 PEM 内容（私钥认证）")
+    private_key_path: Optional[str] = Field(
+        None, description="私钥文件路径（本机绝对路径），与 private_key 二选一"
+    )
+    passphrase: Optional[str] = Field(None, description="私钥口令，无私钥口令时留空")
+
+
 # ---- 同步核心层（均在 asyncio.to_thread 中执行）----
 
 
@@ -705,11 +723,133 @@ class SshNodeHandler(BaseNodeHandler):
             args_schema=SshListDirInput,
         )
 
+        # ---- ssh_set_config ----
+
+        async def set_ssh_config(
+            host: Optional[str] = None,
+            port: Optional[int] = None,
+            username: Optional[str] = None,
+            auth_type: Optional[str] = None,
+            password: Optional[str] = None,
+            private_key: Optional[str] = None,
+            private_key_path: Optional[str] = None,
+            passphrase: Optional[str] = None,
+        ) -> dict:
+            updates: dict = {}
+            # 路径/地址类字段去空白；密码/私钥/口令按原样保留（PEM 内容空白有意义）
+            if host and host.strip():
+                updates["host"] = host.strip()
+            if port is not None:
+                if not (1 <= port <= 65535):
+                    return {
+                        "success": False,
+                        "error": f"port 必须在 1-65535 之间（收到: {port}）",
+                        "error_type": "invalid_params",
+                    }
+                updates["port"] = port
+            if username and username.strip():
+                updates["username"] = username.strip()
+            if auth_type and auth_type.strip():
+                auth_norm = auth_type.strip()
+                if auth_norm not in ("password", "private_key"):
+                    return {
+                        "success": False,
+                        "error": (
+                            f"auth_type 仅支持 password/private_key（收到: {auth_norm}）"
+                        ),
+                        "error_type": "invalid_params",
+                    }
+                updates["auth_type"] = auth_norm
+            if password:
+                updates["password"] = password
+            if private_key and private_key.strip():
+                updates["private_key"] = private_key.strip()
+            if private_key_path and private_key_path.strip():
+                updates["private_key_path"] = private_key_path.strip()
+            if passphrase:
+                updates["passphrase"] = passphrase
+            if not updates:
+                return {
+                    "success": False,
+                    "error": "未提供任何要更新的字段",
+                    "error_type": "invalid_params",
+                }
+            # 未显式指定认证方式时，按传入的凭据类型推导
+            if "auth_type" not in updates:
+                if "password" in updates:
+                    updates["auth_type"] = "password"
+                elif "private_key" in updates or "private_key_path" in updates:
+                    updates["auth_type"] = "private_key"
+
+            merged = cfg.model_copy(update=updates)
+            config_err = _validate_connection_config(merged)
+            if config_err:
+                return {
+                    "success": False,
+                    "error": f"配置校验失败（原配置未修改）: {config_err}",
+                    "error_type": "invalid_config",
+                }
+
+            # 就地更新闭包持有的 cfg，本次执行内的后续调用立即生效
+            for key, value in updates.items():
+                setattr(cfg, key, value)
+
+            # 持久化到节点 base_config（下次执行与前端配置面板均生效）
+            persisted = False
+            if node.id:
+                try:
+                    from app.config.database import AsyncSessionLocal
+
+                    async with AsyncSessionLocal() as db:
+                        row = await db.get(FlowNode, node.id)
+                        if row is not None:
+                            existing = (
+                                row.base_config
+                                if isinstance(row.base_config, dict)
+                                else {}
+                            )
+                            row.base_config = {**existing, **updates}
+                            await db.commit()
+                            persisted = True
+                except Exception as e:
+                    logger.warning("ssh_set_config 持久化失败（内存配置已生效）: %s", e)
+
+            return {
+                "success": True,
+                "host": cfg.host,
+                "port": cfg.port,
+                "username": cfg.username,
+                "auth_type": cfg.auth_type,
+                "persisted": persisted,
+                "message": "连接配置已更新，后续 SSH 工具调用将使用新配置"
+                + (
+                    "（已保存到节点）"
+                    if persisted
+                    else "（节点未保存，仅本次执行生效）"
+                ),
+            }
+
+        ssh_set_config_tool = StructuredTool(
+            name="ssh_set_config",
+            description=(
+                "设置/更新 SSH 节点的连接配置（主机、端口、用户名、密码、私钥）。"
+                "字段级合并，只覆盖传入的字段，未传入的保留原值；"
+                "认证方式不传时按提供的凭据自动推导。"
+                "未预设主机或需要更换目标主机时先调用本工具，"
+                "配置会持久化到节点，之后的 ssh_executor/ssh_upload/ssh_download/"
+                "ssh_list_dir 自动使用新配置，无需每次重复传入。"
+            ),
+            func=None,
+            coroutine=set_ssh_config,
+            args_schema=SshSetConfigInput,
+        )
+
         return [
             ssh_executor_tool,
             ssh_upload_tool,
             ssh_download_tool,
             ssh_list_dir_tool,
+            ssh_set_config_tool,
         ]
 
     @classmethod
@@ -722,6 +862,10 @@ class SshNodeHandler(BaseNodeHandler):
                 "description": "从远程主机下载文件到本地并生成下载链接",
             },
             {"name": "ssh_list_dir", "description": "列出远程主机目录内容"},
+            {
+                "name": "ssh_set_config",
+                "description": "设置或更新 SSH 节点的连接配置（主机/凭据），持久化到节点",
+            },
         ]
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
@@ -730,9 +874,20 @@ class SshNodeHandler(BaseNodeHandler):
         target = f"{cfg.username}@{cfg.host}:{cfg.port}"
         current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        if (cfg.host or "").strip():
+            target_line = (
+                f"你已连接 SSH 节点，目标主机: `{target}`（auth_type={cfg.auth_type}）；"
+                "如需更换目标主机可先调用 ssh_set_config 更新"
+            )
+        else:
+            target_line = (
+                "SSH 节点尚未预设连接信息，请先调用 ssh_set_config 提供主机与凭据"
+                "（host/username/password 或 private_key），配置会持久化到节点"
+            )
+
         lines = [
             "\n\n## SSH 远程操作\n"
-            f"你已连接 SSH 节点，目标主机: `{target}`（auth_type={cfg.auth_type}）。\n"
+            f"{target_line}。\n"
             "- ssh_executor 在远端用户默认 Shell 中执行命令；每次调用独立建连，cd 不影响后续调用\n"
             "- 大量输出先过滤（| head -100、| grep xxx 等），否则结果会被自动截断\n"
             f"- 命令默认超时 {cfg.command_timeout} 秒，长耗时可传更大的 timeout 参数（上限3600秒）；"

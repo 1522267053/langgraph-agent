@@ -650,6 +650,14 @@ class BuiltinAgentService:
                     fill_node_defaults("shell"),
                 ),
                 (
+                    "ssh_tool",
+                    NodeType.SSH.value,
+                    "SSH 工具",
+                    100,
+                    600,
+                    fill_node_defaults("ssh"),
+                ),
+                (
                     "memory_tool",
                     NodeType.MEMORY.value,
                     "记忆管理",
