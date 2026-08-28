@@ -48,7 +48,10 @@ class AiProviderApi:
         return ApiResponse.success(data=models)
 
     async def sync(self):
-        await ai_provider_service.sync_from_url()
+        try:
+            await ai_provider_service.sync_from_url()
+        except Exception as e:
+            return ApiResponse.error(msg=f"同步失败: {e}")
         return ApiResponse.success(msg="同步成功")
 
 

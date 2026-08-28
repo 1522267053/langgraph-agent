@@ -345,6 +345,7 @@ function openDownloadUrl(): void {
                 v-model:base-url="baseUrl"
                 v-model:context-length="contextLength"
                 show-context-length
+                show-sync-button
                 :reset-on-provider-change="false"
                 label-position="top"
                 :api-key-placeholder="
