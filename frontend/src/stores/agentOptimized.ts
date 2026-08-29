@@ -76,6 +76,7 @@ export const useAgentStore = defineStore('agent', () => {
     appendContent,
     addToolSegment,
     updateToolSegment,
+    updateToolLiveOutput,
     addTodoSegment,
     addKnowledgeCitations,
     updateTodos,
@@ -911,6 +912,17 @@ export const useAgentStore = defineStore('agent', () => {
         }
         startApprovalCountdown(298)
       },
+      onSubAgentProgress: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
+        const content = event.data.content || ''
+        if (!content || !event.data.node_key) return
+        // 写入对应 ask_* 工具分段的实时输出区（快照替换，重连回放幂等）
+        updateToolLiveOutput(
+          `ask_${event.data.node_key}`,
+          content,
+          event.data.sub_agent_name || '子Agent'
+        )
+      },
       onContextCompressing: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
         const status = event.data.status as string
@@ -1012,6 +1024,7 @@ export const useAgentStore = defineStore('agent', () => {
       onTokenUsage: deferDuringCompressionRefresh(handlers.onTokenUsage),
       onWaitingHuman: deferDuringCompressionRefresh(handlers.onWaitingHuman),
       onToolApproval: deferDuringCompressionRefresh(handlers.onToolApproval),
+      onSubAgentProgress: deferDuringCompressionRefresh(handlers.onSubAgentProgress),
       onTodoUpdate: deferDuringCompressionRefresh(handlers.onTodoUpdate),
       onFlowDone: deferDuringCompressionRefresh(handlers.onFlowDone),
       onLlmRetry: deferDuringCompressionRefresh(handlers.onLlmRetry),
@@ -1042,6 +1055,7 @@ export const useAgentStore = defineStore('agent', () => {
       onToolCallStart: afterSnapshot(handlers.onToolCallStart),
       onToolCallEnd: afterSnapshot(handlers.onToolCallEnd),
       onToolCallLimit: afterSnapshot(handlers.onToolCallLimit),
+      onSubAgentProgress: afterSnapshot(handlers.onSubAgentProgress),
       onTokenUsage: afterSnapshot(handlers.onTokenUsage),
       onTodoUpdate: afterSnapshot(handlers.onTodoUpdate),
       onKnowledgeCitations: afterSnapshot(handlers.onKnowledgeCitations),

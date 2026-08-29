@@ -27,6 +27,7 @@ class FlowEventType(str, Enum):
     TOOL_CALL_LIMIT = "tool_call_limit"
     TODO_UPDATE = "todo_update"
     TOOL_APPROVAL_REQUIRED = "tool_approval_required"
+    SUB_AGENT_PROGRESS = "sub_agent_progress"
     ERROR = "error"
     LLM_RETRY = "llm_retry"
     CONTEXT_COMPRESSING = "context_compressing"
@@ -184,6 +185,22 @@ class SubAgentToolApprovalEvent(ToolApprovalEvent):
     sub_agent_name: str = Field(default="", description="子Agent名称")
 
 
+class SubAgentProgressEvent(FlowEvent):
+    """子Agent执行进度事件（实时转发子Agent最后一条消息内容）"""
+
+    node_key: str = Field(..., description="父流程中子Agent节点的Key")
+    sub_agent_id: int = Field(default=0, description="子Agent ID")
+    sub_session_id: int = Field(default=0, description="子Agent会话ID")
+    sub_agent_name: str = Field(default="", description="子Agent名称")
+    content: str = Field(
+        default="", description="子Agent当前消息的累计快照（尾部截断）"
+    )
+    status: str = Field(default="running", description="执行状态: running/done/error")
+
+    def _get_event_type(self) -> FlowEventType:
+        return FlowEventType.SUB_AGENT_PROGRESS
+
+
 class WaitingHumanEvent(FlowEvent):
     """等待人工输入事件"""
 
@@ -302,6 +319,7 @@ AnyFlowEvent = Union[
     ToolCallLimitEvent,
     TodoUpdateEvent,
     ToolApprovalEvent,
+    SubAgentProgressEvent,
     WaitingHumanEvent,
     ErrorEvent,
     LlmRetryEvent,

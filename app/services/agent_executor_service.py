@@ -47,6 +47,9 @@ def format_exception_message(e: BaseException) -> str:
 
 
 _RUN_END_EVENT_TYPES = frozenset({"error", "flow_done", "waiting_human"})
+_PROGRESS_EVENT_TYPES = frozenset(
+    {"node_start", "node_content", "tool_call_start", "node_done"}
+)
 _COMPLETED_RUN_RETENTION_SECONDS = 60
 
 
@@ -57,6 +60,7 @@ class _AgentRun:
     run_id: str
     session_id: int
     approval_callback: Callable[[dict[str, Any]], None] | None = None
+    event_callback: Callable[[dict[str, Any]], None] | None = None
     events: list[dict[str, Any]] = dataclass_field(default_factory=list)
     subscribers: set[asyncio.Event] = dataclass_field(default_factory=set)
     result_ready: asyncio.Event = dataclass_field(default_factory=asyncio.Event)
@@ -132,6 +136,16 @@ class AgentExecutorService(BaseExecutorService):
                     run.run_id,
                     exc_info=True,
                 )
+        if stored_event["type"] in _PROGRESS_EVENT_TYPES and run.event_callback:
+            try:
+                run.event_callback(stored_event)
+            except Exception:
+                logger.warning(
+                    "转发子Agent进度事件失败: session_id=%s, run_id=%s",
+                    run.session_id,
+                    run.run_id,
+                    exc_info=True,
+                )
         for wake_event in tuple(run.subscribers):
             wake_event.set()
 
@@ -202,6 +216,7 @@ class AgentExecutorService(BaseExecutorService):
             self._publish_agent_run_event(run, terminal_event)
         finally:
             run.approval_callback = None
+            run.event_callback = None
             run.result = result
             run.done = True
             run.completed_at = time.monotonic()
@@ -286,6 +301,7 @@ class AgentExecutorService(BaseExecutorService):
         *,
         allow_waiting: bool = False,
         approval_callback: Callable[[dict[str, Any]], None] | None = None,
+        event_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
         """启动单个会话的后台执行并返回 run_id。"""
         if self._shutting_down:
@@ -305,6 +321,7 @@ class AgentExecutorService(BaseExecutorService):
             run_id=uuid.uuid4().hex,
             session_id=session_id,
             approval_callback=approval_callback,
+            event_callback=event_callback,
         )
         self._agent_runs[session_id] = run
         stream_generator = stream_factory()
@@ -345,6 +362,7 @@ class AgentExecutorService(BaseExecutorService):
         params: dict | None = None,
         *,
         approval_callback: Callable[[dict[str, Any]], None] | None = None,
+        event_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
         """启动后台 Agent 对话。"""
         return self._start_agent_run(
@@ -356,6 +374,7 @@ class AgentExecutorService(BaseExecutorService):
                 _managed_run=True,
             ),
             approval_callback=approval_callback,
+            event_callback=event_callback,
         )
 
     def start_resume_run(self, session_id: int, human_input: str) -> str:

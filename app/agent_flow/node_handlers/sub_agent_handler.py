@@ -23,6 +23,7 @@ from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.agent_flow.flow_event import (
     NodeStartEvent,
     NodeDoneEvent,
+    SubAgentProgressEvent,
     SubAgentToolApprovalEvent,
 )
 from app.services.flow_service import flow_service
@@ -39,6 +40,9 @@ _TYPE_MAP = {
     "integer": int,
     "boolean": bool,
 }
+
+# 进度预览截断长度（仅展示每轮回复前 N 字符，超出省略）
+_PROGRESS_PREVIEW_CHARS = 50
 
 
 class SubAgentNodeConfig(BaseNodeConfig):
@@ -252,11 +256,57 @@ class SubAgentNodeHandler(BaseNodeHandler):
                         )
                     )
 
+                # 每轮 LLM 回复完成后转发一次预览（content→tool_call→content 时逐次覆盖）
+                progress: dict[str, Any] = {"text": ""}
+
+                def send_progress_preview(status: str = "running") -> None:
+                    text = progress["text"]
+                    progress["text"] = ""
+                    if not text or not _parent_writer:
+                        return
+                    preview = text[:_PROGRESS_PREVIEW_CHARS]
+                    if len(text) > _PROGRESS_PREVIEW_CHARS:
+                        preview += "..."
+                    _parent_writer(
+                        SubAgentProgressEvent(
+                            node_key=node.node_key,
+                            sub_agent_id=_agent_id,
+                            sub_session_id=session_id,
+                            sub_agent_name=_agent_name,
+                            content=preview,
+                            status=status,
+                        )
+                    )
+
+                def forward_progress(event: dict[str, Any]) -> None:
+                    event_type = event.get("type")
+                    event_data = event.get("data") or {}
+                    if event_type == "node_content":
+                        # 只保留前 51 字符：50 用于展示，多留 1 位判断是否省略
+                        progress["text"] = (
+                            progress["text"] + (event_data.get("content") or "")
+                        )[: _PROGRESS_PREVIEW_CHARS + 1]
+                        return
+                    if event_type == "tool_call_start":
+                        # content 流结束、进入工具调用，发送该轮回复预览
+                        send_progress_preview()
+                        return
+                    if event_type == "node_done":
+                        # 最后一轮回复（无工具调用）完成
+                        send_progress_preview(status="done")
+                        return
+                    if (
+                        event_type == "node_start"
+                        and event_data.get("node_type") == "llm"
+                    ):
+                        progress["text"] = ""
+
                 return await _run_sub_agent(
                     session_id,
                     task,
                     extra_params,
                     approval_callback=forward_approval if _parent_writer else None,
+                    event_callback=forward_progress if _parent_writer else None,
                 )
             except Exception as e:
                 logger.error(f"子Agent执行失败: {e}", exc_info=True)
@@ -305,6 +355,7 @@ async def _run_sub_agent(
     task: str,
     params: dict | None = None,
     approval_callback: Callable[[dict[str, Any]], None] | None = None,
+    event_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict | str:
     """启动托管子Agent并等待最终结果，不消费其 SSE 事件。"""
     from app.services.agent_executor_service import agent_executor_service
@@ -314,6 +365,7 @@ async def _run_sub_agent(
         task,
         params or {},
         approval_callback=approval_callback,
+        event_callback=event_callback,
     )
     try:
         result = await agent_executor_service.wait_run_result(session_id, run_id)
