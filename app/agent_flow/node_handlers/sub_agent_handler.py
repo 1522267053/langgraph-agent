@@ -218,6 +218,9 @@ class SubAgentNodeHandler(BaseNodeHandler):
                 for k, v in kwargs.items()
                 if k not in {"task", "session_mode"} and v is not None
             }
+            # 最后一轮回复的完整内容（不截断），子Agent报错时随错误结果返回给父Agent；
+            # 在 try 外初始化，保证任意阶段异常时 except 分支都可安全读取
+            last_round: dict[str, str] = {"content": ""}
 
             try:
                 # 创建子Agent session（标题标记来源）
@@ -282,10 +285,13 @@ class SubAgentNodeHandler(BaseNodeHandler):
                     event_type = event.get("type")
                     event_data = event.get("data") or {}
                     if event_type == "node_content":
-                        # 只保留前 51 字符：50 用于展示，多留 1 位判断是否省略
-                        progress["text"] = (
-                            progress["text"] + (event_data.get("content") or "")
-                        )[: _PROGRESS_PREVIEW_CHARS + 1]
+                        chunk = event_data.get("content") or ""
+                        # 全量累积（供错误时返回），预览只保留前 51 字符：
+                        # 50 用于展示，多留 1 位判断是否省略
+                        last_round["content"] += chunk
+                        progress["text"] = (progress["text"] + chunk)[
+                            : _PROGRESS_PREVIEW_CHARS + 1
+                        ]
                         return
                     if event_type == "tool_call_start":
                         # content 流结束、进入工具调用，发送该轮回复预览
@@ -300,21 +306,26 @@ class SubAgentNodeHandler(BaseNodeHandler):
                         and event_data.get("node_type") == "llm"
                     ):
                         progress["text"] = ""
+                        last_round["content"] = ""
 
                 return await _run_sub_agent(
                     session_id,
                     task,
                     extra_params,
                     approval_callback=forward_approval if _parent_writer else None,
-                    event_callback=forward_progress if _parent_writer else None,
+                    event_callback=forward_progress,
+                    error_content_getter=lambda: last_round["content"],
                 )
             except Exception as e:
                 logger.error(f"子Agent执行失败: {e}", exc_info=True)
-                return {
+                error_result: dict | str = {
                     "success": False,
                     "status": "error",
                     "error": f"子Agent执行失败: {format_exception_message(e)}",
                 }
+                if last_round["content"]:
+                    error_result["content"] = last_round["content"]
+                return error_result
 
         tool = StructuredTool(
             name=f"ask_{tool_prefix}",
@@ -356,6 +367,7 @@ async def _run_sub_agent(
     params: dict | None = None,
     approval_callback: Callable[[dict[str, Any]], None] | None = None,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
+    error_content_getter: Callable[[], str] | None = None,
 ) -> dict | str:
     """启动托管子Agent并等待最终结果，不消费其 SSE 事件。"""
     from app.services.agent_executor_service import agent_executor_service
@@ -430,8 +442,12 @@ async def _run_sub_agent(
         "status": str(status),
         "error": f"子Agent执行出错: {error_detail}",
     }
-    output_data = result.get("output_data") or {}
-    content = output_data.get("content")
-    if content:
-        error_result["content"] = content
+    # 报错时把最后一轮回复返回给父Agent（事件流全量累积，见 ask_agent.last_round），
+    # 让父Agent获得子Agent报错前的现场上下文
+    last_round_content = error_content_getter() if error_content_getter else ""
+    if last_round_content:
+        error_result["content"] = last_round_content
+        error_result["error"] += (
+            "（最后一轮回复见 content 字段，可作为继续执行的上下文）"
+        )
     return error_result
