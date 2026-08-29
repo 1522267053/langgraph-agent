@@ -618,12 +618,23 @@ body {
   opacity: 1;
 }
 
-.scroll-to-bottom.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
 .scroll-to-bottom:hover {
   background: #ecf5ff;
   color: #409eff;
+}
+
+/* 回到底部按钮过渡动画（配合 <Transition name="jump-fade">）。
+   定位与居中由外层 .scroll-to-bottom-wrap 负责（flex 居中，不用 transform），
+   按钮自身 transform 保持空闲，缩放始终围绕自身中心，不会向角落漂移 */
+.jump-fade-enter-active,
+.jump-fade-leave-active {
+  transition:
+    opacity 0.2s ease-out,
+    transform 0.2s ease-out;
+}
+
+.jump-fade-enter-from,
+.jump-fade-leave-to {
+  opacity: 0;
+  transform: translateY(8px) scale(0.8);
 }

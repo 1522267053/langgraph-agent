@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useAgentStore } from '@/stores'
 import { ElMessage, ElMessageBox, ElImageViewer } from 'element-plus'
 import type { ScrollbarDirection, ScrollbarInstance } from 'element-plus'
@@ -18,6 +19,7 @@ import ChatInput from '@/components/AgentChat/ChatInput.vue'
 import FlowPreviewCard from '@/components/common/FlowPreviewCard.vue'
 import { useToolOutputStore } from '@/stores/toolOutput'
 import { useAutoScroll } from '@/composables/useAutoScroll'
+import type { StreamingMessage } from '@/composables/useStreamingMessage'
 
 import 'highlight.js/styles/vs2015.css'
 
@@ -31,7 +33,8 @@ const messagesContainer = computed<HTMLElement | null>(
   () => (scrollbarRef.value?.wrapRef as HTMLElement | undefined) ?? null
 )
 
-// SSE 状态早于 Markdown DOM 更新，底部跟随以 ResizeObserver 的真实高度变化为准。
+// SSE 状态早于 Markdown DOM 更新，底部跟随以 useAutoScroll 内部 ResizeObserver 的
+// 真实高度变化为准（容器 + 内容子元素自动观测）。
 const {
   autoScroll,
   isAtBottom,
@@ -55,22 +58,46 @@ function handleScrollbarPointerDown(event: PointerEvent): void {
   }
 }
 
-let messagesResizeObserver: ResizeObserver | null = null
+// ---- 虚拟滚动（@tanstack/vue-virtual 挂在 el-scrollbar 的原生滚动 wrap 上）----
+interface ChatRow {
+  key: string
+  kind: 'message' | 'typing'
+  msg: StreamingMessage | null
+  isLast: boolean
+}
 
-watch(
-  [messagesContentRef, messagesContainer],
-  ([content, container], [previousContent, previousContainer]) => {
-    if (previousContent) messagesResizeObserver?.unobserve(previousContent)
-    if (previousContainer) messagesResizeObserver?.unobserve(previousContainer)
-    if (!content || !container) return
-    messagesResizeObserver ??= new ResizeObserver(() => {
-      if (!store.messagesLoading) maybeScrollToBottom()
-    })
-    messagesResizeObserver.observe(content)
-    messagesResizeObserver.observe(container)
+// 流式中但最后一条不是 AI 消息（或列表为空）时，追加独立的输入指示器行
+const showStandaloneTyping = computed(() => {
+  if (!store.isStreaming) return false
+  const last = store.chatMessages.at(-1)
+  return !last || last.role !== 'ai' || last.displayType === 'context-summary'
+})
+
+const chatRows = computed<ChatRow[]>(() => {
+  const list = store.chatMessages
+  const rows: ChatRow[] = list.map((msg, idx) => ({
+    key: `m-${msg.id}`,
+    kind: 'message',
+    msg,
+    isLast: idx === list.length - 1
+  }))
+  if (showStandaloneTyping.value) {
+    rows.push({ key: 'typing', kind: 'typing', msg: null, isLast: true })
+  }
+  return rows
+})
+
+const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
+  get count() {
+    return chatRows.value.length
   },
-  { flush: 'post' }
-)
+  getScrollElement: () => messagesContainer.value as HTMLDivElement | null,
+  estimateSize: () => 150,
+  overscan: 8,
+  getItemKey: (index: number) => chatRows.value[index]?.key ?? String(index)
+})
+
+const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
 
 const humanInputValue = ref('')
 
@@ -274,8 +301,6 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  messagesResizeObserver?.disconnect()
-  messagesResizeObserver = null
   store.cancelStream()
   store.resetState()
   store.stopCompressPolling()
@@ -285,13 +310,37 @@ onUnmounted(() => {
   toolOutputStore.unregisterWsHandler()
 })
 
+/**
+ * 首次加载后的贴底：虚拟列表测量收敛期间 scrollHeight 会连续增长，
+ * 逐帧跟随当前底部直到高度连续两帧稳定（或达到帧数上限）。
+ * 直接一次性 scrollToBottom 会先跳到「估算底部」、再被实测收敛拽到「真实底部」，
+ * 形成两段跳体感；逐帧跟随让视口始终骑在底部，视觉上只有一次连续的到位过程
+ */
+function convergeScrollToBottom(): void {
+  const wrap = messagesContainer.value
+  if (!wrap) return
+  let stableFrames = 0
+  let totalFrames = 0
+  let lastHeight = -1
+  const tick = () => {
+    if (!wrap.isConnected) return
+    const height = wrap.scrollHeight
+    stableFrames = height === lastHeight ? stableFrames + 1 : 0
+    lastHeight = height
+    wrap.scrollTop = height
+    totalFrames += 1
+    if (stableFrames < 2 && totalFrames < 30) requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}
+
 watch(
   () => store.messagesLoading,
   async (loading, wasLoading) => {
     if (wasLoading && !loading) {
       resetAutoScrollState()
       await nextTick()
-      scrollToBottom()
+      convergeScrollToBottom()
     }
   }
 )
@@ -304,24 +353,89 @@ watch(
   }
 )
 
+// 上次加载更多的时间戳：加载完成后恢复视口会产生向下的滚动事件，
+// 复位 el-scrollbar 的方向闩锁；惯性滚动/估算高度纠偏可能立刻再次满足
+// end-reached 条件，需冷却窗口防重复请求
+let lastLoadMoreAt = 0
+
 function onEndReached(direction: ScrollbarDirection) {
   if (direction !== 'top') return
   if (isLoadingMore.value || !store.hasMoreMessages || store.messagesLoading) return
+  if (Date.now() - lastLoadMoreAt < 1000) return
+  lastLoadMoreAt = Date.now()
   handleLoadMore()
 }
 
 async function handleLoadMore() {
   if (!agentId.value || isLoadingMore.value) return
   isLoadingMore.value = true
+  const wrap = messagesContainer.value
   try {
-    const prevScrollHeight = messagesContainer.value?.scrollHeight || 0
+    // 前插历史后按「锚行坐标差值 + 逐帧收敛」恢复视口：
+    // - 锚点索引用「行数差」而非 key：buildChatMessagesFromDB 会把连续 ai 行
+    //   合并为一个回合，若新页尾部与旧首行同回合，合并回合 id 会变为更早的
+    //   db id，按 key 找锚必然失效；前插的聊天行数恒等于锚点新下标
+    // - AI 回合行高可达数千甚至上万 px（estimateSize=150 误差极大），一次性的
+    //   scrollToIndex/scrollTop 跳转在测量收敛前必然失准；因此恢复后进入 rAF
+    //   校正循环：每帧以锚行实时 start/size 重算目标位置并施加，直到连续多帧
+    //   稳定（测量收敛）或超时；期间用户滚动输入立即放弃校正
+    // - 目标差值含锚行自身 size 差：newIndex=0（新页全部被合并吸收进锚行）时，
+    //   size 差恰为行内新增前缀的高度，视口随之前移，语义仍正确
+    const first = rowVirtualizer.value.getVirtualItems()[0]
+    const prevFirstStart = first?.start ?? 0
+    const prevFirstSize = first?.size ?? 0
+    const prevScrollTop = wrap?.scrollTop ?? 0
+    const prevRowCount = chatRows.value.length
     await store.loadMoreMessages(agentId.value)
     await nextTick()
-    const newHeight = messagesContainer.value?.scrollHeight || 0
-    // 前插历史后恢复视口位置，避免消息列表跳动
-    if (newHeight > prevScrollHeight && messagesContainer.value) {
-      messagesContainer.value.scrollTop = newHeight - prevScrollHeight
+    if (!wrap) return
+    const anchorIndex = chatRows.value.length - prevRowCount
+    const anchorKey = chatRows.value[anchorIndex]?.key ?? null
+    if (!anchorKey) return
+
+    let aborted = false
+    const abort = () => {
+      aborted = true
     }
+    wrap.addEventListener('wheel', abort, { capture: true, once: true })
+    wrap.addEventListener('touchstart', abort, { capture: true, once: true })
+    wrap.addEventListener('pointerdown', abort, { capture: true, once: true })
+    const removeAbortListeners = () => {
+      wrap.removeEventListener('wheel', abort, { capture: true })
+      wrap.removeEventListener('touchstart', abort, { capture: true })
+      wrap.removeEventListener('pointerdown', abort, { capture: true })
+    }
+
+    let stableFrames = 0
+    let totalFrames = 0
+    const tick = () => {
+      if (aborted || !wrap.isConnected) {
+        removeAbortListeners()
+        return
+      }
+      const m = rowVirtualizer.value.getMeasurements()[anchorIndex]
+      if (!m) {
+        removeAbortListeners()
+        return
+      }
+      const desired = Math.max(
+        0,
+        prevScrollTop + (m.start - prevFirstStart) + (m.size - prevFirstSize)
+      )
+      totalFrames += 1
+      if (Math.abs(wrap.scrollTop - desired) > 1) {
+        wrap.scrollTop = desired
+        stableFrames = 0
+      } else {
+        stableFrames += 1
+      }
+      if (stableFrames < 3 && totalFrames < 90) {
+        requestAnimationFrame(tick)
+      } else {
+        removeAbortListeners()
+      }
+    }
+    requestAnimationFrame(tick)
   } finally {
     isLoadingMore.value = false
   }
@@ -590,27 +704,40 @@ function handleRejectTools() {
             <span></span>
           </div>
         </div>
-        <MessageItem
-          :messages="store.chatMessages"
-          :show-thinking="showThinking"
-          :show-tool-calls="showToolCalls"
-          :is-streaming="store.isStreaming"
-          @delete="handleDeleteMessage"
-          @revert="handleRevertFrom"
-          @preview="handleImagePreview"
-        />
+        <div class="messages-virtual" :style="{ height: `${rowVirtualizer.getTotalSize()}px` }">
+          <div
+            v-for="row of virtualRows"
+            :key="row.key"
+            :ref="rowVirtualizer.measureElement"
+            :data-index="row.index"
+            class="virtual-row"
+            :style="{ transform: `translateY(${row.start}px)` }"
+          >
+            <MessageItem
+              :msg="chatRows[row.index]?.msg ?? null"
+              :typing="chatRows[row.index]?.kind === 'typing'"
+              :is-last="!!chatRows[row.index]?.isLast"
+              :show-thinking="showThinking"
+              :show-tool-calls="showToolCalls"
+              :is-streaming="store.isStreaming"
+              @delete="handleDeleteMessage"
+              @revert="handleRevertFrom"
+              @preview="handleImagePreview"
+            />
+          </div>
+        </div>
       </div>
     </el-scrollbar>
 
-    <div
-      v-if="!isWelcomeMode"
-      :class="['scroll-to-bottom', { hidden: isAtBottom }]"
-      @click="scrollToBottom"
-    >
-      <el-icon :size="16">
-        <Bottom />
-      </el-icon>
-    </div>
+    <Transition v-if="!isWelcomeMode" name="jump-fade">
+      <div v-show="!isAtBottom" class="scroll-to-bottom-wrap">
+        <div class="scroll-to-bottom" aria-label="回到底部" @click="scrollToBottom">
+          <el-icon :size="16">
+            <Bottom />
+          </el-icon>
+        </div>
+      </div>
+    </Transition>
 
     <div v-if="store.isCompressing" class="compress-overlay">
       <div class="compress-overlay-card">
@@ -887,12 +1014,19 @@ export default {
   height: 100%;
 }
 
-.scroll-to-bottom {
+.scroll-to-bottom-wrap {
   position: absolute;
   bottom: 210px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
   z-index: 50;
+  pointer-events: none;
+}
+
+.scroll-to-bottom-wrap .scroll-to-bottom {
+  pointer-events: auto;
 }
 
 .scroll-to-bottom:hover {
@@ -906,6 +1040,20 @@ export default {
   justify-content: center;
   min-height: 32px;
   padding: 8px 0;
+}
+
+/* 虚拟滚动容器：高度由 virtualizer totalSize 驱动，行绝对定位 */
+.messages-virtual {
+  position: relative;
+  max-width: 896px;
+  margin: 0 auto;
+}
+
+.virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
 }
 
 .load-more-dots {
