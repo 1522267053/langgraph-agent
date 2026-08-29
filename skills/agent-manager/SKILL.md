@@ -123,6 +123,13 @@ Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router` 及工�
 - LLM 必须有 `user_prompt`；引用变量用 `{{input.<field>}}`、`{{nodes.<key>.<output>}}`、`{{variables.<name>}}` 或裸名 `{{<field>}}`（走 input_variables 别名映射）。完整路径表见 [节点配置 - 通用变量模型](references/node-config.md#通用变量模型)。
 - `source` 字段写裸路径（不加花括号）：`"source": "input.message"`；模板里才写 `{{input.message}}`。
 - `required_tools` 使用 `connected-tools` 返回的实际工具 `name`，不是节点 `node_key` 或显示名。
+- `tool_check_script` 非空时走高级模式，不再做 `required_tools` 精确匹配。脚本签名与参数类型：
+  ```python
+  def main(called_tools, last_result):
+      # called_tools: list[str] 本轮已调用的工具名列表
+      # last_result: str LLM 最后输出的文本内容
+      return {'need_retry': bool, 'hint': str}  # need_retry 为真时以 hint 提醒 LLM 重试
+  ```
 - 工具调用通常还需要 `tools -> tools` 边；遗漏后 LLM 看不到工具。
 - 条件节点分支使用 `true` / `false` handle；意图路由使用动态 intent key。
 - 卡片输入、循环变量、Python 包装和媒体文件有专门规则，修改前读取 [节点配置](references/node-config.md)。

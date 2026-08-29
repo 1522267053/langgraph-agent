@@ -443,7 +443,7 @@ watch(connectedToolNodes, fetchConnectedTools, { immediate: true, deep: true })
         <el-form-item v-else label="检查脚本">
           <CodeEditor
             v-model="localConfig.tool_check_script"
-            placeholder="def main(called_tools, last_result): return {'need_retry': bool, 'hint': str}"
+            placeholder="def main(called_tools, last_result): &#10;    # called_tools: list[str] 本轮已调用的工具名列表 &#10;    # last_result: str LLM 最后输出的文本内容 &#10;    return {'need_retry': bool, 'hint': str}"
             @blur="updateConfig"
           />
         </el-form-item>
