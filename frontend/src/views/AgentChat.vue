@@ -32,6 +32,11 @@ const messagesContentRef = ref<HTMLElement | null>(null)
 const messagesContainer = computed<HTMLElement | null>(
   () => (scrollbarRef.value?.wrapRef as HTMLElement | undefined) ?? null
 )
+// 首次加载测量收敛期间内容以 visibility:hidden 占位（布局保留、virtualizer 可测），
+// 收敛并定位到底部后才显示——显示即已在底部，避免「顶部闪现 + 跳底」的抖动
+const messagesRevealed = ref(false)
+// 收敛循环代际号：新一轮加载开始后旧循环自动失效，防止过早 reveal
+let convergeGeneration = 0
 
 // SSE 状态早于 Markdown DOM 更新，底部跟随以 useAutoScroll 内部 ResizeObserver 的
 // 真实高度变化为准（容器 + 内容子元素自动观测）。
@@ -311,25 +316,82 @@ onUnmounted(() => {
 })
 
 /**
- * 首次加载后的贴底：虚拟列表测量收敛期间 scrollHeight 会连续增长，
- * 逐帧跟随当前底部直到高度连续两帧稳定（或达到帧数上限）。
- * 直接一次性 scrollToBottom 会先跳到「估算底部」、再被实测收敛拽到「真实底部」，
- * 形成两段跳体感；逐帧跟随让视口始终骑在底部，视觉上只有一次连续的到位过程
+ * 首次加载后的贴底，分两阶段（判据一律用真实时间 ms，帧数在高刷屏上不可靠）：
+ * - converge（隐藏期）：visibility:hidden 下逐帧跟随底部，持续至少 600ms 且
+ *   高度连续 250ms 不变（测量收敛）后定位到底部并 reveal——显示即已在底部
+ * - follow（显示后）：reveal 瞬间仍可能有结构性增量（如 visibility 翻转引发的
+ *   少量重排），继续跟随 scrollHeight 变化约 1s 吸收干净；用户滚动输入立即退出
  */
 function convergeScrollToBottom(): void {
   const wrap = messagesContainer.value
-  if (!wrap) return
-  let stableFrames = 0
-  let totalFrames = 0
+  if (!wrap) {
+    messagesRevealed.value = true
+    return
+  }
+  const generation = ++convergeGeneration
+  let phase: 'converge' | 'follow' = 'converge'
   let lastHeight = -1
+  let lastChangeAt = performance.now()
+  const startAt = performance.now()
+  let followUntil = 0
+  let aborted = false
+  const onUserInput = () => {
+    aborted = true
+  }
+  const startFollow = () => {
+    phase = 'follow'
+    lastChangeAt = performance.now()
+    followUntil = lastChangeAt + 1000
+    wrap.addEventListener('wheel', onUserInput, { capture: true, once: true })
+    wrap.addEventListener('touchstart', onUserInput, { capture: true, once: true })
+    wrap.addEventListener('pointerdown', onUserInput, { capture: true, once: true })
+  }
+  const cleanup = () => {
+    wrap.removeEventListener('wheel', onUserInput, { capture: true })
+    wrap.removeEventListener('touchstart', onUserInput, { capture: true })
+    wrap.removeEventListener('pointerdown', onUserInput, { capture: true })
+  }
+  const finish = () => {
+    wrap.scrollTop = wrap.scrollHeight
+    messagesRevealed.value = true
+  }
   const tick = () => {
-    if (!wrap.isConnected) return
+    if (aborted || generation !== convergeGeneration || !wrap.isConnected) {
+      cleanup()
+      return
+    }
+    const now = performance.now()
     const height = wrap.scrollHeight
-    stableFrames = height === lastHeight ? stableFrames + 1 : 0
-    lastHeight = height
-    wrap.scrollTop = height
-    totalFrames += 1
-    if (stableFrames < 2 && totalFrames < 30) requestAnimationFrame(tick)
+    if (phase === 'converge') {
+      if (height !== lastHeight) {
+        lastHeight = height
+        lastChangeAt = now
+      }
+      wrap.scrollTop = height
+      // 收敛批次间存在短暂平台期（刷新冷启动时更明显）：至少骑 600ms + 高度
+      // 连续 250ms 不变才认定收敛并显示
+      const elapsed = now - startAt
+      const sinceChange = now - lastChangeAt
+      if ((sinceChange < 250 || elapsed < 600) && elapsed < 1500) {
+        requestAnimationFrame(tick)
+        return
+      }
+      finish()
+      startFollow()
+    } else {
+      // follow：高度变化（reveal 引发的重排/晚到内容）才跟随，静止 400ms 或
+      // 跟随满 1s 后退出
+      if (height !== lastHeight) {
+        wrap.scrollTop = height
+        lastHeight = height
+        lastChangeAt = now
+      }
+      if (now - lastChangeAt >= 400 || now >= followUntil) {
+        cleanup()
+        return
+      }
+    }
+    requestAnimationFrame(tick)
   }
   requestAnimationFrame(tick)
 }
@@ -337,11 +399,16 @@ function convergeScrollToBottom(): void {
 watch(
   () => store.messagesLoading,
   async (loading, wasLoading) => {
-    if (wasLoading && !loading) {
-      resetAutoScrollState()
-      await nextTick()
-      convergeScrollToBottom()
+    if (loading) {
+      // 新一轮加载：隐藏内容并使进行中的收敛循环失效
+      messagesRevealed.value = false
+      convergeGeneration += 1
+      return
     }
+    if (!wasLoading) return
+    resetAutoScrollState()
+    await nextTick()
+    convergeScrollToBottom()
   }
 )
 
@@ -672,7 +739,7 @@ function handleRejectTools() {
 
     <el-scrollbar
       ref="scrollbarRef"
-      v-loading="store.messagesLoading"
+      v-loading="store.messagesLoading || !messagesRevealed"
       element-loading-text="加载中..."
       class="messages-scrollbar"
       :distance="50"
@@ -693,9 +760,9 @@ function handleRejectTools() {
       </div>
       <div
         v-else
-        v-show="!store.messagesLoading"
         ref="messagesContentRef"
         class="messages-container"
+        :style="{ visibility: messagesRevealed ? 'visible' : 'hidden' }"
       >
         <div v-if="store.hasMoreMessages" class="load-more-sentinel">
           <div v-show="isLoadingMore" class="load-more-dots">
