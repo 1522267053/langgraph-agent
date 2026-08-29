@@ -71,6 +71,11 @@ BLOCKED_COMMANDS = {
     "diskpart",
     "bcdedit",
     "cipher",
+    # PowerShell 系列宿主（禁止 AI 调用，含 pwsh/powershell_ise；
+    # validate_command 会剥离 .exe 后缀后比对，故无需重复列出 .exe 变体）
+    "powershell",
+    "powershell_ise",
+    "pwsh",
     # Linux 毁灭性命令
     "mkfs",
     "mkswap",
@@ -99,6 +104,11 @@ DANGEROUS_PATTERNS = [
     r"\bpowershell\s+.*-EncodedCommand",  # 执行编码命令 (混淆攻击)
     r"\b(netsh|bitsadmin).*http",  # 利用系统工具下载 (常用于下载恶意软件)
     r"\bwmic\s+.*process\s+call\s+create",  # 进程创建 (可能被用于提权)
+    # 4. PowerShell 系列宿主全量拦截（含 .exe 后缀与绝对路径写法；
+    #    全命令串扫描，覆盖直接调用与 &&/&/||/| 链式调用）
+    r"\bpowershell(?:_ise)?\.exe\b",
+    r"\bpwsh\.exe\b",
+    r"(?:^|[&|;]\s*)(?:powershell|powershell_ise|pwsh)\b",
     # linux高危行为
     # 1. 毁灭性删除 (强制删除根目录、家目录、所有文件)
     r"\brm\s+(-[rf]+\s+){0,2}/\b",  # rm -rf /
@@ -183,11 +193,16 @@ def validate_command(command: str) -> tuple[bool, str]:
     first_word = command.strip().split()[0] if command.strip() else ""
     if first_word:
         base_cmd = first_word.split("/")[-1].split("\\")[-1]
+        # 剥离 .exe 后缀后比对（如 powershell.exe），防止带后缀写法绕过禁止列表
+        if base_cmd.lower().endswith(".exe"):
+            base_cmd = base_cmd[:-4]
         if base_cmd in BLOCKED_COMMANDS:
             return False, f"命令 '{base_cmd}' 在禁止列表中"
 
     if _command_targets_data(command):
         base_cmd = first_word.split("/")[-1].split("\\")[-1]
+        if base_cmd.lower().endswith(".exe"):
+            base_cmd = base_cmd[:-4]
         if base_cmd not in DATA_READONLY_COMMANDS:
             return False, f"不允许对数据目录执行写操作（仅支持查看），命令: {command}"
 
@@ -425,10 +440,13 @@ def _diagnose_empty_output(task: "BackgroundShellTask", command: str) -> Optiona
     hints = ["命令执行成功（退出码 0）但 stdout 与 stderr 均为空。"]
     stripped = command.strip()
     if re.search(r"\$env:[A-Za-z_]", stripped):
-        hints.append("检测到 $env:VAR 写法：这是 PowerShell 语法，cmd 中应使用 %VAR%。")
+        hints.append(
+            "检测到 $env:VAR 写法：这是 PowerShell 语法（已禁用），cmd 中应使用 %VAR%。"
+        )
     if re.search(r"\bGet-ChildItem\b|\bWrite-Output\b|\$PSItem", stripped):
         hints.append(
-            "检测到 PowerShell cmdlet/变量：当前经 cmd.exe 执行，应使用 cmd 等价命令。"
+            "检测到 PowerShell cmdlet/变量：powershell/pwsh 已被禁止调用，"
+            "应改用 cmd 等价命令。"
         )
     hints.append(
         "若预期有输出，请确认命令是否真的会产生输出，或先用 echo 类简单命令验证环境。"
@@ -1168,6 +1186,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 "多条独立命令用 && 连接；多行 Python 先写入 .py 文件再执行；"
                 "%VAR% 与 curl（Win10+ 自带）直接可用（无 wget，下载用 curl -o）；"
                 "无 head/tail，输出过滤用 findstr 或重定向文件。"
+                "禁止调用 powershell/pwsh（含链式与全路径写法，会被直接拦截）。"
             )
             if system_type == "Windows"
             else ""
@@ -2007,7 +2026,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 "- 命令必须为单行：含裸换行的命令会被直接拒绝（cmd 把换行符当命令分隔符，会截断丢输出）。\n"
                 "- 多条独立命令用 && 连成单行（前一条失败则不继续）；不看成败的顺序执行用单个 &。\n"
                 '- 多行 Python 代码先用 file_write 写入 .py 文件，再 python <文件路径> 执行；单行可用 python -c "..."。\n'
-                "- 环境变量用 %VAR%（不是 $env:VAR）；目录列表用 dir；不要使用 PowerShell cmdlet（Get-ChildItem 等）。\n"
+                "- 环境变量用 %VAR%（不是 $env:VAR）；目录列表用 dir；禁止调用 powershell/pwsh（含链式与全路径写法，会被直接拦截），一律使用 cmd 等价命令。\n"
                 "- 大量输出先过滤（findstr / 重定向到文件后用 file_read 分段读取），不要依赖 head/tail（cmd 没有）。\n"
                 "- curl 接口响应常带 UTF-8 BOM：python 解析管道 JSON 禁止 json.load(sys.stdin)，改用 json.loads(sys.stdin.buffer.read().decode('utf-8-sig'))。\n"
                 "- 返回的 exit_code 取自最后一个原生命令（如 python/curl/git）；内部命令（dir/echo 等）固定返回 0。\n"
