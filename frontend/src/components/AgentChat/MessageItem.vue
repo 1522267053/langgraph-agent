@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { Operation } from '@element-plus/icons-vue'
+import { ChatDotRound, Operation } from '@element-plus/icons-vue'
 import MessageBubble from '@/components/AgentChat/MessageBubble.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import type { StreamingMessage } from '@/composables/useStreamingMessage'
 
-const props = defineProps<{
-  messages: StreamingMessage[]
+defineProps<{
+  /** 本行消息（虚拟滚动单行渲染，由 AgentChat.chatRows 决定行类型） */
+  msg?: StreamingMessage | null
+  /** 渲染独立流式输入指示器行（流式中但最后一条不是 AI 消息时） */
+  typing?: boolean
   showThinking: boolean
   showToolCalls: boolean
   isStreaming: boolean
+  /** 是否为最后一条消息（流式指示器定位） */
+  isLast?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -18,81 +22,49 @@ const emit = defineEmits<{
   (e: 'revert', dbMsgId: number): void
   (e: 'preview', data: ImagePreviewData): void
 }>()
-
-function isCompressSummary(msg: StreamingMessage): boolean {
-  return msg.displayType === 'context-summary'
-}
-
-const showStandaloneTyping = computed(() => {
-  if (!props.isStreaming) return false
-  const last = props.messages.at(-1)
-  return !last || last.role !== 'ai' || isCompressSummary(last)
-})
-
-/** 判断指定消息是否为最后一条（用于流式指示器定位） */
-function isLastMessage(idx: number): boolean {
-  return idx === props.messages.length - 1
-}
 </script>
 
 <template>
-  <div class="messages-list">
-    <template v-for="(msg, idx) in messages" :key="msg.id">
-      <div v-if="isCompressSummary(msg)" class="compress-summary">
-        <div class="compress-summary-label">
-          <el-icon :size="14"><Operation /></el-icon>
-          <span>上下文摘要</span>
-          <span v-if="msg.removedCount">已压缩 {{ msg.removedCount }} 条历史消息</span>
-        </div>
-        <MarkdownRenderer class="compress-summary-content" :content="msg.content" />
+  <div v-if="typing" class="message assistant animate-fade-in">
+    <div class="message-avatar">
+      <div class="avatar avatar-ai">
+        <el-icon :size="16"><ChatDotRound /></el-icon>
       </div>
-      <MessageBubble
-        v-else
-        :msg="msg"
-        :data-msg-id="msg.id"
-        :show-thinking="showThinking"
-        :show-tool-calls="showToolCalls"
-        :is-streaming="isStreaming"
-        :is-last="isLastMessage(idx)"
-        @delete="m => emit('delete', m)"
-        @revert="dbMsgId => emit('revert', dbMsgId)"
-        @preview="data => emit('preview', data)"
-      />
-    </template>
-
-    <div v-if="showStandaloneTyping" class="message assistant animate-fade-in">
-      <div class="message-avatar">
-        <div class="avatar avatar-ai">
-          <el-icon :size="16"><ChatDotRound /></el-icon>
-        </div>
+    </div>
+    <div class="message-body">
+      <div class="message-header">
+        <span class="role-name">AI</span>
       </div>
-      <div class="message-body">
-        <div class="message-header">
-          <span class="role-name">AI</span>
-        </div>
-        <div class="message-content typing">
-          <span class="dot"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
-        </div>
+      <div class="message-content typing">
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
       </div>
     </div>
   </div>
+  <div v-else-if="msg && msg.displayType === 'context-summary'" class="compress-summary">
+    <div class="compress-summary-label">
+      <el-icon :size="14"><Operation /></el-icon>
+      <span>上下文摘要</span>
+      <span v-if="msg.removedCount">已压缩 {{ msg.removedCount }} 条历史消息</span>
+    </div>
+    <MarkdownRenderer class="compress-summary-content" :content="msg.content" />
+  </div>
+  <MessageBubble
+    v-else-if="msg"
+    :msg="msg"
+    :data-msg-id="msg.id"
+    :show-thinking="showThinking"
+    :show-tool-calls="showToolCalls"
+    :is-streaming="isStreaming"
+    :is-last="!!isLast"
+    @delete="m => emit('delete', m)"
+    @revert="dbMsgId => emit('revert', dbMsgId)"
+    @preview="data => emit('preview', data)"
+  />
 </template>
 
-<script lang="ts">
-import { ChatDotRound } from '@element-plus/icons-vue'
-export default {
-  components: { ChatDotRound }
-}
-</script>
-
 <style scoped>
-.messages-list {
-  max-width: 896px;
-  margin: 0 auto;
-}
-
 .message {
   display: flex;
   margin-bottom: 32px;

@@ -7,9 +7,7 @@ import type { TodoItem } from '@/types/segment'
 import { getNodeStatusType } from '@/utils/format'
 import { useAutoScroll } from '@/composables/useAutoScroll'
 import ExecutionResultContent from '@/components/common/ExecutionResultContent.vue'
-import type {
-  StreamingContentItem
-} from '@/components/common/ExecutionResultContent.vue'
+import type { StreamingContentItem } from '@/components/common/ExecutionResultContent.vue'
 
 const props = defineProps<{
   visible: boolean
@@ -139,9 +137,13 @@ function handleResumeExecution(exec: FlowExecution, event: Event) {
             show-empty-state
             @resume-execution="emit('resumeExecution', $event)"
           />
-          <div :class="['scroll-to-bottom', { hidden: isAtBottom }]" @click="scrollToBottom">
-            <el-icon :size="16"><Bottom /></el-icon>
-          </div>
+          <Transition name="jump-fade">
+            <div v-show="!isAtBottom" class="scroll-to-bottom-wrap">
+              <div class="scroll-to-bottom" aria-label="回到底部" @click="scrollToBottom">
+                <el-icon :size="16"><Bottom /></el-icon>
+              </div>
+            </div>
+          </Transition>
         </div>
       </template>
 
@@ -259,13 +261,19 @@ function handleResumeExecution(exec: FlowExecution, event: Event) {
   position: relative;
 }
 
-.scroll-to-bottom {
+.scroll-to-bottom-wrap {
   position: sticky;
   bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
   z-index: 10;
-  margin: 0 auto;
+  pointer-events: none;
+}
+
+.scroll-to-bottom-wrap .scroll-to-bottom {
+  pointer-events: auto;
 }
 
 .history-content {
