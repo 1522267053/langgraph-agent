@@ -82,6 +82,14 @@ export interface SSEEventData {
   edges?: Record<string, unknown>[]
   /** LLM 回答中经过校验的知识库引用 */
   citations?: KnowledgeReference[]
+  /** 子Agent ID（sub_agent_progress 事件） */
+  sub_agent_id?: number
+  /** 子Agent会话ID（sub_agent_progress 事件） */
+  sub_session_id?: number
+  /** 子Agent名称（sub_agent_progress 事件） */
+  sub_agent_name?: string
+  /** 子Agent执行状态（sub_agent_progress 事件） */
+  sub_status?: string
 }
 
 /** 人工等待数据 */
@@ -114,6 +122,7 @@ export type FlowSSEEventType =
   | 'token_usage'
   | 'waiting_human'
   | 'tool_approval_required'
+  | 'sub_agent_progress'
   | 'todo_update'
   | 'flow_done'
   | 'error'
@@ -162,6 +171,8 @@ export interface FlowSSEHandlers {
   onWaitingHuman?: SSEEventHandler
   /** 工具确认（批准/拒绝） */
   onToolApproval?: SSEEventHandler
+  /** 子Agent执行进度（实时输出预览） */
+  onSubAgentProgress?: SSEEventHandler
   /** 流程完成 */
   onFlowDone?: SSEEventHandler
   /** 任务计划更新 */

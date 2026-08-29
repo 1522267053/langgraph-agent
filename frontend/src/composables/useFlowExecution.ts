@@ -194,6 +194,28 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
           }
         }
       },
+      onSubAgentProgress: (event: SSEEvent) => {
+        // 进度事件携带子Agent节点key，需反查持有同名 ask_* running 工具段的 LLM 节点并覆盖预览
+        const content = event.data.content || ''
+        if (!content || !event.data.node_key) return
+        const toolName = `ask_${event.data.node_key}`
+        const agentName = event.data.sub_agent_name || '子Agent'
+        for (const [nodeKey, item] of Object.entries(streamingContent.value)) {
+          const segments = item?.segments
+          if (!segments?.length) continue
+          const idx = segments.findLastIndex(
+            s => s.type === 'tool' && s.tool?.name === toolName && s.tool?.status === 'running'
+          )
+          if (idx === -1) continue
+          const updated = [...segments]
+          updated[idx] = {
+            ...segments[idx],
+            tool: { ...segments[idx].tool!, liveOutput: content, liveAgentName: agentName }
+          }
+          streamingContent.value = { ...streamingContent.value, [nodeKey]: { segments: updated } }
+          return
+        }
+      },
       onToolCallLimit: createOnToolCallLimitHandler(),
       onWaitingHuman: handleWaitingHuman,
       onTokenUsage: (event: SSEEvent) => {

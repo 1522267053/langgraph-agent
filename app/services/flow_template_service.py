@@ -91,6 +91,7 @@ _SYSTEM_PROMPT_FULL_AGENT = (
     "- 知识库检索：搜索知识库获取专业信息\n"
     "- Python 代码执行：编写和运行代码处理数据\n"
     "- Shell 命令：执行系统命令、管理文件\n"
+    "- SSH 远程执行：远程命令执行、SFTP 文件传输与目录管理\n"
     "- API 调用：发起 HTTP 请求获取外部数据\n"
     "- MCP 工具：调用已配置的 MCP 服务\n"
     "- 技能加载：使用已配置的技能\n"
@@ -679,8 +680,9 @@ _register(
     FlowTemplate(
         id="full_agent",
         name="全能助手",
-        description="集成全部工具能力的对话智能体：知识库、Python、Shell、API、MCP、"
-        "技能、记忆、任务计划、日程、子Agent（mcp/skill/sub_agent 需创建后配置引用）",
+        description="集成全部工具能力的对话智能体：知识库、Python、Shell、SSH、API、MCP、"
+        "技能、记忆、任务计划、日程、子Agent"
+        "（mcp/skill/sub_agent/ssh 需创建后配置引用）",
         flow_type="agent",
         nodes=[
             TemplateNode(
@@ -689,6 +691,24 @@ _register(
                 node_name="开始",
                 position_x=50,
                 position_y=200,
+                base_config={
+                    "input_variables": [
+                        {
+                            "name": "message",
+                            "type": "string",
+                            "description": "用户消息",
+                            "required": True,
+                        },
+                        {
+                            "name": "files",
+                            "type": "file_list",
+                            "description": "上传文件",
+                            "multiple": True,
+                            "max_size": 20,
+                            "required": False,
+                        },
+                    ]
+                },
             ),
             TemplateNode(
                 node_type="llm",
@@ -784,6 +804,14 @@ _register(
                 position_y=-50,
                 base_config={"agent_id": 0},
             ),
+            TemplateNode(
+                node_type="ssh",
+                node_key="ssh",
+                node_name="SSH 远程执行",
+                position_x=1350,
+                position_y=-50,
+                base_config={"auth_type": "password", "command_timeout": 300},
+            ),
             # ---- 结束 ----
             TemplateNode(
                 node_type="end",
@@ -864,6 +892,12 @@ _register(
                 source_handle="tools",
                 target_handle="tools",
             ),
+            TemplateEdge(
+                source_node_key="ssh",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
             TemplateEdge(source_node_key="llm", target_node_key="end"),
         ],
         input_schema=FlowIOSchema(
@@ -873,7 +907,15 @@ _register(
                     type=FieldType.STRING,
                     description="用户消息",
                     required=True,
-                )
+                ),
+                FlowIOField(
+                    name="files",
+                    type=FieldType.FILE_LIST,
+                    description="上传文件",
+                    multiple=True,
+                    max_size=20,
+                    required=False,
+                ),
             ]
         ),
         output_schema=FlowIOSchema(

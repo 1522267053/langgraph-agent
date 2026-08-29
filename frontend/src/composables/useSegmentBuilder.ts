@@ -132,7 +132,9 @@ export function updateTool(
     tool: {
       ...seg.tool!,
       status,
-      ...(result !== undefined ? { result } : {})
+      ...(result !== undefined ? { result } : {}),
+      liveOutput: undefined,
+      liveAgentName: undefined
     }
   }
   return [...segments.slice(0, idx), updated, ...segments.slice(idx + 1)]

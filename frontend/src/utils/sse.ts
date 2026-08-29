@@ -280,6 +280,7 @@ export function createFlowSSEConnection(
     token_usage: handlers.onTokenUsage,
     waiting_human: handlers.onWaitingHuman,
     tool_approval_required: handlers.onToolApproval,
+    sub_agent_progress: handlers.onSubAgentProgress,
     todo_update: handlers.onTodoUpdate,
     flow_done: handlers.onFlowDone,
     llm_retry: handlers.onLlmRetry,

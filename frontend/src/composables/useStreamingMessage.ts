@@ -297,9 +297,29 @@ export function useStreamingMessage() {
       if (tool) {
         tool.status = status
         if (result !== undefined) tool.result = result
+        delete tool.liveOutput
+        delete tool.liveAgentName
       }
     }
 
+    triggerRef(messages)
+  }
+
+  /**
+   * 更新子Agent实时输出快照（ask_* 工具执行中嵌入展示）
+   */
+  function updateToolLiveOutput(name: string, content: string, agentName?: string): void {
+    const msg = messages.value[messages.value.length - 1]
+    if (msg?.role !== 'ai' || !msg.segments) return
+
+    // 优先匹配带 ID 的同名并行工具段，无 ID 回退最后一个同名 running 分段
+    const segment = [...msg.segments]
+      .reverse()
+      .find(s => s.type === 'tool' && s.tool?.name === name && s.tool?.status === 'running')
+    if (!segment?.tool) return
+
+    segment.tool.liveOutput = content
+    if (agentName) segment.tool.liveAgentName = agentName
     triggerRef(messages)
   }
 
@@ -385,6 +405,7 @@ export function useStreamingMessage() {
     appendContent,
     addToolSegment,
     updateToolSegment,
+    updateToolLiveOutput,
     addTodoSegment,
     addKnowledgeCitations,
     updateTodos,

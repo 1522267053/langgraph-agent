@@ -145,6 +145,16 @@ async function handleCopy(text: string): Promise<void> {
           }}
         </span>
       </div>
+      <!-- 子Agent实时输出预览（ask_* 工具执行中展示，完成后由最终结果替代） -->
+      <div
+        v-if="segment.tool.status === 'running' && segment.tool.liveOutput"
+        class="tool-live-wrapper"
+      >
+        <div class="tool-live-label">
+          子Agent「{{ segment.tool.liveAgentName || '子Agent' }}」输出中
+        </div>
+        <pre class="tool-content tool-live-output">{{ segment.tool.liveOutput }}</pre>
+      </div>
       <template v-if="showToolCalls">
         <div
           v-if="segment.tool.args && Object.keys(segment.tool.args).length > 0"
@@ -445,6 +455,24 @@ async function handleCopy(text: string): Promise<void> {
   padding: 12px 16px;
   color: #94a3b8;
   font-size: 13px;
+}
+
+.tool-live-wrapper {
+  border-top: 1px solid #e2e8f0;
+  background: rgba(239, 246, 255, 0.6);
+}
+
+.tool-live-label {
+  padding: 8px 16px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #2563eb;
+}
+
+.tool-live-output {
+  border-top: none;
+  max-height: 180px;
+  color: #334155;
 }
 
 .revert-btn {
