@@ -180,8 +180,32 @@ async function handleSyncModels() {
   }
 }
 
+// 标记本次 provider 变更来自用户手动选择（而非配置回显的赋值）
+let userProviderChange = false
+
 async function onProviderChange(newVal: string, oldVal: string) {
   if (_init.value) return
+  // base_url 为空或仍是旧供应商默认值（非用户自定义）时，跟随替换为新供应商默认值
+  const prevDefault = oldVal ? getProviderBaseUrl(oldVal) : ''
+  const nextDefault = getProviderBaseUrl(newVal)
+  if (nextDefault && (!baseUrl.value || baseUrl.value === prevDefault)) {
+    baseUrl.value = nextDefault
+  }
+  await loadModels(newVal)
+  // sync watcher 先于 el-select @change 触发，故标记需在 loadModels 完成后读取
+  const isUserChange = userProviderChange
+  userProviderChange = false
+  // 仅用户主动切换时才用模型默认值覆盖上下文窗口，避免页面回显的配置被覆盖
+  if (isUserChange) applyModelAutoFill(true)
+  emit('change')
+}
+
+function onModelChange() {
+  if (_init.value) return
+  emit('change')
+}
+
+function onProviderSelectChange() {
   if (props.resetOnProviderChange) {
     model.value = ''
     if (capabilities.value) {
@@ -190,21 +214,13 @@ async function onProviderChange(newVal: string, oldVal: string) {
     contextLength.value = undefined
     if (maxTokens.value !== undefined) maxTokens.value = undefined
   }
-  // base_url 为空或仍是旧供应商默认值（非用户自定义）时，跟随替换为新供应商默认值
-  const prevDefault = oldVal ? getProviderBaseUrl(oldVal) : ''
-  const nextDefault = getProviderBaseUrl(newVal)
-  if (nextDefault && (!baseUrl.value || baseUrl.value === prevDefault)) {
-    baseUrl.value = nextDefault
-  }
-  await loadModels(newVal)
-  applyModelAutoFill(true)
-  emit('change')
+  userProviderChange = true
+  onFieldChange()
 }
 
-function onModelChange() {
-  if (_init.value) return
+function onModelSelectChange() {
   applyModelAutoFill(true)
-  emit('change')
+  onFieldChange()
 }
 
 watch(provider, onProviderChange, { flush: 'sync' })
@@ -261,7 +277,7 @@ function handleExtraBodyBlur() {
           filterable
           :clearable="providerClearable"
           :disabled="disabled"
-          @change="onFieldChange"
+          @change="onProviderSelectChange"
         >
           <el-option
             v-for="item in providerList"
@@ -284,7 +300,7 @@ function handleExtraBodyBlur() {
         filterable
         :clearable="providerClearable"
         :disabled="disabled"
-        @change="onFieldChange"
+        @change="onProviderSelectChange"
       >
         <el-option
           v-for="item in providerList"
@@ -304,7 +320,7 @@ function handleExtraBodyBlur() {
         allow-create
         default-first-option
         :clearable="modelClearable"
-        @change="onFieldChange"
+        @change="onModelSelectChange"
       >
         <el-option
           v-for="item in modelList"
@@ -501,7 +517,7 @@ function handleExtraBodyBlur() {
         allow-create
         default-first-option
         :clearable="modelClearable"
-        @change="onFieldChange"
+        @change="onModelSelectChange"
       >
         <el-option
           v-for="item in modelList"

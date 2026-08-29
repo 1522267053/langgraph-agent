@@ -10,6 +10,7 @@ import type {
   TokenStatisticsQuery
 } from '@/types/statistics'
 import * as echarts from 'echarts'
+import { formatTokenCount as formatNumber } from '@/utils/format'
 
 const loading = ref(false)
 const overview = ref<TokenOverview>({
@@ -37,12 +38,6 @@ const grainOptions = [
 let trendChart: echarts.ECharts | null = null
 let flowChart: echarts.ECharts | null = null
 let modelChart: echarts.ECharts | null = null
-
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
-  return String(n)
-}
 
 async function loadData() {
   loading.value = true
@@ -95,11 +90,15 @@ function renderCharts() {
 
 function setTrendOption(chart: echarts.ECharts) {
   chart.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' },
+      valueFormatter: (value: number) => formatNumber(value) + ' token'
+    },
     legend: { data: ['输入 Token', '输出 Token', '总 Token'], bottom: 0 },
     grid: { left: 60, right: 30, top: 20, bottom: 40 },
     xAxis: { type: 'category', data: trendData.value.map(i => i.date), boundaryGap: false },
-    yAxis: { type: 'value' },
+    yAxis: { type: 'value', axisLabel: { formatter: (v: number) => formatNumber(v) } },
     series: [
       {
         name: '输入 Token',
@@ -128,10 +127,14 @@ function setTrendOption(chart: echarts.ECharts) {
 function setFlowOption(chart: echarts.ECharts) {
   const sorted = [...flowData.value].sort((a, b) => a.total_tokens - b.total_tokens)
   chart.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      valueFormatter: (value: number) => formatNumber(value) + ' token'
+    },
     legend: { data: ['输入', '输出'], bottom: 0 },
     grid: { left: 120, right: 30, top: 10, bottom: 40 },
-    xAxis: { type: 'value' },
+    xAxis: { type: 'value', axisLabel: { formatter: (v: number) => formatNumber(v) } },
     yAxis: {
       type: 'category',
       data: sorted.map(i => i.flow_name || `#${i.flow_id}`),
@@ -157,10 +160,14 @@ function setFlowOption(chart: echarts.ECharts) {
 function setModelOption(chart: echarts.ECharts) {
   const sorted = [...modelData.value].sort((a, b) => a.total_tokens - b.total_tokens)
   chart.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      valueFormatter: (value: number) => formatNumber(value) + ' token'
+    },
     legend: { data: ['输入', '输出', '缓存读取', '缓存写入', '推理'], bottom: 0 },
     grid: { left: 140, right: 30, top: 10, bottom: 60 },
-    xAxis: { type: 'value' },
+    xAxis: { type: 'value', axisLabel: { formatter: (v: number) => formatNumber(v) } },
     yAxis: {
       type: 'category',
       data: sorted.map(i => i.model || i.provider || 'unknown'),

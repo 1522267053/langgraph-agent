@@ -293,12 +293,13 @@ export const conditionOperators = [
   { value: 'ends_with', label: '结尾是' }
 ]
 
-/** 上下文窗口预设选项（供 openai_compatible 等自定义模型使用） */
+/** 上下文窗口预设选项（供 openai_compatible 等自定义模型使用，与 parseContextLength 的十进制换算一致） */
 export const CONTEXT_LENGTH_PRESETS = [
-  { label: '100K', value: 102400 },
-  { label: '128K', value: 131072 },
-  { label: '200K', value: 204800 },
-  { label: '1M', value: 1048576 }
+  { label: '100K', value: 100000 },
+  { label: '128K', value: 128000 },
+  { label: '200K', value: 200000 },
+  { label: '500K', value: 500000 },
+  { label: '1M', value: 1000000 }
 ]
 
 /** 将上下文窗口缩写转为数字（如 "32K" → 32000，"1M" → 1000000） */

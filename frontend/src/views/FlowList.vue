@@ -27,7 +27,6 @@ const { isMobile } = useIsMobile()
 const loading = ref(false)
 const tableData = ref<Flow[]>([])
 const total = ref(0)
-const selectedRows = ref<Flow[]>([])
 
 const queryParams = reactive({
   page: 1,
@@ -189,10 +188,6 @@ const executeFlowId = ref<number | null>(null)
 function handleRun(row: Flow) {
   executeFlowId.value = row.id!
   showQuickExecute.value = true
-}
-
-function handleSelectionChange(rows: Flow[]) {
-  selectedRows.value = rows
 }
 
 // ---- 导出 ----
@@ -461,8 +456,7 @@ onMounted(() => {
     </el-form>
 
     <div v-loading="loading" class="card-panel table-container">
-      <el-table :data="tableData" style="width: 100%" @selection-change="handleSelectionChange">
-        <el-table-column type="selection" width="55" />
+      <el-table :data="tableData" style="width: 100%">
         <el-table-column label="ID" width="80">
           <template #default="{ row }">
             <span class="id-text">#{{ String(row.id ?? 0) }}</span>
