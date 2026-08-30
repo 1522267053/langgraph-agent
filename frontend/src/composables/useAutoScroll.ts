@@ -6,6 +6,8 @@ interface UseAutoScrollOptions {
   throttleMs?: number
   /** 手势有效窗口（ms）：真实输入后该时间内的 scroll 事件才被视为用户滚动 */
   gestureWindowMs?: number
+  /** 调试日志：true 用默认标签，字符串作为自定义标签前缀 */
+  debug?: boolean | string
 }
 
 /**
@@ -26,6 +28,12 @@ export function useAutoScroll(
   options: UseAutoScrollOptions = {}
 ) {
   const { threshold = 50, throttleMs = 200, gestureWindowMs = 500 } = options
+  const _debugTag =
+    typeof options.debug === 'string' ? options.debug : options.debug ? '[use-auto-scroll]' : null
+  /** 调试日志：仅在 debug 选项开启时输出 */
+  function _log(message: string, data?: Record<string, unknown>): void {
+    if (_debugTag) console.log(_debugTag, message, data ?? '')
+  }
   const autoScroll = ref(true)
   const isAtBottom = ref(true)
   const userScrolledUp = ref(false)
@@ -142,10 +150,19 @@ export function useAutoScroll(
     const el = containerRef.value
     if (!el) return
     // 程序化贴底引发的 scroll 事件由手势白名单忽略（见 handleScroll），无需额外标志位
+    _log('贴底执行: 前', {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight
+    })
     el.scrollTop = el.scrollHeight
     _lastScrollTop = el.scrollTop
     isAtBottom.value = true
     userScrolledUp.value = false
+    _log('贴底执行: 后', {
+      scrollTop: el.scrollTop,
+      bottomGap: el.scrollHeight - el.scrollTop - el.clientHeight
+    })
   }
 
   /** rAF 单飞合帧：一帧内多次触发（如 RO 连续回调）只执行一次滚动 */
@@ -160,12 +177,14 @@ export function useAutoScroll(
     })
   }
 
-  function markUserScrolledUp(): void {
+  function markUserScrolledUp(reason: string): void {
+    _log('标记用户上滚，停止跟随', { reason })
     userScrolledUp.value = true
     cancelPendingScroll()
   }
 
   function scrollToBottom(): void {
+    _log('显式贴底(scrollToBottom) 调用')
     cancelPendingScroll()
     performScrollToBottom()
   }
@@ -249,7 +268,9 @@ export function useAutoScroll(
     const wheelUp = event?.type === 'wheel' && (event as WheelEvent).deltaY < 0
     const scrollbarDrag = event?.type === 'pointerdown'
     const awayFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight > threshold
-    if (wheelUp || scrollbarDrag || awayFromBottom) markUserScrolledUp()
+    if (wheelUp) markUserScrolledUp('wheel 上滚')
+    else if (scrollbarDrag) markUserScrolledUp('滚动条拖动')
+    else if (awayFromBottom) markUserScrolledUp('远离底部手势')
   }
 
   /** 绑定到容器 @scroll 事件 */
@@ -259,7 +280,16 @@ export function useAutoScroll(
     const { scrollTop, scrollHeight, clientHeight } = el
     const scrollable = scrollHeight - clientHeight > 1
     _wasScrollable = scrollable
+    const prevAtBottom = isAtBottom.value
     isAtBottom.value = scrollable ? scrollHeight - scrollTop - clientHeight <= threshold : true
+    if (prevAtBottom !== isAtBottom.value) {
+      _log('isAtBottom 翻转', {
+        to: isAtBottom.value ? '底部' : '离开底部',
+        scrollTop,
+        scrollHeight,
+        bottomGap: scrollHeight - scrollTop - clientHeight
+      })
+    }
 
     if (!scrollable) {
       // 没有滚动范围时不存在“主动上滚”
@@ -277,7 +307,7 @@ export function useAutoScroll(
 
     if (scrollTop < _lastScrollTop - 1) {
       // 真实输入后的上滚：立即停止跟随（即使仍在底部阈值内）
-      markUserScrolledUp()
+      markUserScrolledUp('scroll 上滚(手势窗口内)')
     } else if (scrollTop > _lastScrollTop + 1 && isAtBottom.value) {
       // 用户主动滚回底部（含拖动滚动条）→ 恢复自动滚动
       userScrolledUp.value = false
