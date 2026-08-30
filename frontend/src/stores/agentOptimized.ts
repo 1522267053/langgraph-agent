@@ -458,7 +458,10 @@ export const useAgentStore = defineStore('agent', () => {
           currentAssistant.segments.push({
             type: 'thinking',
             thinking: msg.thinking,
-            dbMsgId: msg.id
+            dbMsgId: msg.id,
+            // 确定性段 id（按 DB 行派生）：供虚拟行 key 使用，前插历史被吸收合并时
+            // 旧段 key 不随下标漂移
+            id: `s-${msg.id}-t`
           })
           currentAssistant.thinking = msg.thinking
         }
@@ -468,7 +471,8 @@ export const useAgentStore = defineStore('agent', () => {
             type: 'content',
             content: msg.content,
             dbMsgId: msg.id,
-            knowledge_citations: msg.knowledge_citations
+            knowledge_citations: msg.knowledge_citations,
+            id: `s-${msg.id}-c`
           })
           currentAssistant.content = msg.content
         }
@@ -477,7 +481,7 @@ export const useAgentStore = defineStore('agent', () => {
           if (!currentAssistant.tools) {
             currentAssistant.tools = []
           }
-          for (const tc of msg.tool_calls) {
+          for (const [tcIdx, tc] of msg.tool_calls.entries()) {
             const toolResult = toolResultMap.get(tc.id as string)
             let resultData: unknown = toolResult?.content
             try {
@@ -493,7 +497,11 @@ export const useAgentStore = defineStore('agent', () => {
               result: resultData
             }
             currentAssistant.tools.push(tool)
-            currentAssistant.segments.push({ type: 'tool', tool })
+            currentAssistant.segments.push({
+              type: 'tool',
+              tool,
+              id: `s-${msg.id}-tc${tcIdx}`
+            })
 
             const toolName = tc.name as string
             if (toolName === 'todowrite' && toolResult?.status === 'success') {
@@ -502,6 +510,7 @@ export const useAgentStore = defineStore('agent', () => {
                 if (Array.isArray(todosArgs)) {
                   currentAssistant.segments.push({
                     type: 'todo',
+                    id: `s-${msg.id}-todo${tcIdx}`,
                     todo: todosArgs.map(
                       (item: { content?: string; status?: string; priority?: string }) => ({
                         content: item.content || '',
@@ -524,6 +533,7 @@ export const useAgentStore = defineStore('agent', () => {
               if (Array.isArray(parsed.todos)) {
                 currentAssistant.segments.push({
                   type: 'todo',
+                  id: `s-${msg.id}-todo${tcIdx}`,
                   todo: parsed.todos.map(
                     (item: { content?: string; status?: string; priority?: string }) => ({
                       content: item.content || '',
@@ -624,14 +634,14 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   /**
-   * 按位置 + 类型过继旧分段 id：流式分段带 genSegmentId，重建分段无 id，
-   * 保持分段 key 稳定（key 变化会卸载重挂分段组件，触发 markdown/hljs 全量重跑）
+   * 按位置 + 类型过继旧分段 id：流式分段带 genSegmentId，回合结束重建时优先保留
+   * 原 key（即使重建分段已带确定性 id），避免段行 key 变化触发 markdown/hljs 全量重挂
    */
   function inheritSegmentIds(existing: StreamingMessage, rebuilt: StreamingMessage): void {
     for (let i = 0; i < rebuilt.segments.length && i < existing.segments.length; i++) {
       const prev = existing.segments[i]
       const next = rebuilt.segments[i]
-      if (prev.type === next.type && prev.id && !next.id) {
+      if (prev.type === next.type && prev.id) {
         next.id = prev.id
       }
     }
