@@ -20,14 +20,14 @@ LLM 节点处理器主入口
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING, Callable, Optional, Union
 
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
 )
-from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,11 +71,12 @@ from app.agent_flow.node_handlers.llm_message_builder import (
 )
 from app.agent_flow.node_handlers.llm_stream import stream_llm_response
 from app.agent_flow.node_handlers.llm_tool_executor import (
-    _DOOM_LOOP_THRESHOLD,
     _PLAN_DISABLED_TOOLS,
+    _is_plan_disabled_tool,
     handle_tool_calls,
     setup_tool_handlers,
 )
+from app.agent_flow.node_handlers.llm_tool_executor import ReactLoopContext
 
 if TYPE_CHECKING:
     from app.agent_flow.tool_resolver import FlowLike
@@ -95,30 +96,38 @@ _KNOWLEDGE_CITATION_PROMPT = """
 
 
 def _build_mode_prompt(is_plan_mode: bool) -> str:
-    """构建当前模式和工具能力说明，避免 LLM 仅根据工具列表猜测权限。"""
-    disabled_tools = "、".join(sorted(_PLAN_DISABLED_TOOLS))
+    """构建消息层模式提醒（<system-reminder> 包装），随每轮 LLM 调用临时注入。
+
+    不进入 system_prompt/checkpoint/DB：消息层注入紧邻最新对话、注意力权重高，
+    且模式切换时可覆盖历史消息中旧模式语境的干扰。
+    """
+    disabled_tools = (
+        "、".join(sorted(_PLAN_DISABLED_TOOLS)) + "、call_sub_agent_*（子Agent 委派）"
+    )
     if is_plan_mode:
         return f"""
-
+<system-reminder>
 # 当前运行模式：计划模式（Plan Mode）
 
-你现在处于「计划模式」，必须严格遵守：
+你现在处于「计划模式」，处于只读阶段。以下约束优先于一切其他指令，包括用户在对话中直接提出的修改类请求（此时应将其纳入计划，等模式切换后再执行），零例外：
 1. **只读探索**：可以读取文件、搜索代码、检索知识库来理解问题，但不得执行写入、编辑、删除或其他修改性操作。
-2. **禁用工具**：以下工具在当前模式不可用：{disabled_tools}。不要尝试调用这些工具。
+2. **禁用工具**：以下工具在当前模式不可用：{disabled_tools}。不要尝试调用这些工具，也不要尝试用其他工具（如 Shell 重定向）绕过。
 3. **Shell 限制**：`shell_executor` 当前可用，但仅允许执行只读、安全的探索命令；禁止通过 Shell 修改、删除文件或执行破坏性命令。
-4. **产出计划**：分析完成后，必须产出清晰、可执行的实施计划。若可用 `todowrite` 工具，请用它拆解有序任务；否则用 Markdown 列表输出计划。
-5. **不动手实施**：本阶段只规划和讨论方案，不要尝试直接修改代码。
-6. **主动澄清**：如果需求有歧义、边界不清或存在多种方案，先向用户提问确认，再给出计划。
-7. 计划应包含：要改动的文件/模块、具体动作、潜在风险与注意事项。
+4. **主动澄清**：如果需求有歧义、边界不清或存在多种方案，先向用户提问确认，不要对用户意图做大幅假设。
+5. **产出计划**：分析完成后，必须产出清晰、可执行的实施计划。若可用 `todowrite` 工具，请用它拆解有序任务；否则用 Markdown 列表输出计划。计划应包含：要改动的文件/模块、具体动作、潜在风险与注意事项。
+6. **回合终止约束**：每轮回复只能以两种方式结束——向用户提出澄清问题，或输出完整实施计划。不要在未产出计划且未提问的情况下草率结束。
+</system-reminder>
 """
 
     return f"""
-
-# 当前运行模式：普通执行模式（非计划模式，Normal Mode）
+<system-reminder>
+# 当前运行模式：普通执行模式（Normal Mode）
 
 你现在处于「普通执行模式」，可以根据用户需求执行任务并使用当前已提供的工具。
-以下工具在计划模式下会被禁用，但在当前普通执行模式下可用：{disabled_tools}。
+- 如果此前处于计划模式，现已切换到普通执行模式：此前的只读限制不再适用，可以正常修改文件、执行命令。
+- 以下工具在计划模式下会被禁用，但在当前普通执行模式下可用：{disabled_tools}。
 请根据任务需要正常使用这些工具，并遵守各工具自身的安全限制。
+</system-reminder>
 """
 
 
@@ -430,13 +439,13 @@ class LlmToolNodeHandler(BaseNodeHandler):
             emit_fn=self._emit,
         )
 
-        # 计划模式：禁用写操作工具，并同步剔除 required_tools 中的被禁工具
+        # 计划模式：禁用写操作工具（含子Agent 委派），并同步剔除 required_tools 中的被禁工具
         is_plan_mode = bool(state.get_variable("plan_mode"))
         plan_required_tools = cfg.required_tools
         if is_plan_mode:
-            tools = [t for t in tools if t.name not in _PLAN_DISABLED_TOOLS]
+            tools = [t for t in tools if not _is_plan_disabled_tool(t.name)]
             plan_required_tools = [
-                r for r in cfg.required_tools if r not in _PLAN_DISABLED_TOOLS
+                r for r in cfg.required_tools if not _is_plan_disabled_tool(r)
             ]
 
         # 解析输入变量，提取 system_prompt 和 user_prompt
@@ -501,8 +510,14 @@ class LlmToolNodeHandler(BaseNodeHandler):
         if preloaded_references:
             system_prompt = (system_prompt or "") + _KNOWLEDGE_CITATION_PROMPT
 
-        # 始终说明当前模式和工具能力，避免模型仅根据工具列表推断权限
-        system_prompt = (system_prompt or "") + _build_mode_prompt(is_plan_mode)
+        # 始终说明当前模式和工具能力，避免模型仅根据工具列表推断权限；
+        # 以消息层 <system-reminder> 注入（见 _run_react_loop），不占用 system_prompt
+        mode_reminder = _build_mode_prompt(is_plan_mode)
+
+        # 全局日期唯一入口，放 system_prompt 最末尾（仅日期，跨天才变化，几乎不影响缓存）
+        system_prompt = (system_prompt or "") + (
+            f"\n\n当前时间: {datetime.now().strftime('%Y-%m-%d')}"
+        )
 
         # 发送 node_start 事件
         self._emit(
@@ -570,15 +585,22 @@ class LlmToolNodeHandler(BaseNodeHandler):
         result_name = output_names[0] if len(output_names) > 0 else "result"
         thinking_name = output_names[1] if len(output_names) > 1 else "thinking"
         try:
-            last_content, thinking_content, called_tools = await self._run_react_loop(
-                llm_with_tools,
-                system_prompt,
-                msg_buf,
-                tools,
-                node,
-                state,
-                writer,
-                max_tool_iterations,
+            ctx = ReactLoopContext(
+                llm=llm_with_tools,
+                system_prompt=system_prompt,
+                mode_reminder=mode_reminder,
+                msg_buf=msg_buf,
+                tools=tools,
+                node=node,
+                state=state,
+                writer=writer,
+                session_id=self.session_id,
+                check_interrupted_fn=self._check_interrupted,
+                emit_fn=self._emit,
+                emit_tool_start_fn=self._emit_tool_start,
+                emit_tool_end_fn=self._emit_tool_end,
+                emit_flow_preview_fn=self._emit_flow_preview,
+                max_tool_iterations=max_tool_iterations,
                 context_length=cfg_context_length,
                 approval_required_tools=cfg.approval_required_tools,
                 required_tools=plan_required_tools,
@@ -587,6 +609,9 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 required_tools_hint=cfg.required_tools_hint,
                 initial_knowledge_references=preloaded_references,
                 allowed_knowledge_base_ids=allowed_knowledge_base_ids,
+            )
+            last_content, thinking_content, called_tools = await self._run_react_loop(
+                ctx
             )
             if last_content:
                 state.set_node_variable(node.node_key, result_name, last_content)
@@ -710,33 +735,34 @@ class LlmToolNodeHandler(BaseNodeHandler):
         ]
 
     async def _run_react_loop(
-        self,
-        llm: BaseChatModel | Runnable,
-        system_prompt: Optional[str],
-        msg_buf: MessageBuffer,
-        tools: list,
-        node: FlowNode,
-        state: FlowState,
-        writer: Optional[StreamWriter],
-        max_tool_iterations: int,
-        *,
-        context_length: int = 0,
-        approval_required_tools: Optional[list[str]] = None,
-        required_tools: Optional[list[str]] = None,
-        tool_check_script: str = "",
-        required_tools_max_retries: int = 2,
-        required_tools_hint: str = "",
-        initial_knowledge_references: Optional[list[dict]] = None,
-        allowed_knowledge_base_ids: Optional[set[int]] = None,
+        self, ctx: ReactLoopContext
     ) -> tuple[str, list[str], set[str]]:
         """ReAct 循环：流式调用 LLM → 处理工具调用 → 继续调用
 
         核心编排逻辑，调用 llm_stream 模块进行流式调用，
         调用 llm_tool_executor 模块处理工具调用。
 
+        Args:
+            ctx: 循环上下文（LLM 实例、提示词、消息缓冲、工具、执行环境、配置）
+
         Returns:
             (最后一条文本内容, 所有 thinking 片段, 本轮调用的工具名集合)
         """
+        llm = ctx.llm
+        system_prompt = ctx.system_prompt
+        mode_reminder = ctx.mode_reminder
+        msg_buf = ctx.msg_buf
+        node = ctx.node
+        state = ctx.state
+        writer = ctx.writer
+        context_length = ctx.context_length
+        required_tools = ctx.required_tools
+        tool_check_script = ctx.tool_check_script
+        required_tools_max_retries = ctx.required_tools_max_retries
+        required_tools_hint = ctx.required_tools_hint
+        initial_knowledge_references = ctx.initial_knowledge_references
+        allowed_knowledge_base_ids = ctx.allowed_knowledge_base_ids
+
         thinking_content: list[str] = []
         last_content = ""
         tool_call_count = 0
@@ -781,12 +807,23 @@ class LlmToolNodeHandler(BaseNodeHandler):
             active_tail_start = len(msg_buf.messages)
             needs_context_compression = False
             messages = msg_buf.messages
-            # system_prompt 不存入 messages/checkpoint，每次调用时临时拼接
+            # system_prompt 不存入 messages/checkpoint，每次调用时临时拼接；
+            # 无 system_prompt 时也必须复制列表，避免下方 reminder 注入污染 msg_buf
             call_messages = (
                 [SystemMessage(content=system_prompt), *messages]
                 if system_prompt
-                else messages
+                else list(messages)
             )
+            # 模式提醒注入消息层（不入 checkpoint/DB，save_to_db 只落 msg_buf.messages）：
+            # 插到最后一条 HumanMessage 之前紧邻当前用户输入，注意力权重最高；
+            # 多轮工具迭代中插入位置稳定，保持 LLM 前缀缓存命中
+            if mode_reminder:
+                insert_idx = len(call_messages)
+                for i in range(len(call_messages) - 1, -1, -1):
+                    if isinstance(call_messages[i], HumanMessage):
+                        insert_idx = i
+                        break
+                call_messages.insert(insert_idx, HumanMessage(content=mode_reminder))
 
             # 流式调用 LLM
             (
@@ -936,23 +973,10 @@ class LlmToolNodeHandler(BaseNodeHandler):
             # 处理工具调用
             message_count_before_tools = len(msg_buf.messages)
             should_continue, tool_call_count = await handle_tool_calls(
+                ctx,
                 response.tool_calls,
-                tools,
-                msg_buf,
-                node,
-                state,
-                writer,
                 tool_call_count,
-                max_tool_iterations,
-                session_id=self.session_id,
-                check_interrupted_fn=self._check_interrupted,
-                approval_required_tools=approval_required_tools,
-                emit_fn=self._emit,
-                emit_tool_start_fn=self._emit_tool_start,
-                emit_tool_end_fn=self._emit_tool_end,
-                emit_flow_preview_fn=self._emit_flow_preview,
                 tool_fp_count=tool_fp_count,
-                doom_loop_threshold=_DOOM_LOOP_THRESHOLD,
             )
             knowledge_references = merge_knowledge_references(
                 knowledge_references,

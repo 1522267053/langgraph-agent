@@ -51,13 +51,15 @@ class SubAgentNodeConfig(BaseNodeConfig):
     agent_id: int = Field(..., description="引用的Agent ID")
 
 
-def _build_ask_tool_schema(agent_name: str, input_schema: dict | None, node_key: str):
-    """根据子Agent的input_schema动态构建ask工具的参数模型
+def _build_sub_agent_tool_schema(
+    agent_name: str, input_schema: dict | None, node_key: str
+):
+    """根据子Agent的input_schema动态构建call_sub_agent工具的参数模型
 
     Returns:
         (Pydantic模型类, file_list字段名集合)
     """
-    model_name = f"Ask{node_key}Input"
+    model_name = f"CallSubAgent{node_key}Input"
 
     fields_def: dict[str, Any] = {
         "task": (str, Field(..., description="要委派给子Agent执行的任务描述")),
@@ -187,14 +189,14 @@ class SubAgentNodeHandler(BaseNodeHandler):
                 except (json.JSONDecodeError, TypeError):
                     input_schema = None
 
-        ask_schema, file_list_fields = _build_ask_tool_schema(
+        tool_schema, file_list_fields = _build_sub_agent_tool_schema(
             agent_name, input_schema, node.node_key
         )
 
         tools: list[StructuredTool] = []
 
-        # ---- ask 工具（阻塞等待托管子Agent） ----
-        ask_desc = (
+        # ---- call_sub_agent 工具（阻塞等待托管子Agent） ----
+        tool_desc = (
             f"将任务委派给子Agent「{agent_name}」执行。\n\n"
             f"{description}\n\n"
             f"调用后阻塞等待子Agent完成并返回结果。\n"
@@ -208,7 +210,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
         _parent_session_id = self._parent_session_id
         _parent_writer = self._writer
 
-        async def ask_agent(**kwargs) -> dict | str:
+        async def call_sub_agent(**kwargs) -> dict | str:
             from app.services.agent_executor_service import agent_executor_service
 
             task = kwargs.get("task", "")
@@ -328,11 +330,11 @@ class SubAgentNodeHandler(BaseNodeHandler):
                 return error_result
 
         tool = StructuredTool(
-            name=f"ask_{tool_prefix}",
-            description=ask_desc,
+            name=f"call_sub_agent_{tool_prefix}",
+            description=tool_desc,
             func=None,
-            coroutine=ask_agent,
-            args_schema=ask_schema,
+            coroutine=call_sub_agent,
+            args_schema=tool_schema,
             metadata={
                 "sub_agent": True,
             },
@@ -358,7 +360,12 @@ class SubAgentNodeHandler(BaseNodeHandler):
     @classmethod
     def get_tool_info(cls, node: FlowNode) -> list[dict]:
         node_key = node.node_key
-        return [{"name": f"ask_{node_key}", "description": "将任务委派给子Agent执行"}]
+        return [
+            {
+                "name": f"call_sub_agent_{node_key}",
+                "description": "将任务委派给子Agent执行",
+            }
+        ]
 
 
 async def _run_sub_agent(
@@ -442,7 +449,7 @@ async def _run_sub_agent(
         "status": str(status),
         "error": f"子Agent执行出错: {error_detail}",
     }
-    # 报错时把最后一轮回复返回给父Agent（事件流全量累积，见 ask_agent.last_round），
+    # 报错时把最后一轮回复返回给父Agent（事件流全量累积，见 call_sub_agent.last_round），
     # 让父Agent获得子Agent报错前的现场上下文
     last_round_content = error_content_getter() if error_content_getter else ""
     if last_round_content:

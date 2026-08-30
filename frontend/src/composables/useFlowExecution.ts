@@ -195,10 +195,10 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
         }
       },
       onSubAgentProgress: (event: SSEEvent) => {
-        // 进度事件携带子Agent节点key，需反查持有同名 ask_* running 工具段的 LLM 节点并覆盖预览
+        // 进度事件携带子Agent节点key，需反查持有同名 call_sub_agent_* running 工具段的 LLM 节点并覆盖预览
         const content = event.data.content || ''
         if (!content || !event.data.node_key) return
-        const toolName = `ask_${event.data.node_key}`
+        const toolName = `call_sub_agent_${event.data.node_key}`
         const agentName = event.data.sub_agent_name || '子Agent'
         for (const [nodeKey, item] of Object.entries(streamingContent.value)) {
           const segments = item?.segments

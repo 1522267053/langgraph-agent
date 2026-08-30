@@ -869,10 +869,9 @@ class SshNodeHandler(BaseNodeHandler):
         ]
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
-        """向 LLM 注入 SSH 工具使用说明（含连接目标、输出控制、当前时间）"""
+        """向 LLM 注入 SSH 工具使用说明（含连接目标、输出控制）"""
         cfg = self._get_config(node)
         target = f"{cfg.username}@{cfg.host}:{cfg.port}"
-        current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if (cfg.host or "").strip():
             target_line = (
@@ -896,6 +895,5 @@ class SshNodeHandler(BaseNodeHandler):
             f"单文件上限 {min(50, cfg.max_transfer_mb)}MB），下载的文件会自动获得 download_url\n"
             "- 远程路径是 POSIX 风格绝对路径；上传远程父目录不存在时会自动创建\n"
             "- 远程操作是真实系统变更：rm/chmod/systemctl restart 类高危命令，务必先向用户说明并获得确认\n"
-            f"\n当前时间: {current_time_str}"
         ]
         return "\n".join(lines)

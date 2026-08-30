@@ -70,9 +70,8 @@ class AgendaNodeHandler(BaseNodeHandler):
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
         """返回日程管理工具使用提示，追加到 LLM system_prompt"""
-        now = datetime.now().strftime("%Y年%m月%d日")
         return (
-            f"\n\n## 日程管理\n当前时间：{now}\n"
+            "\n\n## 日程管理\n"
             "拥有日程管理能力（agenda_create/agenda_list/agenda_update/agenda_delete）。使用规则：\n"
             "- 用户提到日程、提醒、安排时间时，主动使用日程工具\n"
             "- 时间格式统一使用 YYYY-MM-DD HH:MM:SS\n"

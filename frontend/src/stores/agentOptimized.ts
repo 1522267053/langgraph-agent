@@ -916,9 +916,9 @@ export const useAgentStore = defineStore('agent', () => {
         if (!isCurrentStream(context)) return
         const content = event.data.content || ''
         if (!content || !event.data.node_key) return
-        // 写入对应 ask_* 工具分段的实时输出区（快照替换，重连回放幂等）
+        // 写入对应 call_sub_agent_* 工具分段的实时输出区（快照替换，重连回放幂等）
         updateToolLiveOutput(
-          `ask_${event.data.node_key}`,
+          `call_sub_agent_${event.data.node_key}`,
           content,
           event.data.sub_agent_name || '子Agent'
         )
