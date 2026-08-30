@@ -71,7 +71,7 @@ from app.agent_flow.node_handlers.llm_message_builder import (
 )
 from app.agent_flow.node_handlers.llm_stream import stream_llm_response
 from app.agent_flow.node_handlers.llm_tool_executor import (
-    _PLAN_DISABLED_TOOLS,
+    _PLAN_DISABLED_TOOL_NAMES,
     _is_plan_disabled_tool,
     handle_tool_calls,
     setup_tool_handlers,
@@ -102,7 +102,8 @@ def _build_mode_prompt(is_plan_mode: bool) -> str:
     且模式切换时可覆盖历史消息中旧模式语境的干扰。
     """
     disabled_tools = (
-        "、".join(sorted(_PLAN_DISABLED_TOOLS)) + "、call_sub_agent_*（子Agent 委派）"
+        "、".join(sorted(_PLAN_DISABLED_TOOL_NAMES))
+        + "（按前缀匹配；call_sub_agent_* 为子Agent 委派工具）"
     )
     if is_plan_mode:
         return f"""
