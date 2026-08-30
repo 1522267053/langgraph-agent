@@ -220,11 +220,14 @@ _TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
 
 
 def _resolve_tool_name(cfg: PythonNodeConfig, node_key: str) -> str:
-    """解析自定义工具名，空或非法格式时回退 python_{node_key}"""
+    """解析预设工具名：python_executor_{自定义名或node_key}
+
+    统一 python_executor_ 前缀，便于计划模式按前缀识别禁用。
+    """
     name = (cfg.tool_name or "").strip()
     if name and _TOOL_NAME_PATTERN.match(name):
-        return name
-    return f"python_{node_key}"
+        return f"python_executor_{name}"
+    return f"python_executor_{node_key}"
 
 
 def _coerce_default_value(var: PythonParam) -> Any:
@@ -618,9 +621,9 @@ class PythonNodeHandler(BaseNodeHandler):
         if cfg.get("use_preset_for_tool"):
             custom_name = (cfg.get("tool_name") or "").strip()
             if custom_name and _TOOL_NAME_PATTERN.match(custom_name):
-                tool_name = custom_name
+                tool_name = f"python_executor_{custom_name}"
             else:
-                tool_name = f"python_{node_key}"
+                tool_name = f"python_executor_{node_key}"
             desc = (
                 cfg.get("description")
                 or f"执行 {node.node_name or node_key} Python代码"

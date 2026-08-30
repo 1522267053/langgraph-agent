@@ -53,24 +53,19 @@ logger = logging.getLogger(__name__)
 # 人工协助工具名（LLM 通过此工具名触发 interrupt）
 _REQUEST_HUMAN_HELP = "request_human_help"
 
-# 计划模式下禁用的工具名（写操作 / 有副作用）
-_PLAN_DISABLED_TOOLS: frozenset[str] = frozenset(
-    {
-        "python_executor",
-        "file_write",
-        "text_editor",
-    }
+# 计划模式下禁用的工具名前缀（写操作 / 有副作用；python_executor 与 call_sub_agent_
+# 的实际注册名带动态后缀 _{node_key}，统一按前缀匹配）
+_PLAN_DISABLED_TOOL_NAMES = (
+    "python_executor",
+    "file_write",
+    "text_editor",
+    "call_sub_agent_",
 )
-
-# 子Agent 委派工具名前缀（工具名为动态的 call_sub_agent_{node_key}，按前缀匹配）
-_SUB_AGENT_TOOL_PREFIX = "call_sub_agent_"
 
 
 def _is_plan_disabled_tool(tool_name: str) -> bool:
-    """判断工具是否为计划模式禁用工具（含 call_sub_agent_* 子Agent 委派工具）"""
-    return tool_name in _PLAN_DISABLED_TOOLS or tool_name.startswith(
-        _SUB_AGENT_TOOL_PREFIX
-    )
+    """判断工具是否为计划模式禁用工具（前缀匹配，覆盖动态名后缀）"""
+    return any(tool_name.startswith(prefix) for prefix in _PLAN_DISABLED_TOOL_NAMES)
 
 
 # system_prompt hint 优先级：值越小越靠前，静态内容放前面有利于 LLM 缓存命中
