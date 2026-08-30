@@ -48,7 +48,47 @@ const {
   handleScroll,
   onUserScrollIntent,
   resetAutoScrollState
-} = useAutoScroll(messagesContainer, [])
+} = useAutoScroll(messagesContainer, [], { debug: '[chat-scroll]' })
+
+/**
+ * 输出虚拟滚动状态快照：实测行数 vs 估值行数是判断「贴底停不到真实底部」的
+ * 关键信号——未实测行使用估值高度，跳底后 measureElement 实测会改变总高度
+ */
+function logVirtualState(tag: string): void {
+  const wrap = messagesContainer.value
+  const v = rowVirtualizer.value
+  const measurements = v.getMeasurements()
+  let measuredRows = 0
+  let estimatedRows = 0
+  for (const m of measurements) {
+    const row = chatRows.value[m.index]
+    if (row && m.size !== estimateRowSize(row)) measuredRows++
+    else estimatedRows++
+  }
+  console.log('[chat-scroll]', tag, {
+    scrollTop: wrap?.scrollTop ?? null,
+    scrollHeight: wrap?.scrollHeight ?? null,
+    clientHeight: wrap?.clientHeight ?? null,
+    bottomGap: wrap ? wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight : null,
+    totalSize: Math.round(v.getTotalSize()),
+    rowCount: chatRows.value.length,
+    measuredRows,
+    estimatedRows,
+    virtualRange:
+      v.getVirtualItems().length > 0
+        ? `${v.getVirtualItems()[0]!.index}~${v.getVirtualItems().at(-1)!.index}`
+        : '[]'
+  })
+}
+
+/** 回到底部按钮：贴底后跟踪测量收敛（实测高度偏离估值时一次贴底可能停不到真实底部） */
+function handleJumpToBottom(): void {
+  logVirtualState('点击回到底部: 前')
+  scrollToBottom()
+  requestAnimationFrame(() => logVirtualState('点击回到底部: +1帧'))
+  setTimeout(() => logVirtualState('点击回到底部: +350ms'), 350)
+  setTimeout(() => logVirtualState('点击回到底部: +800ms'), 800)
+}
 
 function handleScrollbarPointerDown(event: PointerEvent): void {
   const root = scrollbarRef.value?.$el as Element | undefined
@@ -433,7 +473,9 @@ async function handleLoadMore() {
     // - 行高仍可能很大（单个超大 content 段不切分），一次性的 scrollToIndex/
     //   scrollTop 跳转在测量收敛前必然失准；因此恢复后进入 rAF 校正循环：每帧
     //   以锚行实时 start/size 重算目标位置并施加，直到连续多帧稳定（测量收敛）
-    //   或超时；期间用户滚动输入立即放弃校正
+    //   或超时；前 5 帧校正未落地时忽略手势中断（load-more 由连续上滚触发，
+    //   注册监听时手势通常仍在持续，立即让位会停在校正前的位置），之后用户
+    //   滚动输入才立即放弃校正
     // - 目标差值含锚行自身 size 差：视口随锚行高度变化前移，语义仍正确
     const first = rowVirtualizer.value.getVirtualItems()[0]
     const prevFirstStart = first?.start ?? 0
@@ -441,23 +483,46 @@ async function handleLoadMore() {
     const prevScrollTop = wrap?.scrollTop ?? 0
     const prevRowCount = chatRows.value.length
     const prevFirstKey = first?.key ?? null
+    console.log('[chat-scroll][load-more] 开始', {
+      prevScrollTop,
+      prevFirstStart: Math.round(prevFirstStart),
+      prevFirstSize: Math.round(prevFirstSize),
+      prevRowCount,
+      prevFirstKey
+    })
     await store.loadMoreMessages(agentId.value)
     await nextTick()
     if (!wrap) return
     let anchorIndex = prevFirstKey ? chatRows.value.findIndex(row => row.key === prevFirstKey) : -1
+    let anchorBy: 'key' | '行数差' = 'key'
     if (anchorIndex === -1) {
       anchorIndex = chatRows.value.length - prevRowCount
+      anchorBy = '行数差'
     }
     const anchorKey = chatRows.value[anchorIndex]?.key ?? null
     if (!anchorKey) return
+    console.log('[chat-scroll][load-more] 锚点解析', {
+      anchorBy,
+      anchorIndex,
+      anchorKey,
+      newRowCount: chatRows.value.length
+    })
 
     let aborted = false
+    let totalFrames = 0
     const abort = () => {
+      // 首批校正未落地前忽略手势：load-more 由连续上滚触发，注册监听时手势通常
+      // 仍在持续，立即中止会让视口停在未校正位置（前插内容整体下移造成视觉跳变，
+      // 表现为「滚动位置被偷走」）。校正满 5 帧后恢复「用户输入立即让位」语义
+      if (totalFrames < 5) {
+        console.log('[chat-scroll][load-more] 忽略中断（校正未落地）', { totalFrames })
+        return
+      }
       aborted = true
     }
-    wrap.addEventListener('wheel', abort, { capture: true, once: true })
-    wrap.addEventListener('touchstart', abort, { capture: true, once: true })
-    wrap.addEventListener('pointerdown', abort, { capture: true, once: true })
+    wrap.addEventListener('wheel', abort, { capture: true })
+    wrap.addEventListener('touchstart', abort, { capture: true })
+    wrap.addEventListener('pointerdown', abort, { capture: true })
     const removeAbortListeners = () => {
       wrap.removeEventListener('wheel', abort, { capture: true })
       wrap.removeEventListener('touchstart', abort, { capture: true })
@@ -465,15 +530,20 @@ async function handleLoadMore() {
     }
 
     let stableFrames = 0
-    let totalFrames = 0
     const tick = () => {
       if (aborted || !wrap.isConnected) {
         removeAbortListeners()
+        console.log('[chat-scroll][load-more] 收敛终止', {
+          reason: aborted ? '用户滚动输入' : 'wrap 断开',
+          totalFrames,
+          finalScrollTop: wrap.scrollTop
+        })
         return
       }
       const m = rowVirtualizer.value.getMeasurements()[anchorIndex]
       if (!m) {
         removeAbortListeners()
+        console.log('[chat-scroll][load-more] 收敛终止', { reason: '锚行测量丢失', anchorIndex })
         return
       }
       const desired = Math.max(
@@ -491,6 +561,14 @@ async function handleLoadMore() {
         requestAnimationFrame(tick)
       } else {
         removeAbortListeners()
+        console.log('[chat-scroll][load-more] 收敛结束', {
+          stableFrames,
+          totalFrames,
+          settled: stableFrames >= 3,
+          finalScrollTop: wrap.scrollTop,
+          anchorStart: Math.round(m.start),
+          anchorSize: Math.round(m.size)
+        })
       }
     }
     requestAnimationFrame(tick)
@@ -787,7 +865,7 @@ function handleRejectTools() {
 
     <Transition v-if="!isWelcomeMode" name="jump-fade">
       <div v-show="!isAtBottom" class="scroll-to-bottom-wrap">
-        <div class="scroll-to-bottom" aria-label="回到底部" @click="scrollToBottom">
+        <div class="scroll-to-bottom" aria-label="回到底部" @click="handleJumpToBottom">
           <el-icon :size="16">
             <Bottom />
           </el-icon>
