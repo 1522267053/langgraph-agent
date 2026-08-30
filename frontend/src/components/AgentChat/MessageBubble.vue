@@ -1,17 +1,30 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { RefreshLeft } from '@element-plus/icons-vue'
 import AIMessageContent from '@/components/common/AIMessageContent.vue'
 import FilePreviewer from '@/components/common/FilePreviewer.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import { formatChatTime, formatTokenCount } from '@/utils/format'
 import type { StreamingMessage } from '@/composables/useStreamingMessage'
+import type { Segment } from '@/types/segment'
+import type { ChatRowPart } from '@/components/AgentChat/chatRow'
 
-defineProps<{
+/**
+ * 消息气泡（段级虚拟行渲染单元）
+ * 一个 AI 回合被拆成多行时，first 行带头部（头像/角色名/时间）、last 行带尾部
+ * （token 统计/流式指示器），mid 行仅渲染段本身；single 行头尾同框
+ */
+const props = defineProps<{
   msg: StreamingMessage
+  part: ChatRowPart
+  /** ai 行渲染的段；human 行不传 */
+  segment?: Segment
+  /** 段在消息 segments 中的下标 */
+  segmentIndex?: number
   showThinking: boolean
   showToolCalls: boolean
   isStreaming: boolean
-  /** 是否为列表最后一条（流式指示器定位） */
+  /** 是否为列表最后一条消息（流式指示器定位） */
   isLast: boolean
 }>()
 
@@ -20,25 +33,55 @@ const emit = defineEmits<{
   (e: 'revert', dbMsgId: number): void
   (e: 'preview', data: ImagePreviewData): void
 }>()
+
+const isHuman = computed(() => props.msg.role === 'human')
+const showHeader = computed(() => props.part === 'first' || props.part === 'single')
+const showFooter = computed(() => props.part === 'last' || props.part === 'single')
+
+// ---- 段级上下文标志（供 AIMessageContent 单段模式还原消息级判定） ----
+const isMsgLastSegment = computed(() => {
+  const segs = props.msg.segments
+  return props.segmentIndex === segs.length - 1
+})
+
+const isMsgLastContent = computed(() => {
+  const segs = props.msg.segments
+  for (let i = segs.length - 1; i >= 0; i--) {
+    if (segs[i]?.type === 'content') return props.segmentIndex === i
+  }
+  return isMsgLastSegment.value
+})
+
+const isMsgThinkingInProgress = computed(() => {
+  if (!props.isStreaming || !props.isLast) return false
+  const segs = props.msg.segments
+  for (let i = (props.segmentIndex ?? 0) + 1; i < segs.length; i++) {
+    if (segs[i]?.type === 'content') return false
+  }
+  return true
+})
+
+const streamingActive = computed(() => props.isStreaming && props.isLast)
+/** 流式 markdown 仅在消息最后一个段上启用（父级传入的 isStreaming 已含 isLast 判定） */
+const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegment.value)
 </script>
 
 <template>
-  <div :class="['message', msg.role, 'animate-fade-in']">
+  <div :class="['message', msg.role, `part-${part}`, 'animate-fade-in']">
+    <!-- 头像列：仅 first/single 行渲染头像，mid/last 行渲染等宽占位保持左对齐 -->
     <div class="message-avatar">
-      <div v-if="msg.role === 'human'" class="avatar avatar-user">U</div>
-      <div v-else class="avatar avatar-ai">
-        <el-icon :size="16"><ChatDotRound /></el-icon>
-      </div>
+      <template v-if="showHeader">
+        <div v-if="isHuman" class="avatar avatar-user">U</div>
+        <div v-else class="avatar avatar-ai">
+          <el-icon :size="16"><ChatDotRound /></el-icon>
+        </div>
+      </template>
     </div>
     <div class="message-body">
-      <div class="message-header">
-        <span class="role-name">{{ msg.role === 'human' ? '你' : 'AI' }}</span>
+      <div v-if="showHeader" class="message-header">
+        <span class="role-name">{{ isHuman ? '你' : 'AI' }}</span>
         <span class="message-time">{{ formatChatTime(msg.createdAt) }}</span>
-        <el-tooltip
-          v-if="msg.role === 'human' && !isStreaming"
-          content="回退到此消息"
-          placement="top"
-        >
+        <el-tooltip v-if="isHuman && !isStreaming" content="回退到此消息" placement="top">
           <el-button
             :icon="RefreshLeft"
             link
@@ -49,16 +92,31 @@ const emit = defineEmits<{
         </el-tooltip>
       </div>
 
-      <template v-if="msg.role === 'ai' && msg.segments && msg.segments.length > 0">
+      <template v-if="isHuman">
+        <div class="message-content">
+          {{ msg.content }}
+        </div>
+        <FilePreviewer
+          v-if="msg.files && msg.files.length > 0"
+          :files="msg.files"
+          @preview="data => emit('preview', data)"
+        />
+      </template>
+      <template v-else>
         <AIMessageContent
-          :segments="msg.segments"
+          v-if="segment"
+          :segments="[segment]"
+          single-segment
+          :is-msg-last-segment="isMsgLastSegment"
+          :is-msg-last-content="isMsgLastContent"
+          :is-msg-thinking-in-progress="isMsgThinkingInProgress"
           :show-thinking="showThinking"
           :show-tool-calls="showToolCalls"
-          :is-streaming="isStreaming && isLast"
+          :is-streaming="segmentStreaming"
           :disable-actions="isStreaming"
           @revert="dbMsgId => emit('revert', dbMsgId)"
         />
-        <div v-if="msg.total_tokens && !(isStreaming && isLast)" class="token-info">
+        <div v-if="showFooter && msg.total_tokens && !streamingActive" class="token-info">
           <span>
             输入:
             <span class="token-value">{{ formatTokenCount(msg.prompt_tokens) }}</span>
@@ -75,25 +133,14 @@ const emit = defineEmits<{
             token
           </span>
         </div>
-      </template>
 
-      <template v-else>
-        <div class="message-content">
-          {{ msg.content }}
+        <!-- 流式输出指示器：复用 @keyframes typing，点更小更轻量 -->
+        <div v-if="showFooter && streamingActive" class="streaming-indicator">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
         </div>
-        <FilePreviewer
-          v-if="msg.files && msg.files.length > 0"
-          :files="msg.files"
-          @preview="data => emit('preview', data)"
-        />
       </template>
-
-      <!-- 已有 AI 气泡时在气泡内显示加载状态，避免再创建第二个占位气泡 -->
-      <div v-if="msg.role === 'ai' && isStreaming && isLast" class="streaming-indicator">
-        <span class="dot"></span>
-        <span class="dot"></span>
-        <span class="dot"></span>
-      </div>
     </div>
   </div>
 </template>
@@ -108,6 +155,11 @@ export default {
 <style scoped>
 .message {
   display: flex;
+}
+
+/* 消息间距只挂在消息的最后一行，段行之间保持紧凑 */
+.message.part-last,
+.message.part-single {
   margin-bottom: 32px;
 }
 
@@ -116,6 +168,7 @@ export default {
 }
 
 .message-avatar {
+  width: 36px;
   flex-shrink: 0;
   margin-right: 5px;
 }
@@ -230,7 +283,6 @@ export default {
   font-variant-numeric: tabular-nums;
 }
 
-/* 流式输出指示器：复用 @keyframes typing，点更小更轻量 */
 .streaming-indicator {
   display: flex;
   align-items: center;

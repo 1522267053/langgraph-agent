@@ -17,9 +17,9 @@ import WelcomePage from '@/components/AgentChat/WelcomePage.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import ChatInput from '@/components/AgentChat/ChatInput.vue'
 import FlowPreviewCard from '@/components/common/FlowPreviewCard.vue'
+import { buildChatRows, estimateRowSize, type ChatRow } from '@/components/AgentChat/chatRow'
 import { useToolOutputStore } from '@/stores/toolOutput'
 import { useAutoScroll } from '@/composables/useAutoScroll'
-import type { StreamingMessage } from '@/composables/useStreamingMessage'
 
 import 'highlight.js/styles/vs2015.css'
 
@@ -64,12 +64,8 @@ function handleScrollbarPointerDown(event: PointerEvent): void {
 }
 
 // ---- 虚拟滚动（@tanstack/vue-virtual 挂在 el-scrollbar 的原生滚动 wrap 上）----
-interface ChatRow {
-  key: string
-  kind: 'message' | 'typing'
-  msg: StreamingMessage | null
-  isLast: boolean
-}
+// 行模型为「段级」：AI 回合每个 segment 独占一行（见 AgentChat/chatRow.ts），
+// 消息级 UI（头像/头部/尾部）拆分到 first/last 行
 
 // 流式中但最后一条不是 AI 消息（或列表为空）时，追加独立的输入指示器行
 const showStandaloneTyping = computed(() => {
@@ -78,26 +74,16 @@ const showStandaloneTyping = computed(() => {
   return !last || last.role !== 'ai' || last.displayType === 'context-summary'
 })
 
-const chatRows = computed<ChatRow[]>(() => {
-  const list = store.chatMessages
-  const rows: ChatRow[] = list.map((msg, idx) => ({
-    key: `m-${msg.id}`,
-    kind: 'message',
-    msg,
-    isLast: idx === list.length - 1
-  }))
-  if (showStandaloneTyping.value) {
-    rows.push({ key: 'typing', kind: 'typing', msg: null, isLast: true })
-  }
-  return rows
-})
+const chatRows = computed<ChatRow[]>(() =>
+  buildChatRows(store.chatMessages, showStandaloneTyping.value)
+)
 
 const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   get count() {
     return chatRows.value.length
   },
   getScrollElement: () => messagesContainer.value as HTMLDivElement | null,
-  estimateSize: () => 150,
+  estimateSize: (index: number) => estimateRowSize(chatRows.value[index]),
   overscan: 8,
   getItemKey: (index: number) => chatRows.value[index]?.key ?? String(index)
 })
@@ -439,24 +425,29 @@ async function handleLoadMore() {
   const wrap = messagesContainer.value
   try {
     // 前插历史后按「锚行坐标差值 + 逐帧收敛」恢复视口：
-    // - 锚点索引用「行数差」而非 key：buildChatMessagesFromDB 会把连续 ai 行
-    //   合并为一个回合，若新页尾部与旧首行同回合，合并回合 id 会变为更早的
-    //   db id，按 key 找锚必然失效；前插的聊天行数恒等于锚点新下标
-    // - AI 回合行高可达数千甚至上万 px（estimateSize=150 误差极大），一次性的
-    //   scrollToIndex/scrollTop 跳转在测量收敛前必然失准；因此恢复后进入 rAF
-    //   校正循环：每帧以锚行实时 start/size 重算目标位置并施加，直到连续多帧
-    //   稳定（测量收敛）或超时；期间用户滚动输入立即放弃校正
-    // - 目标差值含锚行自身 size 差：newIndex=0（新页全部被合并吸收进锚行）时，
-    //   size 差恰为行内新增前缀的高度，视口随之前移，语义仍正确
+    // - 锚点优先按「行 key」定位：段级行模式下，新页尾部回合会被合并吸收进锚行，
+    //   吸收产生的段行插在锚点之前，「前插行数 = 锚点新下标」不再恒等；但段的
+    //   确定性 id 按 DB 行派生，吸收只改变下标不改变 key，findIndex 即精确新下标
+    // - key 找不到（锚行被重建丢弃等极端情况）时回退「行数差」估算：无吸收的
+    //   纯前插场景下两者等价
+    // - 行高仍可能很大（单个超大 content 段不切分），一次性的 scrollToIndex/
+    //   scrollTop 跳转在测量收敛前必然失准；因此恢复后进入 rAF 校正循环：每帧
+    //   以锚行实时 start/size 重算目标位置并施加，直到连续多帧稳定（测量收敛）
+    //   或超时；期间用户滚动输入立即放弃校正
+    // - 目标差值含锚行自身 size 差：视口随锚行高度变化前移，语义仍正确
     const first = rowVirtualizer.value.getVirtualItems()[0]
     const prevFirstStart = first?.start ?? 0
     const prevFirstSize = first?.size ?? 0
     const prevScrollTop = wrap?.scrollTop ?? 0
     const prevRowCount = chatRows.value.length
+    const prevFirstKey = first?.key ?? null
     await store.loadMoreMessages(agentId.value)
     await nextTick()
     if (!wrap) return
-    const anchorIndex = chatRows.value.length - prevRowCount
+    let anchorIndex = prevFirstKey ? chatRows.value.findIndex(row => row.key === prevFirstKey) : -1
+    if (anchorIndex === -1) {
+      anchorIndex = chatRows.value.length - prevRowCount
+    }
     const anchorKey = chatRows.value[anchorIndex]?.key ?? null
     if (!anchorKey) return
 
@@ -781,9 +772,7 @@ function handleRejectTools() {
             :style="{ transform: `translateY(${row.start}px)` }"
           >
             <MessageItem
-              :msg="chatRows[row.index]?.msg ?? null"
-              :typing="chatRows[row.index]?.kind === 'typing'"
-              :is-last="!!chatRows[row.index]?.isLast"
+              :row="chatRows[row.index] ?? null"
               :show-thinking="showThinking"
               :show-tool-calls="showToolCalls"
               :is-streaming="store.isStreaming"

@@ -17,8 +17,25 @@ const props = withDefaults(
     showToolCalls?: boolean
     isStreaming?: boolean
     disableActions?: boolean
+    /** 单段模式（聊天段级虚拟行）：segments 恒为单元素，跳过内部窗口与折叠 */
+    singleSegment?: boolean
+    /** 单段模式：本段是否为消息最后一个段（决定 thinking revert 显隐） */
+    isMsgLastSegment?: boolean
+    /** 单段模式：本段是否为消息最后一个 content 段（决定 content revert 显隐） */
+    isMsgLastContent?: boolean
+    /** 单段模式：thinking 进行中（流式中且本段之后无 content 段） */
+    isMsgThinkingInProgress?: boolean
   }>(),
-  { showThinking: true, showToolCalls: true, isStreaming: false, disableActions: false }
+  {
+    showThinking: true,
+    showToolCalls: true,
+    isStreaming: false,
+    disableActions: false,
+    singleSegment: false,
+    isMsgLastSegment: true,
+    isMsgLastContent: true,
+    isMsgThinkingInProgress: false
+  }
 )
 
 const emit = defineEmits<{
@@ -31,6 +48,7 @@ const MAX_FINAL_SEGMENTS = 100
 const expanded = ref(false)
 
 const visibleSegments = computed(() => {
+  if (props.singleSegment) return props.segments
   if (props.isStreaming) {
     return props.segments.length > MAX_VISIBLE_SEGMENTS
       ? props.segments.slice(-MAX_VISIBLE_SEGMENTS)
@@ -42,9 +60,22 @@ const visibleSegments = computed(() => {
 
 /** 被折叠的更早分段数量（流式期间不提供展开入口） */
 const hiddenSegmentCount = computed(() => {
-  if (props.isStreaming || expanded.value) return 0
+  if (props.singleSegment || props.isStreaming || expanded.value) return 0
   return Math.max(0, props.segments.length - MAX_FINAL_SEGMENTS)
 })
+
+/** 单段模式的上下文标志由父组件传入；列表模式沿用内部推导 */
+function isMsgRevertVisible(idx: number): boolean {
+  return props.singleSegment ? !props.isMsgLastSegment : !isLastSegment(idx)
+}
+
+function isMsgContentRevertHidden(idx: number): boolean {
+  return props.singleSegment ? props.isMsgLastContent : idx === lastContentIdx.value
+}
+
+function isMsgThinkingLoading(idx: number): boolean {
+  return props.singleSegment ? props.isMsgThinkingInProgress : isThinkingInProgress(idx)
+}
 
 const lastContentIdx = computed(() => {
   for (let i = visibleSegments.value.length - 1; i >= 0; i--) {
@@ -109,11 +140,11 @@ async function handleCopy(text: string): Promise<void> {
         </div>
         <span class="code-block-label thinking-label">思考过程</span>
         <div class="code-block-actions">
-          <span v-if="!showThinking && isThinkingInProgress(idx)" class="thinking-loading">
+          <span v-if="!showThinking && isMsgThinkingLoading(idx)" class="thinking-loading">
             思考中...
           </span>
           <el-tooltip
-            v-if="!disableActions && segment.dbMsgId && !isLastSegment(idx)"
+            v-if="!disableActions && segment.dbMsgId && isMsgRevertVisible(idx)"
             content="删除此条及之后的内容"
             placement="top"
           >
@@ -200,7 +231,7 @@ async function handleCopy(text: string): Promise<void> {
           />
         </el-tooltip>
         <el-tooltip
-          v-if="!disableActions && segment.dbMsgId && idx !== lastContentIdx"
+          v-if="!disableActions && segment.dbMsgId && !isMsgContentRevertHidden(idx)"
           content="删除此条及之后的内容"
           placement="top"
         >
@@ -216,7 +247,7 @@ async function handleCopy(text: string): Promise<void> {
       <!-- 仅流式中的最后一个分段走节流渲染路径，历史分段正常渲染 -->
       <MarkdownRenderer
         :content="segment.content || ''"
-        :streaming="isStreaming && isLastSegment(idx)"
+        :streaming="isStreaming && (singleSegment || isLastSegment(idx))"
         :citations="segment.knowledge_citations || []"
         @citation-click="openKnowledgeReference"
       />

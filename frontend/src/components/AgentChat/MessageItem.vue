@@ -3,18 +3,19 @@ import { ChatDotRound, Operation } from '@element-plus/icons-vue'
 import MessageBubble from '@/components/AgentChat/MessageBubble.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
+import type { ChatRow } from '@/components/AgentChat/chatRow'
 import type { StreamingMessage } from '@/composables/useStreamingMessage'
 
+/**
+ * 虚拟行分发器：按行类型渲染 typing 指示器 / 上下文摘要 / 消息气泡
+ * 行结构由 AgentChat.buildChatRows 决定（AI 回合每段一行）
+ */
 defineProps<{
-  /** 本行消息（虚拟滚动单行渲染，由 AgentChat.chatRows 决定行类型） */
-  msg?: StreamingMessage | null
-  /** 渲染独立流式输入指示器行（流式中但最后一条不是 AI 消息时） */
-  typing?: boolean
+  /** 当前虚拟行（virtualizer 窗口外可能瞬时为空） */
+  row: ChatRow | null
   showThinking: boolean
   showToolCalls: boolean
   isStreaming: boolean
-  /** 是否为最后一条消息（流式指示器定位） */
-  isLast?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -25,7 +26,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div v-if="typing" class="message assistant animate-fade-in">
+  <div v-if="row?.kind === 'typing'" class="message assistant animate-fade-in">
     <div class="message-avatar">
       <div class="avatar avatar-ai">
         <el-icon :size="16"><ChatDotRound /></el-icon>
@@ -42,22 +43,25 @@ const emit = defineEmits<{
       </div>
     </div>
   </div>
-  <div v-else-if="msg && msg.displayType === 'context-summary'" class="compress-summary">
+  <div v-else-if="row?.kind === 'summary' && row.msg" class="compress-summary">
     <div class="compress-summary-label">
       <el-icon :size="14"><Operation /></el-icon>
       <span>上下文摘要</span>
-      <span v-if="msg.removedCount">已压缩 {{ msg.removedCount }} 条历史消息</span>
+      <span v-if="row.msg.removedCount">已压缩 {{ row.msg.removedCount }} 条历史消息</span>
     </div>
-    <MarkdownRenderer class="compress-summary-content" :content="msg.content" />
+    <MarkdownRenderer class="compress-summary-content" :content="row.msg.content" />
   </div>
   <MessageBubble
-    v-else-if="msg"
-    :msg="msg"
-    :data-msg-id="msg.id"
+    v-else-if="row?.msg"
+    :msg="row.msg"
+    :part="row.part"
+    :segment="row.segment"
+    :segment-index="row.segmentIndex ?? -1"
+    :data-msg-id="row.msg.id"
     :show-thinking="showThinking"
     :show-tool-calls="showToolCalls"
     :is-streaming="isStreaming"
-    :is-last="!!isLast"
+    :is-last="!!row.isLast"
     @delete="m => emit('delete', m)"
     @revert="dbMsgId => emit('revert', dbMsgId)"
     @preview="data => emit('preview', data)"
@@ -67,11 +71,11 @@ const emit = defineEmits<{
 <style scoped>
 .message {
   display: flex;
-  margin-bottom: 32px;
 }
 
 .message-avatar {
   flex-shrink: 0;
+  width: 36px;
   margin-right: 5px;
 }
 
