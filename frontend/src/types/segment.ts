@@ -21,7 +21,7 @@ export interface ToolCall {
   args?: Record<string, unknown>
   status: 'running' | 'success' | 'error'
   result?: unknown
-  /** 子Agent实时输出快照（ask_* 工具执行中嵌入展示） */
+  /** 子Agent实时输出快照（call_sub_agent_* 工具执行中嵌入展示） */
   liveOutput?: string
   /** 子Agent名称 */
   liveAgentName?: string

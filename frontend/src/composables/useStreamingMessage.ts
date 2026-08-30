@@ -306,7 +306,7 @@ export function useStreamingMessage() {
   }
 
   /**
-   * 更新子Agent实时输出快照（ask_* 工具执行中嵌入展示）
+   * 更新子Agent实时输出快照（call_sub_agent_* 工具执行中嵌入展示）
    */
   function updateToolLiveOutput(name: string, content: string, agentName?: string): void {
     const msg = messages.value[messages.value.length - 1]

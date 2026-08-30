@@ -2019,7 +2019,6 @@ class ShellNodeHandler(BaseNodeHandler):
             else self._resolve_working_dir()
         )
         temp_dir = get_temp_dir()
-        current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ps_compat_hint = (
             (
                 "### Windows 命令环境（cmd.exe）\n"
@@ -2040,17 +2039,45 @@ class ShellNodeHandler(BaseNodeHandler):
             else "| head / | tail / grep"
         )
 
+        # 媒体查看提示按模型实际能力（模型能力×适配器交集）分支：
+        # 有能力时明确告知并引导主动查看（工具产出媒体后不再漏看）；
+        # 无能力时明确禁止尝试，避免模型白试 file_read 报错后形成"看不了图"的错误经验
+        media_caps = self._media_caps or set()
+        _media_cap_labels = {"image": "图片", "audio": "音频", "pdf": "PDF"}
+        supported_labels = "/".join(
+            _media_cap_labels[c] for c in ("image", "audio", "pdf") if c in media_caps
+        )
+        media_hint = (
+            (
+                "### 查看多媒体（重要）\n"
+                f"你具备查看本地{supported_labels}的能力：用 file_read 传入媒体文件的本地路径即可，"
+                "内容会自动以多模态注入下一轮对话，不要声称无法查看图片/媒体\n"
+                "- 工具执行产出媒体文件（截图、导出的 PDF 等）后，如需查看其内容，"
+                "主动用 file_read 读取该文件路径\n"
+                "- xlsx/docx 自动转文本读取；不支持网络 URL、视频和 .xls/.doc 旧格式，"
+                "禁止用 file_read 读其他二进制文件\n"
+            )
+            if supported_labels
+            else (
+                "### 媒体查看（当前模型不支持）\n"
+                "当前模型不支持查看图片/音频/PDF，用户要求查看媒体文件时如实说明，"
+                "不要尝试用 file_read 读取媒体文件（会返回错误），也不要声称已查看媒体内容\n"
+                "- xlsx/docx 自动转文本读取；不支持网络 URL、视频和 .xls/.doc 旧格式，"
+                "禁止用 file_read 读其他二进制文件\n"
+            )
+        )
+
         lines = [
             "\n\n## Shell 与文件操作\n"
             "你已连接 Shell 执行节点。先用 file_search 在项目中搜索目标，再用 file_read 读取文件内容，用 text_editor 精确替换；创建新文件用 file_write\n"
-            "### 输出控制（重要）\n"
+            + media_hint
+            + "### 输出控制（重要）\n"
             f"- 执行命令前先评估可能的输出量，大量输出务必先过滤（{filter_hint}），或重定向到文件后用 file_read 分段读取\n"
             "- 如果命令输出被截断（返回 _truncated 标记），完整内容已自动保存到临时文件，需要时用 file_read 读取\n"
             f"- file_read 单次最多读取 {settings.tool_output_max_lines} 行，大文件用 offset 参数分段读取，续读位置见返回的提示信息\n"
             "- file_search 搜索文件内容（正则匹配），支持目录递归或单个文件路径\n"
             "- list_files 按文件名 glob 匹配（如 **/*.py），用于查找文件或了解目录结构\n"
             "- 禁止用 cat 读取大文件，始终使用 file_read\n"
-            "- 需要查看图片/PDF/音频时直接用 file_read 读本地路径（自动多模态注入下一轮对话）；xlsx/docx 自动转文本读取；不支持网络 URL、视频和 .xls/.doc 旧格式，禁止用 file_read 读其他二进制文件\n"
             "- Shell 每次调用都是独立进程；切换目录时传入 shell_executor 的 workdir 参数，不要依赖 cd 影响后续调用\n"
             "- 长时间任务超过等待秒数会转后台并返回 task_id：后台任务支持并发与多次长阻塞查询（wait_time 最长120秒），"
             "期间可继续执行其他工具调用\n"
@@ -2068,5 +2095,4 @@ class ShellNodeHandler(BaseNodeHandler):
             )
         if configured_warn:
             lines.append(f"⚠️ {configured_warn}，已回退默认工作目录")
-        lines.append(f"当前时间: {current_time_str}")
         return "\n".join(lines)

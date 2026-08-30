@@ -145,7 +145,7 @@ async function handleCopy(text: string): Promise<void> {
           }}
         </span>
       </div>
-      <!-- 子Agent实时输出预览（ask_* 工具执行中展示，完成后由最终结果替代） -->
+      <!-- 子Agent实时输出预览（call_sub_agent_* 工具执行中展示，完成后由最终结果替代） -->
       <div
         v-if="segment.tool.status === 'running' && segment.tool.liveOutput"
         class="tool-live-wrapper"

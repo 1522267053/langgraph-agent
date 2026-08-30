@@ -13,11 +13,13 @@ import json
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import ToolCall, ToolMessage
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.types import StreamWriter, interrupt
 
@@ -60,6 +62,17 @@ _PLAN_DISABLED_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+# 子Agent 委派工具名前缀（工具名为动态的 call_sub_agent_{node_key}，按前缀匹配）
+_SUB_AGENT_TOOL_PREFIX = "call_sub_agent_"
+
+
+def _is_plan_disabled_tool(tool_name: str) -> bool:
+    """判断工具是否为计划模式禁用工具（含 call_sub_agent_* 子Agent 委派工具）"""
+    return tool_name in _PLAN_DISABLED_TOOLS or tool_name.startswith(
+        _SUB_AGENT_TOOL_PREFIX
+    )
+
+
 # system_prompt hint 优先级：值越小越靠前，静态内容放前面有利于 LLM 缓存命中
 _HINT_PRIORITY: dict[str, int] = {
     "todo": 0,
@@ -67,11 +80,54 @@ _HINT_PRIORITY: dict[str, int] = {
     "knowledge": 1,
     "shell": 1,
     "agenda": 1,
+    "ssh": 1,
     "memory": 2,
 }
 
 # doom loop 检测：相同工具+相同参数重复调用次数上限，超过则跳过执行
 _DOOM_LOOP_THRESHOLD = 3
+
+
+@dataclass
+class ReactLoopContext:
+    """ReAct 循环与工具执行共享的上下文参数
+
+    由 LlmToolNodeHandler 在一次节点执行内构建后传入 _run_react_loop 与
+    handle_tool_calls，替代原先十余个散落参数；对象在单次节点执行内不变，
+    tool_fp_count 等跨轮可变态仍由调用方持有。
+    """
+
+    # LLM 调用
+    llm: BaseChatModel | Runnable
+    system_prompt: Optional[str]
+    mode_reminder: Optional[str]
+    # 消息与工具
+    msg_buf: MessageBuffer
+    tools: list[BaseTool]
+    # 执行环境
+    node: FlowNode
+    state: FlowState
+    writer: Optional[StreamWriter]
+    session_id: int
+    check_interrupted_fn: Callable[[FlowState], bool]
+    # 事件回调
+    emit_fn: Optional[Callable] = None
+    emit_tool_start_fn: Optional[Callable] = None
+    emit_tool_end_fn: Optional[Callable] = None
+    emit_flow_preview_fn: Optional[Callable] = None
+    # 行为配置
+    max_tool_iterations: int = 10
+    context_length: int = 0
+    approval_required_tools: Optional[list[str]] = None
+    doom_loop_threshold: int = _DOOM_LOOP_THRESHOLD
+    # 必需工具校验
+    required_tools: Optional[list[str]] = None
+    tool_check_script: str = ""
+    required_tools_max_retries: int = 2
+    required_tools_hint: str = ""
+    # 知识引用
+    initial_knowledge_references: Optional[list[dict]] = None
+    allowed_knowledge_base_ids: Optional[set[int]] = None
 
 
 def _tool_call_fingerprint(tool_call: ToolCall) -> str:
@@ -227,57 +283,72 @@ async def setup_tool_handlers(
 
 
 async def handle_tool_calls(
+    ctx: ReactLoopContext,
     tool_calls: list[ToolCall],
-    tools: list[BaseTool],
-    msg_buf: MessageBuffer,
-    node: FlowNode,
-    state: FlowState,
-    writer: Optional[StreamWriter],
     tool_call_count: int,
-    max_tool_iterations: int,
     *,
-    session_id: int,
-    check_interrupted_fn: Callable[[FlowState], bool],
-    approval_required_tools: Optional[list[str]] = None,
-    emit_fn: Optional[Callable] = None,
-    emit_tool_start_fn: Optional[Callable] = None,
-    emit_tool_end_fn: Optional[Callable] = None,
-    emit_flow_preview_fn: Optional[Callable] = None,
     tool_fp_count: Optional[dict[str, int]] = None,
-    doom_loop_threshold: int = _DOOM_LOOP_THRESHOLD,
 ) -> tuple[bool, int]:
-    """统一处理所有工具调用（人工协助 + 审批确认 + 并行执行 + 截断）
+    """统一处理所有工具调用（计划模式拦截 + 人工协助 + 审批确认 + 并行执行 + 截断）
 
     不同 MCP 服务器的工具调用并行执行（per-server 锁保证安全），
     非 MCP 工具也并行执行。人工介入工具单独处理。
+    计划模式下对禁用工具（含 call_sub_agent_* 子Agent 委派）硬拦截并反馈引导。
 
     Args:
+        ctx: ReAct 循环上下文（消息缓冲、工具列表、执行环境、事件回调、行为配置）
         tool_calls: LLM 返回的工具调用列表
-        tools: 可用工具列表
-        msg_buf: 消息缓冲区
-        node: 当前节点
-        state: 流程状态
-        writer: SSE 流式写入器
         tool_call_count: 当前已执行的工具调用次数
-        max_tool_iterations: 最大工具调用轮次
-        session_id: 会话 ID（Agent 模式 > 0）
-        check_interrupted_fn: 中断检查回调
-        approval_required_tools: 执行前需要用户确认的完整工具名列表
-        emit_fn: 事件发送回调
-        emit_tool_start_fn: 工具开始事件发送回调
-        emit_tool_end_fn: 工具结束事件发送回调
-        emit_flow_preview_fn: 流程预览事件发送回调（async，工具执行后检测到流程变更时调用）
         tool_fp_count: doom loop 检测的指纹计数字典（由调用方持有，跨轮累积）
-        doom_loop_threshold: 相同工具+参数重复调用次数上限，超过则跳过
 
     Returns:
         (是否应继续循环, 工具调用总次数)
     """
+    tools = ctx.tools
+    msg_buf = ctx.msg_buf
+    node = ctx.node
+    state = ctx.state
+    writer = ctx.writer
+    session_id = ctx.session_id
+    check_interrupted_fn = ctx.check_interrupted_fn
+    emit_fn = ctx.emit_fn
+    emit_tool_start_fn = ctx.emit_tool_start_fn
+    emit_tool_end_fn = ctx.emit_tool_end_fn
+    emit_flow_preview_fn = ctx.emit_flow_preview_fn
+    approval_required_tools = ctx.approval_required_tools
+    max_tool_iterations = ctx.max_tool_iterations
+    doom_loop_threshold = ctx.doom_loop_threshold
+
     # 个别 OpenAI 兼容端点不返回 tool_call id，统一生成兜底 id
     # 写回原 dict（与 AIMessage.tool_calls 中条目同引用），保证 ToolMessage 可配对
     for tc in tool_calls:
         if not tc.get("id"):
             tc["id"] = f"call_{uuid.uuid4().hex[:24]}"
+
+    # ---- 计划模式硬拦截：禁用工具虽不注入工具列表，但模型仍可能受历史消息误导而调用
+    # （如上一轮普通模式的工具调用记录），此处拒绝执行并反馈，引导切换普通模式 ----
+    if state.get_variable("plan_mode"):
+        disabled_calls = [
+            tc for tc in tool_calls if _is_plan_disabled_tool(tc.get("name", ""))
+        ]
+        if disabled_calls:
+            reject_remaining_tools(
+                disabled_calls,
+                msg_buf,
+                node.node_key,
+                writer,
+                "该工具在计划模式下被禁用（写操作/有副作用/子Agent 委派），"
+                "请切换到普通执行模式后再调用，或改用只读方式完成当前步骤",
+                emit_fn=emit_fn,
+                emit_tool_end_fn=emit_tool_end_fn,
+            )
+            tool_calls = [
+                tc
+                for tc in tool_calls
+                if not _is_plan_disabled_tool(tc.get("name", ""))
+            ]
+            if not tool_calls:
+                return True, tool_call_count
 
     # ---- 人工协助工具：跳过所有其他工具（避免有副作用的工具先执行） ----
     human_help_idx = next(

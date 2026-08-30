@@ -155,6 +155,10 @@ def _is_enabled(capabilities: dict, capability: str) -> bool:
 # 各适配器（langchain 包）已实现媒体块转换的能力集。
 # 实测：langchain-openai 1.4.1 支持 image/audio（file 含 pdf/xlsx），video 抛错；
 # langchain-anthropic 1.5.3 仅支持 image/file，video/audio 抛错。
+# 复验（langchain-core 1.6.0 / openai 1.6.0 / anthropic 1.6.1）：
+# core 协议层已定义 VideoContentBlock（支持 base64/file_id/url），但两个 provider
+# 的转换层均未实现 video 分支，发送 video 块在本地即抛 ValueError（未到 API）。
+# 未来 provider 跟进后，将 "video" 加入对应适配器集合即可启用注入。
 # pdf/xlsx 在我们的链路中始终生成文本占位块，不经过媒体块转换层。
 ADAPTER_MEDIA_SUPPORT = {
     "openai_compatible": {"image", "audio", "pdf", "xlsx"},
