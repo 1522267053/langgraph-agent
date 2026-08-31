@@ -328,6 +328,17 @@ class ShellTaskCancelInput(BaseModel):
     task_id: str = Field(..., description="要终止的后台任务ID")
 
 
+class ShellWaitInput(BaseModel):
+    """通用等待工具输入参数"""
+
+    seconds: int = Field(
+        10,
+        ge=1,
+        le=120,
+        description="等待秒数（1~120），等待期间不执行任何操作",
+    )
+
+
 class FileSearchInput(BaseModel):
     """文件内容搜索工具输入参数"""
 
@@ -1336,6 +1347,34 @@ class ShellNodeHandler(BaseNodeHandler):
             args_schema=ShellTaskCancelInput,
         )
 
+        # ---- shell_wait ----
+
+        async def wait_seconds(seconds: int = 10) -> dict:
+            await asyncio.sleep(seconds)
+            return {
+                "success": True,
+                "waited_seconds": seconds,
+                "message": (
+                    f"已等待 {seconds} 秒。若在等待后台任务完成，请用 shell_task_status "
+                    "查询最新状态；若在等待文件生成，请用 file_read/list_files 确认结果。"
+                ),
+            }
+
+        shell_wait_tool = StructuredTool(
+            name="shell_wait",
+            description=(
+                "主动等待指定的秒数（1~120秒），期间不执行任何操作。"
+                "适用场景：后台任务/编译/下载需要时间推进、等待服务启动就绪、"
+                "等待文件生成、网络请求重试间隔等。"
+                "用主动等待代替高频空转轮询，减少无效工具调用；"
+                "等待结束后再用 shell_task_status / file_read 等工具确认结果。"
+                "等待后台任务时建议直接用 shell_task_status 的 wait_time 参数（可阻塞等待）。"
+            ),
+            func=None,
+            coroutine=wait_seconds,
+            args_schema=ShellWaitInput,
+        )
+
         # ---- file_read（实现在 tools/file_read.py，此处仅构造服务并注册）----
 
         file_read_service = FileReadService(self._media_caps)
@@ -1978,6 +2017,7 @@ class ShellNodeHandler(BaseNodeHandler):
             shell_task_status_tool,
             shell_task_input_tool,
             shell_task_cancel_tool,
+            shell_wait_tool,
             file_read_tool,
             text_editor_tool,
             file_write_tool,
@@ -1994,6 +2034,7 @@ class ShellNodeHandler(BaseNodeHandler):
             {"name": "shell_task_status", "description": "查询后台Shell任务状态"},
             {"name": "shell_task_input", "description": "向后台Shell任务发送输入"},
             {"name": "shell_task_cancel", "description": "取消后台Shell任务"},
+            {"name": "shell_wait", "description": "主动等待指定秒数（1~120秒）"},
             {
                 "name": "file_read",
                 "description": "读取文件内容（图片/音频/PDF 多模态注入，xlsx/docx 转文本）",
@@ -2081,6 +2122,8 @@ class ShellNodeHandler(BaseNodeHandler):
             "- Shell 每次调用都是独立进程；切换目录时传入 shell_executor 的 workdir 参数，不要依赖 cd 影响后续调用\n"
             "- 长时间任务超过等待秒数会转后台并返回 task_id：后台任务支持并发与多次长阻塞查询（wait_time 最长120秒），"
             "期间可继续执行其他工具调用\n"
+            "- 需要等待时（后台任务推进、服务启动、文件生成、重试间隔）用 shell_wait 主动等待（1~120秒），"
+            "不要用高频空转轮询消耗调用次数\n"
             + ps_compat_hint
             + (
                 f"\n临时文件输出目录: `{temp_dir}`（7天后自动清理，勿存放重要数据）。"
