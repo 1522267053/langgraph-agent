@@ -56,7 +56,7 @@ class Memory(DbBaseModel):
         String(50), nullable=False, comment="记忆标题/摘要"
     )
     content: Mapped[str] = mapped_column(
-        String(500), nullable=False, comment="记忆内容"
+        String(600), nullable=False, comment="记忆内容"
     )
     keywords: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, comment="关键词(逗号分隔)"
