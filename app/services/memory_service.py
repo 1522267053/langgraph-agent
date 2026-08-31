@@ -153,7 +153,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
     # ---- 记忆保存 ----
 
     TITLE_MAX_LENGTH = 50
-    CONTENT_MAX_LENGTH = 500
+    CONTENT_MAX_LENGTH = 600
 
     async def save_memory(
         self,
