@@ -117,6 +117,17 @@ const agentId = ref<number | null>(null)
 
 const isWelcomeMode = computed(() => !store.messagesLoading && store.chatMessages.length === 0)
 
+// 欢迎页无消息列表，无需收敛贴底：直接显示
+// （空会话/无会话时 selectSession 不被调用，messagesLoading 从不翻转，
+//  messagesRevealed 须在此解除，否则 loading 遮罩永不消失）
+watch(
+  isWelcomeMode,
+  welcome => {
+    if (welcome) messagesRevealed.value = true
+  },
+  { immediate: true }
+)
+
 function handleSuggestedPrompt(prompt: string) {
   inputMessage.value = prompt
   handleChatSend({}, [], prompt)
