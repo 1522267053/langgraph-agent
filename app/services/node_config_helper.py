@@ -10,13 +10,12 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# 全 False 的能力基线（xlsx 恒 False：后端链路不生成 xlsx 媒体块）
+# 全 False 的能力基线
 _EMPTY_CAPABILITIES = {
     "image": False,
     "video": False,
     "audio": False,
     "pdf": False,
-    "xlsx": False,
 }
 
 
@@ -57,7 +56,7 @@ async def derive_model_capabilities(
     查不到模型记录时返回全 False 基线，不抛错。
 
     Returns:
-        {"image","video","audio","pdf","xlsx"} 能力开关副本
+        {"image","video","audio","pdf"} 能力开关副本
     """
     from app.models.ai_model import AIModel
 

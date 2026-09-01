@@ -49,17 +49,12 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".mp4", ".webm", ".aac"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi"}
 PDF_EXTENSIONS = {".pdf"}
-XLSX_EXTENSIONS = {".xlsx", ".xls"}
 
 CAPABILITY_TO_MIME_MAP = {
     "image": IMAGE_TYPES,
     "audio": AUDIO_TYPES,
     "video": VIDEO_TYPES,
     "pdf": {PDF_TYPE},
-    "xlsx": {
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-excel",
-    },
 }
 
 CAPABILITY_TO_EXT_MAP = {
@@ -68,9 +63,7 @@ CAPABILITY_TO_EXT_MAP = {
     "video": VIDEO_EXTENSIONS,
     "audio": AUDIO_EXTENSIONS,
     "pdf": PDF_EXTENSIONS,
-    "xlsx": XLSX_EXTENSIONS,
 }
-
 _EXT_TO_MIME = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -153,16 +146,16 @@ def _is_enabled(capabilities: dict, capability: str) -> bool:
 
 
 # 各适配器（langchain 包）已实现媒体块转换的能力集。
-# 实测：langchain-openai 1.4.1 支持 image/audio（file 含 pdf/xlsx），video 抛错；
+# 实测：langchain-openai 1.4.1 支持 image/audio（file 含 pdf），video 抛错；
 # langchain-anthropic 1.5.3 仅支持 image/file，video/audio 抛错。
 # 复验（langchain-core 1.6.0 / openai 1.6.0 / anthropic 1.6.1）：
 # core 协议层已定义 VideoContentBlock（支持 base64/file_id/url），但两个 provider
 # 的转换层均未实现 video 分支，发送 video 块在本地即抛 ValueError（未到 API）。
 # 未来 provider 跟进后，将 "video" 加入对应适配器集合即可启用注入。
-# pdf/xlsx 在我们的链路中始终生成文本占位块，不经过媒体块转换层。
+# pdf 在我们的链路中始终生成文本占位块，不经过媒体块转换层。
 ADAPTER_MEDIA_SUPPORT = {
-    "openai_compatible": {"image", "audio", "pdf", "xlsx"},
-    "anthropic": {"image", "pdf", "xlsx"},
+    "openai_compatible": {"image", "audio", "pdf"},
+    "anthropic": {"image", "pdf"},
 }
 
 
@@ -337,11 +330,6 @@ async def _resolve_file_info_to_block(
             "type": "text",
             "text": f"[pdf document: {original_name or 'document'}]",
         }
-    if capability == "xlsx":
-        return {
-            "type": "text",
-            "text": f"[excel spreadsheet: {original_name or 'spreadsheet'}]",
-        }
 
     return None
 
@@ -473,7 +461,7 @@ async def collect_media_blocks(
     从 input_data 中收集媒体 content blocks 和文件索引文本
 
     媒体块（image/audio/video）前插入内联标注（含 file_id 和路径），与块紧邻；
-    非媒体文件（pdf/xlsx 等）归入 [附件文件] 索引文本。
+    非媒体文件（pdf 等）归入 [附件文件] 索引文本。
 
     Args:
         input_data: 输入数据（值为 file_info dict / list / str）

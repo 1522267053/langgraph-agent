@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 _FRONT_MATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
-_CAPABILITY_KEYS = ("image", "video", "audio", "pdf", "xlsx")
+_CAPABILITY_KEYS = ("image", "video", "audio", "pdf")
 
 
 def _has_any_capability(caps: Optional[dict]) -> bool:

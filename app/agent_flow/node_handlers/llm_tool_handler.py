@@ -173,7 +173,6 @@ class LlmNodeConfig(BaseNodeConfig):
             "video": False,
             "audio": False,
             "pdf": False,
-            "xlsx": False,
         },
         description="模型能力开关",
     )
