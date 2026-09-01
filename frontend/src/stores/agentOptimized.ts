@@ -547,6 +547,11 @@ export const useAgentStore = defineStore('agent', () => {
           }
         }
 
+        // 结束节点输出（该轮 AI 消息携带，前端按钮查看）
+        if (msg.end_output) {
+          currentAssistant.end_output = msg.end_output
+        }
+
         if (msg.prompt_tokens) {
           currentAssistant.prompt_tokens = (currentAssistant.prompt_tokens || 0) + msg.prompt_tokens
           currentAssistant.latest_prompt_tokens = msg.prompt_tokens

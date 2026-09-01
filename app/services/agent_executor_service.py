@@ -1375,8 +1375,14 @@ class AgentExecutorService(BaseExecutorService):
                         title += "..."
                     await self._update_session_title(db, session_id, title)
 
-                # 发送完成事件
+                # 发送完成事件（携带结束节点输出，前端按钮展示 + 持久化到 AI 消息）
                 is_interrupted = interrupt_service.is_agent_interrupted(session_id)
+                end_output = (
+                    {}
+                    if is_interrupted
+                    else self._filter_end_output(context.state.output_data)
+                )
+                await self._save_end_output_to_message(db, session_id, end_output)
                 # ---- WebSocket 广播（chat 完成通知）----
                 try:
                     from app.services.ws_manager import ws_manager
@@ -1393,7 +1399,7 @@ class AgentExecutorService(BaseExecutorService):
                     pass
                 yield FlowEventFactory.flow_done(
                     execution_id=session_id,
-                    output_data={"content": llm_content},
+                    output_data={"content": llm_content, "end_output": end_output},
                     status="cancelled" if is_interrupted else "success",
                 )
                 interrupt_service.clear_agent_interrupted(session_id)
@@ -1450,6 +1456,37 @@ class AgentExecutorService(BaseExecutorService):
                             tasks.discard(direct_task)
                             if not tasks:
                                 self._direct_streaming_tasks.pop(session_id, None)
+
+    @staticmethod
+    def _filter_end_output(raw: Optional[dict]) -> dict:
+        """过滤结束节点输出：去掉未配置输出变量时写入的全量 variables dump"""
+        if not isinstance(raw, dict):
+            return {}
+        return {k: v for k, v in raw.items() if k != "variables"}
+
+    async def _save_end_output_to_message(
+        self, db: AsyncSession, session_id: int, end_output: dict
+    ) -> None:
+        """把结束节点输出持久化到该会话最后一条 AI 消息（刷新后随消息恢复按钮）"""
+        if not end_output:
+            return
+        try:
+            result = await db.execute(
+                select(AgentMessage)
+                .where(
+                    AgentMessage.session_id == session_id,
+                    AgentMessage.role == "ai",
+                    AgentMessage.is_delete == 0,
+                )
+                .order_by(AgentMessage.id.desc())
+                .limit(1)
+            )
+            msg = result.scalar_one_or_none()
+            if msg is not None:
+                msg.end_output = end_output
+                await db.commit()
+        except Exception as e:
+            logger.warning("保存结束节点输出失败 session_id=%s: %s", session_id, e)
 
     async def _update_session_title(
         self, db: AsyncSession, session_id: int, title: str
@@ -1577,6 +1614,7 @@ class AgentExecutorService(BaseExecutorService):
             # 收集LLM响应内容
             llm_content = ""
             llm_thinking = ""
+            resume_end_output: dict = {}
 
             try:
                 # 使用Command(resume=...)恢复执行
@@ -1638,6 +1676,12 @@ class AgentExecutorService(BaseExecutorService):
                         if not node:
                             continue
 
+                        # 累积各节点 output_data（end 节点最后执行，结果即结束输出）
+                        if isinstance(result, dict) and isinstance(
+                            result.get("output_data"), dict
+                        ):
+                            resume_end_output.update(result["output_data"])
+
                         yield FlowEventFactory.node_start(
                             node_key=node.node_key,
                             node_type=node.node_type,
@@ -1660,8 +1704,14 @@ class AgentExecutorService(BaseExecutorService):
                 if was_waiting and not resume_claimed:
                     raise RuntimeError("未找到可恢复的 Agent 中断状态")
 
-                # 发送完成事件
+                # 发送完成事件（携带结束节点输出，前端按钮展示 + 持久化到 AI 消息）
                 is_interrupted = interrupt_service.is_agent_interrupted(session_id)
+                end_output = (
+                    {}
+                    if is_interrupted
+                    else self._filter_end_output(resume_end_output)
+                )
+                await self._save_end_output_to_message(db, session_id, end_output)
                 # ---- WebSocket 广播（resume 完成通知）----
                 try:
                     from app.services.ws_manager import ws_manager
@@ -1678,7 +1728,7 @@ class AgentExecutorService(BaseExecutorService):
                     pass
                 yield FlowEventFactory.flow_done(
                     execution_id=session_id,
-                    output_data={"content": llm_content},
+                    output_data={"content": llm_content, "end_output": end_output},
                     status="cancelled" if is_interrupted else "success",
                 )
                 interrupt_service.clear_agent_interrupted(session_id)

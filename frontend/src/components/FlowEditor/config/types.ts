@@ -48,6 +48,35 @@ export interface ModelOption {
   max_tokens?: number
 }
 
+/** JSON 结构化输出字段定义 */
+export interface JsonOutputField {
+  name: string
+  type: 'string' | 'number' | 'boolean' | 'array' | 'object'
+  description: string
+  required: boolean
+  /** 仅 type=array：元素类型（缺省 string）；元素为 object 时用 children 描述元素字段 */
+  item_type?: 'string' | 'number' | 'boolean' | 'object'
+  /** type=object 的子字段；或 array 且 item_type=object 时的元素字段 */
+  children?: JsonOutputField[]
+}
+
+/** 字段类型中文标签（只读摘要展示用） */
+export const jsonFieldTypeLabels: Record<JsonOutputField['type'], string> = {
+  string: '字符串',
+  number: '数字',
+  boolean: '布尔',
+  array: '数组',
+  object: '对象'
+}
+
+/** 数组元素类型中文标签 */
+export const jsonItemTypeLabels: Record<string, string> = {
+  string: '字符串',
+  number: '数字',
+  boolean: '布尔',
+  object: '对象'
+}
+
 /** LLM节点配置 */
 export interface LlmConfig {
   provider: string
@@ -74,6 +103,8 @@ export interface LlmConfig {
   tool_check_script?: string
   required_tools_max_retries?: number
   required_tools_hint?: string
+  json_output_enabled?: boolean
+  json_fields?: JsonOutputField[]
 }
 
 /** 条件节点配置 */

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { RefreshLeft } from '@element-plus/icons-vue'
+import { computed, ref } from 'vue'
+import { RefreshLeft, Tickets } from '@element-plus/icons-vue'
 import AIMessageContent from '@/components/common/AIMessageContent.vue'
 import FilePreviewer from '@/components/common/FilePreviewer.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
@@ -23,6 +23,8 @@ const props = defineProps<{
   segmentIndex?: number
   showThinking: boolean
   showToolCalls: boolean
+  /** 是否显示结束节点输出按钮（右上角"展示"下拉控制） */
+  showEndOutput: boolean
   isStreaming: boolean
   /** 是否为列表最后一条消息（流式指示器定位） */
   isLast: boolean
@@ -37,6 +39,12 @@ const emit = defineEmits<{
 const isHuman = computed(() => props.msg.role === 'human')
 const showHeader = computed(() => props.part === 'first' || props.part === 'single')
 const showFooter = computed(() => props.part === 'last' || props.part === 'single')
+
+// ---- 结束节点输出（该轮 AI 消息携带，点击按钮查看） ----
+const endOutputVisible = ref(false)
+const endOutputText = computed(() =>
+  props.msg.end_output ? JSON.stringify(props.msg.end_output, null, 2) : ''
+)
 
 // ---- 段级上下文标志（供 AIMessageContent 单段模式还原消息级判定） ----
 const isMsgLastSegment = computed(() => {
@@ -133,6 +141,25 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
             token
           </span>
         </div>
+
+        <!-- 结束节点输出：右上角"展示"下拉勾选后显示（该轮 AI 消息携带） -->
+        <div
+          v-if="showFooter && showEndOutput && msg.end_output && !streamingActive"
+          class="end-output-row"
+        >
+          <el-button link size="small" type="primary" :icon="Tickets" @click="endOutputVisible = true">
+            结束输出
+          </el-button>
+        </div>
+        <el-dialog
+          v-model="endOutputVisible"
+          title="结束节点输出"
+          width="560px"
+          append-to-body
+          class="end-output-dialog"
+        >
+          <pre class="end-output-pre">{{ endOutputText }}</pre>
+        </el-dialog>
 
         <!-- 流式输出指示器：复用 @keyframes typing，点更小更轻量 -->
         <div v-if="showFooter && streamingActive" class="streaming-indicator">
@@ -304,6 +331,25 @@ export default {
 
 .streaming-indicator .dot:nth-child(3) {
   animation-delay: 0.4s;
+}
+
+.end-output-row {
+  
+}
+
+.end-output-pre {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #334155;
+  background: #f8fafc;
+  border-radius: 6px;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 @keyframes typing {

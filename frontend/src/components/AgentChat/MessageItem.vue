@@ -15,6 +15,7 @@ defineProps<{
   row: ChatRow | null
   showThinking: boolean
   showToolCalls: boolean
+  showEndOutput: boolean
   isStreaming: boolean
 }>()
 
@@ -60,6 +61,7 @@ const emit = defineEmits<{
     :data-msg-id="row.msg.id"
     :show-thinking="showThinking"
     :show-tool-calls="showToolCalls"
+    :show-end-output="showEndOutput"
     :is-streaming="isStreaming"
     :is-last="!!row.isLast"
     @delete="m => emit('delete', m)"

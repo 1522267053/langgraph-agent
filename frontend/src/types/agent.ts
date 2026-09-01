@@ -85,6 +85,8 @@ export interface AgentMessage extends BaseEntity {
   files?: AgentFileInfo[]
   /** 用户输入参数（回退恢复用） */
   input_data?: Record<string, unknown>
+  /** 结束节点输出（该轮 AI 消息携带，前端按钮查看） */
+  end_output?: Record<string, unknown>
   /** 创建时间 */
   created_at?: string
 }

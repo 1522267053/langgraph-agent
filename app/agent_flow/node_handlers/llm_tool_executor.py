@@ -36,6 +36,7 @@ from app.agent_flow.tool_resolver import (
     filter_tools_by_intent,
     get_connected_tool_edges,
 )
+from app.agent_flow.tools.structured_output import StructuredOutputService
 from app.config.build_utils import get_agent_work_dir
 from app.models.flow import FlowType
 from app.models.flow_node import FlowNode
@@ -120,6 +121,10 @@ class ReactLoopContext:
     tool_check_script: str = ""
     required_tools_max_retries: int = 2
     required_tools_hint: str = ""
+    # JSON 结构化输出（structured_output 普通工具，由 execute() 构建并注入 tools）
+    structured_service: Optional["StructuredOutputService"] = None
+    # 共享已调用工具集合（execute() 创建，结构化工具清单门控读取）
+    called_tools: Optional[set] = None
     # 知识引用
     initial_knowledge_references: Optional[list[dict]] = None
     allowed_knowledge_base_ids: Optional[set[int]] = None

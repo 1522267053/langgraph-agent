@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { LlmConfig } from './types'
+import type { LlmConfig, JsonOutputField } from './types'
 import { variableFormatHint, fieldTypeOptions } from './types'
+import { jsonFieldTypeLabels, jsonItemTypeLabels } from './types'
 import { flowApi, type ConnectedToolInfo, type ConnectedToolNodeInput } from '@/api/flow'
 import { useFlowStore } from '@/stores/flowStore'
 import { useConfigBase } from '@/composables/useConfigBase'
@@ -9,6 +10,7 @@ import { useInputVariables } from '@/composables/useInputVariables'
 import VariableSelector from '../components/VariableSelector.vue'
 import AiProviderConfig from '@/components/common/AiProviderConfig.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
+import JsonFieldTree from './JsonFieldTree.vue'
 
 const props = defineProps<{
   config: LlmConfig
@@ -47,6 +49,12 @@ if (localConfig.value.required_tools_hint === undefined) {
 if (!localConfig.value.approval_required_tools) {
   localConfig.value.approval_required_tools = []
 }
+if (localConfig.value.json_output_enabled === undefined) {
+  localConfig.value.json_output_enabled = false
+}
+if (!localConfig.value.json_fields) {
+  localConfig.value.json_fields = []
+}
 
 watch(
   () => props.config,
@@ -74,6 +82,12 @@ watch(
     }
     if (!localConfig.value.approval_required_tools) {
       localConfig.value.approval_required_tools = []
+    }
+    if (localConfig.value.json_output_enabled === undefined) {
+      localConfig.value.json_output_enabled = false
+    }
+    if (!localConfig.value.json_fields) {
+      localConfig.value.json_fields = []
     }
     if (!localConfig.value.file_inputs) {
       localConfig.value.file_inputs = []
@@ -167,6 +181,62 @@ function updateApprovalRequiredTools(): void {
   localConfig.value.approval_required_tools = [
     ...new Set(names.map(name => name.trim()).filter(Boolean))
   ]
+  updateConfig()
+}
+
+// ---- JSON 结构化输出（structured_output 虚拟工具：弹窗编辑字段树，面板只读摘要）----
+
+const jsonEditorVisible = ref(false)
+/** 弹窗内编辑的工作副本，确定后写回 json_fields */
+const editingFields = ref<JsonOutputField[]>([])
+
+/** 摘要行：字段树扁平化（depth 控制缩进），避免模板递归 */
+interface JsonSummaryRow {
+  field: JsonOutputField
+  depth: number
+}
+
+const jsonSummaryRows = computed<JsonSummaryRow[]>(() => {
+  const rows: JsonSummaryRow[] = []
+  const walk = (fields: JsonOutputField[], depth: number) => {
+    for (const field of fields) {
+      rows.push({ field, depth })
+      const children = field.children || []
+      if (children.length && (field.type === 'object' || field.item_type === 'object')) {
+        walk(children, depth + 1)
+      }
+    }
+  }
+  walk(localConfig.value.json_fields || [], 0)
+  return rows
+})
+
+function openJsonEditor(): void {
+  editingFields.value = JSON.parse(JSON.stringify(localConfig.value.json_fields || []))
+  jsonEditorVisible.value = true
+}
+
+function confirmJsonEditor(): void {
+  // 丢弃未填字段名的行（与后端 _normalize_fields 行为一致）
+  localConfig.value.json_fields = editingFields.value.filter(f => f.name.trim())
+  jsonEditorVisible.value = false
+  updateConfig()
+}
+
+function handleJsonOutputEnabledChange(val: string | number | boolean): void {
+  // 联动输出变量：开启时追加 structured_output 变量供下游引用，关闭时移除
+  const vars = localConfig.value.output_variables || []
+  const hasVar = vars.some(v => v.name === 'structured_output')
+  if (val && !hasVar) {
+    localConfig.value.output_variables = [
+      ...vars,
+      { name: 'structured_output', source: '', type: 'object' }
+    ]
+  } else if (!val && hasVar) {
+    localConfig.value.output_variables = vars.filter(
+      v => v.name !== 'structured_output'
+    )
+  }
   updateConfig()
 }
 
@@ -470,6 +540,67 @@ watch(connectedToolNodes, fetchConnectedTools, { immediate: true, deep: true })
         </el-text>
       </div>
     </div>
+
+    <div class="config-section">
+      <div class="section-title">结构化输出(JSON)</div>
+      <el-form label-width="50px" size="small">
+        <el-form-item label="启用">
+          <el-switch
+            v-model="localConfig.json_output_enabled"
+            @change="handleJsonOutputEnabledChange"
+          />
+        </el-form-item>
+      </el-form>
+      <template v-if="localConfig.json_output_enabled">
+        <!-- 只读字段结构摘要，编辑一律进弹窗 -->
+        <div class="json-fields-summary">
+          <div class="summary-header">
+            <span class="summary-title">字段结构</span>
+            <el-button type="primary" size="small" link @click="openJsonEditor">编辑字段</el-button>
+          </div>
+          <div v-if="jsonSummaryRows.length" class="summary-body">
+            <div
+              v-for="(row, index) in jsonSummaryRows"
+              :key="index"
+              class="summary-row"
+              :class="{ 'is-child': row.depth > 0 }"
+              :style="{ paddingLeft: `${row.depth * 14}px` }"
+            >
+              <span class="required-mark">{{ row.field.required ? '*' : '' }}</span>
+              <span class="field-name" :title="row.field.description">{{ row.field.name }}</span>
+              <el-tag size="small" type="info" class="type-tag">
+                {{ jsonFieldTypeLabels[row.field.type] || row.field.type }}
+              </el-tag>
+              <span v-if="row.field.type === 'array'" class="item-type-text">
+                元素: {{ jsonItemTypeLabels[row.field.item_type || 'string'] }}
+              </span>
+            </div>
+          </div>
+          <el-text v-else size="small" type="info">暂无字段，点击「编辑字段」定义输出结构</el-text>
+        </div>
+      </template>
+      <div class="config-hint">
+        <el-text size="small" type="info">
+          开启后 LLM 通过调用 structured_output 工具给出 JSON
+          结果，输出变量自动追加 structured_output（解析后的对象）；该工具并入必需工具检查清单，重试共用上方"最大重试次数"
+        </el-text>
+      </div>
+    </div>
+
+    <!-- 字段结构编辑弹窗（编辑副本，确定写回） -->
+    <el-dialog
+      v-model="jsonEditorVisible"
+      title="编辑结构化输出字段"
+      width="640px"
+      append-to-body
+      destroy-on-close
+    >
+      <JsonFieldTree v-model="editingFields" />
+      <template #footer>
+        <el-button @click="jsonEditorVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmJsonEditor">确定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -500,4 +631,71 @@ watch(connectedToolNodes, fetchConnectedTools, { immediate: true, deep: true })
   cursor: help;
   color: #909399;
 }
+
+/* 结构化输出只读摘要卡片 */
+.json-fields-summary {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.summary-title {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.summary-body {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.summary-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 22px;
+  min-width: 0;
+}
+
+.summary-row.is-child {
+  border-left: 2px solid #e4e7ed;
+  margin-left: 2px;
+}
+
+.required-mark {
+  color: #f56c6c;
+  width: 8px;
+  flex-shrink: 0;
+}
+
+.field-name {
+  color: #303133;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.type-tag {
+  flex-shrink: 0;
+  transform: scale(0.9);
+}
+
+.item-type-text {
+  color: #909399;
+  flex-shrink: 0;
+}
+
 </style>

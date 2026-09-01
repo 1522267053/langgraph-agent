@@ -30,7 +30,7 @@ export interface MessageFile {
 /** 流式消息 */
 export interface StreamingMessage {
   id: string
-  /** 落库后的 DB 消息 id（id 保留流式临时前缀时，通过此字段定位 DB 行） */
+  /** 关联的 DB 消息 id。id 含流式前缀时通过该字段定位 DB 行 */
   dbMsgId?: number
   role: 'human' | 'ai'
   displayType?: 'context-summary'
@@ -43,6 +43,8 @@ export interface StreamingMessage {
   completion_tokens?: number
   total_tokens?: number
   files?: MessageFile[]
+  /** 结束节点输出（该轮 AI 消息携带，前端按钮查看） */
+  end_output?: Record<string, unknown>
   createdAt: Date
 }
 
