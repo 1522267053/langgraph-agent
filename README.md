@@ -53,6 +53,7 @@ Dify 仅有短期对话记忆，DeerFlow 尚未实现分层记忆。本项目的
 - **Python 沙箱** — AST 级安全隔离，50+ 黑名单模块
 - **Skill 系统** — Markdown 技能文档，LLM 自主理解并执行
 - **流式推理** — 支持 DeepSeek thinking、Anthropic thinking 推理过程流式输出
+- **结构化输出** — LLM 节点 JSON 字段树定义，structured_output 工具强制模型输出合法 JSON（支持嵌套对象/数组，重试自动修正）
 - **媒体生成** — 图片/音频/视频生成工具（OpenAI/Anthropic/MiniMax）
 - **定时任务** — 基于 APScheduler 的 Cron 定时触发，支持 Flow/Agent 执行目标
 - **日程管理** — 完整 CRUD + FullCalendar 日历视图 + APScheduler 提醒推送 + Agent 工具节点
@@ -197,7 +198,8 @@ langgraph-agent/
 │   │   │   ├── llm_*.py        #     LLM 节点模块化拆分（主入口 + factory + stream + message + executor）
 │   │   ├── tools/              #   LLM 工具实现（非自动扫描，显式导入）
 │   │   │   ├── common.py       #     文件类工具共享原语（路径校验/编码读取/大小上限）
-│   │   │   └── file_read.py    #     file_read 工具（多模态注入 + xlsx/docx 转文本 + 分段读取）
+│   │   │   ├── file_read.py    #     file_read 工具（多模态注入 + xlsx/docx 转文本 + 分段读取）
+│   │   │   └── structured_output.py # structured_output 工具（JSON 结构化输出，字段树动态模型）
 │   │   ├── ai_provider/        #   AI 模型提供商（6 种，自动注册）
 │   │   ├── flow_context.py     #   FlowState 状态定义 + reducer
 │   │   ├── graph_builder.py    #   StateGraph 构建器

@@ -247,6 +247,16 @@ Body: {"human_input": "用户补充内容"}
 
 恢复接口同样先返回新的 `run_id`，再通过 `/events` 订阅执行事件。
 
+对话消息分页（刷新恢复用）：
+
+```text
+POST /agent/{agent_id}/sessions/{session_id}/messages/page
+Body: {"page": 1, "page_size": 50, "condition": {}}
+```
+
+LLM 开启结构化输出且结束节点映射了 `structured_output` 时，每轮最后一条
+AI 消息带 `end_output` 字段（结束节点输出持久化），可直接读取无需重放 SSE。
+
 工具审批：
 
 ```text
