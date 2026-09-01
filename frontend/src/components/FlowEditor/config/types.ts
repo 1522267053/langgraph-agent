@@ -37,7 +37,6 @@ export interface ModelCapabilities {
   video: boolean
   audio: boolean
   pdf: boolean
-  xlsx: boolean
 }
 
 /** LLM模型选项 */

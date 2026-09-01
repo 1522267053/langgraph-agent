@@ -88,7 +88,7 @@ function getProviderBaseUrl(name: string): string {
 function hasAnyCapability(): boolean {
   const caps = capabilities.value
   if (!caps) return false
-  return caps.image || caps.video || caps.audio || caps.pdf || caps.xlsx
+  return caps.image || caps.video || caps.audio || caps.pdf
 }
 
 function applyModelAutoFill(overwriteContextLength = false) {
@@ -151,8 +151,7 @@ async function loadModels(providerId: string) {
           image: inputModalities.includes('image'),
           video: inputModalities.includes('video'),
           audio: inputModalities.includes('audio'),
-          pdf: inputModalities.includes('pdf'),
-          xlsx: false
+          pdf: inputModalities.includes('pdf')
         },
         context_length: m.limits?.context,
         max_tokens: m.limits?.output
@@ -209,7 +208,7 @@ function onProviderSelectChange() {
   if (props.resetOnProviderChange) {
     model.value = ''
     if (capabilities.value) {
-      capabilities.value = { image: false, video: false, audio: false, pdf: false, xlsx: false }
+      capabilities.value = { image: false, video: false, audio: false, pdf: false }
     }
     contextLength.value = undefined
     if (maxTokens.value !== undefined) maxTokens.value = undefined
@@ -335,7 +334,6 @@ function handleExtraBodyBlur() {
       <el-checkbox v-model="capabilities.video" @change="onFieldChange">视频</el-checkbox>
       <el-checkbox v-model="capabilities.audio" @change="onFieldChange">音频</el-checkbox>
       <el-checkbox v-model="capabilities.pdf" @change="onFieldChange">PDF</el-checkbox>
-      <el-checkbox v-model="capabilities.xlsx" @change="onFieldChange">Excel</el-checkbox>
     </el-form-item>
     <el-form-item label="API Key">
       <el-input

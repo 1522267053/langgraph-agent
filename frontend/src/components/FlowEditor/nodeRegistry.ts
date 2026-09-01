@@ -316,7 +316,7 @@ const registry: Record<string, NodeRegistryEntry> = {
       model: '',
       api_key: '',
       base_url: '',
-      capabilities: { image: false, video: false, audio: false, pdf: false, xlsx: false },
+      capabilities: { image: false, video: false, audio: false, pdf: false },
       input_variables: [],
       output_variables: [
         { name: 'result', source: '', type: undefined },

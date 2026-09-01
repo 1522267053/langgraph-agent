@@ -27,8 +27,7 @@ if (!localConfig.value.capabilities) {
     image: false,
     video: false,
     audio: false,
-    pdf: false,
-    xlsx: false
+    pdf: false
   }
 }
 
@@ -57,8 +56,7 @@ watch(
         image: false,
         video: false,
         audio: false,
-        pdf: false,
-        xlsx: false
+        pdf: false
       }
     }
     // 必需工具检查默认值（每次配置变化都补齐，防止被 useConfigBase 覆盖）
