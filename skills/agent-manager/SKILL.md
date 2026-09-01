@@ -51,6 +51,31 @@ Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router` 及工�
 9. **检查结构**：再次读取详情，确认节点、边和字段级合并结果符合预期。
 10. **执行验证**：使用真实最小输入运行，修复错误后重试，直至收到状态为 `success` 的 `flow_done`。
 
+## 结构化输出（JSON）
+
+LLM 节点开启 `json_output_enabled: true` 后绑定 `structured_output` 虚拟工具：模型收集完信息调用该工具，其参数即结构化 JSON 结果；输出变量自动追加 `structured_output`（object），下游用 `nodes.<llm_key>.structured_output` 引用。
+
+字段定义写在 LLM 节点 `json_fields`（字段树，递归不限层级）：
+
+```json
+[
+  {"name": "答案", "type": "string", "description": "最终回答", "required": true},
+  {"name": "用户列表", "type": "array", "item_type": "object", "description": "匹配的用户", "required": true,
+   "children": [
+     {"name": "姓名", "type": "string", "description": "", "required": true},
+     {"name": "年龄", "type": "number", "description": "", "required": false}
+   ]},
+  {"name": "元信息", "type": "object", "description": "", "required": false,
+   "children": [{"name": "版本", "type": "string", "description": "", "required": true}]}
+]
+```
+
+- `type` 取值：`string` / `number` / `boolean` / `array` / `object`。
+- `array` 应写 `item_type`（`string` / `number` / `boolean` / `object`，缺省按 `string` 处理）；元素为对象时必须 `item_type: "object"` 并用 `children` 描述元素字段。
+- `object` 用 `children` 描述子字段；子字段可继续嵌套 array/object，不限层级。
+- 无 `children` 的 `object` 校验为自由 dict；开启后无需把 `structured_output` 手写进 `required_tools`，它自动并入必需工具检查清单，参数校验失败时返回 `error` 由模型自动修正，重试共用 `required_tools_max_retries`。
+- Agent 模式：结束节点 `output_variables` 映射 `{"name": "structured_output", "source": "nodes.<llm_key>.structured_output", "type": "object"}` 后，每轮对话结束会把结束节点输出持久化到最后一条 AI 消息的 `end_output` 字段，通过 `POST /agent/{id}/sessions/{session_id}/messages/page` 可随时取回（前端聊天页由"展示"下拉控制展示）。
+
 ## API 速查
 
 | 操作 | 方法与路径 |
@@ -133,6 +158,8 @@ Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router` 及工�
 - 工具调用通常还需要 `tools -> tools` 边；遗漏后 LLM 看不到工具。
 - 条件节点分支使用 `true` / `false` handle；意图路由使用动态 intent key。
 - 卡片输入、循环变量、Python 包装和媒体文件有专门规则，修改前读取 [节点配置](references/node-config.md)。
+- `json_fields` 的 `array` 缺 `item_type` 时按字符串数组处理；元素要带子字段必须 `item_type: "object"` 且提供 `children`，否则元素只能是自由 dict。
+- `json_output_enabled` 开启但 `json_fields` 无有效字段（全部缺 name）时结构化输出不生效。
 - 子 Agent 工具名为 `ask_{node_key}`；`session_mode` 是调用参数，不是节点配置，详见 [子 Agent](references/sub-agent.md)。
 - 修改对话历史会同步影响 checkpoint；不要绕过正式 API 直接改数据库。
 
@@ -142,5 +169,6 @@ Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router` 及工�
 - 每种节点配置都来自当前实时 Schema。
 - 普通边、条件边和工具边的 handle 正确。
 - LLM 的 `required_tools` 名称与 `connected-tools` 返回值一致。
+- 结构化输出场景：`json_fields` 字段树符合类型规则，执行后 `structured_output` 返回结果符合定义。
 - 详情接口返回的配置符合预期，没有覆盖无关字段。
 - 至少一次真实执行收到状态为 `success` 的 `flow_done`，输出结构满足目标。

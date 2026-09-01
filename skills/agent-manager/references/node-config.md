@@ -139,10 +139,37 @@ API 节点的请求体里嵌入上游变量：
 | `output_variables` | 默认包含 `result` 和 `thinking` |
 | `required_tools` | 本轮必须调用的实际工具名列表 |
 | `tool_check_script` | 自定义必需工具检查脚本 |
+| `required_tools_max_retries` | 必需工具未调用时的最大重试次数（默认 2，结构化输出共用） |
 | `max_tool_iterations` | 单轮最大工具调用轮次 |
 | `approval_required_tools` | Agent 模式下执行前需要审批的完整工具名列表；空列表表示关闭审批 |
+| `json_output_enabled` | 开启后绑定 `structured_output` 虚拟工具，输出变量自动追加 `structured_output`（object） |
+| `json_fields` | 结构化输出字段树，规则见下节 |
 
 配置 `required_tools` 或 `approval_required_tools` 前先调用 connected-tools 接口，从返回的 `tools[].name` 复制准确名称。它不是节点 key。动态注册且接口未返回的工具可手动填写完整名称。
+
+### 结构化输出（structured_output）
+
+`json_output_enabled: true` 后模型完成信息收集必须调用 `structured_output` 工具，其参数即结构化 JSON；下游用 `nodes.<llm_key>.structured_output` 引用解析后的对象。该工具自动并入必需工具检查清单（无需写入 `required_tools`），参数校验失败返回 `error` 由模型自动修正，重试共用 `required_tools_max_retries`。
+
+`json_fields` 是字段树，递归不限层级：
+
+```json
+[
+  {"name": "答案", "type": "string", "description": "最终回答", "required": true},
+  {"name": "用户列表", "type": "array", "item_type": "object", "description": "", "required": true,
+   "children": [
+     {"name": "姓名", "type": "string", "required": true},
+     {"name": "年龄", "type": "number", "required": false}
+   ]},
+  {"name": "元信息", "type": "object", "required": false,
+   "children": [{"name": "版本", "type": "string", "required": true}]}
+]
+```
+
+- `type`：`string` / `number` / `boolean` / `array` / `object`。
+- `array` 写 `item_type`（`string`/`number`/`boolean`/`object`，缺省按 `string`）；元素为对象时必须 `item_type: "object"` 并用 `children` 描述元素字段。
+- `object` 用 `children` 描述子字段；无 `children` 的 `object` 校验为自由 dict。
+- 结束节点映射 `{"name": "structured_output", "source": "nodes.<llm_key>.structured_output", "type": "object"}` 后，Agent 模式每轮对话结束会把该输出持久化到最后一条 AI 消息的 `end_output` 字段。
 
 ## 条件与意图路由
 
@@ -347,3 +374,4 @@ Workflow 中的 `human` 节点使用 `prompt` 或 `review_prompt` 暂停执行�
 4. 工具边为 `tools -> tools`，数据边为 `default -> default`。
 5. `required_tools` 与 connected-tools 返回的实际名称一致。
 6. Python 包装、卡片 `ref_flow_id` 和循环路径已按上述规则处理。
+7. 开启结构化输出时 `json_fields` 字段树符合类型规则（array 带 `item_type`，object 子字段放 `children`）。

@@ -156,6 +156,7 @@ npm run format                          # Prettier 格式化
 - `get_system_prompt_hint` 支持同步和异步两种模式
 - `get_default_config()` 从 `ConfigClass` 自动生成默认配置；`get_config_schema()` 提取 JSON Schema 字段描述
 - **Pydantic v2 注意**: `default_factory` 字段在 `model_json_schema()` 中不含 `"default"` 键，`_schema_from_pydantic` 已补偿处理
+- **结构化输出**: LLM 节点 `json_output_enabled` 开启后由 `tools/structured_output.py` 注入 `structured_output` 虚拟工具；自动并入必需工具清单（门控/重试与 `required_tools` 同一套），输出变量自动追加 `structured_output`
 
 ### LLM 节点模块化（4 个子模块，单向依赖）
 - `llm_factory.py`: LLM 实例创建和工具绑定
@@ -166,7 +167,7 @@ npm run format                          # Prettier 格式化
 ### agent_flow/tools/ 目录（LLM 工具实现）
 - **定位**: 存放以 `StructuredTool` 形式提供给 LLM 的工具实现，handler 只负责注册与依赖注入；与 node_handlers 内拆分子模块（llm_*）不同——tools 是独立工具实体，handler 是图的编排单元
 - **不参与自动扫描**：`tools/` 不在 loader 三个扫描目录内，全部显式 import
-- **现有成员**: `common.py`（文件类工具共享原语：路径校验/编码读取/大小上限）、`file_read.py`（FileReadService：媒体多模态注入 + xlsx/docx 转文本 + 行/字符分段读取）
+- **现有成员**: `common.py`（文件类工具共享原语：路径校验/编码读取/大小上限）、`file_read.py`（FileReadService：媒体多模态注入 + xlsx/docx 转文本 + 行/字符分段读取）、`structured_output.py`（StructuredOutputService：JSON 结构化输出虚拟工具，字段树递归构建 Pydantic 模型）
 - **依赖方向（强制单向）**: `tools/* → app/utils/*`，`node_handlers/* → tools/*`，禁止反向或 tools 之间互引
 - **新工具入目录规则**: 一个工具一个文件；共享原语进 `common.py`；工具返回模型友好的 dict 协议（error/truncated_hint/media_type 等），不返回裸字符串
 - **编码探测**: `common.detect_and_read` 探测顺序 UTF-16 BOM（FF FE/FE FF，PowerShell 重定向产物）→ utf-8-sig → GBK；二进制拦截对带 UTF-16 BOM 的文本白名单放行
