@@ -1095,7 +1095,7 @@ export default {
 
 .scroll-to-bottom-wrap {
   position: absolute;
-  bottom: 210px;
+  bottom: 175px;
   left: 0;
   right: 0;
   display: flex;
@@ -1250,7 +1250,7 @@ export default {
   background: rgba(255, 255, 255, 0.5);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  padding: 24px 24px 16px;
+  padding: 14px 24px 16px;
   position: relative;
   z-index: 40;
 }
@@ -1361,7 +1361,7 @@ export default {
   }
 
   .input-wrapper {
-    padding: 16px;
+    padding: 14px;
   }
 
   .header-center h1 {
