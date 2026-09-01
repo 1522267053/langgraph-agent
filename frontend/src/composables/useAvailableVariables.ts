@@ -52,16 +52,47 @@ function getOutputVariablesForNode(node: Node, allNodes?: Node[]): NodeOutputVar
     return []
   }
 
-  const schemaVars = getSchemaOutputVariables(nodeType)
-  if (schemaVars.length > 0) {
-    return schemaVars.map(v => ({
-      name: v.name,
-      type: (v.type as FieldType) || 'string',
-      description: ''
-    }))
+  // 节点配置中显式声明的输出变量优先于 schema 默认值
+  // （后端运行时按 config.output_variables 写节点变量）
+  let vars: NodeOutputVariable[] = []
+  const configVars = (node.data?.config as Record<string, unknown> | undefined)
+    ?.output_variables as Array<{ name: string; type?: string }> | undefined
+  if (configVars && configVars.length > 0) {
+    vars = configVars
+      .filter(v => v.name)
+      .map(v => ({
+        name: v.name,
+        type: (v.type as FieldType) || 'string',
+        description: ''
+      }))
+  } else {
+    const schemaVars = getSchemaOutputVariables(nodeType)
+    if (schemaVars.length > 0) {
+      vars = schemaVars.map(v => ({
+        name: v.name,
+        type: (v.type as FieldType) || 'string',
+        description: ''
+      }))
+    }
   }
 
-  return []
+  // LLM 节点开启 JSON 结构化输出时动态追加 structured_output 变量
+  // （不依赖已存配置中的 output_variables，旧流程开启开关后立即可选）
+  if (nodeType === 'llm') {
+    const llmConfig = node.data?.config as Record<string, unknown> | undefined
+    if (
+      llmConfig?.json_output_enabled &&
+      !vars.some(v => v.name === 'structured_output')
+    ) {
+      vars.push({
+        name: 'structured_output',
+        type: 'object',
+        description: '结构化输出 JSON'
+      })
+    }
+  }
+
+  return vars
 }
 
 function formatVariableLabel(variable: NodeOutputVariable): string {

@@ -74,6 +74,9 @@ class AgentMessageBase(BaseModel):
     input_data: Optional[dict[str, Any]] = Field(
         default=None, description="用户输入参数或内部消息元数据"
     )
+    end_output: Optional[dict[str, Any]] = Field(
+        default=None, description="结束节点输出（该轮 AI 消息携带）"
+    )
     """创建Agent消息"""
 
     pass

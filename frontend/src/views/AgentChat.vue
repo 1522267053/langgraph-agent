@@ -145,6 +145,7 @@ function loadDisplayPrefs() {
       if (typeof prefs.autoScroll === 'boolean') autoScroll.value = prefs.autoScroll
       if (typeof prefs.showThinking === 'boolean') showThinking.value = prefs.showThinking
       if (typeof prefs.showToolCalls === 'boolean') showToolCalls.value = prefs.showToolCalls
+      if (typeof prefs.showEndOutput === 'boolean') showEndOutput.value = prefs.showEndOutput
     }
   } catch {
     // ignore
@@ -157,17 +158,20 @@ function saveDisplayPrefs() {
     JSON.stringify({
       autoScroll: autoScroll.value,
       showThinking: showThinking.value,
-      showToolCalls: showToolCalls.value
+      showToolCalls: showToolCalls.value,
+      showEndOutput: showEndOutput.value
     })
   )
 }
 
 const showThinking = ref(true)
 const showToolCalls = ref(true)
+// 结束节点输出按钮：默认不展示，右上角"展示"下拉勾选后显示
+const showEndOutput = ref(false)
 
 loadDisplayPrefs()
 
-watch([autoScroll, showThinking, showToolCalls], saveDisplayPrefs)
+watch([autoScroll, showThinking, showToolCalls, showEndOutput], saveDisplayPrefs)
 
 watch(
   () => route.params.id,
@@ -724,6 +728,7 @@ function handleRejectTools() {
           v-model:auto-scroll="autoScroll"
           v-model:show-thinking="showThinking"
           v-model:show-tool-calls="showToolCalls"
+          v-model:show-end-output="showEndOutput"
         />
         <el-tooltip content="记忆" placement="bottom">
           <button class="header-action-btn" @click="showMemory = true">
@@ -792,6 +797,7 @@ function handleRejectTools() {
               :row="chatRows[row.index] ?? null"
               :show-thinking="showThinking"
               :show-tool-calls="showToolCalls"
+              :show-end-output="showEndOutput"
               :is-streaming="store.isStreaming"
               @delete="handleDeleteMessage"
               @revert="handleRevertFrom"

@@ -329,7 +329,9 @@ const registry: Record<string, NodeRegistryEntry> = {
       max_tokens: 8192,
       history_mode: 'node',
       max_history_turns: 10,
-      approval_required_tools: []
+      approval_required_tools: [],
+      json_output_enabled: false,
+      json_fields: []
     }),
     initConfig: (rawConfig, ctx) => {
       const config = { ...rawConfig }

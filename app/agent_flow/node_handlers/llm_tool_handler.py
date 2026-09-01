@@ -16,9 +16,11 @@ LLM 节点处理器主入口
 - llm_message_builder: 消息构建（历史加载、恢复、multimodal）
 - llm_stream: 流式 LLM 调用（重试、thinking 解析）
 - llm_tool_executor: 工具调用处理（执行、人工交互、审批、截断）
+- tools/structured_output: JSON 结构化输出工具（普通工具执行链路 + Pydantic 参数校验）
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable, Optional, Union
@@ -77,6 +79,10 @@ from app.agent_flow.node_handlers.llm_tool_executor import (
     setup_tool_handlers,
 )
 from app.agent_flow.node_handlers.llm_tool_executor import ReactLoopContext
+from app.agent_flow.tools.structured_output import (
+    OUTPUT_TOOL_NAME,
+    StructuredOutputService,
+)
 
 if TYPE_CHECKING:
     from app.agent_flow.tool_resolver import FlowLike
@@ -130,6 +136,13 @@ def _build_mode_prompt(is_plan_mode: bool) -> str:
 请根据任务需要正常使用这些工具，并遵守各工具自身的安全限制。
 </system-reminder>
 """
+
+
+def _tool_call_name(tool_call) -> str:
+    """兼容 dict / ToolCall 两种形态取工具名"""
+    if isinstance(tool_call, dict):
+        return tool_call.get("name", "")
+    return getattr(tool_call, "name", "")
 
 
 class LlmNodeConfig(BaseNodeConfig):
@@ -219,6 +232,16 @@ class LlmNodeConfig(BaseNodeConfig):
     required_tools_hint: str = Field(
         default="",
         description="提醒消息模板，{{tools}} 占位符替换为缺失工具名（留空使用默认模板）",
+    )
+    json_output_enabled: bool = Field(
+        default=False,
+        description="启用 JSON 结构化输出：绑定 structured_output 虚拟工具，"
+        "模型以其调用参数给出 JSON 结果（自动并入必需工具检查清单）",
+    )
+    json_fields: list[dict] = Field(
+        default_factory=list,
+        description="结构化输出字段树 [{name, type, description, required, "
+        "item_type(仅array), children(object子字段/数组元素字段)}]",
     )
 
     @field_validator("approval_required_tools")
@@ -448,6 +471,35 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 r for r in cfg.required_tools if not _is_plan_disabled_tool(r)
             ]
 
+        # 必需工具可用性过滤：未连接的工具不参与检查，避免模型永远无法调用而空转重试
+        available_tool_names = {t.name for t in tools}
+        plan_required_tools = [
+            r for r in plan_required_tools if r in available_tool_names
+        ]
+
+        # 共享已调用工具集合：_run_react_loop 变更，结构化输出工具清单门控读取
+        called_tools: set[str] = set()
+
+        # JSON 结构化输出：构建 structured_output 普通工具并入工具列表（计划模式
+        # 不启用），执行/展示复用 handle_tool_calls 统一链路；自动加入必需工具清单
+        structured_service = StructuredOutputService(cfg.json_fields)
+        json_output_tool = None
+        if cfg.json_output_enabled and not is_plan_mode:
+            if structured_service.enabled:
+                json_output_tool = structured_service.build_tool(
+                    get_called_tools=lambda: called_tools,
+                    required_tools=plan_required_tools,
+                )
+                tools.append(json_output_tool)
+            else:
+                logger.warning(
+                    "节点[%s] 已启用 JSON 结构化输出但未配置有效字段，已忽略",
+                    node.node_key,
+                )
+        checklist = list(plan_required_tools)
+        if json_output_tool is not None:
+            checklist.append(OUTPUT_TOOL_NAME)
+
         # 解析输入变量，提取 system_prompt 和 user_prompt
         input_data = self.__class__.get_input_content(
             node, state, self._resolver, node.base_config or {}
@@ -509,6 +561,10 @@ class LlmToolNodeHandler(BaseNodeHandler):
             system_prompt = (system_prompt or "") + hint
         if preloaded_references:
             system_prompt = (system_prompt or "") + _KNOWLEDGE_CITATION_PROMPT
+
+        # JSON 结构化输出引导：字段定义 + 必须调用 structured_output 的约束
+        if json_output_tool is not None:
+            system_prompt = (system_prompt or "") + structured_service.build_prompt()
 
         # 始终说明当前模式和工具能力，避免模型仅根据工具列表推断权限；
         # 以消息层 <system-reminder> 注入（见 _run_react_loop），不占用 system_prompt
@@ -607,6 +663,10 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 tool_check_script=cfg.tool_check_script,
                 required_tools_max_retries=cfg.required_tools_max_retries,
                 required_tools_hint=cfg.required_tools_hint,
+                structured_service=(
+                    structured_service if json_output_tool is not None else None
+                ),
+                called_tools=called_tools,
                 initial_knowledge_references=preloaded_references,
                 allowed_knowledge_base_ids=allowed_knowledge_base_ids,
             )
@@ -615,6 +675,23 @@ class LlmToolNodeHandler(BaseNodeHandler):
             )
             if last_content:
                 state.set_node_variable(node.node_key, result_name, last_content)
+            if json_output_tool is not None:
+                if not structured_service.accepted:
+                    raise NodeExecutionError(
+                        node.node_key,
+                        "未收到有效的 JSON 结构化输出：structured_output 工具未被成功调用",
+                    )
+                structured_result = structured_service.accepted_result
+                state.set_node_variable(
+                    node.node_key, "structured_output", structured_result
+                )
+                if not last_content:
+                    # 模型仅通过工具给出结果时，回填 JSON 文本保证下游 result 引用可用
+                    state.set_node_variable(
+                        node.node_key,
+                        result_name,
+                        json.dumps(structured_result, ensure_ascii=False),
+                    )
             if thinking_content:
                 state.set_node_variable(
                     node.node_key, thinking_name, "".join(thinking_content)
@@ -763,10 +840,17 @@ class LlmToolNodeHandler(BaseNodeHandler):
         initial_knowledge_references = ctx.initial_knowledge_references
         allowed_knowledge_base_ids = ctx.allowed_knowledge_base_ids
 
+        # JSON 结构化输出：共享服务实例（execute() 构建）+ 检查清单（自动追加）
+        structured_service = ctx.structured_service
+        json_output_enabled = structured_service is not None
+        checklist = list(required_tools or [])
+        if json_output_enabled:
+            checklist.append(OUTPUT_TOOL_NAME)
+
         thinking_content: list[str] = []
         last_content = ""
         tool_call_count = 0
-        called_tools: set[str] = set()
+        called_tools = ctx.called_tools if ctx.called_tools is not None else set()
         retry_count = 0
         react_compress_attempts = 0
         tool_fp_count: dict[str, int] = {}
@@ -936,26 +1020,37 @@ class LlmToolNodeHandler(BaseNodeHandler):
             thinking_content.extend(current_thinking)
 
             # 收集本轮调用的工具名（仅当前 ReAct 循环内新增调用，不查历史/DB）
-            if response and response.tool_calls:
-                called_tools.update(
-                    tc.get("name", "") if isinstance(tc, dict) else tc.name
-                    for tc in response.tool_calls
-                )
+            tool_calls = response.tool_calls if response else []
+            for tc in tool_calls:
+                name = _tool_call_name(tc)
+                if name:
+                    called_tools.add(name)
 
-            # 无工具调用时检查必需工具：未调用则注入提醒消息重试
+            # 无工具调用时检查必需工具清单：未调用则注入提醒消息重试
             if not response or not response.tool_calls:
                 if (
-                    (tool_check_script or required_tools)
+                    (tool_check_script or checklist)
                     and not self._check_interrupted(state)
                     and retry_count < required_tools_max_retries
                 ):
                     need_retry, hint = await self._evaluate_required_tools(
-                        required_tools or [],
+                        checklist,
                         tool_check_script,
                         called_tools,
                         last_content,
                         required_tools_hint,
                     )
+                    if (
+                        not need_retry
+                        and json_output_enabled
+                        and not structured_service.accepted
+                    ):
+                        # 脚本模式通过但结构化输出未交付（脚本看不到 structured_output）
+                        need_retry = True
+                        hint = (
+                            f"请调用 {OUTPUT_TOOL_NAME} 工具，"
+                            "以符合字段定义的 JSON 参数输出最终结果，不要用文字回复。"
+                        )
                     if need_retry and hint:
                         retry_count += 1
                         if needs_context_compression and not await compress_react_tail(
@@ -970,11 +1065,11 @@ class LlmToolNodeHandler(BaseNodeHandler):
                     )
                 break
 
-            # 处理工具调用
+            # 处理工具调用（structured_output 与普通工具同链路：事件展示/截断/重试）
             message_count_before_tools = len(msg_buf.messages)
             should_continue, tool_call_count = await handle_tool_calls(
                 ctx,
-                response.tool_calls,
+                tool_calls,
                 tool_call_count,
                 tool_fp_count=tool_fp_count,
             )
@@ -985,6 +1080,10 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 ),
             )
             if not should_continue:
+                break
+
+            # 结构化输出已被接受：任务完成，终止循环
+            if json_output_enabled and structured_service.accepted:
                 break
 
             if needs_context_compression and not await compress_react_tail(
