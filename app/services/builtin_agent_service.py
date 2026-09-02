@@ -206,7 +206,7 @@ class BuiltinAgentService:
                 builtin_flow.suggested_prompts = BUILTIN_AGENT_SUGGESTED_PROMPTS.copy()
                 changed = True
             # 补偿：修复前创建的 LLM 节点 capabilities 全 False，
-            # 且 max_tokens/context_length 未按模型 limits 填充
+            # 且 context_length 未按模型 limits 填充
             node_changed = await self._compensate_llm_node(db, builtin_flow.id)
             if node_changed:
                 changed = True
@@ -226,7 +226,6 @@ class BuiltinAgentService:
 
         - capabilities 全 False（或缺失）时，按模型 modalities 重新推导
         - context_length 为空时，按模型 limits.context 填充
-        - max_tokens 为空时，按模型 limits.output 填充
 
         Returns:
             是否有字段被修改
@@ -256,9 +255,6 @@ class BuiltinAgentService:
         if not config.get("context_length") and metadata["context_length"]:
             config["context_length"] = metadata["context_length"]
             changed = True
-        if not config.get("max_tokens") and metadata["max_tokens"]:
-            config["max_tokens"] = metadata["max_tokens"]
-            changed = True
 
         if changed:
             llm_node.base_config = config
@@ -270,7 +266,7 @@ class BuiltinAgentService:
 
         读取全局配置，查找内置 Agent 的 LLM 节点，
         将空的 provider/model/api_key/base_url 回填为全局配置值，
-        并按已配置模型的元数据联动派生 capabilities/max_tokens/context_length。
+        并按已配置模型的元数据联动派生 capabilities/context_length。
         """
         global_llm = await global_config_service.get_default_llm_config(db)
         if not global_llm.get("api_key"):
@@ -315,7 +311,7 @@ class BuiltinAgentService:
             config["context_length"] = global_llm["context_length"]
             updated = True
 
-        # 模型已就位时，联动派生 capabilities / context_length / max_tokens
+        # 模型已就位时，联动派生 capabilities / context_length
         if config.get("provider") and config.get("model"):
             metadata = await self._get_model_metadata(
                 db, config["provider"], config["model"]
@@ -325,9 +321,6 @@ class BuiltinAgentService:
                 updated = True
             if not config.get("context_length") and metadata["context_length"]:
                 config["context_length"] = metadata["context_length"]
-                updated = True
-            if not config.get("max_tokens") and metadata["max_tokens"]:
-                config["max_tokens"] = metadata["max_tokens"]
                 updated = True
 
         if updated:
@@ -478,7 +471,6 @@ class BuiltinAgentService:
         返回:
             {
                 "capabilities": 多模态能力开关（公共函数按 modalities.input 推导），
-                "max_tokens": 输出上限（limits.output），无则 0，
                 "context_length": 上下文窗口（limits.context），无则 0，
             }
         """
@@ -486,7 +478,7 @@ class BuiltinAgentService:
         from app.utils.node_config_helper import derive_model_capabilities
 
         caps = await derive_model_capabilities(db, provider, model)
-        metadata = {"capabilities": caps, "max_tokens": 0, "context_length": 0}
+        metadata = {"capabilities": caps, "context_length": 0}
         if not provider or not model:
             return metadata
 
@@ -502,7 +494,6 @@ class BuiltinAgentService:
 
         limits = ai_model.limits or {}
         if isinstance(limits, dict):
-            metadata["max_tokens"] = limits.get("output") or 0
             metadata["context_length"] = limits.get("context") or 0
         return metadata
 
@@ -577,11 +568,6 @@ class BuiltinAgentService:
                                 "type": "string",
                             }
                         ],
-                        **(
-                            {"max_tokens": model_meta["max_tokens"]}
-                            if model_meta["max_tokens"]
-                            else {}
-                        ),
                     },
                 ),
             },

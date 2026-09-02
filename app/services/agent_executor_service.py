@@ -1278,7 +1278,7 @@ class AgentExecutorService(BaseExecutorService):
 
             # 临时模型覆盖（仅同供应商内切换）：改的是本次从 DB 加载的内存副本，
             # expunge 摘除 ORM 变更跟踪，防止后续 commit 把覆盖值写回 flow_node 表；
-            # capabilities/context_length/max_tokens 按模型元数据联动，不回退全局默认
+            # capabilities/context_length 按模型元数据联动，不回退全局默认
             if model:
                 from app.utils.node_config_helper import derive_model_runtime_meta
 
@@ -1298,8 +1298,6 @@ class AgentExecutorService(BaseExecutorService):
                         cfg["capabilities"] = meta["capabilities"]
                         if meta["context_length"]:
                             cfg["context_length"] = meta["context_length"]
-                        if meta["max_tokens"]:
-                            cfg["max_tokens"] = meta["max_tokens"]
                     node.base_config = cfg
 
             # 检查是否首次对话（用于自动生成标题）
