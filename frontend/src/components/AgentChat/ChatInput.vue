@@ -402,7 +402,7 @@ function handleStop() {
                 filterable
                 clearable
                 :disabled="isStreaming || isWaitingHuman"
-                placeholder="默认模型"
+                :placeholder="'默认模型：' + (defaultModelLabel || 'Agent 配置')"
                 no-data-text="暂无可用模型"
               >
                 <el-option
