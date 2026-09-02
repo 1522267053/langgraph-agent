@@ -438,7 +438,7 @@ function handleStop() {
               @click="handleStop"
             >
               <el-icon :size="16" class="is-loading"><Loading /></el-icon>
-              <span>{{ isStopping ? '停止中…' : '停止' }}</span>
+              <span class="btn-text">{{ isStopping ? '停止中…' : '停止' }}</span>
             </button>
             <button
               v-else
@@ -446,7 +446,7 @@ function handleStop() {
               :disabled="sendMessageDisabled || isWaitingHuman"
               @click="handleSend"
             >
-              <span>发送</span>
+              <span class="btn-text">发送</span>
               <el-icon :size="16"><Promotion /></el-icon>
             </button>
           </div>
@@ -869,7 +869,34 @@ export default {
 
   .send-btn,
   .stop-btn {
-    padding: 8px 14px;
+    padding: 8px 12px;
+    gap: 0;
+    /* 空间不足时禁止按钮内文字换行（CJK 可逐字断行导致竖排） */
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* 发送/停止收成纯图标按钮，为左侧工具栏腾出空间 */
+  .send-btn .btn-text,
+  .stop-btn .btn-text {
+    display: none;
+  }
+
+  /* 工作目录按钮收成纯图标：目录名与清除小图标隐藏（tooltip 仍有全路径，
+     清除操作走弹窗内"清除选择"），为右侧发送按钮腾出空间 */
+  .workdir-btn {
+    max-width: 32px;
+    padding: 0;
+  }
+
+  .workdir-name,
+  .workdir-clear {
+    display: none;
+  }
+
+  /* 模型下拉收窄，placeholder 超宽自动省略 */
+  .model-select {
+    width: 100px;
   }
 }
 </style>
