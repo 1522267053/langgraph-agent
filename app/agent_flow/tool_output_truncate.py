@@ -9,7 +9,8 @@ JSON 感知截断：保留 JSON 结构完整，只截断大字段值。
 
 所有工具输出统一为 JSON 字符串，LLM 始终收到结构完整、可解析的 JSON。
 阈值通过 .env 配置（TOOL_OUTPUT_MAX_LINES / TOOL_OUTPUT_MAX_BYTES）。
-超限时将完整内容保存到临时文件，返回预览 + 文件路径提示。
+超限时将完整内容保存到临时文件，返回预览 + 文件路径提示；
+保存到临时文件的 JSON 内容统一为 indent=2 可读缩进格式。
 """
 
 import json
@@ -21,6 +22,11 @@ from app.config.build_utils import get_temp_dir
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _dumps_pretty(obj: Any) -> str:
+    """保存到临时文件的 JSON 统一格式化为可读缩进格式（indent=2）"""
+    return json.dumps(obj, ensure_ascii=False, indent=2, default=str)
 
 
 def _get_preview_limits() -> tuple[int, int]:
@@ -127,9 +133,7 @@ def _truncate_json_list(
         return serialized
 
     # ---- 超限：保存原始完整列表到文件，按字节预算保留前 N 项 ----
-    saved_to = _save_to_temp_file(
-        json.dumps(lst, ensure_ascii=False, default=str), prefix=prefix
-    )
+    saved_to = _save_to_temp_file(_dumps_pretty(lst), prefix=prefix)
 
     kept: list = []
     byte_budget = max_bytes // 2
@@ -207,9 +211,7 @@ def _truncate_dict(d: dict, *, max_lines: int, max_bytes: int, prefix: str) -> d
     # ---- 最终检查：序列化后仍超限 ----
     serialized = json.dumps(result, ensure_ascii=False, default=str)
     if len(serialized.encode("utf-8")) > max_bytes * 2:
-        full_saved = _save_to_temp_file(
-            json.dumps(d, ensure_ascii=False, default=str), prefix=prefix
-        )
+        full_saved = _save_to_temp_file(_dumps_pretty(d), prefix=prefix)
         minimal: dict[str, Any] = {
             k: v
             for k, v in result.items()
@@ -231,9 +233,7 @@ def _truncate_list(
         (截断后的列表, 完整内容保存的文件路径)
     """
     # 完整列表保存到文件
-    saved_to = _save_to_temp_file(
-        json.dumps(lst, ensure_ascii=False, default=str), prefix=prefix
-    )
+    saved_to = _save_to_temp_file(_dumps_pretty(lst), prefix=prefix)
 
     # 逐项累加字节，控制在 max_bytes // 2 以内
     kept: list = []
