@@ -400,12 +400,24 @@ function getStatusType(isEnabled: number | undefined): '' | 'success' | 'danger'
   return isEnabled === 1 ? 'success' : 'danger'
 }
 
+// 常见 JSON 配置的 type 别名归一化（http/streamable_http 等写法统一为 streamable-http）
+function normalizeTransport(raw: unknown): McpTransportType {
+  const t = String(raw ?? '')
+    .toLowerCase()
+    .replace(/[_\s]/g, '-')
+  if (t === 'sse') return 'sse'
+  if (t === 'stdio') return 'stdio'
+  // http / streamable-http / streamablehttp 及无法识别的类型均按 streamable-http 处理
+  return 'streamable-http'
+}
+
 function _applyJsonEntry(key: string, entry: Record<string, unknown>): void {
   if (entry.command) {
     formData.transport = 'stdio'
   } else if (entry.url) {
-    const rawType = String(entry.type || 'sse').replace(/_/g, '-')
-    formData.transport = rawType as McpTransportType
+    formData.transport = normalizeTransport(entry.type ?? 'sse')
+  } else {
+    formData.transport = 'stdio'
   }
   formData.name = key
   const configCopy = { ...entry }
@@ -441,7 +453,7 @@ function parseJson(): void {
         const label = v.command
           ? `stdio: ${v.command} ${Array.isArray(v.args) ? v.args[0] || '' : ''}`
           : v.url
-            ? `${(v.type as string) || 'sse'}: ${v.url}`
+            ? `${normalizeTransport(v.type ?? 'sse')}: ${v.url}`
             : '未知类型'
         return `<label style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer">
             <input type="radio" name="mcp-select" value="${i}" style="margin:0" />

@@ -54,13 +54,15 @@ class McpServerBase(BaseView):
     @field_validator("transport")
     @classmethod
     def validate_transport(cls, v: Optional[str]) -> Optional[str]:
-        """校验传输类型"""
+        """校验传输类型（兼容 http/streamable_http 等常见别名写法）"""
         if v is None:
             return v
-        valid_types = ["stdio", "sse", "streamable-http"]
-        if v not in valid_types:
-            raise ValueError(f"传输类型必须是: {', '.join(valid_types)}")
-        return v
+        normalized = v.strip().lower().replace("_", "-")
+        if normalized in ("http", "streamablehttp", "streamable-http"):
+            return "streamable-http"
+        if normalized in ("sse", "stdio"):
+            return normalized
+        raise ValueError("传输类型必须是: stdio, sse, streamable-http")
 
 
 class McpServerCreate(McpServerBase):
