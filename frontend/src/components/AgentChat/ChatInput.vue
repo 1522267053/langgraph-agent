@@ -729,18 +729,19 @@ export default {
 
 /* 模型下拉框：与工具栏图标按钮高度对齐 */
 .model-select {
-  width: 170px;
+  width: 130px;
 }
 
 .model-select :deep(.el-select__wrapper) {
   min-height: 32px;
   border-radius: 8px;
-  background: transparent;
-  box-shadow: none;
+  background: #fff;
+  box-shadow: 0 0 0 1px #e2e8f0 inset;
 }
 
-.model-select :deep(.el-select__wrapper.is-hovering) {
-  background: #fff;
+.model-select :deep(.el-select__wrapper.is-hovering),
+.model-select :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px #2563eb inset;
 }
 
 .model-select :deep(.el-select__placeholder) {
