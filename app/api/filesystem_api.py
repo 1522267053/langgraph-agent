@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import os
 import string
 from pathlib import Path
 from typing import Optional
@@ -16,6 +17,9 @@ from app.schemas.filesystem_schema import (
     DirectoryEntry,
     DirectoryListResponse,
 )
+
+# 平台标记（模块级常量，便于测试时 monkeypatch 模拟 POSIX 环境）
+_IS_WINDOWS = os.name == "nt"
 
 
 class FilesystemApi:
@@ -34,15 +38,24 @@ class FilesystemApi:
             summary="浏览本地目录",
         )
         async def list_directories(path: Optional[str] = None):
-            """列出指定路径下的子目录；path 为空时返回 Windows 盘符列表"""
+            """列出指定路径下的子目录；path 为空时 Windows 返回盘符列表，
+            Linux/macOS 默认浏览用户 home 目录"""
             if not path or not path.strip():
-                drives = await asyncio.to_thread(_list_drives)
-                return ApiResponse.success(
-                    data=DirectoryListResponse(
-                        path=None, parent=None, directories=drives
-                    ),
-                    msg="查询成功",
-                )
+                if not _IS_WINDOWS:
+                    # POSIX 无盘符概念，空路径默认落在用户 home 目录
+                    try:
+                        path = str(Path.home())
+                    except RuntimeError:
+                        # HOME 无法解析的极端环境，回退根目录
+                        path = "/"
+                else:
+                    drives = await asyncio.to_thread(_list_drives)
+                    return ApiResponse.success(
+                        data=DirectoryListResponse(
+                            path=None, parent=None, directories=drives
+                        ),
+                        msg="查询成功",
+                    )
 
             target = Path(path.strip()).expanduser()
             if not target.exists():
