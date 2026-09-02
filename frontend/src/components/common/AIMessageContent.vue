@@ -186,34 +186,40 @@ async function handleCopy(text: string): Promise<void> {
         </div>
         <pre class="tool-content tool-live-output">{{ segment.tool.liveOutput }}</pre>
       </div>
-      <template v-if="showToolCalls">
-        <div
-          v-if="segment.tool.args && Object.keys(segment.tool.args).length > 0"
-          class="tool-content-args-wrapper"
+      <!-- 入参 JSON：仅勾选"工具调用"时展示 -->
+      <div
+        v-if="showToolCalls && segment.tool.args && Object.keys(segment.tool.args).length > 0"
+        class="tool-content-args-wrapper"
+      >
+        <pre class="tool-content tool-content-args">{{
+          isArgsExpanded(segment, idx)
+            ? formatToolArgsExpanded(segment.tool.args)
+            : formatToolArgs(segment.tool.args)
+        }}</pre>
+        <el-button
+          v-if="hasStringifiedJson(segment.tool.args)"
+          link
+          size="small"
+          class="args-toggle-btn"
+          @click="toggleArgsFormat(segment, idx)"
         >
-          <pre class="tool-content tool-content-args">{{
-            isArgsExpanded(segment, idx)
-              ? formatToolArgsExpanded(segment.tool.args)
-              : formatToolArgs(segment.tool.args)
-          }}</pre>
-          <el-button
-            v-if="hasStringifiedJson(segment.tool.args)"
-            link
-            size="small"
-            class="args-toggle-btn"
-            @click="toggleArgsFormat(segment, idx)"
-          >
-            {{ isArgsExpanded(segment, idx) ? '显示原始' : '显示格式化' }}
-          </el-button>
-        </div>
-        <ToolResultViewer
-          v-if="segment.tool.result !== undefined"
-          :tool-name="segment.tool.name"
-          :result="segment.tool.result"
-        />
-        <pre v-else-if="segment.tool.status === 'error'" class="tool-content tool-content-error">
+          {{ isArgsExpanded(segment, idx) ? '显示原始' : '显示格式化' }}
+        </el-button>
+      </div>
+      <!-- 结果：始终尝试渲染；取消勾选时富结果（文件读取/编辑/媒体/子Agent回复）保留，
+           纯 JSON 不展示；失败结果（错误详情）始终展示 -->
+      <ToolResultViewer
+        v-if="segment.tool.result !== undefined"
+        :tool-name="segment.tool.name"
+        :result="segment.tool.result"
+        :hide-plain-json="
+          !showToolCalls &&
+          segment.tool.status !== 'error' &&
+          !segment.tool.name.startsWith('call_sub_agent')
+        "
+      />
+      <pre v-else-if="segment.tool.status === 'error'" class="tool-content tool-content-error">
 执行失败</pre>
-      </template>
       <div v-else-if="segment.tool.status === 'running'" class="tool-content tool-loading-text">
         执行中...
       </div>

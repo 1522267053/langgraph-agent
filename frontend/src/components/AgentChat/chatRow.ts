@@ -79,8 +79,14 @@ export function buildChatRows(
   return rows
 }
 
+/** 展示开关状态：影响行高估算（关闭时工具/思考段只剩头部） */
+export interface RowSizePrefs {
+  showThinking?: boolean
+  showToolCalls?: boolean
+}
+
 /** 行高初值：按段类型估值，头部/尾部行附加消息 chrome 高度，减少测量收敛迭代 */
-export function estimateRowSize(row: ChatRow | undefined): number {
+export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs): number {
   if (!row) return 150
   switch (row.kind) {
     case 'typing':
@@ -96,10 +102,10 @@ export function estimateRowSize(row: ChatRow | undefined): number {
           size = 220
           break
         case 'thinking':
-          size = 160
+          size = prefs?.showThinking === false ? 90 : 160
           break
         case 'tool':
-          size = 110
+          size = prefs?.showToolCalls === false ? 60 : 110
           break
         case 'todo':
           size = 280
