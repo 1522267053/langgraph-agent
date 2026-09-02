@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 CLOSE_TIMEOUT = 10
 MCP_CONNECT_TIMEOUT = 30
+MCP_TOOL_FETCH_TIMEOUT = 10
 MCP_TOOL_CALL_TIMEOUT = 120
 MCP_REMOTE_TOOL_CALL_TIMEOUT = 60
 MAX_CONNECTION_AGE = 600
@@ -537,12 +538,12 @@ class McpToolManager:
             try:
                 server_tools = await asyncio.wait_for(
                     self._get_server_tools(db, server_id),
-                    timeout=MCP_CONNECT_TIMEOUT,
+                    timeout=MCP_TOOL_FETCH_TIMEOUT,
                 )
                 tools.extend(server_tools)
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"MCP服务器 {server_id} 连接超时({MCP_CONNECT_TIMEOUT}s)，跳过"
+                    f"MCP服务器 {server_id} 获取工具超时({MCP_TOOL_FETCH_TIMEOUT}s)，跳过"
                 )
             except McpConnectionError as e:
                 logger.warning(f"MCP服务器加载失败，跳过: {e}")
