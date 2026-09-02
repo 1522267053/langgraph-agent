@@ -8,7 +8,6 @@ import json
 import logging
 from typing import List, Optional
 
-import httpx
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +16,7 @@ from app.models.ai_provider import AIProvider
 from app.models.ai_model import AIModel
 from app.services.base_service import BaseService
 from app.schemas.ai_model_provider_schema import AIProviderCreate, AIProviderUpdate
+from app.utils.http_client import create_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +186,7 @@ class AIProviderService(BaseService[AIProvider, AIProviderCreate, AIProviderUpda
     async def sync_from_url(self) -> None:
         logger.info("开始从 models.dev 同步 AI 供应商和模型数据...")
         try:
-            async with httpx.AsyncClient(timeout=SYNC_TIMEOUT) as client:
+            async with create_async_client(timeout=SYNC_TIMEOUT) as client:
                 response = await client.get(SYNC_URL)
                 response.raise_for_status()
                 data = response.json()

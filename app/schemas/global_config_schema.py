@@ -58,6 +58,10 @@ class UpdateConfigRequest(BaseModel):
     execution_notification_enabled: Optional[bool] = Field(
         default=None, description="是否启用执行完成通知"
     )
+    proxy_url: Optional[str] = Field(
+        default=None,
+        description="出站网络代理地址（http/https/socks5，空串表示清除恢复直连）",
+    )
 
 
 class GlobalConfigResponse(BaseModel):
@@ -76,6 +80,7 @@ class GlobalConfigResponse(BaseModel):
     has_username: bool = False
     username: Optional[str] = None
     execution_notification_enabled: bool = True
+    proxy_url: Optional[str] = None
 
 
 class CheckInitResponse(BaseModel):

@@ -773,6 +773,8 @@ class McpToolManager:
         """构建MCP连接配置，提取超时时间并处理 args 拆分"""
         import shlex
 
+        from app.utils.http_client import mcp_httpx_client_factory
+
         result: dict[str, Any] = {"transport": transport}
         timeout: Optional[int] = None
         for key, value in config.items():
@@ -786,6 +788,10 @@ class McpToolManager:
                     result["args"] = shlex.split(value)
                 continue
             result[key] = value
+        # 远程 HTTP/SSE 连接注入统一代理策略的 httpx 客户端工厂
+        # （stdio 子进程不走 HTTP，websocket 不基于 httpx，均无需注入）
+        if transport in ("streamable-http", "sse"):
+            result["httpx_client_factory"] = mcp_httpx_client_factory
         return result, timeout
 
     async def _close_connection(self, server_id: int) -> None:

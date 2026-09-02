@@ -12,6 +12,7 @@ from app.agent_flow.ai_provider.base import (
     AIProviderRegistry,
     BaseAIProvider,
 )
+from app.utils.http_client import create_llm_async_client, create_llm_sync_client
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,10 @@ class ChatOpenAIReasoning(BaseChatOpenAI):
         default_headers = kwargs.pop("default_headers", None) or {}
         default_headers.setdefault("Accept", "*/*")
         kwargs["default_headers"] = default_headers
+        # 本模型始终注入自定义 http_client/http_async_client（见 create_chat_model），
+        # 显式置空 http_socket_options，避免 langchain-openai 检测到系统代理时
+        # 对"默认客户端 transport 绕过代理自动探测"发出误报告警
+        kwargs.setdefault("http_socket_options", ())
         super().__init__(**kwargs)
         # 临时调试：挂载 httpx request hook 打印真实请求
         # _install_request_logger(self)
@@ -158,5 +163,10 @@ class OpenAICompatibleProvider(BaseAIProvider):
             api_key=self.api_key,
             base_url=base_url,
             stream_usage=kwargs.pop("stream_usage", True),
+            # 统一代理策略：trust_env=False，仅走全局配置的 proxy_url
+            # （sync/async 都注入，避免 langchain-openai 默认 sync 客户端的
+            #   socket-options transport 触发"绕过系统代理"告警）
+            http_client=create_llm_sync_client(),
+            http_async_client=create_llm_async_client(),
             **kwargs,
         )

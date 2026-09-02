@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Callable, List, Optional
 from langchain_openai import OpenAIEmbeddings
 
 from app.config.settings import settings
+from app.utils.http_client import create_llm_async_client, create_llm_sync_client
 
 if TYPE_CHECKING:
     pass
@@ -46,6 +47,10 @@ class EmbeddingService:
                 "openai_api_base": self.base_url,
                 "check_embedding_ctx_length": False,
                 "model_kwargs": {"encoding_format": "float"},
+                # 统一代理策略：trust_env=False，仅走全局配置的 proxy_url
+                # （sync 一并注入，避免默认 sync 客户端走系统代理/触发告警）
+                "http_client": create_llm_sync_client(),
+                "http_async_client": create_llm_async_client(),
             }
             self._embeddings = OpenAIEmbeddings(**kwargs)
         return self._embeddings

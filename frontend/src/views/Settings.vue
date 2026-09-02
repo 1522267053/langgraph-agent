@@ -39,6 +39,7 @@ const loginUsername = ref('')
 const currentPassword = ref('')
 const hasUsername = computed(() => config.value.has_username ?? false)
 const executionNotificationEnabled = ref(true)
+const proxyUrl = ref('')
 const notifyPermission = computed(() => {
   if (!('Notification' in window)) return 'unsupported'
   return Notification.permission
@@ -85,6 +86,7 @@ async function loadConfig() {
     embeddingModel.value = config.value.embedding_model || ''
     embeddingBaseUrl.value = config.value.embedding_base_url || ''
     executionNotificationEnabled.value = config.value.execution_notification_enabled ?? true
+    proxyUrl.value = config.value.proxy_url || ''
   } catch {
     // error handled by interceptor
   }
@@ -116,6 +118,15 @@ async function handleSave() {
     return
   }
 
+  const trimmedProxy = proxyUrl.value.trim()
+  if (trimmedProxy && !/^(https?|socks5h?):\/\//i.test(trimmedProxy)) {
+    ElMessage.error({
+      message: '代理地址无效，支持 http://、https:// 或 socks5:// 开头，如 http://127.0.0.1:7890',
+      duration: 5000
+    })
+    return
+  }
+
   saving.value = true
   try {
     const data: UpdateConfigRequest = {
@@ -126,7 +137,9 @@ async function handleSave() {
       context_length: parseContextLength(contextLength.value),
       embedding_model: embeddingModel.value.trim() || undefined,
       embedding_base_url: embeddingBaseUrl.value.trim() || undefined,
-      execution_notification_enabled: executionNotificationEnabled.value
+      execution_notification_enabled: executionNotificationEnabled.value,
+      // 空串显式发送，用于清除代理恢复直连
+      proxy_url: trimmedProxy
     }
     if (apiKey.value.trim()) {
       data.api_key = apiKey.value.trim()
@@ -522,6 +535,37 @@ function openDownloadUrl(): void {
           </div>
         </el-tab-pane>
 
+        <el-tab-pane label="网络代理" name="proxy">
+          <div class="settings-card">
+            <el-alert
+              title="留空则直连（忽略系统代理）；设置后所有出站请求经此代理转发"
+              type="info"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 16px"
+            />
+            <el-form label-position="top">
+              <el-form-item label="代理地址">
+                <el-input
+                  v-model="proxyUrl"
+                  placeholder="如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891"
+                  clearable
+                />
+              </el-form-item>
+              <div class="proxy-tip">
+                <p>生效范围（保存后即时生效，无需重启）：</p>
+                <ul>
+                  <li>LLM 对话与流程执行（OpenAI 兼容 / Anthropic）</li>
+                  <li>向量模型（知识库 / 记忆检索）</li>
+                  <li>MCP 远程服务器（streamable-http / sse）</li>
+                  <li>资源市场、版本更新检查</li>
+                </ul>
+              </div>
+              <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+            </el-form>
+          </div>
+        </el-tab-pane>
+
         <el-tab-pane label="资源市场" name="marketplace">
           <div class="settings-card">
             <div
@@ -806,6 +850,27 @@ function openDownloadUrl(): void {
   font-weight: 600;
   color: #1e293b;
   font-size: 15px;
+}
+
+.proxy-tip {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.8;
+}
+
+.proxy-tip p {
+  margin: 0 0 4px;
+  font-weight: 500;
+}
+
+.proxy-tip ul {
+  margin: 0;
+  padding-left: 18px;
 }
 
 .full-width {
