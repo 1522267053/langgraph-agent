@@ -78,6 +78,9 @@ const isSaveFile = computed(() => {
   )
 })
 
+/** 裸字符串结果（非 JSON 文本，如 file_write 成功消息、子Agent 回复、shell 输出）：始终展示 */
+const isBareString = computed(() => typeof props.result === 'string' && parsedResult.value === null)
+
 const filePath = computed(() => parsedResult.value?.file_path || '')
 
 const fileLanguage = computed(() => detectFileLanguage(filePath.value) || 'plaintext')
@@ -273,8 +276,11 @@ watch(
     <div v-if="parsedResult?.note" class="tool-edit-note">{{ parsedResult.note }}</div>
   </div>
 
-  <div v-else-if="!hidePlainJson || (isSaveFile && mediaInfo)" class="tool-fallback-result">
-    <template v-if="!hidePlainJson">
+  <div
+    v-else-if="!hidePlainJson || isBareString || (isSaveFile && mediaInfo)"
+    class="tool-fallback-result"
+  >
+    <template v-if="!hidePlainJson || isBareString">
       <pre class="tool-fallback-pre">{{ fallbackText }}</pre>
       <el-button
         :icon="CopyDocument"

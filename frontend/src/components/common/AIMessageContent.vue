@@ -206,17 +206,13 @@ async function handleCopy(text: string): Promise<void> {
           {{ isArgsExpanded(segment, idx) ? '显示原始' : '显示格式化' }}
         </el-button>
       </div>
-      <!-- 结果：始终尝试渲染；取消勾选时富结果（文件读取/编辑/媒体/子Agent回复）保留，
-           纯 JSON 不展示；失败结果（错误详情）始终展示 -->
+      <!-- 结果：始终尝试渲染；取消勾选时仅隐藏纯 JSON（裸字符串结果如文件写入消息、
+           子Agent 回复等始终展示），失败结果（错误详情）始终展示 -->
       <ToolResultViewer
         v-if="segment.tool.result !== undefined"
         :tool-name="segment.tool.name"
         :result="segment.tool.result"
-        :hide-plain-json="
-          !showToolCalls &&
-          segment.tool.status !== 'error' &&
-          !segment.tool.name.startsWith('call_sub_agent')
-        "
+        :hide-plain-json="!showToolCalls && segment.tool.status !== 'error'"
       />
       <pre v-else-if="segment.tool.status === 'error'" class="tool-content tool-content-error">
 执行失败</pre>

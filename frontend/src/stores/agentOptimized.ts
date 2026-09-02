@@ -202,10 +202,7 @@ export const useAgentStore = defineStore('agent', () => {
    * 创建新会话
    * @param workDir 可选，会话级项目工作路径
    */
-  async function createSession(
-    agentId: number,
-    workDir?: string
-  ): Promise<AgentSession | null> {
+  async function createSession(agentId: number, workDir?: string): Promise<AgentSession | null> {
     try {
       const res = await agentApi.createSession(agentId, workDir)
       if (res.data.code === 1) {
@@ -510,7 +507,11 @@ export const useAgentStore = defineStore('agent', () => {
             const toolName = tc.name as string
             if (toolName === 'todowrite' && toolResult?.status === 'success') {
               try {
-                const todosArgs = JSON.parse((tc.args as { todos?: string })?.todos || '[]')
+                // args.todos 当前为数组（TodoWriteInput: list[TodoItem]）；
+                // 兼容旧数据中的 JSON 字符串形态
+                const rawTodos = (tc.args as { todos?: unknown })?.todos
+                const todosArgs =
+                  typeof rawTodos === 'string' ? JSON.parse(rawTodos || '[]') : rawTodos
                 if (Array.isArray(todosArgs)) {
                   currentAssistant.segments.push({
                     type: 'todo',
