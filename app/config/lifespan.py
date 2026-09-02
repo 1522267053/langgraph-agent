@@ -120,6 +120,12 @@ async def startup() -> None:
     # ---- 更新续传：进程重启前处于下载中的，重新拉起下载任务 ----
     from app.services.update_service import update_service
 
+    # 预加载全局配置缓存（含 proxy_url），确保持久 HTTP 客户端按代理配置创建
+    from app.services.global_config_service import global_config_service
+
+    async with AsyncSessionLocal() as db:
+        await global_config_service.ensure_ai_cache(db)
+
     update_service.initialize_http_client()
     update_service.start_pending_result_resolver()
     update_service.start_pending_download_resume()

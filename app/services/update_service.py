@@ -33,6 +33,7 @@ from app.config.build_utils import (
 from app.config.settings import settings
 from app.config.version import get_version, is_newer
 from app.services.global_config_service import global_config_service
+from app.utils.http_client import create_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,23 @@ class UpdateService:
         if self._http_client is not None and not self._http_client.is_closed:
             return
         ssl_context = httpx.create_ssl_context()
-        self._http_client = httpx.AsyncClient(timeout=10, verify=ssl_context)
+        self._http_client = create_async_client(timeout=10, verify=ssl_context)
+
+    def rebuild_http_client(self) -> None:
+        """代理配置变更后同步重建持久客户端（关闭旧客户端，下次使用时按新配置创建）。
+
+        在事件循环中调用时仅关闭旧客户端；新客户端由 _get_http_client 惰性创建，
+        避免 API 线程同步加载 CA 证书。
+        """
+        if self._http_client is not None and not self._http_client.is_closed:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._http_client = None
+                return
+            old_client = self._http_client
+            self._http_client = None
+            loop.create_task(old_client.aclose())
 
     async def close_http_client(self) -> None:
         """关闭更新检查使用的持久 HTTP 客户端。"""
@@ -253,7 +270,7 @@ class UpdateService:
         tmp_path = cache_dir / f"download_{self._version}.zip.tmp"
         try:
             timeout = httpx.Timeout(10.0, read=120.0)
-            async with httpx.AsyncClient(
+            async with create_async_client(
                 timeout=timeout, follow_redirects=True
             ) as client:
                 async with client.stream("GET", url) as resp:

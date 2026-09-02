@@ -27,6 +27,7 @@ from app.agent_flow.node_handlers.base_handler import (
     NodeVariable,
 )
 from app.agent_flow.handler_registry import NodeHandlerRegistry
+from app.utils.http_client import create_async_client
 
 if TYPE_CHECKING:
     from app.agent_flow.tool_resolver import LlmToolConfig
@@ -456,7 +457,7 @@ class ApiNodeHandler(BaseNodeHandler):
             raw_response=True 时额外包含 _content, _content_type, _suggested_name, _is_file
         """
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with create_async_client(timeout=timeout) as client:
                 kwargs: dict[str, Any] = {"url": url, "headers": headers}
 
                 if files and method in ["POST", "PUT", "PATCH"]:

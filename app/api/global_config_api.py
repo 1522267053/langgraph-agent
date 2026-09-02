@@ -115,17 +115,35 @@ class GlobalConfigApi:
             request: UpdateConfigRequest, db: AsyncSession = Depends(get_db)
         ):
             """更新全局配置，并同步内置 Agent LLM 节点"""
+            proxy_changed = False
+            if request.proxy_url is not None:
+                from app.utils.http_client import validate_proxy_url
+
+                error = validate_proxy_url(request.proxy_url)
+                if error:
+                    return ApiResponse.error(msg=error)
+                # 以 DB 中的旧值为准判断代理是否实际变化（内存缓存可能未加载）
+                from app.services.global_config_service import PROXY_URL_KEY
+
+                old_proxy = (
+                    await global_config_service.get_value(db, PROXY_URL_KEY) or ""
+                )
+                proxy_changed = request.proxy_url.strip() != old_proxy.strip()
+
             await global_config_service.update_config(db, request)
             await builtin_agent_service.sync_llm_config(db)
             if request.login_password is not None:
                 invalidate_password_cache()
-            if any(
-                v is not None
-                for v in [
-                    request.embedding_api_key,
-                    request.embedding_base_url,
-                    request.embedding_model,
-                ]
+            if (
+                any(
+                    v is not None
+                    for v in [
+                        request.embedding_api_key,
+                        request.embedding_base_url,
+                        request.embedding_model,
+                    ]
+                )
+                or proxy_changed
             ):
                 from app.services.embedding_service import reset_embedding_service
 
@@ -136,6 +154,10 @@ class GlobalConfigApi:
                 ws_manager.set_notification_enabled(
                     request.execution_notification_enabled
                 )
+            if proxy_changed:
+                from app.services.update_service import update_service
+
+                update_service.rebuild_http_client()
             return ApiResponse.success(msg="更新成功")
 
 

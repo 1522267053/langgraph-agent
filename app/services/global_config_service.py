@@ -26,6 +26,7 @@ MARKETPLACE_SERVER_URL_KEY = "marketplace_server_url"
 MARKETPLACE_TOKEN_KEY = "marketplace_token"
 MARKETPLACE_TOKEN_EXPIRES_KEY = "marketplace_token_expires_at"
 MARKETPLACE_PASSWORD_HASH_KEY = "marketplace_password_hash"
+PROXY_URL_KEY = "proxy_url"
 
 _CACHE_TTL = 300
 
@@ -38,6 +39,7 @@ _AI_CONFIG_KEYS = {
     "embedding_api_key",
     "embedding_base_url",
     "embedding_model",
+    PROXY_URL_KEY,
 }
 
 CONFIG_KEYS = {
@@ -53,6 +55,7 @@ CONFIG_KEYS = {
     "login_password_hash": "登录密码哈希",
     "login_username": "登录用户名",
     "execution_notification_enabled": "执行完成通知开关",
+    PROXY_URL_KEY: "出站网络代理地址",
     MARKETPLACE_SERVER_URL_KEY: "资源市场服务器地址",
     MARKETPLACE_TOKEN_KEY: "市场 JWT Token",
     MARKETPLACE_TOKEN_EXPIRES_KEY: "市场 Token 过期时间",
@@ -126,6 +129,11 @@ class GlobalConfigService:
     def marketplace_token(self) -> Optional[str]:
         """获取当前缓存的 marketplace JWT token"""
         return self._marketplace_token
+
+    @property
+    def proxy_url(self) -> str:
+        """获取当前缓存的全局代理地址（未配置返回空串）"""
+        return self._ai_config.get(PROXY_URL_KEY) or ""
 
     @staticmethod
     def _hash_password(password: str) -> str:
@@ -248,6 +256,10 @@ class GlobalConfigService:
                 request.execution_notification_enabled
             )
 
+        if request.proxy_url is not None:
+            # 空串表示清除代理（恢复直连）
+            updates[PROXY_URL_KEY] = request.proxy_url.strip()
+
         if request.login_password is not None or request.login_username is not None:
             # 修改密码时必须验证当前密码
             if request.login_password:
@@ -348,6 +360,7 @@ class GlobalConfigService:
             has_username=has_username,
             username=username,
             execution_notification_enabled=notif_enabled,
+            proxy_url=self.proxy_url,
         )
 
     async def get_password_hash(self, db: AsyncSession) -> Optional[str]:

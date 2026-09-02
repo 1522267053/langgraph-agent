@@ -24,6 +24,7 @@ export interface GlobalConfigData {
   has_username?: boolean
   username?: string | null
   execution_notification_enabled?: boolean
+  proxy_url?: string | null
 }
 
 export interface InitConfigRequest {
@@ -52,6 +53,7 @@ export interface UpdateConfigRequest {
   login_username?: string
   current_password?: string
   execution_notification_enabled?: boolean
+  proxy_url?: string
 }
 
 export const configApi = {

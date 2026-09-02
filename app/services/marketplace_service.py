@@ -8,8 +8,6 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-import httpx
-
 from app.services.global_config_service import (
     global_config_service,
     MARKETPLACE_SERVER_URL_KEY,
@@ -18,6 +16,7 @@ from app.services.global_config_service import (
     MARKETPLACE_PASSWORD_HASH_KEY,
 )
 from app.config.settings import settings
+from app.utils.http_client import create_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +89,7 @@ class MarketplaceService:
         if not expires or datetime.now() >= expires:
             return False
         try:
-            async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+            async with create_async_client(timeout=_REQUEST_TIMEOUT) as client:
                 resp = await client.get(f"{server_url}/api/health")
                 return resp.status_code == 200
         except Exception:
@@ -113,7 +112,7 @@ class MarketplaceService:
         self, db, server_url: str, username: str, password_hash: str
     ) -> Optional[str]:
         """执行一次登录请求，成功返回 token，否则返回 None"""
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+        async with create_async_client(timeout=_REQUEST_TIMEOUT) as client:
             try:
                 resp = await client.post(
                     f"{server_url}/api/auth/login",
@@ -145,7 +144,7 @@ class MarketplaceService:
         self, db, server_url: str, username: str, password_hash: str
     ) -> bool:
         """执行一次注册请求，返回是否成功，失败时记录错误信息"""
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+        async with create_async_client(timeout=_REQUEST_TIMEOUT) as client:
             try:
                 resp = await client.post(
                     f"{server_url}/api/auth/register",
@@ -242,7 +241,7 @@ class MarketplaceService:
             or not new_password_hash
         ):
             return False
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+        async with create_async_client(timeout=_REQUEST_TIMEOUT) as client:
             try:
                 resp = await client.put(
                     f"{server_url}/api/auth/password",
@@ -274,7 +273,7 @@ class MarketplaceService:
         if not server_url:
             return False
         try:
-            async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+            async with create_async_client(timeout=_REQUEST_TIMEOUT) as client:
                 resp = await client.get(f"{server_url}/api/health")
                 return resp.status_code == 200
         except Exception:
@@ -298,7 +297,7 @@ class MarketplaceService:
         server_url = await self.get_server_url(db)
         if not token or not server_url:
             return None
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+        async with create_async_client(timeout=_REQUEST_TIMEOUT) as client:
             try:
                 resp = await client.post(
                     f"{server_url}/api/resources",
@@ -332,7 +331,7 @@ class MarketplaceService:
         server_url = await self.get_server_url(db)
         if not token or not server_url:
             return None
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+        async with create_async_client(timeout=_REQUEST_TIMEOUT) as client:
             try:
                 resp = await client.get(
                     f"{server_url}/api/resources/{resource_id}",
@@ -354,7 +353,7 @@ class MarketplaceService:
         server_url = await self.get_server_url(db)
         if not token or not server_url:
             return None
-        async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT) as client:
+        async with create_async_client(timeout=_DOWNLOAD_TIMEOUT) as client:
             try:
                 resp = await client.get(
                     f"{server_url}/api/resources/{resource_id}/download",
@@ -374,7 +373,7 @@ class MarketplaceService:
         server_url = await self.get_server_url(db)
         if not token or not server_url:
             return None
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+        async with create_async_client(timeout=_REQUEST_TIMEOUT) as client:
             try:
                 resp = await client.get(
                     f"{server_url}/api/categories",
