@@ -2,6 +2,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { CopyDocument, Download, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { collapseHooks } from '@/components/AgentChat/collapseTransition'
 import { detectFileLanguage } from '@/utils/format'
 
 const props = withDefaults(
@@ -10,8 +11,11 @@ const props = withDefaults(
     result: unknown
     /** 仅展示富结果（文件读取/编辑/媒体预览下载），纯 JSON 回退不渲染 */
     hidePlainJson?: boolean
+    /** 纯 JSON 块显隐是否带高度过渡（仅用户点击过的聊天工具行为 true，
+     * 程序性翻转瞬时完成；Flow 执行面板等列表场景恒为 false） */
+    animateJson?: boolean
   }>(),
-  { hidePlainJson: false }
+  { hidePlainJson: false, animateJson: false }
 )
 
 let hljsModule: typeof import('highlight.js').default | null = null
@@ -80,6 +84,11 @@ const isSaveFile = computed(() => {
 
 /** 裸字符串结果（非 JSON 文本，如 file_write 成功消息、子Agent 回复、shell 输出）：始终展示 */
 const isBareString = computed(() => typeof props.result === 'string' && parsedResult.value === null)
+
+/** 回退容器内是否有可见内容（决定 border-top 显隐，折叠的纯 JSON 时为空容器） */
+const hasVisibleFallback = computed(
+  () => !props.hidePlainJson || isBareString.value || !!(isSaveFile.value && mediaInfo.value)
+)
 
 const filePath = computed(() => parsedResult.value?.file_path || '')
 
@@ -276,22 +285,25 @@ watch(
     <div v-if="parsedResult?.note" class="tool-edit-note">{{ parsedResult.note }}</div>
   </div>
 
-  <div
-    v-else-if="!hidePlainJson || isBareString || (isSaveFile && mediaInfo)"
-    class="tool-fallback-result"
-  >
-    <template v-if="!hidePlainJson || isBareString">
-      <pre class="tool-fallback-pre">{{ fallbackText }}</pre>
-      <el-button
-        :icon="CopyDocument"
-        link
-        size="small"
-        class="tool-fallback-copy"
-        @click="handleFallbackCopy"
-      >
-        复制
-      </el-button>
-    </template>
+  <!-- 容器始终渲染（v-else）：折叠/展开只翻转内部 JSON 块的 v-if，让
+       ElCollapseTransition 的 enter/leave 正常触发（若容器随内容一起挂载，
+       内部过渡会被视为初始渲染而吞掉）；无可见内容时隐藏 border 避免空线 -->
+  <div v-else :class="['tool-fallback-result', { 'tool-fallback-hidden': !hasVisibleFallback }]">
+    <!-- 纯 JSON 转储：折叠态隐藏；高度过渡仅在 animateJson（用户点击过）时启用 -->
+    <Transition v-bind="animateJson ? collapseHooks : {}">
+      <div v-if="!hidePlainJson || isBareString" class="tool-fallback-json">
+        <pre class="tool-fallback-pre">{{ fallbackText }}</pre>
+        <el-button
+          :icon="CopyDocument"
+          link
+          size="small"
+          class="tool-fallback-copy"
+          @click="handleFallbackCopy"
+        >
+          复制
+        </el-button>
+      </div>
+    </Transition>
     <!-- 文件结果：在返回数据下方追加预览/下载 -->
     <div v-if="isSaveFile && mediaInfo" class="tool-media-result">
       <div class="media-inline-preview">
@@ -496,6 +508,11 @@ watch(
 
 .tool-fallback-result {
   position: relative;
+}
+
+/* 折叠的纯 JSON 回退容器为空，隐藏 border-top 避免头部下出现空线 */
+.tool-fallback-result.tool-fallback-hidden {
+  border-top: none;
 }
 
 .tool-fallback-pre {

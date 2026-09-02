@@ -1,20 +1,21 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CopyDocument, RefreshLeft, SetUp } from '@element-plus/icons-vue'
+import { ArrowRight, CopyDocument, RefreshLeft, SetUp } from '@element-plus/icons-vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import KnowledgeCitationList from '@/components/common/KnowledgeCitationList.vue'
 import TodoList from '@/components/common/TodoList.vue'
 import ToolResultViewer from '@/components/common/ToolResultViewer.vue'
 import type { Segment } from '@/types/segment'
 import { useKnowledgeReferenceDrawer } from '@/composables/useKnowledgeReferenceDrawer'
+import { getToolExpandOverride, toggleToolExpand } from '@/components/AgentChat/toolExpand'
+import { collapseHooks } from '@/components/AgentChat/collapseTransition'
 import { formatToolArgs, formatToolArgsExpanded, hasStringifiedJson } from '@/utils/format'
 
 const props = withDefaults(
   defineProps<{
     segments: Segment[]
     showThinking?: boolean
-    showToolCalls?: boolean
     isStreaming?: boolean
     disableActions?: boolean
     /** 单段模式（聊天段级虚拟行）：segments 恒为单元素，跳过内部窗口与折叠 */
@@ -25,16 +26,21 @@ const props = withDefaults(
     isMsgLastContent?: boolean
     /** 单段模式：thinking 进行中（流式中且本段之后无 content 段） */
     isMsgThinkingInProgress?: boolean
+    /** 聊天折叠交互：传入后工具块头部可点击展开/收起，key 为虚拟行 key */
+    expandKey?: string
+    /** 聊天折叠交互：本段是否为流式中的最新工具段（默认展开态判定） */
+    isLatestTool?: boolean
   }>(),
   {
     showThinking: true,
-    showToolCalls: true,
     isStreaming: false,
     disableActions: false,
     singleSegment: false,
     isMsgLastSegment: true,
     isMsgLastContent: true,
-    isMsgThinkingInProgress: false
+    isMsgThinkingInProgress: false,
+    expandKey: '',
+    isLatestTool: false
   }
 )
 
@@ -103,6 +109,29 @@ function segmentKey(segment: Segment, idx: number): string {
 const expandedArgsSegments = ref(new Set<string>())
 const { open: openKnowledgeReference } = useKnowledgeReferenceDrawer()
 
+// ---- 工具块折叠交互（聊天段级模式：传入 expandKey 后启用） ----
+const isToolCollapsible = computed(() => !!props.expandKey)
+
+/** 高度过渡动画开关（每行实例）：仅在用户点击过后置位。流式 handoff / 流结束的
+ * 程序性翻转保持瞬时，避免 300ms 行高渐变被贴底跟随逐帧追逐产生滚动抖动 */
+const toolAnimate = ref(false)
+
+/** 工具块内容（入参/结果/错误/加载）显隐：
+ * 聊天模式 = 手动操作覆盖 ?? 流式最新工具默认展开；
+ * 列表模式（Flow 执行面板等）始终展开 */
+const toolBodyVisible = computed(() => {
+  if (props.expandKey) {
+    return getToolExpandOverride(props.expandKey) ?? props.isLatestTool
+  }
+  return true
+})
+
+function toggleToolBody(): void {
+  if (!props.expandKey) return
+  toolAnimate.value = true
+  toggleToolExpand(props.expandKey, !toolBodyVisible.value)
+}
+
 function toggleArgsFormat(segment: Segment, idx: number): void {
   const key = segmentKey(segment, idx)
   if (expandedArgsSegments.value.has(key)) {
@@ -162,7 +191,14 @@ async function handleCopy(text: string): Promise<void> {
     </div>
 
     <div v-else-if="segment.type === 'tool' && segment.tool" class="tool-block">
-      <div :class="['code-block-header', 'tool-header-' + segment.tool.status]">
+      <div
+        :class="[
+          'code-block-header',
+          'tool-header-' + segment.tool.status,
+          { 'tool-header-clickable': isToolCollapsible }
+        ]"
+        @click="toggleToolBody"
+      >
         <el-icon class="tool-header-icon"><SetUp /></el-icon>
         <span class="tool-header-name">{{ segment.tool.name }}</span>
         <span :class="['tool-status-badge', segment.tool.status]">
@@ -175,6 +211,13 @@ async function handleCopy(text: string): Promise<void> {
                 : '完成'
           }}
         </span>
+        <!-- 折叠交互（聊天段级模式）：箭头指向提示可点击，展开时旋转 90° -->
+        <el-icon
+          v-if="isToolCollapsible"
+          :class="['tool-expand-arrow', { 'is-expanded': toolBodyVisible }]"
+        >
+          <ArrowRight />
+        </el-icon>
       </div>
       <!-- 子Agent实时输出预览（call_sub_agent_* 工具执行中展示，完成后由最终结果替代） -->
       <div
@@ -186,37 +229,50 @@ async function handleCopy(text: string): Promise<void> {
         </div>
         <pre class="tool-content tool-live-output">{{ segment.tool.liveOutput }}</pre>
       </div>
-      <!-- 入参 JSON：仅勾选"工具调用"时展示 -->
-      <div
-        v-if="showToolCalls && segment.tool.args && Object.keys(segment.tool.args).length > 0"
-        class="tool-content-args-wrapper"
-      >
-        <pre class="tool-content tool-content-args">{{
-          isArgsExpanded(segment, idx)
-            ? formatToolArgsExpanded(segment.tool.args)
-            : formatToolArgs(segment.tool.args)
-        }}</pre>
-        <el-button
-          v-if="hasStringifiedJson(segment.tool.args)"
-          link
-          size="small"
-          class="args-toggle-btn"
-          @click="toggleArgsFormat(segment, idx)"
+      <!-- 入参 JSON：折叠态隐藏，点击头部展开后显示。高度过渡仅在用户点击过后
+           启用（toolAnimate），程序性翻转瞬时完成 -->
+      <Transition v-bind="toolAnimate ? collapseHooks : {}">
+        <div
+          v-if="toolBodyVisible && segment.tool.args && Object.keys(segment.tool.args).length > 0"
+          class="tool-content-args-wrapper"
         >
-          {{ isArgsExpanded(segment, idx) ? '显示原始' : '显示格式化' }}
-        </el-button>
+          <pre class="tool-content tool-content-args">{{
+            isArgsExpanded(segment, idx)
+              ? formatToolArgsExpanded(segment.tool.args)
+              : formatToolArgs(segment.tool.args)
+          }}</pre>
+          <el-button
+            v-if="hasStringifiedJson(segment.tool.args)"
+            link
+            size="small"
+            class="args-toggle-btn"
+            @click="toggleArgsFormat(segment, idx)"
+          >
+            {{ isArgsExpanded(segment, idx) ? '显示原始' : '显示格式化' }}
+          </el-button>
+        </div>
+      </Transition>
+      <!-- 结果：完成时滑入淡入动画。不用 Transition 组件（流式 patch 场景下 enter
+           hook 时序不稳定），改用 CSS keyframe——元素插入时必然播放一次；动画类仅
+           流式中的最后消息携带，历史/Flow 面板静态渲染，虚拟滚动重挂不重播。
+           折叠态仅隐藏纯 JSON 转储（富结果/裸字符串/错误详情仍展示） -->
+      <div v-if="segment.tool.result !== undefined" :class="{ 'tool-result-in': isStreaming }">
+        <ToolResultViewer
+          :tool-name="segment.tool.name"
+          :result="segment.tool.result"
+          :hide-plain-json="!toolBodyVisible && segment.tool.status !== 'error'"
+          :animate-json="toolAnimate"
+        />
       </div>
-      <!-- 结果：始终尝试渲染；取消勾选时仅隐藏纯 JSON（裸字符串结果如文件写入消息、
-           子Agent 回复等始终展示），失败结果（错误详情）始终展示 -->
-      <ToolResultViewer
-        v-if="segment.tool.result !== undefined"
-        :tool-name="segment.tool.name"
-        :result="segment.tool.result"
-        :hide-plain-json="!showToolCalls && segment.tool.status !== 'error'"
-      />
-      <pre v-else-if="segment.tool.status === 'error'" class="tool-content tool-content-error">
+      <pre
+        v-if="segment.tool.result === undefined && segment.tool.status === 'error'"
+        class="tool-content tool-content-error"
+      >
 执行失败</pre>
-      <div v-else-if="segment.tool.status === 'running'" class="tool-content tool-loading-text">
+      <div
+        v-else-if="segment.tool.result === undefined && segment.tool.status === 'running'"
+        class="tool-content tool-loading-text"
+      >
         执行中...
       </div>
     </div>
@@ -321,6 +377,40 @@ async function handleCopy(text: string): Promise<void> {
 
 .tool-header-running {
   background: #0f172a;
+}
+
+.tool-header-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.tool-expand-arrow {
+  margin-left: 4px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.8);
+  transition: transform 0.2s;
+}
+
+.tool-expand-arrow.is-expanded {
+  transform: rotate(90deg);
+}
+
+/* 结果块流式完成时的滑入淡入动画（挂载时播放一次；transform 不影响布局，
+   不触发行高重测抖动） */
+.tool-result-in {
+  animation: tool-result-in 0.3s ease;
+}
+
+@keyframes tool-result-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .tool-header-icon {

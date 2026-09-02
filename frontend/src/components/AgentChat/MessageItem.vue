@@ -14,7 +14,6 @@ defineProps<{
   /** 当前虚拟行（virtualizer 窗口外可能瞬时为空） */
   row: ChatRow | null
   showThinking: boolean
-  showToolCalls: boolean
   showEndOutput: boolean
   isStreaming: boolean
 }>()
@@ -60,10 +59,11 @@ const emit = defineEmits<{
     :segment-index="row.segmentIndex ?? -1"
     :data-msg-id="row.msg.id"
     :show-thinking="showThinking"
-    :show-tool-calls="showToolCalls"
     :show-end-output="showEndOutput"
     :is-streaming="isStreaming"
     :is-last="!!row.isLast"
+    :is-latest-tool="!!row.isLatestTool"
+    :expand-key="row.key"
     @delete="m => emit('delete', m)"
     @revert="dbMsgId => emit('revert', dbMsgId)"
     @preview="data => emit('preview', data)"
