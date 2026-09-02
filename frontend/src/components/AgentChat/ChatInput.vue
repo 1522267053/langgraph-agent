@@ -8,6 +8,7 @@ import {
   Promotion,
   Document,
   FolderOpened,
+  CircleClose,
   QuestionFilled,
   List
 } from '@element-plus/icons-vue'
@@ -22,6 +23,12 @@ const props = defineProps<{
   latestPromptTokens?: number
   planMode?: boolean
   restoreParams?: Record<string, unknown> | null
+  /** 会话级项目工作路径（空表示未选择，使用 Agent 默认工作目录） */
+  workDir?: string
+  /** 可选模型列表（当前 Agent 供应商下的模型；为空时不展示下拉框） */
+  modelOptions?: Array<{ value: string; label: string; multimodal?: boolean }>
+  /** Agent 配置的默认模型名（仅展示用） */
+  defaultModelLabel?: string
 }>()
 
 const emit = defineEmits<{
@@ -34,10 +41,25 @@ const emit = defineEmits<{
   (e: 'stop'): void
   (e: 'toggle-plan-mode'): void
   (e: 'restore-consumed'): void
+  (e: 'select-workdir'): void
+  (e: 'clear-workdir'): void
 }>()
 
 const inputMessage = defineModel<string>('inputMessage', { default: '' })
+/** 临时模型覆盖（空串/未选表示使用 Agent 默认模型） */
+const selectedModel = defineModel<string>('selectedModel', { default: '' })
 const sendMessageDisabled = computed(() => !inputMessage.value.trim())
+
+const showModelSelect = computed(() => (props.modelOptions?.length ?? 0) > 0)
+
+/** 工作路径缩略显示：取末段目录名 */
+const workDirName = computed(() => {
+  const dir = props.workDir
+  if (!dir) return ''
+  const normalized = dir.replace(/[\\/]+$/, '')
+  const segments = normalized.split(/[\\/]/)
+  return segments[segments.length - 1] || dir
+})
 
 function formatTokenCount(tokens: number): string {
   if (tokens >= 1_000_000) return (tokens / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
@@ -342,6 +364,60 @@ function handleStop() {
                 <el-icon :size="18"><List /></el-icon>
               </button>
             </el-tooltip>
+            <el-tooltip
+              :content="workDir || '工作目录：未选择（使用 Agent 默认目录）'"
+              placement="top"
+            >
+              <button
+                class="toolbar-icon-btn workdir-btn"
+                :class="{ active: !!workDir }"
+                @click="emit('select-workdir')"
+              >
+                <el-icon :size="18"><FolderOpened /></el-icon>
+                <span v-if="workDir" class="workdir-name">{{ workDirName }}</span>
+                <span
+                  v-if="workDir"
+                  class="workdir-clear"
+                  title="清除（回退默认目录）"
+                  @click.stop="emit('clear-workdir')"
+                >
+                  <el-icon :size="13"><CircleClose /></el-icon>
+                </span>
+              </button>
+            </el-tooltip>
+            <!-- 模型切换：仅同供应商内覆盖，清空即回退 Agent 默认模型 -->
+            <el-tooltip
+              v-if="showModelSelect"
+              :content="
+                selectedModel
+                  ? `临时模型：${selectedModel}（清除后回退默认）`
+                  : `默认模型：${defaultModelLabel || 'Agent 配置'}`
+              "
+              placement="top"
+            >
+              <el-select
+                v-model="selectedModel"
+                class="model-select"
+                size="small"
+                filterable
+                clearable
+                :disabled="isStreaming || isWaitingHuman"
+                placeholder="默认模型"
+                no-data-text="暂无可用模型"
+              >
+                <el-option
+                  v-for="opt in modelOptions"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                >
+                  <div class="model-option">
+                    <span class="model-option-name">{{ opt.label }}</span>
+                    <span v-if="opt.multimodal" class="model-option-badge">多模态</span>
+                  </div>
+                </el-option>
+              </el-select>
+            </el-tooltip>
           </div>
           <div class="toolbar-right">
             <div v-if="totalTokens" class="token-count">
@@ -610,6 +686,36 @@ export default {
   background: #fff7ed;
 }
 
+/* 工作目录按钮：选中时横向展示 目录名 + 清除按钮 */
+.workdir-btn {
+  width: auto;
+  min-width: 32px;
+  max-width: 220px;
+  padding: 0 8px;
+  gap: 4px;
+}
+
+.workdir-name {
+  max-width: 140px;
+  overflow: hidden;
+  color: inherit;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workdir-clear {
+  display: flex;
+  align-items: center;
+  color: #94a3b8;
+  border-radius: 50%;
+  transition: color 0.15s;
+}
+
+.workdir-clear:hover {
+  color: #ef4444;
+}
+
 .param-dot {
   position: absolute;
   top: 4px;
@@ -619,6 +725,49 @@ export default {
   background: #2563eb;
   border-radius: 50%;
   border: 1.5px solid #f8fafc;
+}
+
+/* 模型下拉框：与工具栏图标按钮高度对齐 */
+.model-select {
+  width: 170px;
+}
+
+.model-select :deep(.el-select__wrapper) {
+  min-height: 32px;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.model-select :deep(.el-select__wrapper.is-hovering) {
+  background: #fff;
+}
+
+.model-select :deep(.el-select__placeholder) {
+  font-size: 12px;
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.model-option-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-option-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 16px;
+  color: #2563eb;
+  background: #eff6ff;
+  border-radius: 4px;
+  padding: 0 5px;
 }
 
 .toolbar-right {

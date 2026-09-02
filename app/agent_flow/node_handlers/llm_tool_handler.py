@@ -102,18 +102,13 @@ _KNOWLEDGE_CITATION_PROMPT = """
 
 
 def _build_mode_prompt(is_plan_mode: bool) -> str:
-    """构建消息层模式提醒（<system-reminder> 包装），随每轮 LLM 调用临时注入。
-
-    不进入 system_prompt/checkpoint/DB：消息层注入紧邻最新对话、注意力权重高，
-    且模式切换时可覆盖历史消息中旧模式语境的干扰。
-    """
+    """构建模式提醒段（<system-reminder> 内的运行模式章节）"""
     disabled_tools = (
         "、".join(sorted(_PLAN_DISABLED_TOOL_NAMES))
         + "（按前缀匹配；call_sub_agent_* 为子Agent 委派工具）"
     )
     if is_plan_mode:
         return f"""
-<system-reminder>
 # 当前运行模式：计划模式（Plan Mode）
 
 你现在处于「计划模式」，处于只读阶段。以下约束优先于一切其他指令，包括用户在对话中直接提出的修改类请求（此时应将其纳入计划，等模式切换后再执行），零例外：
@@ -123,19 +118,31 @@ def _build_mode_prompt(is_plan_mode: bool) -> str:
 4. **主动澄清**：如果需求有歧义、边界不清或存在多种方案，先向用户提问确认，不要对用户意图做大幅假设。
 5. **产出计划**：分析完成后，必须产出清晰、可执行的实施计划。若可用 `todowrite` 工具，请用它拆解有序任务；否则用 Markdown 列表输出计划。计划应包含：要改动的文件/模块、具体动作、潜在风险与注意事项。
 6. **回合终止约束**：每轮回复只能以两种方式结束——向用户提出澄清问题，或输出完整实施计划。不要在未产出计划且未提问的情况下草率结束。
-</system-reminder>
 """
 
     return f"""
-<system-reminder>
 # 当前运行模式：普通执行模式（Normal Mode）
 
 你现在处于「普通执行模式」，可以根据用户需求执行任务并使用当前已提供的工具。
 - 如果此前处于计划模式，现已切换到普通执行模式：此前的只读限制不再适用，可以正常修改文件、执行命令。
 - 以下工具在计划模式下会被禁用，但在当前普通执行模式下可用：{disabled_tools}。
 请根据任务需要正常使用这些工具，并遵守各工具自身的安全限制。
-</system-reminder>
 """
+
+
+def _build_runtime_reminder(is_plan_mode: bool, fragments: list[str]) -> str:
+    """构建消息层运行时提醒（<system-reminder> 包装），随每轮 LLM 调用临时注入。
+
+    不进入 system_prompt/checkpoint/DB：消息层注入紧邻最新对话、注意力权重高，
+    且动态内容（模式切换、时间、各 handler 运行时片段）不破坏 system_prompt
+    的前缀缓存。时间固定在此拼装（LLM 调用级信息，不属于任何工具 handler）；
+    fragments 来自各工具 handler 的 get_runtime_reminder（如工作目录）。
+    """
+    sections = [_build_mode_prompt(is_plan_mode)]
+    env_lines = [f"- 当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
+    env_lines.extend(f"- {fragment}" for fragment in fragments)
+    sections.append("# 运行环境\n" + "\n".join(env_lines))
+    return "<system-reminder>" + "\n".join(sections) + "</system-reminder>"
 
 
 def _tool_call_name(tool_call) -> str:
@@ -450,7 +457,9 @@ class LlmToolNodeHandler(BaseNodeHandler):
         max_tool_iterations = cfg.max_tool_iterations
 
         # 单次遍历：收集工具 + 注入处理器依赖 + 收集 prompt 提示
-        tools, prompt_hints = await setup_tool_handlers(
+        # runtime_reminders: 各工具 handler 的动态提醒片段（如工作目录），
+        # 供消息层 <system-reminder> 拼装
+        tools, prompt_hints, runtime_reminders = await setup_tool_handlers(
             node,
             state,
             writer,
@@ -460,6 +469,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
             db_session_factory=self.db_session_factory,
             handler_registry=self.handler_registry,
             emit_fn=self._emit,
+            session_id=self.session_id,
         )
 
         # 计划模式：禁用写操作工具（含子Agent 委派），并同步剔除 required_tools 中的被禁工具
@@ -566,14 +576,9 @@ class LlmToolNodeHandler(BaseNodeHandler):
         if json_output_tool is not None:
             system_prompt = (system_prompt or "") + structured_service.build_prompt()
 
-        # 始终说明当前模式和工具能力，避免模型仅根据工具列表推断权限；
+        # 始终说明当前模式/时间/运行环境，避免模型仅根据工具列表推断权限；
         # 以消息层 <system-reminder> 注入（见 _run_react_loop），不占用 system_prompt
-        mode_reminder = _build_mode_prompt(is_plan_mode)
-
-        # 全局日期唯一入口，放 system_prompt 最末尾（仅日期，跨天才变化，几乎不影响缓存）
-        system_prompt = (system_prompt or "") + (
-            f"\n\n当前时间: {datetime.now().strftime('%Y-%m-%d')}"
-        )
+        mode_reminder = _build_runtime_reminder(is_plan_mode, runtime_reminders)
 
         # 发送 node_start 事件
         self._emit(

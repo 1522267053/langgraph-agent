@@ -1007,7 +1007,7 @@ class FlowTransferService:
         self, db: AsyncSession, nodes: list[dict]
     ) -> None:
         """为缺少 api_key 的 LLM 节点填充本地默认配置"""
-        from app.services.node_config_helper import inject_llm_defaults
+        from app.utils.node_config_helper import inject_llm_defaults
         from app.services.global_config_service import global_config_service
 
         global_cfg = await global_config_service.get_default_llm_config(db)

@@ -200,10 +200,14 @@ export const useAgentStore = defineStore('agent', () => {
 
   /**
    * 创建新会话
+   * @param workDir 可选，会话级项目工作路径
    */
-  async function createSession(agentId: number): Promise<AgentSession | null> {
+  async function createSession(
+    agentId: number,
+    workDir?: string
+  ): Promise<AgentSession | null> {
     try {
-      const res = await agentApi.createSession(agentId)
+      const res = await agentApi.createSession(agentId, workDir)
       if (res.data.code === 1) {
         await loadSessions(agentId, 1)
         const session = res.data.data
@@ -1086,7 +1090,8 @@ export const useAgentStore = defineStore('agent', () => {
   function sendMessage(
     content: string,
     params: Record<string, unknown> = {},
-    files?: MessageFile[]
+    files?: MessageFile[],
+    model?: string
   ) {
     if (!currentAgent.value || !currentSession.value) return
 
@@ -1103,7 +1108,7 @@ export const useAgentStore = defineStore('agent', () => {
     streamAbort = agentApi.chat(
       context.agentId,
       context.sessionId,
-      { content, params: { ...params, __plan_mode__: planMode.value } },
+      { content, params: { ...params, __plan_mode__: planMode.value }, model },
       createStreamHandlers(context)
     )
   }

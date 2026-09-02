@@ -29,7 +29,7 @@ from app.schemas.ai_flow_schema import (
 from app.utils.secret_mask import restore_masked_api_keys
 from app.services.flow_service import flow_service
 from app.services.global_config_service import global_config_service
-from app.services.node_config_helper import fill_node_defaults, inject_llm_defaults
+from app.utils.node_config_helper import fill_node_defaults, inject_llm_defaults
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.agent_flow.flow_change_tracker import record_flow_change
 

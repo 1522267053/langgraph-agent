@@ -455,6 +455,23 @@ class BaseNodeHandler(ABC):
         """
         return None
 
+    async def get_runtime_reminder(self, node: FlowNode) -> Optional[str]:
+        """
+        返回要拼入消息层 <system-reminder> 的运行时提醒片段
+
+        与 get_system_prompt_hint（静态内容，进 system_prompt 利于前缀缓存）相对，
+        本方法返回动态内容（工作目录、会话状态等），随每轮 LLM 调用临时注入，
+        不进入 system_prompt/checkpoint/DB。需要动态提醒的子 handler 重写此方法。
+        同一 handler 单例服务多个工具节点时只收集一次。
+
+        Args:
+            node: 节点对象
+
+        Returns:
+            提醒文本片段，不需要时返回 None
+        """
+        return None
+
     # ---- 执行结果内容 ----
 
     @classmethod
