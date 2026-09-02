@@ -71,7 +71,7 @@ export function useStreamingMessage() {
   const latestPromptTokens = ref(0)
 
   /** 流式 chunk 攒批间隔（ms）：缓冲期内合并 chunk，降低深响应写与 segments 重建频率 */
-  const FLUSH_INTERVAL = 120
+  const FLUSH_INTERVAL = 50
   /** 待 flush 的 content/thinking 缓冲（非响应式，同一时刻至多一种非空） */
   let pendingContent: string | null = null
   let pendingThinking: string | null = null
