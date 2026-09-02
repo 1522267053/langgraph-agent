@@ -4,10 +4,15 @@ import { CopyDocument, Download, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { detectFileLanguage } from '@/utils/format'
 
-const props = defineProps<{
-  toolName: string
-  result: unknown
-}>()
+const props = withDefaults(
+  defineProps<{
+    toolName: string
+    result: unknown
+    /** 仅展示富结果（文件读取/编辑/媒体预览下载），纯 JSON 回退不渲染 */
+    hidePlainJson?: boolean
+  }>(),
+  { hidePlainJson: false }
+)
 
 let hljsModule: typeof import('highlight.js').default | null = null
 
@@ -268,17 +273,19 @@ watch(
     <div v-if="parsedResult?.note" class="tool-edit-note">{{ parsedResult.note }}</div>
   </div>
 
-  <div v-else class="tool-fallback-result">
-    <pre class="tool-fallback-pre">{{ fallbackText }}</pre>
-    <el-button
-      :icon="CopyDocument"
-      link
-      size="small"
-      class="tool-fallback-copy"
-      @click="handleFallbackCopy"
-    >
-      复制
-    </el-button>
+  <div v-else-if="!hidePlainJson || (isSaveFile && mediaInfo)" class="tool-fallback-result">
+    <template v-if="!hidePlainJson">
+      <pre class="tool-fallback-pre">{{ fallbackText }}</pre>
+      <el-button
+        :icon="CopyDocument"
+        link
+        size="small"
+        class="tool-fallback-copy"
+        @click="handleFallbackCopy"
+      >
+        复制
+      </el-button>
+    </template>
     <!-- 文件结果：在返回数据下方追加预览/下载 -->
     <div v-if="isSaveFile && mediaInfo" class="tool-media-result">
       <div class="media-inline-preview">

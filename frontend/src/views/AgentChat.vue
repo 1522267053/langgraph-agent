@@ -81,17 +81,36 @@ const chatRows = computed<ChatRow[]>(() =>
   buildChatRows(store.chatMessages, showStandaloneTyping.value)
 )
 
+// 展示开关：声明须在 rowVirtualizer 之前（estimateSize 闭包在 setup 期间同步求值）
+const showThinking = ref(true)
+// 工具调用：默认只显示富结果（文件/编辑/子Agent回复等），勾选后才显示入参与纯 JSON
+const showToolCalls = ref(false)
+// 结束节点输出按钮：默认不展示，右上角"展示"下拉勾选后显示
+const showEndOutput = ref(false)
+
 const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   get count() {
     return chatRows.value.length
   },
   getScrollElement: () => messagesContainer.value as HTMLDivElement | null,
-  estimateSize: (index: number) => estimateRowSize(chatRows.value[index]),
+  estimateSize: (index: number) =>
+    estimateRowSize(chatRows.value[index], {
+      showThinking: showThinking.value,
+      showToolCalls: showToolCalls.value
+    }),
   overscan: 8,
   getItemKey: (index: number) => chatRows.value[index]?.key ?? String(index)
 })
 
 const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
+
+// 展示开关改变行内内容高度：整体失效 virtualizer 尺寸缓存（行 key 不变，未挂载行
+// 的旧实测尺寸会残留导致滚动错位）；已挂载行由 ResizeObserver 重测，未挂载行回落
+// 到感知开关的新估算
+watch([showThinking, showToolCalls, showEndOutput], async () => {
+  await nextTick()
+  rowVirtualizer.value.measure()
+})
 
 const humanInputValue = ref('')
 
@@ -166,11 +185,6 @@ function saveDisplayPrefs() {
     })
   )
 }
-
-const showThinking = ref(true)
-const showToolCalls = ref(true)
-// 结束节点输出按钮：默认不展示，右上角"展示"下拉勾选后显示
-const showEndOutput = ref(false)
 
 loadDisplayPrefs()
 
