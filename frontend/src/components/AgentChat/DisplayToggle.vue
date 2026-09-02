@@ -3,7 +3,6 @@ import { View } from '@element-plus/icons-vue'
 
 const autoScroll = defineModel<boolean>('autoScroll', { default: true })
 const showThinking = defineModel<boolean>('showThinking', { default: true })
-const showToolCalls = defineModel<boolean>('showToolCalls', { default: true })
 const showEndOutput = defineModel<boolean>('showEndOutput', { default: false })
 </script>
 
@@ -23,10 +22,6 @@ const showEndOutput = defineModel<boolean>('showEndOutput', { default: false })
       <div class="display-toggle-item" @click="showThinking = !showThinking">
         <el-checkbox :model-value="showThinking" @click.prevent />
         <span>思考过程</span>
-      </div>
-      <div class="display-toggle-item" @click="showToolCalls = !showToolCalls">
-        <el-checkbox :model-value="showToolCalls" @click.prevent />
-        <span>工具调用</span>
       </div>
       <div class="display-toggle-item" @click="showEndOutput = !showEndOutput">
         <el-checkbox :model-value="showEndOutput" @click.prevent />

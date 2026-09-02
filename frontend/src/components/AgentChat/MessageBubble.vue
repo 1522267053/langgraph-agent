@@ -22,12 +22,15 @@ const props = defineProps<{
   /** 段在消息 segments 中的下标 */
   segmentIndex?: number
   showThinking: boolean
-  showToolCalls: boolean
   /** 是否显示结束节点输出按钮（右上角"展示"下拉控制） */
   showEndOutput: boolean
   isStreaming: boolean
   /** 是否为列表最后一条消息（流式指示器定位） */
   isLast: boolean
+  /** 工具块交互：本行是否为流式中的最新工具段（默认展开态判定） */
+  isLatestTool: boolean
+  /** 工具块交互：本行展开状态存取 key（虚拟行 key） */
+  expandKey: string
 }>()
 
 const emit = defineEmits<{
@@ -119,9 +122,10 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
           :is-msg-last-content="isMsgLastContent"
           :is-msg-thinking-in-progress="isMsgThinkingInProgress"
           :show-thinking="showThinking"
-          :show-tool-calls="showToolCalls"
           :is-streaming="segmentStreaming"
           :disable-actions="isStreaming"
+          :is-latest-tool="isLatestTool"
+          :expand-key="expandKey"
           @revert="dbMsgId => emit('revert', dbMsgId)"
         />
         <div v-if="showFooter && msg.total_tokens && !streamingActive" class="token-info">
@@ -147,7 +151,13 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
           v-if="showFooter && showEndOutput && msg.end_output && !streamingActive"
           class="end-output-row"
         >
-          <el-button link size="small" type="primary" :icon="Tickets" @click="endOutputVisible = true">
+          <el-button
+            link
+            size="small"
+            type="primary"
+            :icon="Tickets"
+            @click="endOutputVisible = true"
+          >
             结束输出
           </el-button>
         </div>
@@ -334,7 +344,6 @@ export default {
 }
 
 .end-output-row {
-  
 }
 
 .end-output-pre {

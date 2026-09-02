@@ -6,6 +6,7 @@
 
 import type { StreamingMessage } from '@/composables/useStreamingMessage'
 import type { Segment } from '@/types/segment'
+import { getToolExpandOverride } from '@/components/AgentChat/toolExpand'
 
 export type ChatRowKind = 'human' | 'summary' | 'typing' | 'ai'
 
@@ -23,6 +24,8 @@ export interface ChatRow {
   segmentIndex?: number
   /** 是否为列表最后一条消息（流式指示器定位） */
   isLast: boolean
+  /** 流式进行中时，列表最后一个 tool 段行自动展开（默认展开态的行级判定） */
+  isLatestTool?: boolean
 }
 
 /** 段级行 key：流式段用 genSegmentId，历史段用按 DB 行生成的确定性 id 兜底 */
@@ -33,10 +36,12 @@ export function getSegmentRowKey(msg: StreamingMessage, segment: Segment, idx: n
 /**
  * 将消息列表拍平为虚拟行
  * @param showStandaloneTyping 流式中但最后一条不是 AI 消息时，追加独立输入指示器行
+ * @param isStreaming 流式进行中时标记最后一个 tool 段行为最新工具（默认展开）
  */
 export function buildChatRows(
   chatMessages: StreamingMessage[],
-  showStandaloneTyping: boolean
+  showStandaloneTyping: boolean,
+  isStreaming: boolean
 ): ChatRow[] {
   const rows: ChatRow[] = []
 
@@ -76,13 +81,16 @@ export function buildChatRows(
   if (showStandaloneTyping) {
     rows.push({ key: 'typing', kind: 'typing', part: 'single', msg: null, isLast: true })
   }
+  if (isStreaming) {
+    const latestToolRow = rows.findLast(row => row.kind === 'ai' && row.segment?.type === 'tool')
+    if (latestToolRow) latestToolRow.isLatestTool = true
+  }
   return rows
 }
 
-/** 展示开关状态：影响行高估算（关闭时工具/思考段只剩头部） */
+/** 展示开关状态：影响行高估算（关闭时思考段只剩头部） */
 export interface RowSizePrefs {
   showThinking?: boolean
-  showToolCalls?: boolean
 }
 
 /** 行高初值：按段类型估值，头部/尾部行附加消息 chrome 高度，减少测量收敛迭代 */
@@ -104,9 +112,13 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
         case 'thinking':
           size = prefs?.showThinking === false ? 90 : 160
           break
-        case 'tool':
-          size = prefs?.showToolCalls === false ? 60 : 110
+        case 'tool': {
+          // 展开态判定与渲染层一致：手动操作覆盖 > 流式最新工具默认展开；
+          // 估值按实测校准（折叠头部约 50px，展开含入参约 150px）
+          const override = getToolExpandOverride(row.key)
+          size = (override ?? row.isLatestTool === true) ? 150 : 50
           break
+        }
         case 'todo':
           size = 280
           break

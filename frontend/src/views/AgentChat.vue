@@ -21,6 +21,7 @@ import DirectoryPickerDialog from '@/components/common/DirectoryPickerDialog.vue
 import ChatInput from '@/components/AgentChat/ChatInput.vue'
 import FlowPreviewCard from '@/components/common/FlowPreviewCard.vue'
 import { buildChatRows, estimateRowSize, type ChatRow } from '@/components/AgentChat/chatRow'
+import { clearToolExpandOverrides } from '@/components/AgentChat/toolExpand'
 import { useToolOutputStore } from '@/stores/toolOutput'
 import { useAutoScroll } from '@/composables/useAutoScroll'
 
@@ -78,13 +79,11 @@ const showStandaloneTyping = computed(() => {
 })
 
 const chatRows = computed<ChatRow[]>(() =>
-  buildChatRows(store.chatMessages, showStandaloneTyping.value)
+  buildChatRows(store.chatMessages, showStandaloneTyping.value, store.isStreaming)
 )
 
 // 展示开关：声明须在 rowVirtualizer 之前（estimateSize 闭包在 setup 期间同步求值）
 const showThinking = ref(true)
-// 工具调用：默认只显示富结果（文件/编辑/子Agent回复等），勾选后才显示入参与纯 JSON
-const showToolCalls = ref(false)
 // 结束节点输出按钮：默认不展示，右上角"展示"下拉勾选后显示
 const showEndOutput = ref(false)
 
@@ -95,19 +94,31 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   getScrollElement: () => messagesContainer.value as HTMLDivElement | null,
   estimateSize: (index: number) =>
     estimateRowSize(chatRows.value[index], {
-      showThinking: showThinking.value,
-      showToolCalls: showToolCalls.value
+      showThinking: showThinking.value
     }),
   overscan: 8,
   getItemKey: (index: number) => chatRows.value[index]?.key ?? String(index)
 })
+
+// [修复] 向上滚动历史时，已过视口的 Markdown 行会因代码高亮/KaTeX 异步渲染继续撑高，
+// virtual-core 默认在 backward 滚动时跳过重测滚动补偿（防 #1218 级联），导致视口下方
+// 内容被整体推移（滚动跳动）。此处复刻库默认规则但去掉 backward 跳过：
+// - 首测（估算→实测）：行顶在滚动位上方即补偿
+// - 重测：行整体在滚动位上方才补偿（横跨视口的行生长发生在锚点下方，不补偿以防拖动视口）
+// 注意：回调在 itemSizeCache.set 之前调用，可用 has() 判定是否首测
+rowVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+  const offset = (instance.scrollOffset ?? 0) + instance.scrollAdjustments
+  return !instance.itemSizeCache.has(item.key)
+    ? item.start < offset
+    : item.start + item.size <= offset
+}
 
 const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
 
 // 展示开关改变行内内容高度：整体失效 virtualizer 尺寸缓存（行 key 不变，未挂载行
 // 的旧实测尺寸会残留导致滚动错位）；已挂载行由 ResizeObserver 重测，未挂载行回落
 // 到感知开关的新估算
-watch([showThinking, showToolCalls, showEndOutput], async () => {
+watch([showThinking, showEndOutput], async () => {
   await nextTick()
   rowVirtualizer.value.measure()
 })
@@ -166,7 +177,6 @@ function loadDisplayPrefs() {
       const prefs = JSON.parse(raw)
       if (typeof prefs.autoScroll === 'boolean') autoScroll.value = prefs.autoScroll
       if (typeof prefs.showThinking === 'boolean') showThinking.value = prefs.showThinking
-      if (typeof prefs.showToolCalls === 'boolean') showToolCalls.value = prefs.showToolCalls
       if (typeof prefs.showEndOutput === 'boolean') showEndOutput.value = prefs.showEndOutput
     }
   } catch {
@@ -180,7 +190,6 @@ function saveDisplayPrefs() {
     JSON.stringify({
       autoScroll: autoScroll.value,
       showThinking: showThinking.value,
-      showToolCalls: showToolCalls.value,
       showEndOutput: showEndOutput.value
     })
   )
@@ -188,7 +197,7 @@ function saveDisplayPrefs() {
 
 loadDisplayPrefs()
 
-watch([autoScroll, showThinking, showToolCalls, showEndOutput], saveDisplayPrefs)
+watch([autoScroll, showThinking, showEndOutput], saveDisplayPrefs)
 
 watch(
   () => route.params.id,
@@ -196,6 +205,7 @@ watch(
     const id = newId ? parseInt(newId as string) : null
     if (id === agentId.value) return
 
+    clearToolExpandOverrides()
     let targetId = id
     if (!targetId) {
       // 优先级：上次使用(需验证仍存在) > localStorage 默认 > 内置 Agent
@@ -860,7 +870,6 @@ function handleRejectTools() {
         <DisplayToggle
           v-model:auto-scroll="autoScroll"
           v-model:show-thinking="showThinking"
-          v-model:show-tool-calls="showToolCalls"
           v-model:show-end-output="showEndOutput"
         />
         <el-tooltip content="记忆" placement="bottom">
@@ -929,7 +938,6 @@ function handleRejectTools() {
             <MessageItem
               :row="chatRows[row.index] ?? null"
               :show-thinking="showThinking"
-              :show-tool-calls="showToolCalls"
               :show-end-output="showEndOutput"
               :is-streaming="store.isStreaming"
               @delete="handleDeleteMessage"
