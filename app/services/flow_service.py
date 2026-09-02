@@ -1728,7 +1728,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         """
         import time
 
-        from app.services.node_config_helper import (
+        from app.utils.node_config_helper import (
             fill_node_defaults,
             inject_llm_defaults,
         )

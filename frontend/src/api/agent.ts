@@ -2,7 +2,7 @@
  * Agent会话API
  * @description Agent会话相关的API接口，包含会话管理和流式聊天
  */
-import { get, post } from './index'
+import { get, post, put } from './index'
 import type { ApiResponse, ListResponse } from '@/types/common'
 import type {
   AgentFlow,
@@ -234,9 +234,24 @@ export const agentApi = {
   /**
    * 创建会话
    * @param agentId Agent ID
+   * @param workDir 可选，项目工作路径
    */
-  createSession(agentId: number) {
-    return post<AgentSession>(`/agent/${agentId}/sessions`)
+  createSession(agentId: number, workDir?: string) {
+    return post<AgentSession>(`/agent/${agentId}/sessions`, {
+      work_dir: workDir || null
+    })
+  },
+
+  /**
+   * 切换会话工作路径
+   * @param agentId Agent ID
+   * @param sessionId 会话ID
+   * @param workDir 新工作路径，空串/null 表示清除（回退默认目录）
+   */
+  updateWorkDir(agentId: number, sessionId: number, workDir: string | null) {
+    return put<AgentSession>(`/agent/${agentId}/sessions/${sessionId}/workdir`, {
+      work_dir: workDir
+    })
   },
 
   /**

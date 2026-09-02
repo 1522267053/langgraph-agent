@@ -82,6 +82,62 @@ async def derive_model_capabilities(
     return caps
 
 
+async def derive_model_runtime_meta(
+    db: AsyncSession, provider: str, model: str
+) -> Optional[dict]:
+    """按模型元数据（ai_model 表）推导运行时覆盖所需的模型级配置
+
+    供 Agent 聊天临时切换模型使用：capabilities（多模态开关）按 modalities.input
+    推导，context_length / max_tokens 取 limits，全部来自模型自身元数据，
+    不回退到全局默认配置。
+
+    Returns:
+        命中 ai_model 记录时返回
+        {"capabilities": {...}, "context_length": int, "max_tokens": int}
+        （int 为 0 表示元数据缺失，调用方应保留节点原值）；
+        未命中返回 None（调用方仅切换 model，其余保留节点原值）。
+    """
+    from app.models.ai_model import AIModel
+
+    if not provider or not model:
+        return None
+
+    query = select(AIModel).where(
+        AIModel.provider_id == provider,
+        AIModel.model_id == model,
+        AIModel.is_delete == 0,
+    )
+    result = await db.execute(query)
+    ai_model = result.scalar_one_or_none()
+    if not ai_model:
+        return None
+
+    capabilities = await derive_model_capabilities(db, provider, model)
+    has_caps = any(bool(v) for v in capabilities.values())
+    if not has_caps:
+        # ai_model 命中但 modalities 缺失：与 derive_model_capabilities 的全 False
+        # 基线不同，这里保留节点原 capabilities 更安全，视为未命中
+        return None
+
+    limits = ai_model.limits or {}
+    context_length = 0
+    max_tokens = 0
+    if isinstance(limits, dict):
+        try:
+            context_length = int(limits.get("context") or 0)
+        except (TypeError, ValueError):
+            context_length = 0
+        try:
+            max_tokens = int(limits.get("output") or 0)
+        except (TypeError, ValueError):
+            max_tokens = 0
+    return {
+        "capabilities": capabilities,
+        "context_length": context_length,
+        "max_tokens": max_tokens,
+    }
+
+
 async def inject_llm_defaults(
     base_config: dict,
     global_cfg: dict,

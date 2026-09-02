@@ -7,6 +7,8 @@ import { ElMessage, ElMessageBox, ElImageViewer } from 'element-plus'
 import type { ScrollbarDirection, ScrollbarInstance } from 'element-plus'
 import { Operation, Bottom, Notebook, Warning } from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
+import { flowApi } from '@/api/flow'
+import { aiProviderApi, type ModelInfo } from '@/api/ai_provider'
 import type { FlowIOField } from '@/types/flow'
 import DisplayToggle from '@/components/AgentChat/DisplayToggle.vue'
 import MemoryPanel from '@/components/AgentChat/MemoryPanel.vue'
@@ -15,6 +17,7 @@ import RunningToolBadge from '@/components/AgentChat/RunningToolBadge.vue'
 import ToolOutputDrawer from '@/components/AgentChat/ToolOutputDrawer.vue'
 import WelcomePage from '@/components/AgentChat/WelcomePage.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
+import DirectoryPickerDialog from '@/components/common/DirectoryPickerDialog.vue'
 import ChatInput from '@/components/AgentChat/ChatInput.vue'
 import FlowPreviewCard from '@/components/common/FlowPreviewCard.vue'
 import { buildChatRows, estimateRowSize, type ChatRow } from '@/components/AgentChat/chatRow'
@@ -214,6 +217,7 @@ watch(
     agentId.value = targetId
     store.cancelStream()
     store.sessionsLoading = true
+    loadModelSelection(targetId)
     try {
       await store.loadAgent(targetId)
       store.lastUsedAgentId = targetId
@@ -242,6 +246,120 @@ const chatInputRef = ref<InstanceType<typeof ChatInput>>()
 const showMemory = ref(false)
 /** 回退恢复信号：每次回退生成新对象，通知当前挂载的 ChatInput 恢复参数 */
 const restoreParamsSignal = ref<Record<string, unknown> | null>(null)
+
+// ---- 临时模型切换（仅同供应商内，capabilities 等由后端按 ai_model 元数据联动）----
+interface ChatModelOption {
+  value: string
+  label: string
+  multimodal: boolean
+}
+
+const MODEL_PREF_KEY = 'agent-chat-model'
+
+const modelOptions = ref<ChatModelOption[]>([])
+const defaultModelLabel = ref('')
+const selectedModel = ref('')
+/** 恢复 localStorage 偏好期间挂起持久化 watcher，防止切 Agent 时误删新 Agent 的偏好 */
+let restoringModelPref = false
+
+function loadStoredModel(id: number): string {
+  try {
+    const raw = localStorage.getItem(MODEL_PREF_KEY)
+    if (!raw) return ''
+    const map = JSON.parse(raw) as Record<string, string>
+    return typeof map[id] === 'string' ? map[id] : ''
+  } catch {
+    return ''
+  }
+}
+
+watch(selectedModel, model => {
+  if (restoringModelPref || !agentId.value) return
+  try {
+    const raw = localStorage.getItem(MODEL_PREF_KEY)
+    const map = raw ? (JSON.parse(raw) as Record<string, string>) : {}
+    if (model) map[agentId.value] = model
+    else delete map[agentId.value]
+    localStorage.setItem(MODEL_PREF_KEY, JSON.stringify(map))
+  } catch {
+    // ignore
+  }
+})
+
+/**
+ * 加载当前 Agent 可切换的模型列表（取 LLM 节点配置的供应商）并恢复上次选择；
+ * 失败时静默降级：下拉框隐藏、发送走 Agent 默认模型
+ */
+async function loadModelSelection(id: number) {
+  modelOptions.value = []
+  defaultModelLabel.value = ''
+  // 重置/恢复 selectedModel 都不触发持久化（watcher 为 pre-flush，nextTick 后才放行）
+  restoringModelPref = true
+  selectedModel.value = ''
+  try {
+    const res = await flowApi.get(id)
+    const llmNode = (res.data.data?.nodes || []).find(n => n.node_type === 'llm')
+    if (!llmNode?.base_config) return
+    const provider = String(llmNode.base_config.provider || '')
+    defaultModelLabel.value = String(llmNode.base_config.model || '')
+    if (!provider) return
+    const modelsRes = await aiProviderApi.getModels(provider)
+    modelOptions.value = (modelsRes.data.data || []).map((m: ModelInfo) => ({
+      value: m.model_id,
+      label: m.name,
+      multimodal: (m.modalities?.input || []).some(t =>
+        ['image', 'video', 'audio', 'pdf'].includes(t)
+      )
+    }))
+    const stored = loadStoredModel(id)
+    if (stored && modelOptions.value.some(o => o.value === stored)) {
+      selectedModel.value = stored
+    }
+  } catch {
+    // 模型列表加载失败不阻塞聊天
+  } finally {
+    await nextTick()
+    restoringModelPref = false
+  }
+}
+
+// ---- 会话级项目工作路径（对标 opencode session.directory）----
+// 有会话时以 currentSession.work_dir 为准，无会话时暂存到 pendingWorkDir，
+// 首次发消息创建会话时随 createSession 传入
+const workDirPickerVisible = ref(false)
+const pendingWorkDir = ref('')
+
+const currentWorkDir = computed(() =>
+  store.currentSession ? store.currentSession.work_dir || '' : pendingWorkDir.value
+)
+
+function handleSelectWorkDir(): void {
+  if (store.isStreaming) {
+    ElMessage.warning({ message: '请等待回复完成', duration: 5000 })
+    return
+  }
+  workDirPickerVisible.value = true
+}
+
+async function handleWorkDirConfirm(path: string): Promise<void> {
+  const session = store.currentSession
+  if (session) {
+    try {
+      const res = await agentApi.updateWorkDir(agentId.value!, session.id, path || null)
+      if (res.data.code === 1 && res.data.data) {
+        session.work_dir = res.data.data.work_dir
+        ElMessage.success({
+          message: path ? '工作目录已切换' : '已清除，回退默认目录',
+          duration: 5000
+        })
+      }
+    } catch {
+      // error handled by interceptor
+    }
+    return
+  }
+  pendingWorkDir.value = path
+}
 
 onMounted(async () => {
   toolOutputStore.registerWsHandler()
@@ -284,6 +402,7 @@ onMounted(async () => {
     store.sessionsLoading = true
     await store.loadAgent(agentId.value)
     store.lastUsedAgentId = agentId.value
+    loadModelSelection(agentId.value)
     await store.loadSessions(agentId.value)
     if (sessionId) {
       const target = store.sessions.find(s => s.id === parseInt(sessionId))
@@ -526,11 +645,11 @@ async function handleChatSend(
   message: string
 ) {
   if (!store.currentSession) {
-    const session = await store.createSession(agentId.value!)
+    const session = await store.createSession(agentId.value!, currentWorkDir.value || undefined)
     if (!session) return
     await store.selectSession(agentId.value!, session)
   }
-  store.sendMessage(message, params, attachedFiles)
+  store.sendMessage(message, params, attachedFiles, selectedModel.value || undefined)
   await nextTick()
   scrollToBottom()
 }
@@ -909,6 +1028,7 @@ function handleRejectTools() {
       <ChatInput
         ref="chatInputRef"
         v-model:input-message="inputMessage"
+        v-model:selected-model="selectedModel"
         :fields="dynamicFields"
         :is-streaming="store.isStreaming"
         :is-stopping="store.isStopping"
@@ -917,15 +1037,25 @@ function handleRejectTools() {
         :latest-prompt-tokens="store.latestPromptTokens"
         :plan-mode="store.planMode"
         :restore-params="restoreParamsSignal"
+        :model-options="modelOptions"
+        :default-model-label="defaultModelLabel"
+        :work-dir="currentWorkDir"
         @send="handleChatSend"
         @stop="handleStop"
         @toggle-plan-mode="store.togglePlanMode"
         @restore-consumed="restoreParamsSignal = null"
+        @select-workdir="handleSelectWorkDir"
+        @clear-workdir="handleWorkDirConfirm('')"
       />
     </div>
 
     <MemoryPanel v-model:visible="showMemory" :agent-id="agentId" />
     <ToolOutputDrawer />
+    <DirectoryPickerDialog
+      v-model="workDirPickerVisible"
+      :initial-path="currentWorkDir"
+      @confirm="handleWorkDirConfirm"
+    />
 
     <Teleport to="body">
       <el-image-viewer

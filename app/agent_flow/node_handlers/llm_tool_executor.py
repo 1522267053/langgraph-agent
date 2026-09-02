@@ -14,6 +14,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -141,6 +142,37 @@ def _tool_call_fingerprint(tool_call: ToolCall) -> str:
     return f"{name}:{hashlib.md5(args_key.encode('utf-8')).hexdigest()}"
 
 
+async def _resolve_session_work_dir(
+    session_id: int,
+    db_session_factory: Optional[Callable[[], AsyncSession]],
+) -> Optional[Path]:
+    """读取会话级项目工作路径（AgentSession.work_dir，用户在聊天页选择）
+
+    目录已被删除/不可访问时回退 None（由调用方使用 Agent 默认工作目录）并告警。
+    """
+    if session_id <= 0 or not db_session_factory:
+        return None
+    from app.models.agent_session import AgentSession
+
+    try:
+        async with db_session_factory() as db:
+            session = await db.get(AgentSession, session_id)
+    except Exception as e:
+        logger.warning("读取会话工作路径失败 session_id=%s: %s", session_id, e)
+        return None
+    if not session or not session.work_dir:
+        return None
+    work_dir = Path(session.work_dir)
+    if not work_dir.is_dir():
+        logger.warning(
+            "会话工作路径不存在，回退 Agent 默认工作目录: %s (session_id=%s)",
+            session.work_dir,
+            session_id,
+        )
+        return None
+    return work_dir
+
+
 async def setup_tool_handlers(
     node: FlowNode,
     state: FlowState,
@@ -152,7 +184,8 @@ async def setup_tool_handlers(
     db_session_factory: Optional[Callable[[], AsyncSession]],
     handler_registry: dict,
     emit_fn: Optional[Callable] = None,
-) -> tuple[list[BaseTool], list[str]]:
+    session_id: int = 0,
+) -> tuple[list[BaseTool], list[str], list[str]]:
     """单次遍历工具节点，完成三件事：
 
     1. 注入处理器依赖（_agent_id, _writer, _resolve_context, _llm_config）
@@ -169,19 +202,26 @@ async def setup_tool_handlers(
         db_session_factory: 数据库会话工厂
         handler_registry: 工具处理器注册表
         emit_fn: 事件发送回调
+        session_id: 会话 ID（Agent 模式，用于读取会话级项目工作路径）
 
     Returns:
-        (工具列表, prompt 提示片段列表)
+        (工具列表, prompt 提示片段列表, 运行时提醒片段列表)
+        第三项来自各工具 handler 的 get_runtime_reminder（动态内容），
+        供消息层 <system-reminder> 拼装，按 handler 实例去重
     """
     tools: list[BaseTool] = []
     prompt_hints: list[tuple[int, int, str]] = []
+    runtime_reminders: list[str] = []
 
     if not flow or not db_session_factory:
-        return tools, [h for _, _, h in prompt_hints]
+        return tools, [h for _, _, h in prompt_hints], runtime_reminders
 
     # 获取工具节点 + 边对，按意图条件过滤
     tool_edge_pairs = get_connected_tool_edges(flow, node.node_key)
     tool_edge_pairs = filter_tools_by_intent(tool_edge_pairs, state)
+
+    # 会话级项目工作路径（仅 Agent 模式，用户在聊天页选择；空则用 Agent 默认目录）
+    session_work_dir = await _resolve_session_work_dir(session_id, db_session_factory)
 
     # LLM 配置注入到工具处理器
     llm_config = {
@@ -193,6 +233,9 @@ async def setup_tool_handlers(
     }
     flow_id = getattr(flow, "id", None)
     flow_type = getattr(flow, "flow_type", "")
+    # 已收集运行时提醒的 handler 实例（registry 为单例，同一 handler 服务多个
+    # 工具节点时只收集一次）
+    reminder_collected_handlers: set[int] = set()
     for idx, (tool_node, _edge) in enumerate(tool_edge_pairs):
         handler = handler_registry.get(tool_node.node_type)
         if not handler:
@@ -203,12 +246,13 @@ async def setup_tool_handlers(
             handler._agent_id = flow_id
 
         # 注入 _working_dir（仅 Agent 类型，Shell 节点用作 cwd）
+        # 优先级：会话级项目工作路径 > Agent 默认工作目录
         if (
             hasattr(handler, "_working_dir")
             and flow_type == "agent"
             and flow_id is not None
         ):
-            handler._working_dir = get_agent_work_dir(flow_id)
+            handler._working_dir = session_work_dir or get_agent_work_dir(flow_id)
 
         # 注入 _media_caps（file_read 可自动注入的媒体类型，模型能力×适配器交集）
         if hasattr(handler, "_media_caps"):
@@ -252,6 +296,13 @@ async def setup_tool_handlers(
                 priority = _HINT_PRIORITY.get(tool_node.node_type, 1)
                 prompt_hints.append((priority, idx, hint))
 
+        # 收集运行时提醒（动态内容，按 handler 实例去重，注入前依赖已在循环内完成）
+        if id(handler) not in reminder_collected_handlers:
+            reminder_collected_handlers.add(id(handler))
+            reminder = await handler.get_runtime_reminder(tool_node)
+            if reminder:
+                runtime_reminders.append(reminder)
+
     # 按优先级排序：静态内容靠前，动态内容（如记忆）靠后，利于 LLM 缓存命中
     prompt_hints.sort(key=lambda x: (x[0], x[1]))
 
@@ -279,7 +330,7 @@ async def setup_tool_handlers(
             seen_names.add(tool.name)
             unique_tools.append(tool)
 
-    return unique_tools, [h for _, _, h in prompt_hints]
+    return unique_tools, [h for _, _, h in prompt_hints], runtime_reminders
 
 
 async def handle_tool_calls(

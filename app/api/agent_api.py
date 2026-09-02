@@ -12,7 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
 from app.models.flow import FlowType
-from app.services.agent_executor_service import agent_executor_service
+from app.services.agent_executor_service import (
+    agent_executor_service,
+    normalize_work_dir,
+)
 from app.services.builtin_agent_service import builtin_agent_service
 from app.services.flow_service import flow_service
 from app.services.interrupt_service import interrupt_service
@@ -23,6 +26,8 @@ from app.schemas.agent_schema import (
     AgentSessionResponse,
     AgentSessionListResponse,
     AgentSessionPageRequest,
+    AgentSessionCreateRequest,
+    AgentSessionWorkDirRequest,
     AgentMessageResponse,
     AgentMessageListResponse,
     AgentMessagePageRequest,
@@ -146,15 +151,50 @@ class AgentApi:
             response_model=ApiResponse[AgentSessionResponse],
             summary="创建新会话",
         )
-        async def create_session(id: int, db: AsyncSession = Depends(get_db)):
-            """创建新会话"""
+        async def create_session(
+            id: int,
+            req: Optional[AgentSessionCreateRequest] = None,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """创建新会话，可选携带项目工作路径"""
             flow = await flow_service.get_by_id(db, id)
             if not flow or flow.flow_type != FlowType.AGENT.value:
                 return ApiResponse.error(msg="Agent不存在")
 
-            session = await agent_executor_service.create_session(db, id)
+            try:
+                work_dir = normalize_work_dir(req.work_dir if req else None)
+            except ValueError as exc:
+                return ApiResponse.error(msg=str(exc))
+
+            session = await agent_executor_service.create_session(
+                db, id, work_dir=work_dir
+            )
             return ApiResponse.success(
                 data=AgentSessionResponse.model_validate(session), msg="创建成功"
+            )
+
+        @self.router.put(
+            "/{id}/sessions/{session_id}/workdir",
+            response_model=ApiResponse[AgentSessionResponse],
+            summary="切换会话工作路径",
+        )
+        async def update_work_dir(
+            id: int,
+            session_id: int,
+            req: AgentSessionWorkDirRequest,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """中途切换会话的项目工作路径；work_dir 为空表示清除（回退默认目录）"""
+            try:
+                session = await agent_executor_service.update_work_dir(
+                    db, session_id, req.work_dir
+                )
+            except ValueError as exc:
+                return ApiResponse.error(msg=str(exc))
+            if not session:
+                return ApiResponse.error(msg="会话不存在")
+            return ApiResponse.success(
+                data=AgentSessionResponse.model_validate(session), msg="更新成功"
             )
 
         @self.router.get(
@@ -231,7 +271,7 @@ class AgentApi:
             """启动后台执行，事件通过 /events 独立订阅。"""
             try:
                 run_id = agent_executor_service.start_chat_run(
-                    session_id, request.content, request.params
+                    session_id, request.content, request.params, model=request.model
                 )
             except ValueError as exc:
                 return ApiResponse.error(msg=str(exc))

@@ -22,7 +22,7 @@ from app.models.flow_node import FlowNode, NodeType
 from app.models.skill import Skill
 from app.services.flow_service import flow_service, DEFAULT_AGENT_INPUT_SCHEMA
 from app.services.global_config_service import global_config_service
-from app.services.node_config_helper import fill_node_defaults
+from app.utils.node_config_helper import fill_node_defaults
 from app.schemas.flow_schema import FlowCreate
 from app.schemas.flow_node_schema import FlowNodeCreate
 from app.schemas.flow_edge_schema import FlowEdgeCreate
@@ -483,7 +483,7 @@ class BuiltinAgentService:
             }
         """
         from app.models.ai_model import AIModel
-        from app.services.node_config_helper import derive_model_capabilities
+        from app.utils.node_config_helper import derive_model_capabilities
 
         caps = await derive_model_capabilities(db, provider, model)
         metadata = {"capabilities": caps, "max_tokens": 0, "context_length": 0}

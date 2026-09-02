@@ -26,6 +26,23 @@ class AgentSessionUpdate(BaseModel):
     title: Optional[str] = Field(default=None, description="会话标题")
 
 
+class AgentSessionCreateRequest(BaseModel):
+    """创建Agent会话请求"""
+
+    work_dir: Optional[str] = Field(
+        default=None, description="项目工作路径（可选，空则使用 Agent 默认工作目录）"
+    )
+
+
+class AgentSessionWorkDirRequest(BaseModel):
+    """更新会话工作路径请求"""
+
+    work_dir: Optional[str] = Field(
+        default=None,
+        description="项目工作路径（None/空串表示清除，回退 Agent 默认工作目录）",
+    )
+
+
 class AgentSessionResponse(AgentSessionBase):
     """Agent会话响应"""
 
@@ -34,6 +51,7 @@ class AgentSessionResponse(AgentSessionBase):
     id: int = Field(..., description="会话ID")
     flow_id: int = Field(..., description="关联的Agent Flow ID")
     status: int = Field(..., description="状态：1=活跃，0=已归档")
+    work_dir: Optional[str] = Field(default=None, description="项目工作路径")
     created_at: Optional[ChinaDateTime] = Field(
         default=None,
         validation_alias=AliasChoices("created_at", "create_time"),
@@ -102,6 +120,10 @@ class AgentChatRequest(BaseModel):
 
     content: str = Field(..., description="用户消息内容")
     params: dict = Field(default_factory=dict, description="扩展参数（含文件字段）")
+    model: Optional[str] = Field(
+        default=None,
+        description="临时覆盖 LLM 模型（仅同供应商内切换，capabilities 等随模型元数据联动）",
+    )
 
 
 class AgentResumeRequest(BaseModel):

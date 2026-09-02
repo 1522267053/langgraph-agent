@@ -2054,11 +2054,6 @@ class ShellNodeHandler(BaseNodeHandler):
         """返回临时文件目录说明和文件工具使用指南，追加到 LLM system_prompt"""
         cfg = self._get_config(node)
         configured_dir, configured_warn = self._configured_workdir(cfg)
-        working_dir = (
-            configured_dir
-            if configured_dir is not None
-            else self._resolve_working_dir()
-        )
         temp_dir = get_temp_dir()
         ps_compat_hint = (
             (
@@ -2132,10 +2127,26 @@ class ShellNodeHandler(BaseNodeHandler):
                 "用完无需手动删除"
             )
         ]
-        if working_dir is not None:
+        if configured_dir is not None:
             lines.append(
-                f"默认工作目录: `{working_dir}`，Shell 未传 workdir 时在此目录下执行，文件操作优先使用此目录"
+                f"默认工作目录: `{configured_dir}`（节点 default_workdir 配置，"
+                "优先于会话/Agent 工作目录），Shell 未传 workdir 时在此目录下执行"
             )
         if configured_warn:
             lines.append(f"⚠️ {configured_warn}，已回退默认工作目录")
         return "\n".join(lines)
+
+    async def get_runtime_reminder(self, node: FlowNode) -> Optional[str]:
+        """返回动态工作目录提醒，拼入消息层 <system-reminder>
+
+        仅输出会话/Agent 级动态目录（llm_tool_executor 注入的 _working_dir，
+        用户可在聊天页中途切换）；节点级 default_workdir 为设计期静态配置，
+        由 get_system_prompt_hint 静态说明。
+        """
+        resolved = self._resolve_working_dir()
+        if resolved is None:
+            return None
+        return (
+            f"默认工作目录: `{resolved}`，Shell 未传 workdir 参数时在此目录下执行，"
+            "文件操作优先使用此目录"
+        )

@@ -288,7 +288,7 @@ class FlowNodeApi(
         """为 LLM 节点注入全局默认配置（仅回填空字段 + 按模型推导 capabilities）"""
         if node_type not in ("llm", "intent_router") or base_config is None:
             return base_config
-        from app.services.node_config_helper import inject_llm_defaults
+        from app.utils.node_config_helper import inject_llm_defaults
 
         global_cfg = await global_config_service.get_default_llm_config(db)
         return await inject_llm_defaults(

@@ -15,6 +15,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field as dataclass_field
+from pathlib import Path
 from typing import Optional, AsyncGenerator, Awaitable, Callable, Dict, Any, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -24,6 +25,7 @@ from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.flow import Flow, FlowType
+from app.models.flow_node import NodeType
 from app.models.agent_session import AgentSession
 from app.models.agent_message import AgentMessage
 from app.agent_flow.flow_context import FlowContext
@@ -44,6 +46,25 @@ def format_exception_message(e: BaseException) -> str:
     """格式化异常信息，str() 为空时回退到 repr() 以保留异常类名。"""
     msg = str(e).strip()
     return msg if msg else repr(e)
+
+
+def normalize_work_dir(work_dir: Optional[str]) -> Optional[str]:
+    """校验并规范化会话工作路径
+
+    None/空串返回 None（表示未设置）；路径不存在或不是目录时抛 ValueError；
+    有效路径返回 resolve() 后的规范化绝对路径。
+    """
+    if work_dir is None:
+        return None
+    stripped = work_dir.strip()
+    if not stripped:
+        return None
+    path = Path(stripped).expanduser()
+    if not path.exists():
+        raise ValueError(f"路径不存在: {stripped}")
+    if not path.is_dir():
+        raise ValueError(f"路径不是目录: {stripped}")
+    return str(path.resolve())
 
 
 _RUN_END_EVENT_TYPES = frozenset({"error", "flow_done", "waiting_human"})
@@ -361,6 +382,7 @@ class AgentExecutorService(BaseExecutorService):
         user_message: str,
         params: dict | None = None,
         *,
+        model: str | None = None,
         approval_callback: Callable[[dict[str, Any]], None] | None = None,
         event_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
@@ -371,6 +393,7 @@ class AgentExecutorService(BaseExecutorService):
                 session_id,
                 user_message,
                 dict(params or {}),
+                model=model,
                 _managed_run=True,
             ),
             approval_callback=approval_callback,
@@ -699,14 +722,31 @@ class AgentExecutorService(BaseExecutorService):
         return sessions, total
 
     async def create_session(
-        self, db: AsyncSession, flow_id: int, gateway_id: Optional[int] = None
+        self,
+        db: AsyncSession,
+        flow_id: int,
+        gateway_id: Optional[int] = None,
+        work_dir: Optional[str] = None,
     ) -> AgentSession:
         """创建新会话（公开方法）
 
         Args:
             gateway_id: 可选，由 网关触发创建时传入，用于区分 网关会话与用户聊天会话
+            work_dir: 可选，会话级项目工作路径（需先经 normalize_work_dir 校验）
         """
-        return await self._create_session(db, flow_id, gateway_id)
+        return await self._create_session(db, flow_id, gateway_id, work_dir=work_dir)
+
+    async def update_work_dir(
+        self, db: AsyncSession, session_id: int, work_dir: Optional[str]
+    ) -> Optional[AgentSession]:
+        """更新会话工作路径；work_dir 为 None/空串时清除（回退 Agent 默认工作目录）"""
+        session = await self._get_session(db, session_id)
+        if not session:
+            return None
+        session.work_dir = normalize_work_dir(work_dir)
+        await db.commit()
+        await db.refresh(session)
+        return session
 
     async def get_or_create_sub_agent_session(
         self,
@@ -965,6 +1005,7 @@ class AgentExecutorService(BaseExecutorService):
         gateway_id: Optional[int] = None,
         parent_session_id: Optional[int] = None,
         parent_node_key: Optional[str] = None,
+        work_dir: Optional[str] = None,
     ) -> AgentSession:
         """创建新会话"""
         session = AgentSession(
@@ -974,6 +1015,7 @@ class AgentExecutorService(BaseExecutorService):
             gateway_id=gateway_id,
             parent_session_id=parent_session_id,
             parent_node_key=parent_node_key,
+            work_dir=work_dir,
         )
         db.add(session)
         await db.commit()
@@ -1157,6 +1199,7 @@ class AgentExecutorService(BaseExecutorService):
         user_message: str,
         params: dict | None = None,
         *,
+        model: str | None = None,
         _managed_run: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
@@ -1166,6 +1209,7 @@ class AgentExecutorService(BaseExecutorService):
             session_id: 会话ID
             user_message: 用户消息
             params: 额外参数
+            model: 临时覆盖 LLM 模型（仅同供应商内，capabilities 等按模型元数据联动）
 
         Yields:
             SSE事件字典
@@ -1231,6 +1275,32 @@ class AgentExecutorService(BaseExecutorService):
                 yield FlowEventFactory.error(str(e))
                 logger.exception(e)
                 return
+
+            # 临时模型覆盖（仅同供应商内切换）：改的是本次从 DB 加载的内存副本，
+            # expunge 摘除 ORM 变更跟踪，防止后续 commit 把覆盖值写回 flow_node 表；
+            # capabilities/context_length/max_tokens 按模型元数据联动，不回退全局默认
+            if model:
+                from app.utils.node_config_helper import derive_model_runtime_meta
+
+                for node in flow.nodes or []:
+                    if node.node_type != NodeType.LLM.value:
+                        continue
+                    # 与节点已配置模型相同：视为未切换，跳过覆盖以保留手动定制
+                    if (node.base_config or {}).get("model") == model:
+                        continue
+                    db.expunge(node)
+                    cfg = dict(node.base_config or {})
+                    cfg["model"] = model
+                    meta = await derive_model_runtime_meta(
+                        db, cfg.get("provider") or "", model
+                    )
+                    if meta:
+                        cfg["capabilities"] = meta["capabilities"]
+                        if meta["context_length"]:
+                            cfg["context_length"] = meta["context_length"]
+                        if meta["max_tokens"]:
+                            cfg["max_tokens"] = meta["max_tokens"]
+                    node.base_config = cfg
 
             # 检查是否首次对话（用于自动生成标题）
             existing_messages = await self._get_messages(db, session_id, 1)
@@ -1707,9 +1777,7 @@ class AgentExecutorService(BaseExecutorService):
                 # 发送完成事件（携带结束节点输出，前端按钮展示 + 持久化到 AI 消息）
                 is_interrupted = interrupt_service.is_agent_interrupted(session_id)
                 end_output = (
-                    {}
-                    if is_interrupted
-                    else self._filter_end_output(resume_end_output)
+                    {} if is_interrupted else self._filter_end_output(resume_end_output)
                 )
                 await self._save_end_output_to_message(db, session_id, end_output)
                 # ---- WebSocket 广播（resume 完成通知）----

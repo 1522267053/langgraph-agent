@@ -39,6 +39,12 @@ class AgentSession(DbBaseModel):
     parent_node_key: Mapped[Optional[str]] = mapped_column(
         String(100), nullable=True, default=None, comment="创建该子会话的节点key"
     )
+    work_dir: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
+        default=None,
+        comment="项目工作路径（规范化绝对路径），空则使用 Agent 默认工作目录",
+    )
 
     def __repr__(self) -> str:
         return (

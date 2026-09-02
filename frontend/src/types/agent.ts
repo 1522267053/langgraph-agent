@@ -39,6 +39,8 @@ export interface AgentSession extends BaseEntity {
   title: string
   /** 会话状态 */
   status: number
+  /** 项目工作路径（空则使用 Agent 默认工作目录） */
+  work_dir?: string | null
   /** 创建时间 */
   created_at?: string
   /** 更新时间 */
@@ -116,6 +118,8 @@ export interface AgentDeleteMessagesResult {
 export interface AgentChatRequest {
   content: string
   params?: Record<string, unknown>
+  /** 临时覆盖 LLM 模型（仅同供应商内切换，capabilities 等由后端按模型元数据联动） */
+  model?: string
 }
 
 /** Agent恢复请求（人工交互后继续） */
