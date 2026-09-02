@@ -414,6 +414,14 @@ _SUBPROCESS_WINDOW_FLAGS = (
     else {}
 )
 
+# POSIX 下为子进程创建独立会话（等价 setsid）：子进程成为独立进程组长，
+# 超时/取消时 os.killpg 只清杀命令树，不会误伤后端自身所在进程组。
+# 若缺失此参数，killpg(getpgid(pid)) 会连 uvicorn 一起 SIGKILL，导致整个服务假死。
+# Windows 无此参数（POSIX-only），必须缺省。
+_SUBPROCESS_SESSION_FLAGS = (
+    {} if platform.system() == "Windows" else {"start_new_session": True}
+)
+
 
 async def _create_subprocess(
     command: str,
@@ -437,6 +445,7 @@ async def _create_subprocess(
         env=env,
         cwd=str(cwd) if cwd else None,
         **_SUBPROCESS_WINDOW_FLAGS,
+        **_SUBPROCESS_SESSION_FLAGS,
     )
 
 
@@ -804,7 +813,13 @@ async def _force_kill_process_tree(process: asyncio.subprocess.Process) -> None:
         else:
             import signal
 
-            os.killpg(os.getpgid(pid), signal.SIGKILL)  # type: ignore
+            # 防御兜底：仅当子进程拥有独立进程组（start_new_session）时才整组清杀；
+            # 若与后端自身同组，killpg 会连 uvicorn 一起 SIGKILL，必须退回单杀
+            pgid = os.getpgid(pid)
+            if pgid != os.getpgid(0):
+                os.killpg(pgid, signal.SIGKILL)  # type: ignore
+            else:
+                process.kill()
     except Exception:
         try:
             process.kill()
