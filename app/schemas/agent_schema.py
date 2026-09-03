@@ -145,6 +145,9 @@ class AgentMessagePageRequest(BaseModel):
     before_id: Optional[int] = Field(
         default=None, description="分页游标，获取此ID之前的消息"
     )
+    after_id: Optional[int] = Field(
+        default=None, description="增量游标，获取此ID之后的消息"
+    )
     limit: int = Field(default=20, ge=1, le=100, description="每页条数")
 
 

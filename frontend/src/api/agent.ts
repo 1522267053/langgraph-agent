@@ -300,10 +300,18 @@ export const agentApi = {
    * @param sessionId 会话ID
    * @param beforeId 分页游标，获取此ID之前的消息
    * @param limit 每页数量
+   * @param afterId 增量游标，获取此ID之后的消息
    */
-  getMessages(agentId: number, sessionId: number, beforeId?: number, limit: number = 20) {
+  getMessages(
+    agentId: number,
+    sessionId: number,
+    beforeId?: number,
+    limit: number = 20,
+    afterId?: number
+  ) {
     const params: Record<string, number> = { limit }
     if (beforeId !== undefined) params.before_id = beforeId
+    if (afterId !== undefined) params.after_id = afterId
     return post<ListResponse<AgentMessage>>(
       `/agent/${agentId}/sessions/${sessionId}/messages/page`,
       params

@@ -250,7 +250,11 @@ class AgentApi:
         ):
             """获取会话的消息历史，支持分页加载"""
             messages, total = await agent_executor_service.get_messages(
-                db, session_id, limit=req.limit, before_id=req.before_id
+                db,
+                session_id,
+                limit=req.limit,
+                before_id=req.before_id,
+                after_id=req.after_id,
             )
             message_list = []
             for m in messages:
