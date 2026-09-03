@@ -1,4 +1,5 @@
 import { onScopeDispose, ref, watch, type Ref, type WatchSource } from 'vue'
+import { AUTO_SCROLL_THROTTLE_MS } from '@/constants/timing'
 
 interface UseAutoScrollOptions {
   threshold?: number
@@ -25,7 +26,7 @@ export function useAutoScroll(
   watchSources: WatchSource[],
   options: UseAutoScrollOptions = {}
 ) {
-  const { threshold = 50, throttleMs = 200, gestureWindowMs = 500 } = options
+  const { threshold = 50, throttleMs = AUTO_SCROLL_THROTTLE_MS, gestureWindowMs = 500 } = options
   const autoScroll = ref(true)
   const isAtBottom = ref(true)
   const userScrolledUp = ref(false)

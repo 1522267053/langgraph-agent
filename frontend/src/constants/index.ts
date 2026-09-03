@@ -14,3 +14,6 @@ export * from './nodeTypes'
 
 // 状态枚举配置
 export * from './status'
+
+// 统一时间常量
+export * from './timing'
