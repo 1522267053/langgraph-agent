@@ -46,6 +46,16 @@ export const useAgentStore = defineStore('agent', () => {
   const messages = ref<AgentMessage[]>([])
   // SSE 结束后从接口回载消息完成的版本号，供聊天页面在渲染后同步滚动。
   const messageRefreshVersion = ref(0)
+  // 流式开始时本地已提交的最大 DB 消息 id：SSE 结束合并时用于识别「本轮新增」DB 行，
+  // 与尾部流式占位行（user-/streaming-）按 role 匹配后仅回填元数据，避免占位气泡重挂
+  let streamBaseMsgId = 0
+
+  function markStreamBaseMsgId(): void {
+    streamBaseMsgId = 0
+    for (const m of messages.value) {
+      if (m.id > streamBaseMsgId) streamBaseMsgId = m.id
+    }
+  }
 
   // ========== 消息分页状态 ==========
   const messageTotal = ref(0)
@@ -226,6 +236,7 @@ export const useAgentStore = defineStore('agent', () => {
         currentSession.value = null
         messages.value = []
         clearMessages()
+        streamBaseMsgId = 0
       }
       await loadSessions(agentId, 1)
     } catch {
@@ -240,6 +251,7 @@ export const useAgentStore = defineStore('agent', () => {
     const selectionVersion = ++sessionSelectionVersion
     messagesLoading.value = true
     clearMessages()
+    streamBaseMsgId = 0
     cancelStream()
     stopCompressPolling()
     isCompressing.value = false
@@ -644,49 +656,85 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   /**
-   * 按位置 + 类型过继旧分段 id：流式分段带 genSegmentId，回合结束重建时优先保留
-   * 原 key（即使重建分段已带确定性 id），避免段行 key 变化触发 markdown/hljs 全量重挂
-   */
-  function inheritSegmentIds(existing: StreamingMessage, rebuilt: StreamingMessage): void {
-    for (let i = 0; i < rebuilt.segments.length && i < existing.segments.length; i++) {
-      const prev = existing.segments[i]
-      const next = rebuilt.segments[i]
-      if (prev.type === next.type && prev.id) {
-        next.id = prev.id
-      }
-    }
-  }
-
-  /**
-   * 从历史消息就地 diff 更新聊天消息列表（不 clearMessages，保留 Vue DOM 稳定性）
+   * 从历史消息合并更新聊天消息列表（按 dbMsgId 对齐，非按位置）
    * 用于 selectSession、onFlowDone、loadMoreMessages 等场景
+   *
+   * 刷新拉取范围（最新一页）可能大于本地已加载范围（首屏/向上翻页），按下标逐位
+   * 对齐会整体错位导致气泡全量 REPLACE 重挂；此处以 dbMsgId 为键复用本地行对象，
+   * 虚拟滚动的行 key（m-<msg.id>/row-<segment.id>）稳定，DOM 与实测高度缓存均复用。
+   *
+   * 流式占位行（user-/streaming- 前缀）不按 DB 重建：DB 视图可能缺 thinking/tool 段
+   * （重建会导致内容回退 + 段 key 变化重挂），仅按 role 与本轮新增 DB 行
+   * （id > streamBaseMsgId）匹配后回填 dbMsgId/token 元数据。
    */
   function rebuildChatMessages(preserveStreaming = false) {
     const rebuilt = buildChatMessagesFromDB(messages.value)
+    const local = chatMessages.value
 
-    for (let i = 0; i < rebuilt.length; i++) {
-      if (i < chatMessages.value.length) {
-        const existing = chatMessages.value[i]
-        if (!isSameMessage(existing, rebuilt[i])) {
-          // 流式临时消息（streaming-/user- 前缀）保留原 id，DB id 写入 dbMsgId，
-          // 避免回合结束时气泡整体卸载重挂
-          const isEphemeral =
-            existing.role === rebuilt[i].role &&
-            (existing.id.startsWith('streaming-') || existing.id.startsWith('user-'))
-          if (isEphemeral) {
-            inheritSegmentIds(existing, rebuilt[i])
-            Object.assign(existing, rebuilt[i], { id: existing.id })
-          } else {
-            Object.assign(existing, rebuilt[i])
-          }
+    // ---- 占位行识别：本地尾部连续的流式临时行 ----
+    const isPlaceholder = (m: StreamingMessage | undefined): boolean =>
+      !!m && m.dbMsgId == null && (m.id.startsWith('user-') || m.id.startsWith('streaming-'))
+    let placeholderStart = local.length
+    while (placeholderStart > 0 && isPlaceholder(local[placeholderStart - 1])) placeholderStart--
+    const placeholders = local.slice(placeholderStart)
+
+    // ---- 占位行与本轮新增 DB 渲染行按 role 顺序匹配 ----
+    // streamBaseMsgId=0（首轮/空会话）时 dbMsgId > 0 恒真，全部 rebuilt 行参与匹配
+    const matchedFresh = new Set<StreamingMessage>()
+    if (placeholders.length > 0) {
+      const freshRows = rebuilt.filter(r => r.dbMsgId != null && r.dbMsgId > streamBaseMsgId)
+      let freshIdx = 0
+      for (const ph of placeholders) {
+        while (freshIdx < freshRows.length) {
+          const candidate = freshRows[freshIdx]
+          freshIdx++
+          if (candidate.role !== ph.role) continue
+          // 仅回填元数据：保留原 id 与 segments（行 key 不变 → 虚拟行复用、内容不回退）
+          ph.dbMsgId = candidate.dbMsgId
+          ph.prompt_tokens = candidate.prompt_tokens
+          ph.completion_tokens = candidate.completion_tokens
+          ph.total_tokens = candidate.total_tokens
+          if (candidate.latest_prompt_tokens) ph.latest_prompt_tokens = candidate.latest_prompt_tokens
+          matchedFresh.add(candidate)
+          break
         }
-      } else {
-        chatMessages.value.push(rebuilt[i])
       }
     }
-    if (chatMessages.value.length > rebuilt.length) {
-      chatMessages.value.splice(rebuilt.length)
+
+    // ---- 已提交行按 dbMsgId 对齐：命中复用本地对象（保 key），未命中新建 ----
+    const localById = new Map<number, StreamingMessage>()
+    for (let i = 0; i < placeholderStart; i++) {
+      const m = local[i]
+      if (m.dbMsgId != null) localById.set(m.dbMsgId, m)
     }
+    const result: StreamingMessage[] = []
+    for (const r of rebuilt) {
+      if (matchedFresh.has(r)) continue
+      const existing = r.dbMsgId != null ? localById.get(r.dbMsgId) : undefined
+      if (existing) {
+        if (!isSameMessage(existing, r)) Object.assign(existing, r)
+        result.push(existing)
+      } else {
+        result.push(r)
+      }
+    }
+
+    // ---- 窗口外的本地旧行：以 messages（权威列表，已处理保留/压缩裁剪）为准保留在头部 ----
+    const rebuiltIds = new Set(rebuilt.map(r => r.dbMsgId).filter((v): v is number => v != null))
+    const keptDbIds = new Set(messages.value.map(m => m.id))
+    const olderKept: StreamingMessage[] = []
+    for (let i = 0; i < placeholderStart; i++) {
+      const m = local[i]
+      if (m.dbMsgId == null || rebuiltIds.has(m.dbMsgId) || !keptDbIds.has(m.dbMsgId)) continue
+      olderKept.push(m)
+    }
+    if (olderKept.length > 0) {
+      result.unshift(...olderKept)
+    }
+
+    // 未匹配占位行（DB 尚无对应行）保持尾部
+    result.push(...placeholders)
+    chatMessages.value = result
 
     thinkingContent.value = ''
     textContent.value = ''
@@ -717,7 +765,14 @@ export const useAgentStore = defineStore('agent', () => {
     preserveStreaming = false
   ): void {
     if (replace) {
-      messages.value = latestMessages
+      // 以 DB 最新一页为权威重置原始行；窗口外的更早历史保留（向上翻页成果不丢）。
+      // 压缩场景（窗口内出现 context_summary）：其之前的旧行已软删，需一并裁剪
+      const windowMinId = latestMessages[0]?.id ?? Number.MAX_SAFE_INTEGER
+      const summaryMsg = latestMessages.find(m => m.message_type === CONTEXT_SUMMARY_MESSAGE_TYPE)
+      const olderKept = messages.value.filter(
+        m => m.id < windowMinId && (!summaryMsg || m.id > summaryMsg.id)
+      )
+      messages.value = olderKept.length > 0 ? [...olderKept, ...latestMessages] : latestMessages
     } else if (latestMessages.length > 0) {
       const oldestLatestId = latestMessages[0].id
       const loadedOlderMessages = messages.value.filter(message => message.id < oldestLatestId)
@@ -750,43 +805,6 @@ export const useAgentStore = defineStore('agent', () => {
       replace,
       preserveStreaming
     )
-    messageRefreshVersion.value++
-  }
-
-  /**
-   * SSE 正常结束时置空重建消息列表：不与旧数组做任何合并，
-   * 流式占位气泡（user-/streaming- 前缀）与向上翻页加载的更早历史一并丢弃，
-   * 仅以 DB 最新一页整表原子替换，杜绝按位置对齐合并导致的串位/重复观感。
-   */
-  async function replaceMessagesWithLatestPage(context: AgentStreamContext): Promise<void> {
-    const res = await agentApi.getMessages(
-      context.agentId,
-      context.sessionId,
-      undefined,
-      MESSAGE_REFRESH_LIMIT
-    )
-    if (res.data.code !== 1 || !isCurrentStream(context)) return
-
-    const latestMessages = res.data.data?.list || []
-    const total = res.data.data?.total || 0
-
-    // 渲染列表整表替换：占位气泡 key 不在新数组中自动卸载，由真实 DB 行替代
-    chatMessages.value = buildChatMessagesFromDB(latestMessages)
-    // 原始行同步重置为最新一页，分页状态（hasMoreMessages/再次「加载更多」的游标）随之自洽
-    messages.value = latestMessages
-    messageTotal.value = total
-
-    thinkingContent.value = ''
-    textContent.value = ''
-    currentSegmentType.value = null
-
-    for (let i = messages.value.length - 1; i >= 0; i--) {
-      const m = messages.value[i]
-      if (m.role === 'ai' || m.message_type === CONTEXT_SUMMARY_MESSAGE_TYPE) {
-        latestPromptTokens.value = m.latest_prompt_tokens || m.prompt_tokens || 0
-        break
-      }
-    }
     messageRefreshVersion.value++
   }
 
@@ -983,7 +1001,9 @@ export const useAgentStore = defineStore('agent', () => {
           isResume = false
         }
         try {
-          await replaceMessagesWithLatestPage(context)
+          // replace=true 以 DB 最新一页重置原始行与分页状态；preserveStreaming=true
+          // 走 rebuildChatMessages 就地 diff：占位气泡保留原 id 过继 dbMsgId，DOM 不重挂
+          await refreshStreamMessages(context, true, true)
         } catch (e) {
           console.error('[onFlowDone] 刷新消息失败', e)
         }
@@ -1103,6 +1123,7 @@ export const useAgentStore = defineStore('agent', () => {
       wasFirstMessage: messages.value.length === 0
     }
 
+    markStreamBaseMsgId()
     addUserMessage(content, files)
     startStreaming()
 
@@ -1127,6 +1148,7 @@ export const useAgentStore = defineStore('agent', () => {
       wasFirstMessage: false
     }
     isResume = true
+    markStreamBaseMsgId()
     addUserMessage(humanInput)
     isWaitingHuman.value = false
     currentWaitData.value = null
@@ -1431,6 +1453,7 @@ export const useAgentStore = defineStore('agent', () => {
     currentSession.value = null
     messages.value = []
     clearMessages()
+    streamBaseMsgId = 0
     flowPreview.value = null
     isWaitingHuman.value = false
     currentWaitData.value = null
