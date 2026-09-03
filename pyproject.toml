@@ -1,6 +1,6 @@
 [project]
 name = "langgraph_agent"
-version = "1.2.2"
+version = "1.2.3"
 description = ""
 authors = [
     {name = "wgb",email = "1522267053@qq.com"}
