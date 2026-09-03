@@ -1303,6 +1303,14 @@ class AgentExecutorService(BaseExecutorService):
             # 检查是否首次对话（用于自动生成标题）
             existing_messages = await self._get_messages(db, session_id, 1)
             is_first_message = len(existing_messages) == 0
+            # 首次对话即时生成标题：内容取用户消息截断，不依赖执行结果——
+            # 手动停止（CancelledError 直达 finally）、等待人工输入（interrupt return）、
+            # 执行失败等提前终止路径不会经过流末尾的原标题逻辑
+            if is_first_message and session.title == "新对话":
+                title = user_message[:50]
+                if len(user_message) > 50:
+                    title += "..."
+                await self._update_session_title(db, session_id, title)
 
             # 构建图
             graph = self._build_graph(
@@ -1435,13 +1443,6 @@ class AgentExecutorService(BaseExecutorService):
                             node_type=node.node_type,
                             error=node_error,
                         )
-
-                # 首次对话时自动生成标题
-                if is_first_message and llm_content and session.title == "新对话":
-                    title = user_message[:50]
-                    if len(user_message) > 50:
-                        title += "..."
-                    await self._update_session_title(db, session_id, title)
 
                 # 发送完成事件（携带结束节点输出，前端按钮展示 + 持久化到 AI 消息）
                 is_interrupted = interrupt_service.is_agent_interrupted(session_id)

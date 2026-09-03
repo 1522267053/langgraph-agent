@@ -1329,6 +1329,8 @@ export const useAgentStore = defineStore('agent', () => {
       stopStreaming()
       isStopping.value = false
       ElMessage.success({ message: '停止成功', duration: 5000 })
+      // 停止路径不走 onFlowDone 的会话列表刷新，此处同步侧边栏标题等状态
+      void loadSessions(agentId, sessionPage.value)
     }
     const poll = async () => {
       if (!isCurrentPoll()) return
