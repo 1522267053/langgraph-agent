@@ -15,6 +15,7 @@ import {
   attachKnowledgeCitations,
   genSegmentId
 } from '@/composables/useSegmentBuilder'
+import { SSE_FLUSH_INTERVAL } from '@/constants/timing'
 
 export type { Segment, ToolCall, TodoItem, SegmentType }
 export type MessageSegment = Segment
@@ -70,8 +71,6 @@ export function useStreamingMessage() {
   const messages = ref<StreamingMessage[]>([])
   const latestPromptTokens = ref(0)
 
-  /** 流式 chunk 攒批间隔（ms）：缓冲期内合并 chunk，降低深响应写与 segments 重建频率 */
-  const FLUSH_INTERVAL = 50
   /** 待 flush 的 content/thinking 缓冲（非响应式，同一时刻至多一种非空） */
   let pendingContent: string | null = null
   let pendingThinking: string | null = null
@@ -164,7 +163,7 @@ export function useStreamingMessage() {
     flushTimer = setTimeout(() => {
       flushTimer = null
       flushPending()
-    }, FLUSH_INTERVAL)
+    }, SSE_FLUSH_INTERVAL)
   }
 
   /**
@@ -219,7 +218,7 @@ export function useStreamingMessage() {
   }
 
   /**
-   * 追加思考内容（缓冲攒批，FLUSH_INTERVAL 后统一应用）
+   * 追加思考内容（缓冲攒批，SSE_FLUSH_INTERVAL 后统一应用）
    *
    * 新思考块的首个 chunk（currentSegmentType 从其他类型切换而来）在 flush 时追加新分段，
    * 避免 updateThinking 的前缀匹配命中上一轮的旧 thinking 分段（位于 tool 之前），
@@ -238,7 +237,7 @@ export function useStreamingMessage() {
   }
 
   /**
-   * 追加文本内容（缓冲攒批，FLUSH_INTERVAL 后统一应用）
+   * 追加文本内容（缓冲攒批，SSE_FLUSH_INTERVAL 后统一应用）
    *
    * 新内容块的首个 chunk（currentSegmentType 从其他类型切换而来）在 flush 时追加新分段，
    * 避免 updateContent 的前缀匹配命中上一轮的旧 content 分段（位于 tool 之前）。
