@@ -748,7 +748,17 @@ export const useAgentStore = defineStore('agent', () => {
     }
 
     // ---- 窗口外的本地旧行：以 messages（权威列表，已处理保留/压缩裁剪）为准保留在头部 ----
-    const rebuiltIds = new Set(rebuilt.map(r => r.dbMsgId).filter((v): v is number => v != null))
+    // 覆盖集合除渲染行自身的 dbMsgId 外，还纳入各段 dbMsgId：连续 ai 行会跨越 tool
+    // 结果行合并为一条渲染消息（dbMsgId 取组首），向上翻页前插更早的 ai 行会改变
+    // 分组、把旧行的 dbMsgId 吸收进新组首（如 30091 并入 30089）。若仅按渲染行
+    // dbMsgId 判定，被吸收的旧行会被误判为窗口外而 unshift 到头部，造成重复+错位
+    const rebuiltIds = new Set<number>()
+    for (const r of rebuilt) {
+      if (r.dbMsgId != null) rebuiltIds.add(r.dbMsgId)
+      for (const seg of r.segments) {
+        if (seg.dbMsgId != null) rebuiltIds.add(seg.dbMsgId)
+      }
+    }
     const keptDbIds = new Set(messages.value.map(m => m.id))
     const olderKept: StreamingMessage[] = []
     for (let i = 0; i < placeholderStart; i++) {
