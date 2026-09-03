@@ -22,17 +22,17 @@ export default defineConfig({
     port: 3001,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8800',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         timeout: 0,
         proxyTimeout: 0,
       },
       '/uploads': {
-        target: 'http://127.0.0.1:8800',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://127.0.0.1:8800',
+        target: 'ws://127.0.0.1:8000',
         ws: true,
         changeOrigin: true,
       },
