@@ -325,6 +325,36 @@ export function useStreamingMessage() {
   }
 
   /**
+   * 将所有仍在 running 的工具分段标记为 error（手动停止场景）
+   *
+   * 停止后 tool_call_end SSE 不会再来，running 分段会永久转圈；
+   * 终止文案与后端补写的 ToolMessage（{"success":false,"error":"执行被中断"}）保持一致，
+   * 后续 save polling 合并/重发清理后由 DB 行接手，状态一致。
+   */
+  function failRunningToolSegments(message: string): void {
+    for (const msg of messages.value) {
+      if (msg.role !== 'ai' || !msg.segments) continue
+      for (const seg of msg.segments) {
+        if (seg.type !== 'tool' || seg.tool?.status !== 'running') continue
+        seg.tool.status = 'error'
+        seg.tool.result = { success: false, error: message }
+        delete seg.tool.liveOutput
+        delete seg.tool.liveAgentName
+      }
+      if (msg.tools) {
+        for (const tool of msg.tools) {
+          if (tool.status !== 'running') continue
+          tool.status = 'error'
+          tool.result = { success: false, error: message }
+          delete tool.liveOutput
+          delete tool.liveAgentName
+        }
+      }
+    }
+    triggerRef(messages)
+  }
+
+  /**
    * 更新任务计划列表（供面板实时显示）
    */
   function updateTodos(newTodos: TodoItem[]): void {
@@ -407,6 +437,7 @@ export function useStreamingMessage() {
     addToolSegment,
     updateToolSegment,
     updateToolLiveOutput,
+    failRunningToolSegments,
     addTodoSegment,
     addKnowledgeCitations,
     updateTodos,
