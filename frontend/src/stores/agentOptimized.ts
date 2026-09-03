@@ -57,6 +57,29 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
+  /**
+   * 清理上一轮中断残留的占位行（手动停止后重新发送等场景）
+   *
+   * 非流式状态下仍无 dbMsgId 的占位行只可能是中断残留：正常结束会被 onFlowDone
+   * 合并回填，等待人工输入的占位属于 resume 语义不在此清理。残留占位不清会导致
+   * 重发后列表保留半截内容，且与新轮占位一起参与 role 匹配造成错配/重复；残留
+   * 轮次已落库的内容由后续合并以 DB 行形态自然补回，不丢数据。
+   * 活跃流式（isStreaming 且非停止中）时不清理，防止误删正在流式的合法占位。
+   */
+  function clearOrphanPlaceholders(): void {
+    if (isStreaming.value && !isStopping.value) return
+    const filtered = chatMessages.value.filter(
+      m =>
+        !(
+          m.dbMsgId == null &&
+          (m.id.startsWith('user-') || m.id.startsWith('streaming-'))
+        )
+    )
+    if (filtered.length !== chatMessages.value.length) {
+      chatMessages.value = filtered
+    }
+  }
+
   // ========== 消息分页状态 ==========
   const messageTotal = ref(0)
   const hasMoreMessages = computed(() => messages.value.length < messageTotal.value)
@@ -678,16 +701,20 @@ export const useAgentStore = defineStore('agent', () => {
     while (placeholderStart > 0 && isPlaceholder(local[placeholderStart - 1])) placeholderStart--
     const placeholders = local.slice(placeholderStart)
 
-    // ---- 占位行与本轮新增 DB 渲染行按 role 顺序匹配 ----
+    // ---- 占位行与本轮新增 DB 渲染行尾部反向对齐 ----
+    // 占位行是会话最新消息，对应 DB 行也是最新的：从尾部向前按 role 匹配。
+    // 顺序单调消费在中间缺行（如中断轮次的 ai 为空 chunk 未落库）时会让后续
+    // 占位级联失配；反向对齐只影响末尾对应关系，缺行位置的行保持独立成行。
     // streamBaseMsgId=0（首轮/空会话）时 dbMsgId > 0 恒真，全部 rebuilt 行参与匹配
     const matchedFresh = new Set<StreamingMessage>()
     if (placeholders.length > 0) {
       const freshRows = rebuilt.filter(r => r.dbMsgId != null && r.dbMsgId > streamBaseMsgId)
-      let freshIdx = 0
-      for (const ph of placeholders) {
-        while (freshIdx < freshRows.length) {
+      let freshIdx = freshRows.length - 1
+      for (let pi = placeholders.length - 1; pi >= 0 && freshIdx >= 0; pi--) {
+        const ph = placeholders[pi]
+        while (freshIdx >= 0) {
           const candidate = freshRows[freshIdx]
-          freshIdx++
+          freshIdx--
           if (candidate.role !== ph.role) continue
           // 仅回填元数据：保留原 id 与 segments（行 key 不变 → 虚拟行复用、内容不回退）
           ph.dbMsgId = candidate.dbMsgId
@@ -1124,6 +1151,7 @@ export const useAgentStore = defineStore('agent', () => {
     }
 
     markStreamBaseMsgId()
+    clearOrphanPlaceholders()
     addUserMessage(content, files)
     startStreaming()
 
