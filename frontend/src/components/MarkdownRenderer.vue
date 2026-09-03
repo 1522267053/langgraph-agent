@@ -1,7 +1,23 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import VueMarkdown from 'vue-markdown-render'
+import katex from 'katex'
+import texmath from 'markdown-it-texmath'
+import 'katex/dist/katex.min.css'
 import type { KnowledgeReference } from '@/types/knowledge'
+import { STREAM_RENDER_INTERVAL, MERMAID_RENDER_DEBOUNCE } from '@/constants/timing'
+
+/**
+ * KaTeX 数学公式渲染：支持 $...$ 行内公式和 $$...$$ 块级公式
+ * throwOnError=false 时解析失败的公式以红色原文显示而非抛错（流式期间常见）
+ */
+const texmathPlugin = (md: unknown) =>
+  texmath(md, {
+    engine: katex,
+    delimiters: 'dollars',
+    katexOptions: { throwOnError: false }
+  })
+const mdPlugins = [texmathPlugin]
 
 interface CitationEntry {
   marker: string
@@ -260,8 +276,6 @@ let mermaidInitialized = false
 let renderCount = 0
 let mermaidTimer: ReturnType<typeof setTimeout> | null = null
 
-/** 流式期间 markdown 重渲染的最小间隔（ms），降低全量 Markdown 重渲染频率 */
-const STREAM_RENDER_INTERVAL = 500
 let streamRenderTimer: ReturnType<typeof setTimeout> | null = null
 let lastStreamRenderAt = 0
 let hasPendingStreamRender = false
@@ -498,7 +512,7 @@ async function onMarkdownRendered(immediate = false): Promise<void> {
     mermaidTimer = setTimeout(() => {
       mermaidTimer = null
       renderMermaidBlocks()
-    }, 800)
+    }, MERMAID_RENDER_DEBOUNCE)
   }
 }
 
@@ -590,7 +604,7 @@ onUnmounted(() => {
 
 <template>
   <div ref="containerRef" class="markdown-body" @click="handleMarkdownClick">
-    <VueMarkdown :source="renderedSource" />
+    <VueMarkdown :source="renderedSource" :plugins="mdPlugins" />
   </div>
 </template>
 
@@ -598,6 +612,15 @@ onUnmounted(() => {
 .markdown-body {
   line-height: 1.6;
   word-break: break-word;
+}
+
+/* KaTeX 0.18 用自定义标签包裹公式，默认 display:inline 会导致块级公式外边距塌陷 */
+.markdown-body eqn {
+  display: block;
+}
+
+.markdown-body eq {
+  display: inline;
 }
 
 .markdown-body pre {
