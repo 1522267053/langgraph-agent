@@ -110,24 +110,29 @@ const expandedArgsSegments = ref(new Set<string>())
 const { open: openKnowledgeReference } = useKnowledgeReferenceDrawer()
 
 // ---- 工具块折叠交互（聊天段级模式：传入 expandKey 后启用） ----
-const isToolCollapsible = computed(() => !!props.expandKey)
+
+/** 工具块头部可点击折叠；流式中的最后一轮工具调用强制展开、禁止收起，
+ * 不显示点击手势与箭头 */
+const isToolInteractive = computed(() => !!props.expandKey && !props.isLatestTool)
 
 /** 高度过渡动画开关（每行实例）：仅在用户点击过后置位。流式 handoff / 流结束的
  * 程序性翻转保持瞬时，避免 300ms 行高渐变被贴底跟随逐帧追逐产生滚动抖动 */
 const toolAnimate = ref(false)
 
 /** 工具块内容（入参/结果/错误/加载）显隐：
- * 聊天模式 = 手动操作覆盖 ?? 流式最后一轮工具调用默认展开；
+ * 聊天模式 = 流式最后一轮工具调用强制展开（不允许收缩）；
+ * 其余 = 手动操作覆盖 ?? 默认折叠；
  * 列表模式（Flow 执行面板等）始终展开 */
 const toolBodyVisible = computed(() => {
   if (props.expandKey) {
+    if (props.isLatestTool) return true
     return getBlockExpandOverride(props.expandKey) ?? props.isLatestTool
   }
   return true
 })
 
 function toggleToolBody(): void {
-  if (!props.expandKey) return
+  if (!props.expandKey || props.isLatestTool) return
   toolAnimate.value = true
   toggleBlockExpand(props.expandKey, !toolBodyVisible.value)
 }
@@ -195,7 +200,7 @@ async function handleCopy(text: string): Promise<void> {
         :class="[
           'code-block-header',
           'tool-header-' + segment.tool.status,
-          { 'tool-header-clickable': isToolCollapsible }
+          { 'tool-header-clickable': isToolInteractive }
         ]"
         @click="toggleToolBody"
       >
@@ -211,9 +216,10 @@ async function handleCopy(text: string): Promise<void> {
                 : '完成'
           }}
         </span>
-        <!-- 折叠交互（聊天段级模式）：箭头指向提示可点击，展开时旋转 90° -->
+        <!-- 折叠交互：箭头指向提示可点击，展开时旋转 90°；流式最后一轮工具
+             强制展开不可点击，不显示箭头 -->
         <el-icon
-          v-if="isToolCollapsible"
+          v-if="isToolInteractive"
           :class="['tool-expand-arrow', { 'is-expanded': toolBodyVisible }]"
         >
           <ArrowRight />
