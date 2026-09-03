@@ -7,6 +7,10 @@ interface UseAutoScrollOptions {
   throttleMs?: number
   /** 手势有效窗口（ms）：真实输入后该时间内的 scroll 事件才被视为用户滚动 */
   gestureWindowMs?: number
+  /** RO 条件贴底的总开关：返回 false 时内容撑高不再自动贴底（显式
+   *  scrollToBottom 不受影响）。用于流式结束后停用跟随，避免用户手动
+   *  展开/收起块撑高内容被误判为流式输出而拉走视口 */
+  enabled?: () => boolean
 }
 
 /**
@@ -173,6 +177,7 @@ export function useAutoScroll(
 
   /** 内容变化时条件性滚动（autoScroll && !userScrolledUp），按 throttleMs 节流（leading + trailing） */
   function maybeScrollToBottom(): void {
+    if (options.enabled && !options.enabled()) return
     const el = containerRef.value
     if (!el) return
     const scrollable = hasScrollableOverflow(el)

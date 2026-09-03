@@ -44,15 +44,27 @@ let convergeGeneration = 0
 
 // SSE 状态早于 Markdown DOM 更新，底部跟随以 useAutoScroll 内部 ResizeObserver 的
 // 真实高度变化为准（容器 + 内容子元素自动观测）。
+/** RO 贴底跟随宽限截止时间：流式结束后短暂保留跟随，吸收代码高亮/KaTeX 等
+ *  晚到渲染的撑高；此后用户手动展开/收起块撑高内容不再被贴底拉走视口 */
+let roFollowGraceUntil = 0
+
 const {
   autoScroll,
   isAtBottom,
   scrollToBottom,
-  maybeScrollToBottom,
   handleScroll,
   onUserScrollIntent,
   resetAutoScrollState
-} = useAutoScroll(messagesContainer, [])
+} = useAutoScroll(messagesContainer, [], {
+  enabled: () => store.isStreaming || Date.now() < roFollowGraceUntil
+})
+
+watch(
+  () => store.isStreaming,
+  streaming => {
+    if (!streaming) roFollowGraceUntil = Date.now() + 800
+  }
+)
 
 function handleScrollbarPointerDown(event: PointerEvent): void {
   const root = scrollbarRef.value?.$el as Element | undefined
@@ -566,7 +578,9 @@ watch(
   () => store.messageRefreshVersion,
   async () => {
     await nextTick()
-    maybeScrollToBottom()
+    // 删除/回退消息后强制贴底：maybeScrollToBottom 受 RO 跟随开关限制，
+    // 非流式期间会被拦截
+    scrollToBottom()
   }
 )
 
