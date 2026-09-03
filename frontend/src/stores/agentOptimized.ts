@@ -110,6 +110,7 @@ export const useAgentStore = defineStore('agent', () => {
     addToolSegment,
     updateToolSegment,
     updateToolLiveOutput,
+    failRunningToolSegments,
     addTodoSegment,
     addKnowledgeCitations,
     updateTodos,
@@ -1273,6 +1274,9 @@ export const useAgentStore = defineStore('agent', () => {
     } else if (waitForSave && agentId && sessionId) {
       cancelResult = agentApi.cancel(agentId, sessionId).then(() => undefined)
     }
+    // 取消后 tool_call_end SSE 不会再来，终止仍在转圈的 running 工具分段，
+    // 文案与后端补写的 ToolMessage 保持一致
+    failRunningToolSegments('执行被中断')
     if (!waitForSave) {
       stopStreaming()
       isStopping.value = false

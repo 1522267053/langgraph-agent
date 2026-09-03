@@ -648,43 +648,15 @@ async def handle_tool_calls(
 
     results: list[Any] = [None] * len(tool_calls)
 
-    async def _store_result(index: int) -> None:
-        try:
-            results[index] = await _run_single_tool(tool_calls[index])
-        except BaseException as exc:
-            results[index] = exc
+    def _build_end_payload(
+        tool_name: str, raw_result: Any
+    ) -> tuple[str, Any, Any, Optional[dict]]:
+        """判定工具执行状态并构建 end 事件与 ToolMessage 所需载荷。
 
-    async def _run_parallel() -> None:
-        await asyncio.gather(*(_store_result(index) for index in parallel_indices))
-
-    async def _run_serial(indices: list[int]) -> None:
-        for index in indices:
-            await _store_result(index)
-
-    await asyncio.gather(
-        _run_parallel(),
-        *(_run_serial(indices) for indices in serial_groups.values()),
-    )
-    # file_read 媒体注入成功项收集：本轮所有 ToolMessage 落地后统一注入多模态 HumanMessage
-    # （HumanMessage 必须在全部 tool_result 之后，避免破坏 tool_call 配对约束）
-    pending_media_sources: list[str] = []
-
-    for item in results:
-        if isinstance(item, BaseException):
-            if isinstance(item, asyncio.CancelledError):
-                raise item
-            tool_call = {}
-            raw_result = {
-                "success": False,
-                "error": f"工具执行异常: {str(item)}",
-            }
-        else:
-            tool_call, raw_result = item
-
-        tool_name = tool_call.get("name", "")
-        tool_id = tool_call.get("id", "")
-
-        # 判断工具执行状态
+        「完成即发 end 事件」与「结果循环 ToolMessage 落库」共用本函数，
+        保证前端实时状态与 DB 落库状态一致。返回
+        (tool_status, content, sse_result, artifact)。
+        """
         tool_status = "error"
         if not isinstance(raw_result, Exception):
             try:
@@ -697,16 +669,6 @@ async def handle_tool_calls(
                     tool_status = "success"
             except (json.JSONDecodeError, TypeError):
                 tool_status = "success"
-
-        # file_read 媒体注入成功 → 记录待注入的媒体路径（解析后的绝对路径）
-        if (
-            tool_name == "file_read"
-            and tool_status == "success"
-            and isinstance(raw_result, dict)
-            and raw_result.get("media_type")
-            and raw_result.get("file_path")
-        ):
-            pending_media_sources.append(str(raw_result["file_path"]))
 
         # 知识正文参与截断，引用元数据独立保存在 artifact 中。
         tool = tool_map.get(tool_name)
@@ -733,6 +695,94 @@ async def handle_tool_calls(
             )
         else:
             content = smart_truncate_output(raw_result, prefix=tool_name)
+        sse_result = raw_result if is_exempt and knowledge_result is None else content
+        return tool_status, content, sse_result, artifact
+
+    async def _store_result(index: int) -> None:
+        try:
+            result = await _run_single_tool(tool_calls[index])
+            results[index] = result
+            # 完成即发 end 事件：不等整批 gather 完成。并行场景下先完成的
+            # 工具立即在前端收敛状态（否则手动停止时 SSE 已断，已完成项
+            # 收不到补发事件，会被 failRunningToolSegments 误标为错误）。
+            # 前端按 tool_call_id 精确匹配，发送顺序与调用顺序无关。
+            tool_call, raw_result = result
+            if emit_tool_end_fn:
+                tool_name = tool_call.get("name", "")
+                tool_id = tool_call.get("id", "")
+                tool_status, _, sse_result, _ = _build_end_payload(
+                    tool_name, raw_result
+                )
+                emit_tool_end_fn(
+                    writer,
+                    node.node_key,
+                    tool_name,
+                    sse_result,
+                    tool_status,
+                    tool_call_id=tool_id,
+                )
+        except BaseException as exc:
+            results[index] = exc
+
+    async def _run_parallel() -> None:
+        await asyncio.gather(*(_store_result(index) for index in parallel_indices))
+
+    async def _run_serial(indices: list[int]) -> None:
+        for index in indices:
+            await _store_result(index)
+
+    # 取消传播语义：task.cancel() 会让 gather 记录 _cancel_requested 并取消全部
+    # 子协程——即使 _store_result 用 except BaseException 吞掉了 CancelledError，
+    # await gather 也会向这里抛出。因此不能依赖 results 循环捕获取消，必须在
+    # 此处捕获后降级为「继续走完下方结果处理循环」（已完成工具补发真实结果、
+    # 被打断/未开始的工具补写终止结果），循环结束后统一 re-raise。
+    cancelled = False
+    try:
+        await asyncio.gather(
+            _run_parallel(),
+            *(_run_serial(indices) for indices in serial_groups.values()),
+        )
+    except asyncio.CancelledError:
+        cancelled = True
+    # file_read 媒体注入成功项收集：本轮所有 ToolMessage 落地后统一注入多模态 HumanMessage
+    # （HumanMessage 必须在全部 tool_result 之后，避免破坏 tool_call 配对约束）
+    pending_media_sources: list[str] = []
+
+    for index, item in enumerate(results):
+        tool_call = tool_calls[index]
+        tool_name = tool_call.get("name", "")
+        tool_id = tool_call.get("id", "")
+        if isinstance(item, BaseException) and not isinstance(
+            item, asyncio.CancelledError
+        ):
+            raw_result: Any = {
+                "success": False,
+                "error": f"工具执行异常: {str(item)}",
+            }
+        elif item is None or isinstance(item, asyncio.CancelledError):
+            # 执行中被打断（CancelledError）或串行组未轮到（None）：补写终止结果。
+            # content 含 success=false → extract_tool_status 落库 status=error，
+            # 避免前端重建时 toolResultMap 缺失显示假成功；end 事件已随
+            # _store_result 完成时发出（或前端停止时由 failRunningToolSegments 兜底），
+            # 此处不再重复发送。
+            raw_result = {"success": False, "error": "执行被中断"}
+        else:
+            _, raw_result = item
+
+        tool_status, content, _sse_result, artifact = _build_end_payload(
+            tool_name, raw_result
+        )
+
+        # file_read 媒体注入成功 → 记录待注入的媒体路径（解析后的绝对路径）
+        if (
+            tool_name == "file_read"
+            and tool_status == "success"
+            and isinstance(raw_result, dict)
+            and raw_result.get("media_type")
+            and raw_result.get("file_path")
+        ):
+            pending_media_sources.append(str(raw_result["file_path"]))
+
         msg_buf.append(
             ToolMessage(
                 content=content,
@@ -741,19 +791,6 @@ async def handle_tool_calls(
                 artifact=artifact,
             )
         )
-
-        if emit_tool_end_fn:
-            sse_result = (
-                raw_result if is_exempt and knowledge_result is None else content
-            )
-            emit_tool_end_fn(
-                writer,
-                node.node_key,
-                tool_name,
-                sse_result,
-                tool_status,
-                tool_call_id=tool_id,
-            )
 
     # ---- file_read 媒体注入：构建多模态 HumanMessage（在全部 ToolMessage 之后） ----
     if pending_media_sources:
@@ -777,6 +814,11 @@ async def handle_tool_calls(
                     await emit_flow_preview_fn(writer, fid, action)
                 except Exception as e:
                     logger.warning(f"发送流程预览事件失败 flow_id={fid}: {e}")
+
+    if cancelled:
+        # 补写与真实结果均已处理完毕，继续向上传播取消
+        # （llm_tool_handler 的 except CancelledError 会 save_to_db 落库）
+        raise asyncio.CancelledError
 
     return True, tool_call_count
 
