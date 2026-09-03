@@ -8,7 +8,7 @@ import TodoList from '@/components/common/TodoList.vue'
 import ToolResultViewer from '@/components/common/ToolResultViewer.vue'
 import type { Segment } from '@/types/segment'
 import { useKnowledgeReferenceDrawer } from '@/composables/useKnowledgeReferenceDrawer'
-import { getToolExpandOverride, toggleToolExpand } from '@/components/AgentChat/toolExpand'
+import { getBlockExpandOverride, toggleBlockExpand } from '@/components/AgentChat/blockExpand'
 import { collapseHooks } from '@/components/AgentChat/collapseTransition'
 import { formatToolArgs, formatToolArgsExpanded, hasStringifiedJson } from '@/utils/format'
 
@@ -117,11 +117,11 @@ const isToolCollapsible = computed(() => !!props.expandKey)
 const toolAnimate = ref(false)
 
 /** 工具块内容（入参/结果/错误/加载）显隐：
- * 聊天模式 = 手动操作覆盖 ?? 流式最新工具默认展开；
+ * 聊天模式 = 手动操作覆盖 ?? 流式最后一轮工具调用默认展开；
  * 列表模式（Flow 执行面板等）始终展开 */
 const toolBodyVisible = computed(() => {
   if (props.expandKey) {
-    return getToolExpandOverride(props.expandKey) ?? props.isLatestTool
+    return getBlockExpandOverride(props.expandKey) ?? props.isLatestTool
   }
   return true
 })
@@ -129,7 +129,7 @@ const toolBodyVisible = computed(() => {
 function toggleToolBody(): void {
   if (!props.expandKey) return
   toolAnimate.value = true
-  toggleToolExpand(props.expandKey, !toolBodyVisible.value)
+  toggleBlockExpand(props.expandKey, !toolBodyVisible.value)
 }
 
 function toggleArgsFormat(segment: Segment, idx: number): void {

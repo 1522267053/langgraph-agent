@@ -32,8 +32,11 @@ export const collapseHooks = {
     e.style.transition = ''
   },
   onBeforeLeave(el: Element) {
+    // 起始高度用 offsetHeight（max-height 钳制后的实际渲染高度）而非 scrollHeight
+    // （未钳制内容高度）：基准与视觉一致，过渡全程线性收缩；否则过渡大半时间被
+    // max-height 钳制、渲染高度不动，末帧瞬间塌缩（"内容突然变没"）
     const e = el as CollapseElement
-    e.style.height = `${e.scrollHeight}px`
+    e.style.height = `${e.offsetHeight}px`
     e.style.overflow = 'hidden'
     withHeightTransition(e)
   },

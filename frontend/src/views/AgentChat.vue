@@ -20,8 +20,8 @@ import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import DirectoryPickerDialog from '@/components/common/DirectoryPickerDialog.vue'
 import ChatInput from '@/components/AgentChat/ChatInput.vue'
 import FlowPreviewCard from '@/components/common/FlowPreviewCard.vue'
-import { buildChatRows, estimateRowSize, type ChatRow } from '@/components/AgentChat/chatRow'
-import { clearToolExpandOverrides } from '@/components/AgentChat/toolExpand'
+import { buildChatRows, estimateRowSize, rememberRowSize, clearRowSizeCache, type ChatRow } from '@/components/AgentChat/chatRow'
+import { clearBlockExpandOverrides } from '@/components/AgentChat/blockExpand'
 import { useToolOutputStore } from '@/stores/toolOutput'
 import { useAutoScroll } from '@/composables/useAutoScroll'
 
@@ -105,8 +105,12 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
 // 内容被整体推移（滚动跳动）。此处复刻库默认规则但去掉 backward 跳过：
 // - 首测（估算→实测）：行顶在滚动位上方即补偿
 // - 重测：行整体在滚动位上方才补偿（横跨视口的行生长发生在锚点下方，不补偿以防拖动视口）
-// 注意：回调在 itemSizeCache.set 之前调用，可用 has() 判定是否首测
-rowVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+// 注意：回调在 itemSizeCache.set 之前调用，可用 has() 判定是否首测；
+// item.size 为变更前旧值，新实测 = item.size + delta，同步写入行高实测缓存——
+// 展示开关切换 measure() 清缓存后，估算回落到上次实测而非固定粗估，避免
+// 未挂载行重挂时产生巨量 delta（估算 268px vs 实测 4000px+）引发滚动跳变
+rowVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
+  if (delta !== 0) rememberRowSize(item.key, item.size + delta)
   const offset = (instance.scrollOffset ?? 0) + instance.scrollAdjustments
   return !instance.itemSizeCache.has(item.key)
     ? item.start < offset
@@ -117,7 +121,8 @@ const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
 
 // 展示开关改变行内内容高度：整体失效 virtualizer 尺寸缓存（行 key 不变，未挂载行
 // 的旧实测尺寸会残留导致滚动错位）；已挂载行由 ResizeObserver 重测，未挂载行回落
-// 到感知开关的新估算
+// 到行高实测缓存（开关切换前的上次实测，非固定粗估），重测 delta 即为开关切换
+// 的真实增量，滚动补偿量微小不跳变
 watch([showThinking, showEndOutput], async () => {
   await nextTick()
   rowVirtualizer.value.measure()
@@ -205,7 +210,8 @@ watch(
     const id = newId ? parseInt(newId as string) : null
     if (id === agentId.value) return
 
-    clearToolExpandOverrides()
+    clearBlockExpandOverrides()
+    clearRowSizeCache()
     let targetId = id
     if (!targetId) {
       // 优先级：上次使用(需验证仍存在) > localStorage 默认 > 内置 Agent
