@@ -275,12 +275,6 @@ async function handleCopy(text: string): Promise<void> {
         class="tool-content tool-content-error"
       >
 执行失败</pre>
-      <div
-        v-else-if="segment.tool.result === undefined && segment.tool.status === 'running'"
-        class="tool-content tool-loading-text"
-      >
-        执行中...
-      </div>
     </div>
 
     <div v-else-if="segment.type === 'content'" class="message-content">
@@ -578,12 +572,6 @@ async function handleCopy(text: string): Promise<void> {
   border-top: 1px solid #fecaca;
   background: rgba(254, 242, 242, 0.6);
   color: #dc2626;
-}
-
-.tool-loading-text {
-  padding: 12px 16px;
-  color: #94a3b8;
-  font-size: 13px;
 }
 
 .tool-live-wrapper {
