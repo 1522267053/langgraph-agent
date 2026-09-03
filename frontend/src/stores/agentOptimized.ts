@@ -828,13 +828,20 @@ export const useAgentStore = defineStore('agent', () => {
   async function refreshStreamMessages(
     context: AgentStreamContext,
     replace = false,
-    preserveStreaming = false
+    preserveStreaming = false,
+    incrementalOnly = false
   ): Promise<void> {
+    // 增量刷新：只拉本地已知最大 DB id 之后的新增消息。结束刷新若全量拉取，
+    // 会把本地未上翻加载的更早历史插入列表头部（applyLatestMessages 的 replace
+    // 重置），头部骤增导致像素锚定失效、用户上滚查看的视口"跑到上面"。
+    // 压缩刷新（incrementalOnly=false）保持全量：裁剪已软删旧行依赖全量对账
+    const afterId = incrementalOnly ? (messages.value.at(-1)?.id ?? undefined) : undefined
     const res = await agentApi.getMessages(
       context.agentId,
       context.sessionId,
       undefined,
-      MESSAGE_REFRESH_LIMIT
+      MESSAGE_REFRESH_LIMIT,
+      afterId
     )
     if (res.data.code !== 1 || !isCurrentStream(context)) return
     applyLatestMessages(
@@ -1040,8 +1047,10 @@ export const useAgentStore = defineStore('agent', () => {
         }
         try {
           // replace=true 以 DB 最新一页重置原始行与分页状态；preserveStreaming=true
-          // 走 rebuildChatMessages 就地 diff：占位气泡保留原 id 过继 dbMsgId，DOM 不重挂
-          await refreshStreamMessages(context, true, true)
+          // 走 rebuildChatMessages 就地 diff：占位气泡保留原 id 过继 dbMsgId，DOM 不重挂；
+          // incrementalOnly=true 增量拉取本轮新增，避免全量重置把未加载的更早历史
+          // 插入头部顶跑用户上滚查看的视口
+          await refreshStreamMessages(context, true, true, true)
         } catch (e) {
           console.error('[onFlowDone] 刷新消息失败', e)
         }
@@ -1061,7 +1070,7 @@ export const useAgentStore = defineStore('agent', () => {
           stopApprovalCountdown()
         }
         try {
-          await refreshStreamMessages(context)
+          await refreshStreamMessages(context, false, false, true)
         } catch (e) {
           console.error('[onError] 刷新消息失败', e)
         }
@@ -1376,8 +1385,11 @@ export const useAgentStore = defineStore('agent', () => {
 
   function refreshMessages(agentId: number, sessionId: number, expectedGeneration: number) {
     if (currentSession.value?.id === sessionId) {
+      // 增量拉取：游标为本地已知最大 DB id，只补缺失的新增消息（拉回最终回复语义不变），
+      // 避免全量重置把本地未加载的更早历史插入头部顶跑用户视口
+      const afterId = messages.value.at(-1)?.id
       agentApi
-        .getMessages(agentId, sessionId, undefined, MESSAGE_REFRESH_LIMIT)
+        .getMessages(agentId, sessionId, undefined, MESSAGE_REFRESH_LIMIT, afterId)
         .then(res => {
           if (
             res.data.code === 1 &&

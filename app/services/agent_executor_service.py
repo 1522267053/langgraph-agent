@@ -981,6 +981,7 @@ class AgentExecutorService(BaseExecutorService):
         session_id: int,
         limit: int = 0,
         before_id: Optional[int] = None,
+        after_id: Optional[int] = None,
     ) -> tuple[List[AgentMessage], int]:
         """
         获取会话消息历史（公开方法），支持分页
@@ -990,11 +991,12 @@ class AgentExecutorService(BaseExecutorService):
             session_id: 会话ID
             limit: 最大消息数，0 表示不限制
             before_id: 分页游标，返回此 ID 之前的消息（不含 before_id 本身）
+            after_id: 增量游标，返回此 ID 之后的消息（不含 after_id 本身）
 
         Returns:
             tuple[List[AgentMessage], int]: 消息列表和总数
         """
-        messages = await self._get_messages(db, session_id, limit, before_id)
+        messages = await self._get_messages(db, session_id, limit, before_id, after_id)
         total = await self._get_messages_count(db, session_id)
         return messages, total
 
@@ -1028,13 +1030,16 @@ class AgentExecutorService(BaseExecutorService):
         session_id: int,
         limit: int = 0,
         before_id: Optional[int] = None,
+        after_id: Optional[int] = None,
     ) -> List[AgentMessage]:
-        """获取会话消息历史，支持 before_id 分页游标"""
+        """获取会话消息历史，支持 before_id 分页游标与 after_id 增量游标"""
         query = select(AgentMessage).where(
             AgentMessage.session_id == session_id, AgentMessage.is_delete == 0
         )
         if before_id is not None:
             query = query.where(AgentMessage.id < before_id)
+        elif after_id is not None:
+            query = query.where(AgentMessage.id > after_id)
         query = query.order_by(AgentMessage.id.desc())
         if limit > 0:
             query = query.limit(limit)

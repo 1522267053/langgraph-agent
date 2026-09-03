@@ -52,6 +52,7 @@ const {
   autoScroll,
   isAtBottom,
   scrollToBottom,
+  maybeScrollToBottom,
   handleScroll,
   onUserScrollIntent,
   resetAutoScrollState
@@ -578,9 +579,9 @@ watch(
   () => store.messageRefreshVersion,
   async () => {
     await nextTick()
-    // 删除/回退消息后强制贴底：maybeScrollToBottom 受 RO 跟随开关限制，
-    // 非流式期间会被拦截
-    scrollToBottom()
+    // 条件贴底：流结束的消息刷新也走此路径，须尊重用户位置（上滚查看时不拉回）；
+    // 删除/回退消息的强制贴底在对应操作回调中显式调用 scrollToBottom
+    maybeScrollToBottom()
   }
 )
 
@@ -771,6 +772,8 @@ function handleDeleteMessage(msg: (typeof store.chatMessages)[0]) {
       if (deleted) {
         inputMessage.value = deleted.content
         restoreInputParams(deleted)
+        // 删除后列表缩短，强制贴底（不受 RO 跟随开关与用户位置限制）
+        scrollToBottom()
       }
       ElMessage.success({ message: '已删除，可重新发送', duration: 5000 })
     })
@@ -788,6 +791,8 @@ function handleRevertFrom(dbMsgId: number) {
       if (deleted) {
         inputMessage.value = deleted.content
         restoreInputParams(deleted)
+        // 回退后列表缩短，强制贴底（不受 RO 跟随开关与用户位置限制）
+        scrollToBottom()
       }
       ElMessage.success({ message: '已删除', duration: 5000 })
     })
