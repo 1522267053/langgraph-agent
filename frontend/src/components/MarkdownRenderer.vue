@@ -10,12 +10,13 @@ import { STREAM_RENDER_INTERVAL, MERMAID_RENDER_DEBOUNCE } from '@/constants/tim
 /**
  * KaTeX 数学公式渲染：支持 $...$ 行内公式和 $$...$$ 块级公式
  * throwOnError=false 时解析失败的公式以红色原文显示而非抛错（流式期间常见）
+ * strict='ignore' 关闭非 ASCII 字符（如中文）进入数学模式时的控制台警告
  */
 const texmathPlugin = (md: unknown) =>
   texmath(md, {
     engine: katex,
     delimiters: 'dollars',
-    katexOptions: { throwOnError: false }
+    katexOptions: { throwOnError: false, strict: 'ignore' }
   })
 const mdPlugins = [texmathPlugin]
 
