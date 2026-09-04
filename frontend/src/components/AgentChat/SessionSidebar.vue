@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { ArrowLeft, Plus, ChatDotRound, Delete, Search } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { useAgentStore } from '@/stores'
+import { loadWorkDirForAgent } from '@/utils/workdir'
 
 const props = withDefaults(
   defineProps<{
@@ -23,7 +24,10 @@ const searchKeyword = ref('')
 
 async function handleNewSession(): Promise<void> {
   if (!props.agentId) return
-  const session = await store.createSession(props.agentId)
+  // 新建会话时自动复用 Agent 维度记忆的工作路径（前端 localStorage 偏好）
+  // 让工具栏工作路径红框在「新建会话」瞬间就显示，不需要等用户发消息
+  const rememberedWorkDir = loadWorkDirForAgent(props.agentId)
+  const session = await store.createSession(props.agentId, rememberedWorkDir || undefined)
   if (session) {
     await store.selectSession(props.agentId, session)
     emit('session-selected')

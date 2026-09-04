@@ -31,6 +31,7 @@ import {
 import { clearBlockExpandOverrides } from '@/components/AgentChat/blockExpand'
 import { useToolOutputStore } from '@/stores/toolOutput'
 import { useAutoScroll } from '@/composables/useAutoScroll'
+import { loadWorkDirForAgent, saveWorkDirForAgent } from '@/utils/workdir'
 
 import 'highlight.js/styles/vs2015.css'
 
@@ -413,6 +414,13 @@ const currentWorkDir = computed(() =>
   store.currentSession ? store.currentSession.work_dir || '' : pendingWorkDir.value
 )
 
+// ---- Agent 级「记住的工作路径」：helper 已提取到 utils/workdir.ts（多入口复用）----
+
+/** 弹窗定位优先级：当前会话已设置 > Agent 记忆值 > 空（盘符列表） */
+const effectiveInitialPath = computed(() =>
+  currentWorkDir.value || loadWorkDirForAgent(agentId.value) || ''
+)
+
 function handleSelectWorkDir(): void {
   if (store.isStreaming) {
     ElMessage.warning({ message: '请等待回复完成', duration: 5000 })
@@ -428,6 +436,8 @@ async function handleWorkDirConfirm(path: string): Promise<void> {
       const res = await agentApi.updateWorkDir(agentId.value!, session.id, path || null)
       if (res.data.code === 1 && res.data.data) {
         session.work_dir = res.data.data.work_dir
+        // 服务端权威值（标准化后的路径）写记忆；空串清 key 防脏数据
+        saveWorkDirForAgent(agentId.value, res.data.data.work_dir || '')
         ElMessage.success({
           message: path ? '工作目录已切换' : '已清除，回退默认目录',
           duration: 5000
@@ -439,6 +449,8 @@ async function handleWorkDirConfirm(path: string): Promise<void> {
     return
   }
   pendingWorkDir.value = path
+  // 无会话阶段也写入记忆：首次创建会话后再次打开弹窗即可定位
+  saveWorkDirForAgent(agentId.value, path)
 }
 
 onMounted(async () => {
@@ -726,10 +738,36 @@ async function handleChatSend(
   attachedFiles: Array<{ id: number; original_name: string; mime_type: string }>,
   message: string
 ) {
+  // 解析前端可解析的全部路径值
+  // 优先级 pendingWorkDir > Agent 记忆值（localStorage） > 空
+  // pendingWorkDir 是当前 AgentChat 内已选过的最新值；
+  // 记忆值是上次会话留下的偏好（按 Agent 隔离）——用户未点过按钮时兜底
+  const workDirForNew =
+    pendingWorkDir.value || loadWorkDirForAgent(agentId.value)
+
   if (!store.currentSession) {
-    const session = await store.createSession(agentId.value!, currentWorkDir.value || undefined)
+    // 场景 1：完全没有 session（如首次进入页面、刷新后无历史 session）
+    const session = await store.createSession(
+      agentId.value!,
+      workDirForNew || undefined
+    )
     if (!session) return
     await store.selectSession(agentId.value!, session)
+  } else if (!store.currentSession.work_dir && workDirForNew) {
+    // 场景 2：已有 session（onMounted 自动选中 / 切换）但 work_dir 为空
+    // 自动用前端偏好回填——避免历史 session 没有工作路径时每次都要手动重选
+    try {
+      const res = await agentApi.updateWorkDir(
+        agentId.value!,
+        store.currentSession.id,
+        workDirForNew
+      )
+      if (res.data.code === 1 && res.data.data) {
+        store.currentSession.work_dir = res.data.data.work_dir
+      }
+    } catch {
+      // error handled by interceptor
+    }
   }
   store.sendMessage(message, params, attachedFiles, selectedModel.value || undefined)
   await nextTick()
@@ -1186,7 +1224,7 @@ function handleRejectTools() {
     <ToolOutputDrawer />
     <DirectoryPickerDialog
       v-model="workDirPickerVisible"
-      :initial-path="currentWorkDir"
+      :initial-path="effectiveInitialPath"
       @confirm="handleWorkDirConfirm"
     />
 
