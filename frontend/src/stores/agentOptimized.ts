@@ -533,6 +533,10 @@ export const useAgentStore = defineStore('agent', () => {
             currentAssistant.segments.push({
               type: 'tool',
               tool,
+              // 段级 dbMsgId 必填：rebuildChatMessages 的「窗口外旧行」守卫靠它识别
+              // 被合并组吸收的行（纯 tool_calls 消息整行吸收时，行级 dbMsgId 是组首，
+              // 缺段级标记会导致旧行误判为窗口外而 unshift 到头部，出现重复+锚定失效）
+              dbMsgId: msg.id,
               id: `s-${msg.id}-tc${tcIdx}`
             })
 
@@ -547,6 +551,7 @@ export const useAgentStore = defineStore('agent', () => {
                 if (Array.isArray(todosArgs)) {
                   currentAssistant.segments.push({
                     type: 'todo',
+                    dbMsgId: msg.id,
                     id: `s-${msg.id}-todo${tcIdx}`,
                     todo: todosArgs.map(
                       (item: { content?: string; status?: string; priority?: string }) => ({
@@ -570,6 +575,7 @@ export const useAgentStore = defineStore('agent', () => {
               if (Array.isArray(parsed.todos)) {
                 currentAssistant.segments.push({
                   type: 'todo',
+                  dbMsgId: msg.id,
                   id: `s-${msg.id}-todo${tcIdx}`,
                   todo: parsed.todos.map(
                     (item: { content?: string; status?: string; priority?: string }) => ({
