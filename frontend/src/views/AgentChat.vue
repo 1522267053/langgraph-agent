@@ -20,7 +20,13 @@ import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import DirectoryPickerDialog from '@/components/common/DirectoryPickerDialog.vue'
 import ChatInput from '@/components/AgentChat/ChatInput.vue'
 import FlowPreviewCard from '@/components/common/FlowPreviewCard.vue'
-import { buildChatRows, estimateRowSize, rememberRowSize, clearRowSizeCache, type ChatRow } from '@/components/AgentChat/chatRow'
+import {
+  buildChatRows,
+  estimateRowSize,
+  rememberRowSize,
+  clearRowSizeCache,
+  type ChatRow
+} from '@/components/AgentChat/chatRow'
 import { clearBlockExpandOverrides } from '@/components/AgentChat/blockExpand'
 import { useToolOutputStore } from '@/stores/toolOutput'
 import { useAutoScroll } from '@/composables/useAutoScroll'
@@ -100,6 +106,35 @@ const showThinking = ref(true)
 // 结束节点输出按钮：默认不展示，右上角"展示"下拉勾选后显示
 const showEndOutput = ref(false)
 
+// 消息滚动容器宽度：供 chatRow 内容感知估值按实际宽度折行（窄屏防低估）。
+// 用 RO 观察覆盖窗口缩放与侧栏开合；变化时不调 measure()——已挂载行由
+// virtualizer 的 RO 重测、未挂载行走实测缓存，ref 更新只改善后续首挂载行估值
+const contentWidth = ref(0)
+let widthObserver: ResizeObserver | null = null
+if (typeof ResizeObserver !== 'undefined') {
+  widthObserver = new ResizeObserver(entries => {
+    contentWidth.value = entries[0]?.contentRect.width ?? 0
+  })
+  onUnmounted(() => {
+    widthObserver?.disconnect()
+    widthObserver = null
+  })
+}
+watch(
+  messagesContainer,
+  el => {
+    if (!widthObserver) return
+    widthObserver.disconnect()
+    if (el) {
+      widthObserver.observe(el)
+      contentWidth.value = el.clientWidth
+    } else {
+      contentWidth.value = 0
+    }
+  },
+  { flush: 'post' }
+)
+
 const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   get count() {
     return chatRows.value.length
@@ -107,7 +142,8 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   getScrollElement: () => messagesContainer.value as HTMLDivElement | null,
   estimateSize: (index: number) =>
     estimateRowSize(chatRows.value[index], {
-      showThinking: showThinking.value
+      showThinking: showThinking.value,
+      containerWidth: contentWidth.value
     }),
   overscan: 8,
   getItemKey: (index: number) => chatRows.value[index]?.key ?? String(index)
@@ -927,7 +963,7 @@ function handleRejectTools() {
       @scroll="handleScroll"
       @end-reached="onEndReached"
       @wheel="onUserScrollIntent"
-      @touchmove="onUserScrollIntent"
+      @touchmove.passive="onUserScrollIntent"
       @pointerdown.capture="handleScrollbarPointerDown"
     >
       <div v-if="isWelcomeMode" class="welcome-wrapper">

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, CopyDocument, RefreshLeft, SetUp } from '@element-plus/icons-vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
@@ -11,6 +11,7 @@ import { useKnowledgeReferenceDrawer } from '@/composables/useKnowledgeReference
 import { getBlockExpandOverride, toggleBlockExpand } from '@/components/AgentChat/blockExpand'
 import { collapseHooks } from '@/components/AgentChat/collapseTransition'
 import { formatToolArgs, formatToolArgsExpanded, hasStringifiedJson } from '@/utils/format'
+import { AUTO_SCROLL_BOTTOM_THRESHOLD } from '@/constants/timing'
 
 const props = withDefaults(
   defineProps<{
@@ -158,6 +159,62 @@ async function handleCopy(text: string): Promise<void> {
     ElMessage.error({ message: '复制失败', duration: 5000 })
   }
 }
+
+// ---- thinking 块内部跟随（封顶后流式内容自动滚到块底部） ----
+// 外层贴底由 useAutoScroll 的嵌套滚动归因（isNestedScrollTarget /
+// nestedScrollConsumesGesture）处理，此处只负责块内部：不要加
+// overscroll-behavior，否则内层到边界后手势不再穿透主容器，会被误判为主动上滚
+
+/** thinking 内容元素（key = segmentKey），供跟随滚动 */
+const thinkingEls = new Map<string, HTMLElement>()
+
+/** 用户在块内手动滚动（上滚/触摸/按压）后停用该块的内部跟随 */
+const thinkingFollowOff = new Set<string>()
+
+function setThinkingRef(key: string, el: unknown): void {
+  if (el instanceof HTMLElement) thinkingEls.set(key, el)
+  else thinkingEls.delete(key)
+}
+
+function stopThinkingFollow(key: string): void {
+  thinkingFollowOff.add(key)
+}
+
+function onThinkingWheel(key: string, event: WheelEvent): void {
+  // 仅上滚视为脱离跟随意图；下滚时本就贴底，保持跟随
+  if (event.deltaY < 0) stopThinkingFollow(key)
+}
+
+/** 用户滚回块底部附近（与外层 useAutoScroll 同一距底阈值）→ 恢复内部跟随，
+ * 与外层「上滚停止跟随、回到底部恢复」语义对齐。scroll 事件不冒泡，须挂在
+ * 滚动元素（.thinking-content）本体上 */
+function onThinkingScroll(key: string, event: Event): void {
+  const el = event.target
+  if (!(el instanceof HTMLElement)) return
+  const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+  if (distance <= AUTO_SCROLL_BOTTOM_THRESHOLD) thinkingFollowOff.delete(key)
+}
+
+/** thinking 流式增长时让封顶块内部贴底，用户手动滚动后停用。
+ * 内容为纯 <pre> 文本，thinking 字符串变化是唯一增长源 */
+watch(
+  () => props.segments.map(s => s.thinking),
+  () => {
+    if (!props.isStreaming) return
+    visibleSegments.value.forEach((segment, idx) => {
+      if (segment.type !== 'thinking') return
+      const key = segmentKey(segment, idx)
+      if (!isMsgThinkingLoading(idx)) {
+        thinkingFollowOff.delete(key)
+        return
+      }
+      if (thinkingFollowOff.has(key)) return
+      const el = thinkingEls.get(key)
+      if (el && el.scrollHeight > el.clientHeight) el.scrollTop = el.scrollHeight
+    })
+  },
+  { flush: 'post' }
+)
 </script>
 
 <template>
@@ -165,7 +222,13 @@ async function handleCopy(text: string): Promise<void> {
     展开更早的 {{ hiddenSegmentCount }} 个分段
   </div>
   <template v-for="(segment, idx) in visibleSegments" :key="segmentKey(segment, idx)">
-    <div v-if="segment.type === 'thinking'" class="thinking-block">
+    <div
+      v-if="segment.type === 'thinking'"
+      class="thinking-block"
+      @wheel="onThinkingWheel(segmentKey(segment, idx), $event)"
+      @touchmove.passive="stopThinkingFollow(segmentKey(segment, idx))"
+      @pointerdown="stopThinkingFollow(segmentKey(segment, idx))"
+    >
       <div class="code-block-header">
         <div class="code-block-dots">
           <span class="dot-red"></span>
@@ -192,7 +255,12 @@ async function handleCopy(text: string): Promise<void> {
           </el-tooltip>
         </div>
       </div>
-      <pre v-if="showThinking" class="thinking-content">{{ segment.thinking }}</pre>
+      <pre
+        v-if="showThinking"
+        :ref="el => setThinkingRef(segmentKey(segment, idx), el)"
+        class="thinking-content"
+        @scroll="onThinkingScroll(segmentKey(segment, idx), $event)"
+        >{{ segment.thinking }}</pre>
     </div>
 
     <div v-else-if="segment.type === 'tool' && segment.tool" class="tool-block">
@@ -531,6 +599,11 @@ async function handleCopy(text: string): Promise<void> {
   color: #334155;
   white-space: pre-wrap;
   word-break: break-word;
+  /* 封顶 + 内部滚动（对齐 ThinkingBlock 400px 惯例）：思考内容无界增长时
+     行高有界，虚拟行不因长思考失控；overflow-y: auto 同时是 useAutoScroll
+     嵌套滚动归因的判定条件，块内滚动手势不会打断外层贴底跟随 */
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 .tool-content {
@@ -653,6 +726,13 @@ async function handleCopy(text: string): Promise<void> {
   border-radius: 16px;
   border: 1px solid rgba(37, 99, 235, 0.08);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+/* 任务计划项数无上限，封顶后内部滚动，避免超长计划撑爆虚拟行高；
+   :deep 穿透 TodoList 子组件根节点 */
+.todo-block :deep(.todo-list) {
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 .todo-header {
