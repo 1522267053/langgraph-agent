@@ -129,6 +129,19 @@ def get_agents_base_dir() -> Path:
     return agents_dir
 
 
+def get_file_snapshots_dir(session_id: int | None = None) -> Path:
+    """获取文件快照备份根目录（BASE_DIR/workspace/file_snapshots/），不存在则自动创建
+
+    存放 Agent 对话中工具写文件前的原文件备份（按会话分子目录），
+    回退消息时用于还原文件。独立于 workspace/temp，不参与 7 天临时清理，
+    由 scheduler 的快照清理任务按保留期统一清理。
+    """
+    base = get_workspace_dir() / "file_snapshots"
+    target = base / str(session_id) if session_id is not None else base
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
 def get_update_cache_dir() -> Path:
     """自动更新缓存目录（workspace/update_cache/）
 

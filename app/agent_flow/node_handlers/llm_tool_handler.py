@@ -140,7 +140,8 @@ def _build_runtime_reminder(is_plan_mode: bool, fragments: list[str]) -> str:
     """
     sections = [_build_mode_prompt(is_plan_mode)]
     env_lines = [f"- 当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
-    env_lines.extend(f"- {fragment}" for fragment in fragments)
+    # 多行片段续行缩进对齐，保持 "- " 列表项渲染一致
+    env_lines.extend(f"- {fragment}".replace("\n", "\n  ") for fragment in fragments)
     sections.append("# 运行环境\n" + "\n".join(env_lines))
     return "<system-reminder>" + "\n".join(sections) + "</system-reminder>"
 

@@ -32,6 +32,11 @@ from app.agent_flow.node_handlers.base_handler import (
     NodeVariable,
 )
 from app.agent_flow.tool_output_truncate import smart_truncate_output
+from app.services.agent_file_change_service import (
+    agent_file_change_service,
+    backup_tool_file,
+    record_tool_file_change,
+)
 from app.agent_flow.tools.common import (
     MAX_FILE_SIZE,
     analyze_line_endings as _analyze_line_endings,
@@ -300,6 +305,14 @@ class FileWriteInput(BaseModel):
             "行尾风格：auto（默认）已有文件跟随其主导行尾、新建文件用 LF；"
             "lf/crlf 强制指定"
         ),
+    )
+
+
+class FileDeleteInput(BaseModel):
+    """文件删除工具输入参数（删除前自动备份，支持回退恢复）"""
+
+    file_path: str = Field(
+        ..., description="要删除的文件绝对路径（仅支持文件，不支持目录）"
     )
 
 
@@ -1531,10 +1544,20 @@ class ShellNodeHandler(BaseNodeHandler):
                     lambda _m: new_string, raw, count=max_replace
                 )
 
+            # 文件变更追踪：写前备份原文件（回退消息时恢复），备份失败不阻断写入
+            backup_path = await backup_tool_file(path)
             try:
                 _atomic_write(path, new_raw, encoding=encoding)
             except Exception as e:
+                await agent_file_change_service.discard_backup(backup_path)
                 return {"error": f"文件写入失败: {e}", "success": False}
+
+            await record_tool_file_change(
+                tool_name="text_editor",
+                file_path=str(path),
+                change_type="modify",
+                backup_path=backup_path,
+            )
 
             replaced_count = count if replace_all else 1
             diff = _diff_preview(old_string, new_string)
@@ -1608,11 +1631,21 @@ class ShellNodeHandler(BaseNodeHandler):
             if content_size > MAX_CONTENT_SIZE:
                 return f"写入内容过大（{content_size} 字节），最大支持 {MAX_CONTENT_SIZE} 字节"
 
+            # 文件变更追踪：写前备份原文件（新建文件无需备份），备份失败不阻断写入
+            backup_path = await backup_tool_file(path) if existed else None
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 _atomic_write(path, content, encoding="utf-8")
             except Exception as e:
+                await agent_file_change_service.discard_backup(backup_path)
                 return f"文件写入失败: {e}"
+
+            await record_tool_file_change(
+                tool_name="file_write",
+                file_path=str(path),
+                change_type="modify" if existed else "create",
+                backup_path=backup_path,
+            )
 
             action = "覆盖" if existed else "新建"
             ending_label = "CRLF" if target_ending == "\r\n" else "LF"
@@ -1630,6 +1663,52 @@ class ShellNodeHandler(BaseNodeHandler):
             func=None,
             coroutine=file_write,
             args_schema=FileWriteInput,
+        )
+
+        # ---- file_delete ----
+
+        async def file_delete(file_path: str) -> str:
+            is_valid, error_msg = _validate_writable_path(file_path)
+            if not is_valid:
+                return f"路径校验失败: {error_msg}"
+
+            path = Path(file_path).resolve()
+            if not path.exists():
+                return f"文件不存在: {file_path}"
+            if path.is_dir():
+                return (
+                    f"不支持删除目录: {file_path}（仅支持文件）。"
+                    "如需删除目录，请改用 shell 命令（注意：shell 删除的文件无法随对话回退恢复）"
+                )
+
+            # 删除前备份原文件（回退消息时还原），备份失败不阻断删除
+            backup_path = await backup_tool_file(path)
+            try:
+                await asyncio.to_thread(os.remove, path)
+            except Exception as e:
+                await agent_file_change_service.discard_backup(backup_path)
+                return f"文件删除失败: {e}"
+
+            await record_tool_file_change(
+                tool_name="file_delete",
+                file_path=str(path),
+                change_type="delete",
+                backup_path=backup_path,
+            )
+            return f"文件删除成功（已备份，对话回退时可恢复）: {path}"
+
+        file_delete_tool = StructuredTool(
+            name="file_delete",
+            description=(
+                "删除指定文件。删除前会自动备份原文件，因此该删除操作"
+                "可以随对话回退一起恢复（用户回退消息时文件会被还原）。"
+                "仅支持文件，不支持目录。"
+                "需要删除用户可能希望回退的文件时，务必使用此工具而不是 shell 命令"
+                "（del/rm 删除的文件无法回退）。"
+            ),
+            func=None,
+            coroutine=file_delete,
+            args_schema=FileDeleteInput,
         )
 
         # ---- file_search ----
@@ -2004,6 +2083,15 @@ class ShellNodeHandler(BaseNodeHandler):
             except Exception as e:
                 return {"success": False, "error": f"保存到文件管理失败: {e}"}
 
+            # 文件变更追踪：产物文件记为 create，回退消息时随 File 记录一并移除
+            stored_abs = BASE_DIR / file_obj.file_path
+            await record_tool_file_change(
+                tool_name="upload_to_file_manager",
+                file_path=str(stored_abs),
+                change_type="create",
+                file_id=file_obj.id,
+            )
+
             return {
                 "success": True,
                 "file_id": file_obj.id,
@@ -2036,6 +2124,7 @@ class ShellNodeHandler(BaseNodeHandler):
             file_read_tool,
             text_editor_tool,
             file_write_tool,
+            file_delete_tool,
             file_search_tool,
             list_files_tool,
             upload_to_file_manager_tool,
@@ -2056,6 +2145,10 @@ class ShellNodeHandler(BaseNodeHandler):
             },
             {"name": "text_editor", "description": "编辑文件内容"},
             {"name": "file_write", "description": "写入文件"},
+            {
+                "name": "file_delete",
+                "description": "删除文件",
+            },
             {"name": "file_search", "description": "搜索文件"},
             {"name": "list_files", "description": "按文件名查找文件"},
             {
@@ -2152,16 +2245,23 @@ class ShellNodeHandler(BaseNodeHandler):
         return "\n".join(lines)
 
     async def get_runtime_reminder(self, node: FlowNode) -> Optional[str]:
-        """返回动态工作目录提醒，拼入消息层 <system-reminder>
+        """返回运行时提醒，拼入消息层 <system-reminder>
 
-        仅输出会话/Agent 级动态目录（llm_tool_executor 注入的 _working_dir，
-        用户可在聊天页中途切换）；节点级 default_workdir 为设计期静态配置，
-        由 get_system_prompt_hint 静态说明。
+        包含两部分：
+        - 会话/Agent 级动态目录（llm_tool_executor 注入的 _working_dir，
+          用户可在聊天页中途切换）；节点级 default_workdir 为设计期静态配置，
+          由 get_system_prompt_hint 静态说明
+        - 文件回退规则（行为约束）：file_* 工具的变更可随消息回退恢复，
+          shell 命令的文件操作不可回退
         """
         resolved = self._resolve_working_dir()
         if resolved is None:
             return None
         return (
             f"默认工作目录: `{resolved}`，Shell 未传 workdir 参数时在此目录下执行，"
-            "文件操作优先使用此目录"
+            "文件操作优先使用此目录\n"
+            "对话回退只能自动恢复通过 file_write / text_editor / file_delete 产生的"
+            "文件变更（创建/修改/删除均可回退）；用 shell 命令创建、修改或删除的文件"
+            "无法回退，用户可能需要回退的文件操作务必使用这三个工具，"
+            "shell 写文件仅用于临时输出/日志"
         )

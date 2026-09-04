@@ -69,11 +69,7 @@ export const useAgentStore = defineStore('agent', () => {
   function clearOrphanPlaceholders(): void {
     if (isStreaming.value && !isStopping.value) return
     const filtered = chatMessages.value.filter(
-      m =>
-        !(
-          m.dbMsgId == null &&
-          (m.id.startsWith('user-') || m.id.startsWith('streaming-'))
-        )
+      m => !(m.dbMsgId == null && (m.id.startsWith('user-') || m.id.startsWith('streaming-')))
     )
     if (filtered.length !== chatMessages.value.length) {
       chatMessages.value = filtered
@@ -722,7 +718,8 @@ export const useAgentStore = defineStore('agent', () => {
           ph.prompt_tokens = candidate.prompt_tokens
           ph.completion_tokens = candidate.completion_tokens
           ph.total_tokens = candidate.total_tokens
-          if (candidate.latest_prompt_tokens) ph.latest_prompt_tokens = candidate.latest_prompt_tokens
+          if (candidate.latest_prompt_tokens)
+            ph.latest_prompt_tokens = candidate.latest_prompt_tokens
           matchedFresh.add(candidate)
           break
         }
@@ -1474,16 +1471,21 @@ export const useAgentStore = defineStore('agent', () => {
   /**
    * 删除指定消息及之后的所有消息
    * @param messageId 要删除的消息ID
-   * @returns 被删除的用户消息 {content, files, input_data}，用于回退恢复
+   * @param restoreFiles 是否同步恢复该范围内追踪到的文件变更
+   * @returns 被删除的用户消息 {content, files, input_data, reverted_files}，用于回退恢复
    */
-  async function deleteMessagesFrom(messageId: number): Promise<AgentDeleteMessagesResult | null> {
+  async function deleteMessagesFrom(
+    messageId: number,
+    restoreFiles: boolean = true
+  ): Promise<AgentDeleteMessagesResult | null> {
     if (!currentAgent.value || !currentSession.value) return null
 
     try {
       const res = await agentApi.deleteMessagesFrom(
         currentAgent.value.id,
         currentSession.value.id,
-        messageId
+        messageId,
+        restoreFiles
       )
       if (res.data.code === 1) {
         const deleted = res.data.data
