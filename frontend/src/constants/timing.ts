@@ -7,10 +7,10 @@ export const STREAM_RENDER_INTERVAL = 200
 export const SSE_FLUSH_INTERVAL = 100
 
 /** 内容变化时自动滚动的节流间隔（leading + trailing） */
-export const AUTO_SCROLL_THROTTLE_MS = 100
+export const AUTO_SCROLL_THROTTLE_MS = 50
 
 /** 距底判定阈值（px）：距底部小于该值视为贴底（外层列表跟随与 thinking 块内部跟随共用） */
-export const AUTO_SCROLL_BOTTOM_THRESHOLD = 50
+export const AUTO_SCROLL_BOTTOM_THRESHOLD = 60
 
 /** 流结束后 mermaid 图表渲染防抖间隔 */
 export const MERMAID_RENDER_DEBOUNCE = 300
