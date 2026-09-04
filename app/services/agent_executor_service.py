@@ -28,6 +28,10 @@ from app.models.flow import Flow, FlowType
 from app.models.flow_node import NodeType
 from app.models.agent_session import AgentSession
 from app.models.agent_message import AgentMessage
+from app.agent_flow.file_change_context import (
+    reset_file_change_context,
+    set_file_change_context,
+)
 from app.agent_flow.flow_context import FlowContext
 from app.agent_flow.flow_event import FlowEventFactory
 from app.constants.node_types import NODE_TYPE_LABELS
@@ -253,6 +257,9 @@ class AgentExecutorService(BaseExecutorService):
         """独立于 SSE 连接消费执行流，并将事件写入会话回放缓冲。"""
         run.started = True
         terminal_event: dict | None = None
+        # 文件变更追踪上下文：本 task 内执行的文件写入工具据此记录变更，
+        # 供回退消息时恢复文件（子 Agent run 为独立 task，会覆盖为自己的 session）
+        ctx_token = set_file_change_context(run.session_id, run.run_id)
         try:
             async for event in stream_generator:
                 event_type = event.get("type")
@@ -314,6 +321,8 @@ class AgentExecutorService(BaseExecutorService):
                         status="cancelled",
                     )
                 self._finalize_agent_run(run, terminal_event)
+        # 外层 finally 体末尾：无论结果如何都恢复文件变更追踪上下文
+        reset_file_change_context(ctx_token)
 
     def _start_agent_run(
         self,
@@ -883,10 +892,19 @@ class AgentExecutorService(BaseExecutorService):
         self._waiting_sessions.discard(session_id)
         self._waiting_events.pop(session_id, None)
 
+        # 同步清理该会话的文件变更记录与备份
+        from app.services.agent_file_change_service import agent_file_change_service
+
+        await agent_file_change_service.delete_session_changes(db, session_id)
+
         return True
 
     async def delete_messages_from(
-        self, db: AsyncSession, session_id: int, message_id: int
+        self,
+        db: AsyncSession,
+        session_id: int,
+        message_id: int,
+        restore_files: bool = True,
     ) -> Optional[dict]:
         """
         删除指定消息及之后的所有消息，返回被删除的用户消息内容
@@ -895,10 +913,11 @@ class AgentExecutorService(BaseExecutorService):
             db: 数据库会话
             session_id: 会话ID
             message_id: 起始消息ID（该消息及之后的所有消息都会被删除）
+            restore_files: 是否同步恢复该范围内的文件变更（回退消息并恢复文件）
 
         Returns:
-            被删除的第一条用户消息的 {content, files, input_data}（用于回退恢复），
-            没有用户消息时字段为空，消息不存在返回 None
+            被删除的第一条用户消息的 {content, files, input_data}（用于回退恢复）
+            及 reverted_files（文件恢复结果），消息不存在返回 None
         """
         session = await self._get_session(db, session_id)
         if not session:
@@ -969,11 +988,59 @@ class AgentExecutorService(BaseExecutorService):
         self._waiting_sessions.discard(session_id)
         self._waiting_events.pop(session_id, None)
 
+        # 文件恢复：边界为锚点前最后一条保留消息的创建时间（工具执行晚于上一轮落库）
+        reverted_files: list = []
+        if restore_files:
+            from app.services.agent_file_change_service import agent_file_change_service
+
+            boundary = await agent_file_change_service.get_changes_boundary(
+                db, session_id, message_id
+            )
+            reverted_files = await agent_file_change_service.revert_changes(
+                db, session_id, since_time=boundary
+            )
+
         return {
             "content": user_message_content,
             "files": user_files,
             "input_data": user_input_data,
+            "reverted_files": reverted_files,
         }
+
+    async def get_revert_preview(
+        self, db: AsyncSession, session_id: int, message_id: int
+    ) -> Optional[dict]:
+        """预览回退到指定消息时将恢复的文件清单（不去重前按文件聚合）"""
+        from app.services.agent_file_change_service import agent_file_change_service
+
+        session = await self._get_session(db, session_id)
+        if not session:
+            return None
+        boundary = await agent_file_change_service.get_changes_boundary(
+            db, session_id, message_id
+        )
+        changes = await agent_file_change_service.get_changes_since(
+            db, session_id, since_time=boundary
+        )
+        return {
+            "files": agent_file_change_service.summarize_changes(changes),
+        }
+
+    async def restore_files_only(
+        self, db: AsyncSession, session_id: int, message_id: int
+    ) -> Optional[list]:
+        """仅恢复文件变更（保留对话消息不动）"""
+        from app.services.agent_file_change_service import agent_file_change_service
+
+        session = await self._get_session(db, session_id)
+        if not session:
+            return None
+        boundary = await agent_file_change_service.get_changes_boundary(
+            db, session_id, message_id
+        )
+        return await agent_file_change_service.revert_changes(
+            db, session_id, since_time=boundary
+        )
 
     async def get_messages(
         self,

@@ -61,6 +61,7 @@ _PLAN_DISABLED_TOOL_NAMES = (
     "python_executor",
     "file_write",
     "text_editor",
+    "file_delete",
     "call_sub_agent_",
 )
 

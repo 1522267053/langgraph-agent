@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useAgentStore } from '@/stores'
@@ -10,6 +10,7 @@ import { agentApi } from '@/api/agent'
 import { flowApi } from '@/api/flow'
 import { aiProviderApi, type ModelInfo } from '@/api/ai_provider'
 import type { FlowIOField } from '@/types/flow'
+import type { AgentFileChangeInfo } from '@/types/agent'
 import DisplayToggle from '@/components/AgentChat/DisplayToggle.vue'
 import MemoryPanel from '@/components/AgentChat/MemoryPanel.vue'
 import MessageItem from '@/components/AgentChat/MessageItem.vue'
@@ -788,6 +789,15 @@ async function handleCompress() {
   }
 }
 
+/** 回退确认弹窗状态：展示将恢复的文件清单并提供三种回退方式 */
+const revertDialog = reactive({
+  visible: false,
+  messageId: 0,
+  loading: false,
+  executing: false,
+  files: [] as AgentFileChangeInfo[]
+})
+
 function handleDeleteMessage(msg: (typeof store.chatMessages)[0]) {
   if (!store.currentSession || !store.currentAgent) return
   if (store.isStreaming) {
@@ -801,38 +811,78 @@ function handleDeleteMessage(msg: (typeof store.chatMessages)[0]) {
     ElMessage.warning({ message: '该消息不支持删除', duration: 5000 })
     return
   }
-
-  ElMessageBox.confirm('删除此消息及之后的对话？', '确定', { type: 'warning' })
-    .then(async () => {
-      const deleted = await store.deleteMessagesFrom(msgId)
-      if (deleted) {
-        inputMessage.value = deleted.content
-        restoreInputParams(deleted)
-        // 删除后列表缩短，强制贴底（不受 RO 跟随开关与用户位置限制）
-        scrollToBottom()
-      }
-      ElMessage.success({ message: '已删除，可重新发送', duration: 5000 })
-    })
-    .catch(() => {})
+  openRevertDialog(msgId)
 }
 
 function handleRevertFrom(dbMsgId: number) {
+  if (!store.currentSession || !store.currentAgent) return
   if (store.isStreaming) {
     ElMessage.warning({ message: '请等待回复完成', duration: 5000 })
     return
   }
-  ElMessageBox.confirm('将删除此条及之后的所有内容，确定继续？', '确定', { type: 'warning' })
-    .then(async () => {
-      const deleted = await store.deleteMessagesFrom(dbMsgId)
-      if (deleted) {
-        inputMessage.value = deleted.content
-        restoreInputParams(deleted)
-        // 回退后列表缩短，强制贴底（不受 RO 跟随开关与用户位置限制）
-        scrollToBottom()
+  openRevertDialog(dbMsgId)
+}
+
+async function openRevertDialog(msgId: number) {
+  revertDialog.messageId = msgId
+  revertDialog.files = []
+  revertDialog.visible = true
+  revertDialog.loading = true
+  try {
+    const res = await agentApi.revertPreview(agentId.value, store.currentSession!.id, msgId)
+    if (res.data.code === 1) {
+      revertDialog.files = res.data.data.files
+    }
+  } catch {
+    // error handled by interceptor；预览失败仍允许仅回退消息
+  } finally {
+    revertDialog.loading = false
+  }
+}
+
+type RevertMode = 'message' | 'message_files' | 'files'
+
+async function executeRevert(mode: RevertMode) {
+  if (!store.currentSession || !store.currentAgent) return
+  const msgId = revertDialog.messageId
+  revertDialog.executing = true
+  try {
+    if (mode === 'files') {
+      // 仅恢复文件：对话保持不动
+      const res = await agentApi.restoreFilesOnly(agentId.value, store.currentSession.id, msgId)
+      if (res.data.code === 1) {
+        notifyFileRestore(res.data.data.reverted_files, res.data.data.ok_count)
+        revertDialog.visible = false
       }
-      ElMessage.success({ message: '已删除', duration: 5000 })
+      return
+    }
+    const deleted = await store.deleteMessagesFrom(msgId, mode === 'message_files')
+    if (deleted) {
+      inputMessage.value = deleted.content
+      restoreInputParams(deleted)
+      // 回退后列表缩短，强制贴底（不受 RO 跟随开关与用户位置限制）
+      scrollToBottom()
+      notifyFileRestore(deleted.reverted_files ?? [])
+      ElMessage.success({ message: '已回退，可重新发送', duration: 5000 })
+    }
+    revertDialog.visible = false
+  } finally {
+    revertDialog.executing = false
+  }
+}
+
+/** 提示文件恢复结果：成功数 + 失败项警告 */
+function notifyFileRestore(files: AgentFileChangeInfo[], okCount?: number) {
+  if (!files.length) return
+  const ok = okCount ?? files.filter(f => f.status === 'ok').length
+  ElMessage.success({ message: `已恢复 ${ok} 个文件`, duration: 5000 })
+  const failed = files.filter(f => f.status && f.status !== 'ok')
+  if (failed.length > 0) {
+    ElMessage.warning({
+      message: `${failed.length} 个文件恢复失败（备份缺失或文件不可访问）`,
+      duration: 5000
     })
-    .catch(() => {})
+  }
 }
 
 /**
@@ -1139,6 +1189,57 @@ function handleRejectTools() {
       :initial-path="currentWorkDir"
       @confirm="handleWorkDirConfirm"
     />
+
+    <el-dialog
+      v-model="revertDialog.visible"
+      title="回退到此消息"
+      width="560px"
+      :close-on-click-modal="false"
+    >
+      <div v-loading="revertDialog.loading" class="revert-body">
+        <p class="revert-tip">将删除此消息及之后的所有对话，原始输入会恢复到输入框。</p>
+        <template v-if="revertDialog.files.length > 0">
+          <p class="revert-subtitle">检测到以下被 AI 更改的文件，可选择一并恢复：</p>
+          <ul class="revert-files">
+            <li v-for="file in revertDialog.files" :key="file.file_path" class="revert-file-item">
+              <span class="revert-file-path" :title="file.file_path">{{ file.file_path }}</span>
+              <el-tag size="small" :type="file.change_type === 'create' ? 'danger' : 'warning'">
+                {{ file.change_type === 'create' ? '将删除' : '将还原' }}
+              </el-tag>
+            </li>
+          </ul>
+        </template>
+        <p v-else-if="!revertDialog.loading" class="revert-empty">
+          未追踪到可自动恢复的文件变更（shell 命令产生的文件变更无法恢复）
+        </p>
+      </div>
+      <template #footer>
+        <el-button @click="revertDialog.visible = false">取消</el-button>
+        <el-button
+          v-if="revertDialog.files.length > 0"
+          :disabled="revertDialog.executing"
+          @click="executeRevert('files')"
+        >
+          仅恢复文件
+        </el-button>
+        <el-button
+          v-if="revertDialog.files.length > 0"
+          type="primary"
+          :loading="revertDialog.executing"
+          @click="executeRevert('message_files')"
+        >
+          回退消息并恢复文件
+        </el-button>
+        <el-button
+          v-else
+          type="primary"
+          :loading="revertDialog.executing"
+          @click="executeRevert('message')"
+        >
+          回退消息
+        </el-button>
+      </template>
+    </el-dialog>
 
     <Teleport to="body">
       <el-image-viewer
@@ -1585,6 +1686,60 @@ export default {
     max-width: 35vw;
     font-size: 11px;
   }
+}
+
+/* 回退确认弹窗 */
+.revert-body {
+  min-height: 60px;
+}
+
+.revert-tip {
+  margin: 0 0 8px;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+}
+
+.revert-subtitle {
+  margin: 0 0 8px;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+
+.revert-files {
+  margin: 0;
+  padding: 8px 12px;
+  max-height: 220px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
+}
+
+.revert-file-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.revert-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  color: var(--el-text-color-regular);
+  font-family: monospace;
+}
+
+.revert-empty {
+  margin: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 </style>
 

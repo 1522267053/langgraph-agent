@@ -10,7 +10,9 @@ import type {
   AgentMessage,
   AgentChatRequest,
   AgentResumeRequest,
-  AgentDeleteMessagesResult
+  AgentDeleteMessagesResult,
+  AgentRevertPreview,
+  AgentFileChangeInfo
 } from '@/types/agent'
 import type { FlowSSEHandlers, SSEEvent, SSEWaitData } from '@/types/sse'
 import { createFlowSSEConnection } from '@/utils/sse'
@@ -287,10 +289,41 @@ export const agentApi = {
    * @param agentId Agent ID
    * @param sessionId 会话ID
    * @param messageId 起始消息ID
+   * @param restoreFiles 是否同步恢复该范围内追踪到的文件变更
    */
-  deleteMessagesFrom(agentId: number, sessionId: number, messageId: number) {
+  deleteMessagesFrom(
+    agentId: number,
+    sessionId: number,
+    messageId: number,
+    restoreFiles: boolean = true
+  ) {
     return get<AgentDeleteMessagesResult>(
-      `/agent/${agentId}/sessions/${sessionId}/deleteMessages/${messageId}`
+      `/agent/${agentId}/sessions/${sessionId}/deleteMessages/${messageId}`,
+      { restore_files: restoreFiles }
+    )
+  },
+
+  /**
+   * 预览回退到指定消息时将恢复的文件清单
+   * @param agentId Agent ID
+   * @param sessionId 会话ID
+   * @param messageId 回退锚点消息ID
+   */
+  revertPreview(agentId: number, sessionId: number, messageId: number) {
+    return get<AgentRevertPreview>(
+      `/agent/${agentId}/sessions/${sessionId}/revertPreview/${messageId}`
+    )
+  },
+
+  /**
+   * 仅恢复文件变更（保留对话消息不动）
+   * @param agentId Agent ID
+   * @param sessionId 会话ID
+   * @param messageId 回退锚点消息ID
+   */
+  restoreFilesOnly(agentId: number, sessionId: number, messageId: number) {
+    return post<{ reverted_files: AgentFileChangeInfo[]; ok_count: number }>(
+      `/agent/${agentId}/sessions/${sessionId}/restoreFiles/${messageId}`
     )
   },
 

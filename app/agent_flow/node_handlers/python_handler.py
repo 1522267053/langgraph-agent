@@ -33,7 +33,9 @@ from app.agent_flow.node_handlers.base_handler import (
     BaseNodeConfig,
     NodeVariable,
 )
+from app.config.build_utils import BASE_DIR
 from app.models.flow_node import FlowNode
+from app.services.agent_file_change_service import record_tool_file_change
 
 
 class PythonParam(NodeVariable):
@@ -399,6 +401,15 @@ class PythonNodeHandler(BaseNodeHandler):
                         result["mime_type"] = file_info.get("mime_type", "")
                         result["file_name"] = file_info.get("file_name", "")
                         result["download_url"] = file_info.get("download_url", "")
+                        # 文件变更追踪：产物文件记为 create，回退消息时一并移除
+                        stored_rel = file_info.get("preview_url", "").lstrip("/")
+                        if stored_rel and file_info.get("file_id"):
+                            await record_tool_file_change(
+                                tool_name="save_file",
+                                file_path=str(BASE_DIR / stored_rel),
+                                change_type="create",
+                                file_id=int(file_info["file_id"]),
+                            )
                     except Exception as e:
                         result["result"] = {
                             "success": False,

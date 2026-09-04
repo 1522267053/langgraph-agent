@@ -104,6 +104,24 @@ export interface AgentFileInfo {
   preview_url?: string
 }
 
+/** 文件变更记录（回退预览/恢复结果） */
+export interface AgentFileChangeInfo {
+  /** 被变更文件的绝对路径 */
+  file_path: string
+  /** 变更类型：create=新建（回退时删除），modify=修改（回退时还原备份），delete=删除（回退时还原文件） */
+  change_type: 'create' | 'modify' | 'delete'
+  /** 产生变更的工具名 */
+  tool_name: string
+  /** 恢复状态（仅恢复结果携带）：ok/backup_missing/failed/unknown_type */
+  status?: string
+}
+
+/** 回退预览结果 */
+export interface AgentRevertPreview {
+  /** 将被恢复的文件清单（按文件去重） */
+  files: AgentFileChangeInfo[]
+}
+
 /** 删除消息及之后内容的返回结果（回退恢复用） */
 export interface AgentDeleteMessagesResult {
   /** 被删除用户消息的文本内容 */
@@ -112,6 +130,8 @@ export interface AgentDeleteMessagesResult {
   files?: AgentFileInfo[]
   /** 用户输入参数 */
   input_data?: Record<string, unknown>
+  /** 文件恢复结果（restore_files=true 时返回） */
+  reverted_files?: AgentFileChangeInfo[]
 }
 
 /** Agent聊天请求 */

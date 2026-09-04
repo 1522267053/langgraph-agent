@@ -59,6 +59,14 @@ class SchedulerService:
             max_instances=1,
         )
         self._scheduler.add_job(
+            self._cleanup_file_snapshots,
+            CronTrigger(minute=30, hour="*"),
+            id="cleanup_file_snapshots",
+            name="清理过期的文件回退备份",
+            replace_existing=True,
+            max_instances=1,
+        )
+        self._scheduler.add_job(
             self._scan_expired_recurring_agendas,
             CronTrigger(minute="*/30"),
             id="scan_expired_recurring_agendas",
@@ -276,6 +284,12 @@ class SchedulerService:
 
         if deleted > 0:
             logger.info(f"已清理 {deleted} 个过期临时文件")
+
+    async def _cleanup_file_snapshots(self) -> None:
+        """清理过期的文件回退备份（已回退残留 + 超过保留期的未回退备份）"""
+        from app.services.agent_file_change_service import agent_file_change_service
+
+        await agent_file_change_service.cleanup_expired()
 
     # ---- 日程提醒轮询 ----
 

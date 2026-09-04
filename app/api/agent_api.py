@@ -212,6 +212,48 @@ class AgentApi:
             return ApiResponse.success(msg="删除成功")
 
         @self.router.get(
+            "/{id}/sessions/{session_id}/revertPreview/{message_id}",
+            response_model=ApiResponse,
+            summary="预览回退将恢复的文件清单",
+        )
+        async def revert_preview(
+            id: int,
+            session_id: int,
+            message_id: int,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """查询回退到指定消息时将恢复/删除的文件列表（shell 命令变更不在追踪范围）"""
+            preview = await agent_executor_service.get_revert_preview(
+                db, session_id, message_id
+            )
+            if preview is None:
+                return ApiResponse.error(msg="会话不存在")
+            return ApiResponse.success(data=preview, msg="查询成功")
+
+        @self.router.post(
+            "/{id}/sessions/{session_id}/restoreFiles/{message_id}",
+            response_model=ApiResponse,
+            summary="仅恢复文件变更（保留对话）",
+        )
+        async def restore_files(
+            id: int,
+            session_id: int,
+            message_id: int,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """将文件恢复到指定消息之前的状态，不删除任何消息"""
+            results = await agent_executor_service.restore_files_only(
+                db, session_id, message_id
+            )
+            if results is None:
+                return ApiResponse.error(msg="会话不存在")
+            ok_count = sum(1 for r in results if r.get("status") == "ok")
+            return ApiResponse.success(
+                data={"reverted_files": results, "ok_count": ok_count},
+                msg=f"已恢复 {ok_count} 个文件",
+            )
+
+        @self.router.get(
             "/{id}/sessions/{session_id}/deleteMessages/{message_id}",
             response_model=ApiResponse,
             summary="删除消息及之后内容",
@@ -220,11 +262,15 @@ class AgentApi:
             id: int,
             session_id: int,
             message_id: int,
+            restore_files: bool = True,
             db: AsyncSession = Depends(get_db),
         ):
-            """删除指定消息及之后的所有消息，返回被删除的用户消息内容用于重新编辑"""
+            """删除指定消息及之后的所有消息，返回被删除的用户消息内容用于重新编辑；
+
+            restore_files=True 时同步恢复该范围内追踪到的文件变更
+            """
             deleted = await agent_executor_service.delete_messages_from(
-                db, session_id, message_id
+                db, session_id, message_id, restore_files=restore_files
             )
             if deleted is None:
                 return ApiResponse.error(msg="消息不存在")
@@ -233,6 +279,7 @@ class AgentApi:
                     "content": deleted["content"],
                     "files": deleted["files"],
                     "input_data": deleted["input_data"],
+                    "reverted_files": deleted["reverted_files"],
                 },
                 msg="删除成功",
             )
