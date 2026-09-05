@@ -7,9 +7,12 @@
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 
 from langchain_core.messages import ToolCall
+
+from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,8 @@ class ToolApprovalFuture:
     result: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
     approval_needed: list[str] = field(default_factory=list)
+    # 确认死线（time.time() 秒）：后端权威超时点，供断线重连回放时重算剩余
+    expires_at: float = 0.0
 
 
 class ToolApprovalService:
@@ -38,7 +43,9 @@ class ToolApprovalService:
     ) -> ToolApprovalFuture:
         """注册一个待确认的工具调用，返回 Future 供 await"""
         future = ToolApprovalFuture(
-            tool_calls=tool_calls, approval_needed=approval_needed
+            tool_calls=tool_calls,
+            approval_needed=approval_needed,
+            expires_at=time.time() + USER_RESPONSE_TIMEOUT_SECONDS,
         )
         self._pending[session_id] = future
         logger.info(
@@ -46,6 +53,13 @@ class ToolApprovalService:
             f"approval_needed={approval_needed}"
         )
         return future
+
+    def remaining_seconds(self, session_id: int) -> int | None:
+        """返回当前待确认的剩余响应秒数；无等待时返回 None"""
+        future = self._pending.get(session_id)
+        if not future:
+            return None
+        return max(0, int(future.expires_at - time.time()))
 
     def resolve(self, session_id: int, result: str) -> bool:
         """前端确认/拒绝后唤醒等待"""

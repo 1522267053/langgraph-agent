@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
+from app.constants.timing import LOGIN_LOCK_SECONDS
 from app.schemas.base_schema import ApiResponse
 from app.schemas.global_config_schema import LoginRequest, AuthCheckResponse
 from app.services.global_config_service import global_config_service
@@ -24,14 +25,13 @@ logger = logging.getLogger(__name__)
 # ---- 登录失败锁定（IP 维度，内存存储） ----
 
 _LOCK_THRESHOLD = 5
-_LOCK_DURATION = 300
 
 _login_failures: dict[str, list[float]] = defaultdict(list)
 
 
 def _is_locked(ip: str) -> bool:
     """检查 IP 是否被锁定"""
-    cutoff = time.time() - _LOCK_DURATION
+    cutoff = time.time() - LOGIN_LOCK_SECONDS
     recent = [t for t in _login_failures[ip] if t > cutoff]
     _login_failures[ip] = recent
     return len(recent) >= _LOCK_THRESHOLD
@@ -39,7 +39,7 @@ def _is_locked(ip: str) -> bool:
 
 def _get_remaining_attempts(ip: str) -> int:
     """获取剩余尝试次数"""
-    cutoff = time.time() - _LOCK_DURATION
+    cutoff = time.time() - LOGIN_LOCK_SECONDS
     recent = [t for t in _login_failures[ip] if t > cutoff]
     return max(0, _LOCK_THRESHOLD - len(recent))
 
@@ -51,7 +51,7 @@ def _get_lock_remaining(ip: str) -> int:
         return 0
     oldest_in_window = min(attempts)
     elapsed = time.time() - oldest_in_window
-    return max(0, int(_LOCK_DURATION - elapsed))
+    return max(0, int(LOGIN_LOCK_SECONDS - elapsed))
 
 
 def _record_failure(ip: str) -> None:
@@ -140,7 +140,9 @@ class AuthApi:
                 _record_failure(client_ip)
                 left = _get_remaining_attempts(client_ip)
                 if left <= 0:
-                    return ApiResponse.error(msg="登录失败次数过多，请5分钟后再试")
+                    return ApiResponse.error(
+                        msg=f"登录失败次数过多，请{LOGIN_LOCK_SECONDS // 60}分钟后再试"
+                    )
                 return ApiResponse.error(msg=f"用户名或密码错误，还可尝试 {left} 次")
 
             # 校验密码
@@ -149,7 +151,9 @@ class AuthApi:
                 _record_failure(client_ip)
                 left = _get_remaining_attempts(client_ip)
                 if left <= 0:
-                    return ApiResponse.error(msg="登录失败次数过多，请5分钟后再试")
+                    return ApiResponse.error(
+                        msg=f"登录失败次数过多，请{LOGIN_LOCK_SECONDS // 60}分钟后再试"
+                    )
                 return ApiResponse.error(msg=f"用户名或密码错误，还可尝试 {left} 次")
 
             # 登录成功

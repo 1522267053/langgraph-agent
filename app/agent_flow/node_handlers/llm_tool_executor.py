@@ -38,6 +38,7 @@ from app.agent_flow.tool_resolver import (
     get_connected_tool_edges,
 )
 from app.agent_flow.tools.structured_output import StructuredOutputService
+from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
 from app.config.build_utils import get_agent_work_dir
 from app.models.flow import FlowType
 from app.models.flow_node import FlowNode
@@ -492,19 +493,25 @@ async def handle_tool_calls(
                             node_key=node.node_key,
                             tool_calls=tool_calls,
                             approval_needed=approval_names,
+                            expires_in=USER_RESPONSE_TIMEOUT_SECONDS,
                         ),
                     )
 
-                # 等待前端确认（5分钟超时，SSE 流保持连接）
+                # 等待前端确认（USER_RESPONSE_TIMEOUT_SECONDS 超时，SSE 流保持连接）
                 try:
-                    await asyncio.wait_for(future.event.wait(), timeout=300)
+                    await asyncio.wait_for(
+                        future.event.wait(), timeout=USER_RESPONSE_TIMEOUT_SECONDS
+                    )
                 except asyncio.TimeoutError:
                     tool_approval_service.remove(session_id)
                     state.set_interrupted()
                     for tc in tool_calls:
                         tc_name = tc.get("name", "")
                         tc_id = tc.get("id", "")
-                        msg = "工具确认超时（5分钟未响应），自动取消执行"
+                        msg = (
+                            f"工具确认超时（{USER_RESPONSE_TIMEOUT_SECONDS // 60}分钟未响应），"
+                            "自动取消执行"
+                        )
                         msg_buf.append(
                             ToolMessage(content=msg, tool_call_id=tc_id, name=tc_name)
                         )

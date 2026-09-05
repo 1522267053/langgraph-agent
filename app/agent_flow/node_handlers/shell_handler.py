@@ -49,6 +49,7 @@ from app.agent_flow.tools.common import (
 from app.agent_flow.tools.file_read import FileReadService
 from app.config.build_utils import BASE_DIR, get_agent_work_dir, get_temp_dir
 from app.config.settings import settings
+from app.constants.timing import SHELL_TASK_EXPIRE_SECONDS
 from app.models.flow_node import FlowNode
 
 
@@ -605,7 +606,6 @@ class BackgroundShellTask:
 
 
 _background_tasks: dict[str, BackgroundShellTask] = {}
-_task_expire_seconds: int = 300
 
 
 async def _notify_tool_start(task: BackgroundShellTask) -> None:
@@ -721,13 +721,13 @@ async def _monitor_process(
 
 
 def _cleanup_expired_tasks() -> None:
-    """清理已完成超过 _task_expire_seconds 的任务，释放内存"""
+    """清理已完成超过 SHELL_TASK_EXPIRE_SECONDS 的任务，释放内存"""
     now = datetime.now()
     expired_ids = []
     for tid, task in _background_tasks.items():
         if (
             task.end_time
-            and (now - task.end_time).total_seconds() > _task_expire_seconds
+            and (now - task.end_time).total_seconds() > SHELL_TASK_EXPIRE_SECONDS
         ):
             expired_ids.append(tid)
     for tid in expired_ids:
@@ -740,7 +740,7 @@ def get_running_tasks() -> list[dict]:
     """获取所有运行中和最近完成的后台任务（供 REST API 调用）
 
     返回全部未过期任务（含终态），供前端轮询将本地 running 任务更新为终态；
-    已结束超过 _task_expire_seconds 的任务由 _cleanup_expired_tasks 清理后不再返回。
+    已结束超过 SHELL_TASK_EXPIRE_SECONDS 的任务由 _cleanup_expired_tasks 清理后不再返回。
     """
     _cleanup_expired_tasks()
     result = []
