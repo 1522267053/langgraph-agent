@@ -32,6 +32,7 @@ import {
 } from '@/components/AgentChat/chatRow'
 import { clearBlockExpandOverrides } from '@/components/AgentChat/blockExpand'
 import { useToolOutputStore } from '@/stores/toolOutput'
+import { formatCountdown } from '@/utils/format'
 import { useAutoScroll } from '@/composables/useAutoScroll'
 import { loadWorkDirForAgent, saveWorkDirForAgent } from '@/utils/workdir'
 
@@ -993,13 +994,6 @@ function formatToolApprovalArgs(args?: Record<string, unknown>): string {
   }
 }
 
-function formatCountdown(seconds: number): string {
-  if (seconds <= 0) return ''
-  const m = Math.floor(seconds / 60)
-  const s = seconds % 60
-  return m > 0 ? `${m}:${s.toString().padStart(2, '0')}` : `${s}s`
-}
-
 function handleApproveTools() {
   store.approveToolCalls()
 }
@@ -1268,6 +1262,7 @@ function handleRejectTools() {
     <QuestionDialog
       :question="store.pendingQuestion"
       @submit="handleQuestionSubmit"
+      @expire="store.dismissExpiredQuestion"
     />
     <DirectoryPickerDialog
       v-model="workDirPickerVisible"

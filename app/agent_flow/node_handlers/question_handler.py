@@ -48,7 +48,13 @@ class AskUserQuestionInput(BaseModel):
             "{label: 简短标签, description?: 详细说明, preview?: 长内容预览}"
         ),
     )
-    multiple: bool = Field(default=False, description="是否允许多选；默认单选")
+    multiple: bool = Field(
+        default=False,
+        description=(
+            "true=多选：用户可勾选多项后点确定提交；false/省略=单选：点击选项即提交。"
+            "选项不互斥且可能需要同时选多项时设为 true"
+        ),
+    )
     header: Optional[str] = Field(
         default=None, description="短标题（弹窗表头），2-12 字"
     )
@@ -185,6 +191,7 @@ class QuestionNodeHandler(BaseNodeHandler):
                     header=header,
                     options=options,
                     multiple=multiple,
+                    expires_in=USER_RESPONSE_TIMEOUT_SECONDS,
                 )
             )
 
@@ -217,6 +224,9 @@ class QuestionNodeHandler(BaseNodeHandler):
                 "向用户提出结构化选项问题并等待选择。"
                 "仅在确实需要用户澄清偏好 / 取舍时才调用，不要滥用。"
                 "提供 1-4 个选项，最后一个 Other 选项由前端自动追加。"
+                "选项互斥的方案取舍（如选数据库、选 UI 风格）使用默认单选；"
+                "选项可并存、用户可能需要同时选多项（如勾选多个要处理的文件、"
+                "多项改进措施）时设置 multiple: true。"
                 "返回 JSON {answers: [label, ...]}，用户选择 Other 时 answers[0] 是用户输入的文本。"
             ),
             func=None,
@@ -261,6 +271,7 @@ class QuestionNodeHandler(BaseNodeHandler):
             f"- 需要确认是否执行某项有副作用的操作\n\n"
             f"节点描述：{description}\n"
             f"调用规范：提供 1-4 个选项（label 必填，description 可选），"
+            f"选项不互斥、需要用户同时选多项时设置 multiple: true，"
             f"前端会自动追加 Other 选项允许用户自由输入。\n"
             f"不要在可以自主判断的场景滥用此工具（避免打断用户）。\n"
         )

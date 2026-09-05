@@ -16,6 +16,7 @@ from langgraph.types import StreamWriter
 from pydantic import Field, create_model
 
 from app.config.database import AsyncSessionLocal
+from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
 from app.models.flow_node import FlowNode
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.node_handlers.base_handler import BaseNodeHandler, BaseNodeConfig
@@ -258,6 +259,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
                             sub_agent_id=_agent_id,
                             sub_session_id=session_id,
                             sub_agent_name=_agent_name,
+                            expires_in=USER_RESPONSE_TIMEOUT_SECONDS,
                         )
                     )
 

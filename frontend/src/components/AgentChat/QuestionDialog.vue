@@ -5,11 +5,14 @@
  * LLM 调用 ask_user_question 工具时弹出。用户可点击选项或选择 "Other" 自填。
  * - 单选：选项互斥，点击即提交
  * - 多选：选项可多选，需点"确定"提交
- *
- * 与 tool_approval 的差异：这里是结构化选项，不阻塞（用户必须主动选）
+ * - 倒计时归零：本地自动关闭（emit expire → store 清 pendingQuestion，不调
+ *   resolve），后端超时后自行向 LLM 返回过期错误；倒计时来源为后端权威
+ *   expires_in（刷新重连回放时由服务端重算）
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { QuestionFilled, Check } from '@element-plus/icons-vue'
+import { formatCountdown } from '@/utils/format'
+import { USER_RESPONSE_COUNTDOWN_SECONDS } from '@/constants/timing'
 
 interface QuestionOption {
   label: string
@@ -24,6 +27,7 @@ interface PendingQuestion {
   header?: string | null
   options: QuestionOption[]
   multiple: boolean
+  expiresIn?: number
 }
 
 const props = defineProps<{
@@ -32,6 +36,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'submit', answers: string[]): void
+  (e: 'expire'): void
 }>()
 
 // 多选模式下的当前选中 label 集合
@@ -44,10 +49,48 @@ const showCustomInput = ref(false)
 // 防止 store 清空 pendingQuestion 引发 dialog v-model 同步时再次误触发 cancel → submit
 const submitted = ref(false)
 
+// ---- 回答倒计时 ----
+const remainingSeconds = ref(0)
+const expired = ref(false)
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+
+function stopCountdown(): void {
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+}
+
+function startCountdown(q: PendingQuestion): void {
+  stopCountdown()
+  expired.value = false
+  const fromServer = Math.floor(Number(q.expiresIn) || 0)
+  remainingSeconds.value = fromServer > 0 ? fromServer : USER_RESPONSE_COUNTDOWN_SECONDS
+  countdownTimer = setInterval(() => {
+    remainingSeconds.value -= 1
+    if (remainingSeconds.value > 0) return
+    stopCountdown()
+    expired.value = true
+    // 置 submitted 吞掉 store 清空 question 引发的 v-model cancel（防误发 submit([])）
+    submitted.value = true
+    emit('expire')
+  }, 1000)
+}
+
 const visible = computed(() => props.question !== null)
 const isMultiple = computed(() => props.question?.multiple ?? false)
 
-// 监听 question 变化 → 重置表单
+// Other 自填是否有内容：作为 Other 选项的勾选态（有内容即勾选）
+const otherSelected = computed(() => customText.value.trim().length > 0)
+
+// 单选互斥：Other 有内容时清除已选选项；多选允许勾选项与 Other 并存
+watch(customText, text => {
+  if (text.trim() && !isMultiple.value) {
+    selectedLabels.value = new Set()
+  }
+})
+
+// 监听 question 变化 → 重置表单 + 重启倒计时
 watch(
   () => props.question,
   q => {
@@ -55,12 +98,15 @@ watch(
     customText.value = ''
     showCustomInput.value = false
     submitted.value = false  // 新问题到来时重置提交标志
-    // 默认聚焦到第一个选项（无操作）
-    void q
+    if (q) startCountdown(q)
+    else stopCountdown()
   }
 )
 
+onUnmounted(stopCountdown)
+
 function pickOption(opt: QuestionOption) {
+  if (expired.value) return
   if (isMultiple.value) {
     // 多选：toggle 选中
     if (selectedLabels.value.has(opt.label)) {
@@ -71,33 +117,48 @@ function pickOption(opt: QuestionOption) {
     // 触发响应式
     selectedLabels.value = new Set(selectedLabels.value)
   } else {
-    // 单选：直接提交
-    submitted.value = true
-    emit('submit', [opt.label])
+    // 单选：radio 语义，替换选中并放弃 Other 自填（与 Other 互斥），统一由底部确定提交
+    selectedLabels.value = new Set([opt.label])
+    customText.value = ''
   }
 }
 
 function pickCustom() {
+  if (expired.value) return
   showCustomInput.value = true
 }
 
-function submitCustom() {
-  const text = customText.value.trim()
-  if (!text) return
-  submitted.value = true
-  emit('submit', [text])
-}
-
 function submitMultiple() {
+  if (expired.value) return
   const answers: string[] = []
   for (const label of selectedLabels.value) answers.push(label)
-  // 若用户没选任何项但已填 Other，自动带上
-  if (answers.length === 0 && customText.value.trim()) {
-    answers.push(customText.value.trim())
-  }
+  // Other 自填内容始终追加：多选 = 勾选项与 Other 可并存
+  const custom = customText.value.trim()
+  if (custom) answers.push(custom)
   submitted.value = true
   emit('submit', answers)
 }
+
+// 底部统一确认：多选提交勾选集合；单选提交选中项（自填内容优先——输入即表示
+// 选项都不符合），无任何选择时不可提交
+function submitDialog() {
+  if (expired.value) return
+  if (isMultiple.value) {
+    submitMultiple()
+    return
+  }
+  const custom = customText.value.trim()
+  const label = [...selectedLabels.value][0]
+  const answer = custom || label
+  if (!answer) return
+  submitted.value = true
+  emit('submit', [answer])
+}
+
+// 确定按钮可用性：需有勾选/选中项或自填内容
+const confirmDisabled = computed(() => {
+  return expired.value || (selectedLabels.value.size === 0 && !customText.value.trim())
+})
 
 function cancel() {
   // 守卫：用户已主动 submit（pickOption / submitCustom / submitMultiple）后，
@@ -123,10 +184,14 @@ function cancel() {
       <div class="dialog-header">
         <el-icon :size="20" class="dialog-icon"><QuestionFilled /></el-icon>
         <span class="dialog-title">{{ question?.header || '问题反问' }}</span>
+        <span v-if="expired" class="dialog-expired">已过期</span>
+        <span v-else-if="remainingSeconds > 0" class="dialog-countdown">{{
+          formatCountdown(remainingSeconds)
+        }}</span>
       </div>
     </template>
 
-    <div v-if="question" class="question-body">
+    <div v-if="question" class="question-body" :class="{ 'is-expired': expired }">
       <div class="question-text">{{ question.question }}</div>
 
       <div class="options-list">
@@ -135,11 +200,13 @@ function cancel() {
           :key="opt.label"
           class="option-item"
           :class="{
-            selected: selectedLabels.has(opt.label) && isMultiple
+            selected: selectedLabels.has(opt.label),
+            'option-disabled': expired
           }"
+          :disabled="expired"
           @click="pickOption(opt)"
         >
-          <span v-if="isMultiple" class="option-marker">
+          <span class="option-marker">
             <el-icon v-if="selectedLabels.has(opt.label)">
               <Check />
             </el-icon>
@@ -156,9 +223,19 @@ function cancel() {
           </div>
         </button>
 
-        <!-- Other 自填选项（固定追加） -->
-        <button class="option-item option-other" @click="pickCustom">
-          <span class="option-marker"><span class="marker-empty">✎</span></span>
+        <!-- Other 自填选项（固定追加；提交走底部统一确认按钮） -->
+        <button
+          class="option-item option-other"
+          :class="{ selected: otherSelected, 'option-disabled': expired }"
+          :disabled="expired"
+          @click="pickCustom"
+        >
+          <span class="option-marker">
+            <el-icon v-if="otherSelected">
+              <Check />
+            </el-icon>
+            <span v-else class="marker-empty">✎</span>
+          </span>
           <div class="option-content">
             <div class="option-label">Other（手动输入）</div>
             <div v-if="showCustomInput" class="custom-input-wrap" @click.stop>
@@ -168,20 +245,7 @@ function cancel() {
                 :rows="2"
                 placeholder="输入你的回答"
                 autofocus
-                @keyup.enter.ctrl="submitCustom"
-                @keyup.enter.meta="submitCustom"
               />
-              <div class="custom-actions">
-                <el-button size="small" @click.stop="cancel">取消</el-button>
-                <el-button
-                  size="small"
-                  type="primary"
-                  :disabled="!customText.trim()"
-                  @click.stop="submitCustom"
-                >
-                  确定
-                </el-button>
-              </div>
             </div>
             <div v-else class="option-description">提供自定义回答</div>
           </div>
@@ -189,14 +253,11 @@ function cancel() {
       </div>
     </div>
 
-    <template v-if="visible && isMultiple" #footer>
+    <!-- 底部统一确认：多选提交勾选集合；单选仅在其他输入有内容时可确定 -->
+    <template v-if="visible" #footer>
       <div class="dialog-footer">
         <el-button @click="cancel">取消</el-button>
-        <el-button
-          type="primary"
-          :disabled="selectedLabels.size === 0 && !customText.trim()"
-          @click="submitMultiple"
-        >
+        <el-button type="primary" :disabled="confirmDisabled" @click="submitDialog">
           确定
         </el-button>
       </div>
@@ -219,6 +280,35 @@ function cancel() {
   font-weight: 600;
   font-size: 15px;
   color: #303133;
+}
+
+.dialog-countdown {
+  margin-left: auto;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: #e6a23c;
+  background: #fdf6ec;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.dialog-expired {
+  margin-left: auto;
+  font-size: 13px;
+  color: #909399;
+  background: #f4f4f5;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.question-body.is-expired {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.option-disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .question-body {
@@ -322,13 +412,6 @@ function cancel() {
 }
 
 .custom-input-wrap {
-  margin-top: 8px;
-}
-
-.custom-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
   margin-top: 8px;
 }
 

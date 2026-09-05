@@ -15,8 +15,11 @@
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
+
+from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,8 @@ class QuestionFuture:
     event: asyncio.Event = field(default_factory=asyncio.Event)
     answers: list[str] | None = None  # 用户所选标签列表（multiple=True 时可多个）
     metadata: dict[str, Any] = field(default_factory=dict)
+    # 回答死线（time.time() 秒）：后端权威超时点，供断线重连回放时重算剩余
+    expires_at: float = 0.0
 
 
 class QuestionService:
@@ -44,10 +49,17 @@ class QuestionService:
             existing.answers = None
             existing.event.set()
 
-        future = QuestionFuture()
+        future = QuestionFuture(expires_at=time.time() + USER_RESPONSE_TIMEOUT_SECONDS)
         self._pending[session_id] = future
         logger.info("问题反问等待注册: session_id=%s", session_id)
         return future
+
+    def remaining_seconds(self, session_id: int) -> int | None:
+        """返回当前待回答问题的剩余响应秒数；无等待时返回 None"""
+        future = self._pending.get(session_id)
+        if not future:
+            return None
+        return max(0, int(future.expires_at - time.time()))
 
     def resolve(self, session_id: int, answers: list[str]) -> bool:
         """前端回答后唤醒等待"""

@@ -157,6 +157,8 @@ export const useAgentStore = defineStore('agent', () => {
     header?: string | null
     options: QuestionOption[]
     multiple: boolean
+    /** 后端权威回答剩余秒数（刷新重连回放时由服务端重算） */
+    expiresIn?: number
   } | null>(null)
 
   // ========== 文件变更（侧栏 Diff 面板） ==========
@@ -1068,13 +1070,15 @@ export const useAgentStore = defineStore('agent', () => {
       },
       onQuestionRequest: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
+        const expiresIn = Math.floor(Number(event.data.expires_in) || 0)
         pendingQuestion.value = {
           questionId: event.data.question_id || '',
           nodeKey: event.data.node_key || '',
           question: event.data.question || '',
           header: event.data.header ?? null,
           options: (event.data.options || []) as QuestionOption[],
-          multiple: Boolean(event.data.multiple)
+          multiple: Boolean(event.data.multiple),
+          expiresIn: expiresIn > 0 ? expiresIn : undefined
         }
       },
       onFileChanged: (event: SSEEvent) => {
@@ -1128,6 +1132,9 @@ export const useAgentStore = defineStore('agent', () => {
           stopApprovalCountdown()
           ElMessage.warning({ message: '工具确认超时，连接已断开', duration: 5000 })
         }
+        // 问题反问兜底清理：正常回答时 resolveQuestion 已清空；后端超时/异常结束时
+        // 前端弹窗不会被动清除，避免留下无效弹窗
+        pendingQuestion.value = null
         if (isResume) {
           isResume = false
         }
@@ -1155,6 +1162,7 @@ export const useAgentStore = defineStore('agent', () => {
           pendingApprovalNeeded.value = []
           stopApprovalCountdown()
         }
+        pendingQuestion.value = null
         try {
           await refreshStreamMessages(context, false, false, true)
         } catch (e) {
@@ -1380,6 +1388,14 @@ export const useAgentStore = defineStore('agent', () => {
       // 失败时恢复弹窗（让用户重试）
       pendingQuestion.value = snapshot
     }
+  }
+
+  /**
+   * 问题倒计时归零：本地关闭弹窗，不调 resolve——后端超时后会自行向 LLM 返回
+   * 过期错误并继续执行，此处若提交取消可能与后端超时路径竞态产生无效请求
+   */
+  function dismissExpiredQuestion() {
+    pendingQuestion.value = null
   }
 
   // ===== 文件变更（侧栏 Diff 面板） =====
@@ -1903,6 +1919,7 @@ export const useAgentStore = defineStore('agent', () => {
     approveToolCalls,
     rejectToolCalls,
     resolveQuestion,
+    dismissExpiredQuestion,
     // 文件变更
     fetchFileChanges,
     openFileChangeDiff,
