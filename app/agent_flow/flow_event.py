@@ -320,6 +320,9 @@ class QuestionRequestEvent(FlowEvent):
         default_factory=list, description="选项列表 [{label, description?, preview?}]"
     )
     multiple: bool = Field(default=False, description="是否多选")
+    expires_in: Optional[int] = Field(
+        default=None, description="回答剩余秒数（后端权威；断线重连回放时由服务端重算）"
+    )
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.QUESTION_REQUEST

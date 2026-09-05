@@ -40,6 +40,7 @@ from app.services.base_executor_service import BaseExecutorService
 from app.services.agent_conversation_service import agent_conversation_service
 from app.services.file_service import file_service
 from app.services.interrupt_service import interrupt_service
+from app.services.question_service import question_service
 from app.services.tool_approval_service import tool_approval_service
 from app.config.settings import settings
 from app.utils.media_resolver import guess_mime_by_ext
@@ -544,15 +545,30 @@ class AgentExecutorService(BaseExecutorService):
                 while cursor < run.last_event_id:
                     event = run.events[cursor]
                     cursor = event["id"]
-                    if event["type"] == "tool_approval_required":
-                        # 回放的审批事件以服务端实时剩余时间标注（存量事件是发布
-                        # 时的静态副本），避免刷新重连后前端倒计时与后端死线失同步；
-                        # 审批已终结（无等待句柄）时不标注，前端回退默认倒计时
-                        remaining = tool_approval_service.remaining_seconds(session_id)
+                    if event["type"] in (
+                        "tool_approval_required",
+                        "question_request",
+                    ):
+                        # 回放的「等待用户响应」事件以服务端实时剩余时间标注（存量
+                        # 事件是发布时的静态副本），避免刷新重连后前端倒计时与后端
+                        # 死线失同步。子Agent 审批的死线在子会话的等待句柄上，按
+                        # data.sub_session_id 解析；等待已终结（无句柄）时不标注，
+                        # 前端回退默认倒计时
+                        data = event["data"]
+                        approval_session_id = (
+                            int(data.get("sub_session_id") or 0)
+                            if data.get("is_sub_agent")
+                            else session_id
+                        )
+                        remaining = tool_approval_service.remaining_seconds(
+                            approval_session_id
+                        ) if event["type"] == "tool_approval_required" else (
+                            question_service.remaining_seconds(approval_session_id)
+                        )
                         if remaining is not None:
                             event = {
                                 **event,
-                                "data": {**event["data"], "expires_in": remaining},
+                                "data": {**data, "expires_in": remaining},
                             }
                     yield event
                 if run.done:

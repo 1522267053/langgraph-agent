@@ -251,6 +251,18 @@ export function formatDuration(ms: number): string {
 }
 
 /**
+ * 格式化倒计时秒数（等待用户响应类弹窗共用）
+ * @param seconds 剩余秒数，<=0 返回空串
+ * @returns ≥60s 显示 m:ss（如 59:58），<60s 显示 Ns（如 45s）
+ */
+export function formatCountdown(seconds: number): string {
+  if (seconds <= 0) return ''
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return m > 0 ? `${m}:${s.toString().padStart(2, '0')}` : `${s}s`
+}
+
+/**
  * 首字母大写
  * @param str 字符串
  * @returns 首字母大写后的字符串
