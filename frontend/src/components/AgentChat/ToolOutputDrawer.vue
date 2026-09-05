@@ -20,10 +20,7 @@ const visible = computed({
   }
 })
 
-const tools = computed(() => {
-  void store._reactivityTrigger.value
-  return store.toolList
-})
+const tools = computed(() => store.toolList)
 </script>
 
 <template>
