@@ -128,18 +128,23 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
 
     # ---- 查询（预览/回退共用，复用调用方会话）----
 
+    def _apply_filters(self, query, count_query, condition):
+        """标准分页过滤：在等值条件（session_id 等）之上强制「未回退」领域不变量"""
+        query, count_query = super()._apply_filters(query, count_query, condition)
+        query = query.where(AgentFileChange.is_reverted == 0)
+        if count_query is not None:
+            count_query = count_query.where(AgentFileChange.is_reverted == 0)
+        return query, count_query
+
     async def get_changes_since(
         self,
         db: AsyncSession,
         session_id: int,
         since_time: Optional[datetime] = None,
-        limit: int = 0,
     ) -> List[AgentFileChange]:
         """查询指定会话自 since_time（不含）之后的未回退变更记录，按时间正序
 
         since_time 为 None 时返回全部未回退变更（回退到会话开头）。
-        limit > 0 时仅返回最新 limit 条（如侧栏面板）；回退/预览等内部
-        调用方保持 limit=0 不限制。
         """
         query = (
             select(AgentFileChange)
@@ -148,16 +153,12 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
                 AgentFileChange.is_delete == 0,
                 AgentFileChange.is_reverted == 0,
             )
-            .order_by(AgentFileChange.id.desc())
+            .order_by(AgentFileChange.id.asc())
         )
         if since_time is not None:
             query = query.where(AgentFileChange.create_time > since_time)
         result = await db.execute(query)
-        items = list(result.scalars().all())
-        if limit > 0 and len(items) > limit:
-            # 保留最新 limit 条（列表为升序，截取尾部）
-            items = items[-limit:]
-        return items
+        return list(result.scalars().all())
 
     async def get_changes_boundary(
         self, db: AsyncSession, session_id: int, message_id: int
@@ -280,7 +281,6 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
     async def get_diff_content(
         self,
         db: AsyncSession,
-        session_id: int,
         change_id: int,
         max_bytes: int = 1024 * 1024,
     ) -> Optional[dict]:
@@ -293,7 +293,7 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
         - 备份文件已过期（>7d）→ backup_missing=true
         """
         change = await db.get(AgentFileChange, change_id)
-        if not change or change.session_id != session_id:
+        if not change:
             return None
 
         backup_content = ""
@@ -339,12 +339,11 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
     async def revert_single_change(
         self,
         db: AsyncSession,
-        session_id: int,
         change_id: int,
     ) -> Optional[dict]:
         """仅恢复单条变更，不影响其他记录（侧栏「撤销此变更」按钮用）"""
         change = await db.get(AgentFileChange, change_id)
-        if not change or change.session_id != session_id:
+        if not change:
             return None
         if change.is_reverted == 1:
             return {

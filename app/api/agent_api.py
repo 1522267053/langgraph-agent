@@ -38,11 +38,6 @@ from app.schemas.agent_schema import (
     AgentFlowListResponse,
 )
 from app.schemas.base_schema import ApiResponse
-from app.schemas.agent_file_change_schema import (
-    AgentFileChangeDiffResponse,
-    AgentFileChangeListResponse,
-    AgentFileChangeRevertItem,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -476,69 +471,6 @@ class AgentApi:
             return ApiResponse.success(
                 data=agent_executor_service.get_run_status(session_id)
             )
-
-        @self.router.get(
-            "/{id}/sessions/{session_id}/file_changes",
-            response_model=ApiResponse[AgentFileChangeListResponse],
-            summary="获取当前会话所有未回退的文件变更",
-        )
-        async def list_file_changes(
-            id: int,
-            session_id: int,
-            limit: int = 50,
-            db: AsyncSession = Depends(get_db),
-        ):
-            """侧栏面板用：返回去重后的最新变更记录（按文件聚合，仅保留最新一条）；
-            limit 为返回的最新变更条数上限（0 表示不限制）"""
-            from app.services.agent_file_change_service import agent_file_change_service
-            from app.schemas.agent_file_change_schema import (
-                AgentFileChangeListItem,
-                AgentFileChangeListResponse,
-            )
-
-            changes = await agent_file_change_service.get_changes_since(
-                db, session_id, limit=max(0, limit)
-            )
-            items = [AgentFileChangeListItem.model_to_view(c) for c in changes]
-            return ApiResponse.success(
-                data=AgentFileChangeListResponse(list=items, total=len(items))
-            )
-
-        @self.router.get(
-            "/{id}/sessions/{session_id}/file_changes/{change_id}/diff",
-            response_model=ApiResponse[AgentFileChangeDiffResponse],
-            summary="获取单条变更的 diff 内容",
-        )
-        async def get_file_change_diff(
-            id: int, session_id: int, change_id: int, db: AsyncSession = Depends(get_db)
-        ):
-            """返回 backup_content / current_content（前端自行渲染 diff）"""
-            from app.services.agent_file_change_service import agent_file_change_service
-            from app.schemas.agent_file_change_schema import AgentFileChangeDiffResponse
-
-            data = await agent_file_change_service.get_diff_content(db, session_id, change_id)
-            if not data:
-                return ApiResponse.error(msg="变更记录不存在")
-            return ApiResponse.success(data=AgentFileChangeDiffResponse(**data))
-
-        @self.router.post(
-            "/{id}/sessions/{session_id}/file_changes/{change_id}/revert",
-            response_model=ApiResponse[AgentFileChangeRevertItem],
-            summary="恢复单条文件变更",
-        )
-        async def revert_file_change(
-            id: int, session_id: int, change_id: int, db: AsyncSession = Depends(get_db)
-        ):
-            """侧栏「撤销此变更」按钮：仅恢复该条记录，不影响其他变更"""
-            from app.services.agent_file_change_service import agent_file_change_service
-            from app.schemas.agent_file_change_schema import AgentFileChangeRevertItem
-
-            result = await agent_file_change_service.revert_single_change(
-                db, session_id, change_id
-            )
-            if not result:
-                return ApiResponse.error(msg="变更记录不存在")
-            return ApiResponse.success(data=AgentFileChangeRevertItem(**result), msg="已撤销")
 
         @self.router.get(
             "/{id}/sessions/{session_id}/compressing",
