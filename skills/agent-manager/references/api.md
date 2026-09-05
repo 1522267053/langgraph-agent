@@ -193,6 +193,12 @@
 
 常见事件：`flow_start`、`node_start`、`node_thinking`、`node_content`、`tool_call_start`、`tool_call_end`、`node_done`、`token_usage`、`waiting_human`、`flow_done`、`error`。
 
+Agent 模式额外事件：
+- `question_request` — LLM 调用 `ask_user_question` 工具时推送，前端弹窗展示选项；用户提交后通过 `POST /agent/{id}/sessions/{session_id}/question/resolve` 唤醒
+- `file_changed` — Agent 工具写入文件时实时推送（侧栏 Diff 面板用），`data` 含 `change_id` / `file_path` / `change_type` / `tool_name` / `create_time`
+
+其他事件：`tool_approval_required`（工具执行前需用户确认）、`context_compressing`（上下文自动压缩进度）、`flow_preview`（AI 创建/修改流程时推送预览）。
+
 - 从 `flow_start.data.execution_id` 保存执行 ID。
 - 仅 `flow_done` 且 `data.status` 为 `success` 表示正常结束，最终结果在 `data.output_data`。
 - `waiting_human` 表示暂停而非失败。
