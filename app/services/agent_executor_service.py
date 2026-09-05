@@ -2048,7 +2048,9 @@ class AgentExecutorService(BaseExecutorService):
 
         try:
             async with AsyncSessionLocal() as db:
-                result = await self.compress_session(db, session_id, custom_prompt)
+                result = await self.compress_session(
+                    db, session_id, custom_prompt, record_token_usage=True
+                )
                 self._compress_results[session_id] = result
         except Exception as e:
             logger.error(f"后台压缩会话上下文失败: session_id={session_id}, error={e}")
@@ -2072,6 +2074,7 @@ class AgentExecutorService(BaseExecutorService):
         exclude_tail_count: int = 0,
         continue_react: bool = False,
         cleanup_checkpoint: bool = True,
+        record_token_usage: bool = False,
     ) -> dict[str, Any]:
         """
         压缩会话上下文（手动/自动统一入口）
@@ -2084,13 +2087,16 @@ class AgentExecutorService(BaseExecutorService):
             exclude_tail_count: 不参与摘要并在事务中原样重建的末尾消息数
             continue_react: 是否为需要继续执行的 ReAct 中途压缩
             cleanup_checkpoint: 压缩完成后是否立即清理 LangGraph checkpoint
+            record_token_usage: 是否将压缩 LLM 调用的 token_usage 持久化到数据库。
+                                自动压缩路径（ReAct 节点内）由调用方自行记录，
+                                默认 False 避免重复；手动压缩设为 True 以补齐对称能力。
 
         Returns:
             {"summary": str|None, "kept_count": int, "removed_count": int, "token_usage": dict}
         """
         self._compressing_sessions.add(session_id)
         try:
-            return await self._do_compress(
+            result = await self._do_compress(
                 db,
                 session_id,
                 custom_prompt,
@@ -2098,6 +2104,11 @@ class AgentExecutorService(BaseExecutorService):
                 continue_react=continue_react,
                 cleanup_checkpoint=cleanup_checkpoint,
             )
+            if record_token_usage:
+                await self._record_compress_token_usage(
+                    db, session_id, result.get("token_usage") or {}
+                )
+            return result
         finally:
             self._compressing_sessions.discard(session_id)
 
@@ -2156,40 +2167,9 @@ class AgentExecutorService(BaseExecutorService):
         recent_tool_contents: dict[int, str] = {}
         recent_tool_calls: dict[int, str] = {}
         if continue_react:
-            remaining_bytes = max(settings.tool_output_max_bytes * 2, 4096)
-            for index in range(len(messages_to_compress) - 1, -1, -1):
-                message = messages_to_compress[index]
-                if message.role != "tool" or remaining_bytes <= 0:
-                    continue
-                content_bytes = (message.content or "").encode("utf-8")
-                if len(content_bytes) <= remaining_bytes:
-                    recent_tool_contents[index] = message.content or ""
-                    remaining_bytes -= len(content_bytes)
-                else:
-                    recent_tool_contents[index] = (
-                        content_bytes[:remaining_bytes].decode("utf-8", errors="ignore")
-                        + "\n...[工具输出已截断]"
-                    )
-                    remaining_bytes = 0
-
-            remaining_call_bytes = 4096
-            for index in range(len(messages_to_compress) - 1, -1, -1):
-                message = messages_to_compress[index]
-                if (
-                    message.role != "ai"
-                    or not message.tool_calls
-                    or remaining_call_bytes <= 0
-                ):
-                    continue
-                call_bytes = json.dumps(
-                    message.tool_calls,
-                    ensure_ascii=False,
-                    default=str,
-                ).encode("utf-8")
-                if len(call_bytes) > remaining_call_bytes:
-                    call_bytes = call_bytes[:remaining_call_bytes]
-                recent_tool_calls[index] = call_bytes.decode("utf-8", errors="ignore")
-                remaining_call_bytes -= len(call_bytes)
+            recent_tool_contents, recent_tool_calls = self._trim_recent_tool_payloads(
+                messages_to_compress
+            )
 
         conversation_lines = []
         for index, msg in enumerate(messages_to_compress):
@@ -2332,6 +2312,81 @@ class AgentExecutorService(BaseExecutorService):
             "removed_count": removed_count,
             "token_usage": compress_usage,
         }
+
+    @staticmethod
+    def _trim_recent_tool_payloads(
+        messages: list[AgentMessage],
+    ) -> tuple[dict[int, str], dict[int, str]]:
+        """从消息列表尾部向前，按字节预算挑选 tool 输出 / ai tool_calls。
+
+        ReAct 中途压缩时，仅纳入最近的有限工具负载，避免摘要请求本身溢出。
+        返回 (recent_tool_contents, recent_tool_calls)，key 为消息在 messages 中的索引。
+        """
+        tool_content_budget = max(settings.tool_output_max_bytes * 2, 4096)
+        tool_call_budget = 4096
+
+        recent_tool_contents: dict[int, str] = {}
+        recent_tool_calls: dict[int, str] = {}
+        remaining = tool_content_budget
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if message.role != "tool" or remaining <= 0:
+                continue
+            content_bytes = (message.content or "").encode("utf-8")
+            if len(content_bytes) <= remaining:
+                recent_tool_contents[index] = message.content or ""
+                remaining -= len(content_bytes)
+            else:
+                recent_tool_contents[index] = (
+                    content_bytes[:remaining].decode("utf-8", errors="ignore")
+                    + "\n...[工具输出已截断]"
+                )
+                remaining = 0
+
+        remaining_call_bytes = tool_call_budget
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if (
+                message.role != "ai"
+                or not message.tool_calls
+                or remaining_call_bytes <= 0
+            ):
+                continue
+            call_bytes = json.dumps(
+                message.tool_calls,
+                ensure_ascii=False,
+                default=str,
+            ).encode("utf-8")
+            if len(call_bytes) > remaining_call_bytes:
+                call_bytes = call_bytes[:remaining_call_bytes]
+            recent_tool_calls[index] = call_bytes.decode("utf-8", errors="ignore")
+            remaining_call_bytes -= len(call_bytes)
+
+        return recent_tool_contents, recent_tool_calls
+
+    @staticmethod
+    async def _record_compress_token_usage(
+        db: AsyncSession, session_id: int, token_usage: dict
+    ) -> None:
+        """将压缩 LLM 调用的 token_usage 落库；空用量或异常一律吞掉，不影响主流程。"""
+        if not token_usage.get("total_tokens"):
+            return
+        try:
+            from app.services.token_usage_service import token_usage_service
+
+            await token_usage_service.record_usage(
+                db,
+                source_type="agent",
+                source_id=session_id,
+                node_key="_compress",
+                prompt_tokens=token_usage.get("prompt_tokens", 0),
+                completion_tokens=token_usage.get("completion_tokens", 0),
+                total_tokens=token_usage.get("total_tokens", 0),
+            )
+        except Exception as exc:
+            logger.warning(
+                f"记录压缩 token_usage 失败: session_id={session_id}, error={exc}"
+            )
 
     @staticmethod
     def _extract_llm_config(flow: Flow) -> dict[str, Any]:
