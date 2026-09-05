@@ -122,9 +122,16 @@ class MessageBuffer:
 
         try:
             async with self.db_session_factory() as db:
+                # 从节点配置读取自动压缩附加提示词，留空则使用默认
+                compress_extra_prompt = ""
+                if isinstance(node_config, dict):
+                    raw = node_config.get("compress_extra_prompt")
+                    if isinstance(raw, str):
+                        compress_extra_prompt = raw.strip()
                 result = await agent_executor_service.compress_session(
                     db,
                     self.session_id,
+                    compress_extra_prompt,
                     exclude_tail_count=persisted_tail_count,
                     continue_react=bool(preserve_tail_count),
                     cleanup_checkpoint=False,
