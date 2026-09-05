@@ -5,7 +5,7 @@ import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useAgentStore } from '@/stores'
 import { ElMessage, ElMessageBox, ElImageViewer } from 'element-plus'
 import type { ScrollbarDirection, ScrollbarInstance } from 'element-plus'
-import { Operation, Bottom, Notebook, Warning, Document } from '@element-plus/icons-vue'
+import { Operation, Bottom, Notebook, Warning, Document, MoreFilled, Loading } from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
 import { flowApi } from '@/api/flow'
 import { aiProviderApi, type ModelInfo } from '@/api/ai_provider'
@@ -843,6 +843,17 @@ async function handleCompress() {
   }
 }
 
+/** mobile 下拉菜单触发：转发到对应按钮的 handler */
+async function onOverflowCommand(command: string) {
+  if (command === 'files') {
+    await openFileChangesPanel()
+  } else if (command === 'compress') {
+    await handleCompress()
+  } else if (command === 'background') {
+    toolOutputStore.drawerVisible = true
+  }
+}
+
 /** 回退确认弹窗状态：展示将恢复的文件清单并提供三种回退方式 */
 const revertDialog = reactive({
   visible: false,
@@ -1038,34 +1049,80 @@ function handleRejectTools() {
             <span>记忆</span>
           </button>
         </el-tooltip>
-        <el-tooltip content="文件变更" placement="bottom">
-          <el-badge
-            :value="store.fileChanges.length"
-            :max="9"
-            :hidden="store.fileChanges.length === 0"
-            :offset="[-10, 10]"
-          >
-            <button
-              class="header-action-btn"
-              :class="{ active: showFileChanges }"
-              @click="openFileChangesPanel"
+        <div class="header-overflow-wrapper">
+          <el-tooltip content="文件变更" placement="bottom">
+            <el-badge
+              :value="store.fileChanges.length"
+              :max="9"
+              :hidden="store.fileChanges.length === 0"
+              :offset="[-4, 4]"
             >
-              <el-icon :size="18">
-                <Document />
+              <button
+                class="header-action-btn"
+                :class="{ active: showFileChanges }"
+                @click="openFileChangesPanel"
+              >
+                <el-icon :size="18">
+                  <Document />
+                </el-icon>
+                <span>文件</span>
+              </button>
+            </el-badge>
+          </el-tooltip>
+        </div>
+        <div class="header-overflow-wrapper">
+          <el-tooltip content="压缩" placement="bottom">
+            <button class="header-action-btn" @click="handleCompress">
+              <el-icon :size="18" :class="{ 'is-loading': store.isCompressing }">
+                <Operation />
               </el-icon>
-              <span>文件</span>
+              <span>压缩</span>
             </button>
-          </el-badge>
-        </el-tooltip>
-        <el-tooltip content="压缩" placement="bottom">
-          <button class="header-action-btn" @click="handleCompress">
-            <el-icon :size="18" :class="{ 'is-loading': store.isCompressing }">
-              <Operation />
+          </el-tooltip>
+        </div>
+        <div class="header-overflow-wrapper">
+          <RunningToolBadge />
+        </div>
+
+        <el-dropdown
+          class="header-overflow-trigger"
+          trigger="click"
+          placement="bottom-end"
+          @command="onOverflowCommand"
+        >
+          <button class="header-action-btn" aria-label="更多操作">
+            <el-icon :size="18">
+              <MoreFilled />
             </el-icon>
-            <span>压缩</span>
+            <span>更多</span>
           </button>
-        </el-tooltip>
-        <RunningToolBadge />
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="files">
+                <el-icon class="overflow-item-icon"><Document /></el-icon>
+                文件变更
+                <span
+                  v-if="store.fileChanges.length > 0"
+                  class="overflow-item-badge"
+                >{{ store.fileChanges.length > 9 ? '9+' : store.fileChanges.length }}</span>
+              </el-dropdown-item>
+              <el-dropdown-item command="compress" :disabled="store.isCompressing">
+                <el-icon
+                  class="overflow-item-icon"
+                  :class="{ 'is-loading': store.isCompressing }"
+                ><Operation /></el-icon>
+                {{ store.isCompressing ? '正在压缩…' : '压缩' }}
+              </el-dropdown-item>
+              <el-dropdown-item command="background">
+                <el-icon class="overflow-item-icon"><Loading /></el-icon>
+                后台
+                <span v-if="toolOutputStore.runningCount > 0" class="overflow-item-badge">
+                  {{ toolOutputStore.runningCount }}
+                </span>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </header>
 
@@ -1440,8 +1497,8 @@ export default {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   background: none;
   border: none;
   color: #64748b;
@@ -1460,6 +1517,29 @@ export default {
 .header-action-btn.active {
   color: #2563eb;
   background: #eff6ff;
+}
+
+/* 下拉菜单条目：图标 + 文字 + 角标水平对齐 */
+.overflow-item-icon {
+  margin-right: 6px;
+  vertical-align: middle;
+  font-size: 14px;
+}
+
+.overflow-item-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  background: var(--el-color-danger);
+  border-radius: 9px;
 }
 
 .messages-scrollbar {
@@ -1762,6 +1842,37 @@ export default {
   .session-name {
     max-width: 35vw;
     font-size: 11px;
+  }
+}
+
+/* 移动端：右侧工具栏收纳进「···」下拉菜单，避免横向溢出被裁切 */
+.header-right {
+  flex-shrink: 0;
+}
+
+/* overflow-wrapper: desktop 默认透明（display:contents 让 wrapper 不占 box，子元素直接参与父 flex） */
+.header-overflow-wrapper {
+  display: contents;
+}
+
+/* desktop 默认隐藏「···」触发器（mobile 媒体查询内再覆盖） */
+.header-overflow-trigger {
+  display: none;
+}
+
+/* mobile：隐藏 wrapper（整组 tooltip+badge+button 都不渲染）；触发器显示 */
+@media (max-width: 768px) {
+  .header-overflow-wrapper {
+    display: none;
+  }
+
+  .header-overflow-trigger {
+    display: flex;
+  }
+
+  /* mobile 视口小、按钮少，把按钮间距拉大一点（desktop 默认 gap:2px 偏挤） */
+  .header-right {
+    gap: 4px;
   }
 }
 
