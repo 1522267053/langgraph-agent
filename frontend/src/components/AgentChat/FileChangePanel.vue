@@ -5,105 +5,83 @@
     - 详情：选中一条时显示 backup → current 的 line-level diff
     - 操作：单条「撤销此变更」按钮（已撤销项置灰）
   -->
-  <div class="file-change-panel">
-    <div class="panel-header">
-      <span class="title">
-        <el-icon><Document /></el-icon>
-        文件变更
-        <span v-if="fileChanges.length > 0" class="badge">{{ fileChanges.length }}</span>
-      </span>
-      <el-button
-        link
-        :icon="Refresh"
-        :loading="fileChangesLoading"
-        title="刷新"
-        @click="refresh"
-      />
-    </div>
+  <el-drawer 
+  :model-value="visible" 
+  direction="rtl" 
+  :size="drawerSize" 
+  title="文件变更" 
+  :destroy-on-close="false"
+  @update:model-value="handleClose"
+  >
+    <div class="file-change-panel">
+      <div class="panel-header">
+        <span class="title">
+          <el-icon>
+            <Document />
+          </el-icon>
+          文件变更
+          <span v-if="fileChanges.length > 0" class="badge">{{ fileChanges.length }}</span>
+        </span>
+        <el-button link :icon="Refresh" :loading="fileChangesLoading" title="刷新" @click="refresh" />
+      </div>
 
-    <div v-if="fileChanges.length === 0" class="panel-empty">
-      <el-empty description="当前会话暂无文件变更" :image-size="80" />
-    </div>
+      <div v-if="fileChanges.length === 0" class="panel-empty">
+        <el-empty description="当前会话暂无文件变更" :image-size="80" />
+      </div>
 
-    <ul v-else class="change-list">
-      <li
-        v-for="item in fileChanges"
-        :key="item.id"
-        :class="['change-item', { active: activeFileChangeId === item.id, reverted: item.is_reverted }]"
-        @click="onItemClick(item)"
-      >
-        <div class="change-item-main">
-          <el-tag
-            :type="tagType(item.change_type)"
-            size="small"
-            effect="plain"
-            class="change-type-tag"
-          >
-            {{ changeTypeLabel(item.change_type) }}
-          </el-tag>
-          <span class="path" :title="item.file_path">{{ basename(item.file_path) }}</span>
-          <el-tooltip :content="item.tool_name" placement="top">
-            <span class="tool">{{ item.tool_name }}</span>
-          </el-tooltip>
+      <ul v-else class="change-list">
+        <li v-for="item in fileChanges" :key="item.id"
+          :class="['change-item', { active: activeFileChangeId === item.id, reverted: item.is_reverted }]"
+          @click="onItemClick(item)">
+          <div class="change-item-main">
+            <el-tag :type="tagType(item.change_type)" size="small" effect="plain" class="change-type-tag">
+              {{ changeTypeLabel(item.change_type) }}
+            </el-tag>
+            <span class="path" :title="item.file_path">{{ basename(item.file_path) }}</span>
+            <el-tooltip :content="item.tool_name" placement="top">
+              <span class="tool">{{ item.tool_name }}</span>
+            </el-tooltip>
+          </div>
+          <div class="change-item-meta">
+            <span class="time">{{ formatTime(item.create_time) }}</span>
+            <el-button v-if="!item.is_reverted && activeFileChangeId === item.id" type="danger" link size="small"
+              :loading="reverting" @click.stop="onRevert(item)">
+              撤销此变更
+            </el-button>
+            <el-tag v-else-if="item.is_reverted" size="small" type="info">已撤销</el-tag>
+          </div>
+        </li>
+      </ul>
+
+      <!-- Diff 详情抽屉/弹窗 -->
+      <el-dialog v-model="dialogVisible" :title="dialogTitle" width="80%" top="5vh" destroy-on-close append-to-body
+        class="file-diff-dialog" @close="onClose">
+        <div class="dialog-diff-body">
+          <div v-if="activeFileChangeDiffLoading" class="loading">
+            <el-icon class="is-loading">
+              <Loading />
+            </el-icon>
+            <span>加载 diff 中…</span>
+          </div>
+          <DiffViewer v-else-if="activeFileChangeDiff" :backup-content="activeFileChangeDiff.backup_content"
+            :current-content="activeFileChangeDiff.current_content" :is-binary="activeFileChangeDiff.is_binary"
+            :backup-missing="activeFileChangeDiff.backup_missing" :change-type="activeFileChangeDiff.change_type"
+            :default-view-mode="defaultViewMode" />
+          <div v-else class="loading">
+            <el-empty description="暂无 diff 数据" :image-size="60" />
+          </div>
         </div>
-        <div class="change-item-meta">
-          <span class="time">{{ formatTime(item.create_time) }}</span>
-          <el-button
-            v-if="!item.is_reverted && activeFileChangeId === item.id"
-            type="danger"
-            link
-            size="small"
-            :loading="reverting"
-            @click.stop="onRevert(item)"
-          >
+        <template #footer>
+          <el-button @click="dialogVisible = false">关闭</el-button>
+          <el-button v-if="activeItem && !activeItem.is_reverted" type="danger" :loading="reverting"
+            @click="onRevert(activeItem)">
             撤销此变更
           </el-button>
-          <el-tag v-else-if="item.is_reverted" size="small" type="info">已撤销</el-tag>
-        </div>
-      </li>
-    </ul>
+        </template>
+      </el-dialog>
+    </div>
+  </el-drawer>
 
-    <!-- Diff 详情抽屉/弹窗 -->
-    <el-dialog
-      v-model="dialogVisible"
-      :title="dialogTitle"
-      width="80%"
-      top="5vh"
-      destroy-on-close
-      append-to-body
-      class="file-diff-dialog"
-      @close="onClose"
-    >
-      <div class="dialog-diff-body">
-        <div v-if="activeFileChangeDiffLoading" class="loading">
-          <el-icon class="is-loading"><Loading /></el-icon>
-          <span>加载 diff 中…</span>
-        </div>
-        <DiffViewer
-          v-else-if="activeFileChangeDiff"
-          :backup-content="activeFileChangeDiff.backup_content"
-          :current-content="activeFileChangeDiff.current_content"
-          :is-binary="activeFileChangeDiff.is_binary"
-          :backup-missing="activeFileChangeDiff.backup_missing"
-          :change-type="activeFileChangeDiff.change_type"
-        />
-        <div v-else class="loading">
-          <el-empty description="暂无 diff 数据" :image-size="60" />
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="dialogVisible = false">关闭</el-button>
-        <el-button
-          v-if="activeItem && !activeItem.is_reverted"
-          type="danger"
-          :loading="reverting"
-          @click="onRevert(activeItem)"
-        >
-          撤销此变更
-        </el-button>
-      </template>
-    </el-dialog>
-  </div>
 </template>
 
 <script setup lang="ts">
@@ -113,7 +91,18 @@ import { Document, Refresh, Loading } from '@element-plus/icons-vue'
 import { useAgentStore } from '@/stores/agentOptimized'
 import type { AgentFileChangeBase } from '@/types/agent'
 import DiffViewer from './DiffViewer.vue'
+import { useIsMobile } from '@/composables/useIsMobile.ts'
 
+const props = defineProps<{
+  visible: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'update:visible', value: boolean): void
+}>()
+const { isMobile } = useIsMobile()
+const drawerSize = computed(() => (isMobile.value ? '100%' : '340px'))
+const defaultViewMode = computed(() => (isMobile.value ? 'line-by-line' : 'side-by-side'))
 const store = useAgentStore()
 const {
   fileChanges,
@@ -139,7 +128,9 @@ const dialogTitle = computed(() => {
 watch(activeFileChangeId, (val) => {
   if (val != null) dialogVisible.value = true
 })
-
+function handleClose(): void {
+  emit('update:visible', false)
+}
 function onClose() {
   store.closeFileChangeDiff()
 }
@@ -350,7 +341,7 @@ function formatTime(iso?: string | null): string {
   height: 75vh;
 }
 
-.dialog-diff-body > :deep(.diff-viewer) {
+.dialog-diff-body> :deep(.diff-viewer) {
   flex-shrink: 0;
 }
 </style>

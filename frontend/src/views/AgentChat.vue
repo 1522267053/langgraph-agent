@@ -1249,15 +1249,7 @@ function handleRejectTools() {
     </div>
 
     <MemoryPanel v-model:visible="showMemory" :agent-id="agentId" />
-    <el-drawer
-      v-model="showFileChanges"
-      direction="rtl"
-      :size="'520px'"
-      title="文件变更"
-      :destroy-on-close="false"
-    >
-      <FileChangePanel />
-    </el-drawer>
+    <FileChangePanel v-model:visible="showFileChanges"/>
     <ToolOutputDrawer />
     <QuestionDialog
       :question="store.pendingQuestion"

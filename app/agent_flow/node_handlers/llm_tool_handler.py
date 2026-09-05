@@ -251,6 +251,10 @@ class LlmNodeConfig(BaseNodeConfig):
         description="结构化输出字段树 [{name, type, description, required, "
         "item_type(仅array), children(object子字段/数组元素字段)}]",
     )
+    compress_extra_prompt: Optional[str] = Field(
+        default="",
+        description="上下文压缩时使用的额外提示词，可用于生成指定格式的上下文压缩格式",
+    )
 
     @field_validator("approval_required_tools")
     @classmethod
