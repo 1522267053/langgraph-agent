@@ -14,3 +14,7 @@ export const AUTO_SCROLL_BOTTOM_THRESHOLD = 60
 
 /** 流结束后 mermaid 图表渲染防抖间隔 */
 export const MERMAID_RENDER_DEBOUNCE = 300
+
+/** 等待用户响应的审批倒计时秒数（非 ms）：与后端 USER_RESPONSE_TIMEOUT_SECONDS
+ *  （3600s）对齐，减 2s 缓冲防止前端先于后端归零 */
+export const USER_RESPONSE_COUNTDOWN_SECONDS = 3598

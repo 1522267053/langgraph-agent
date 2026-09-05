@@ -15,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.config.database import AsyncSessionLocal
+from app.constants.timing import RATE_LIMIT_BLOCK_SECONDS
 from app.services.global_config_service import global_config_service
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,6 @@ COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # 7 天
 _404_rate_limit: dict[str, dict] = {}
 _RATE_WINDOW = 60  # 1 分钟窗口
 _RATE_THRESHOLD = 10  # 10 个 404 触发封禁
-_RATE_BLOCK_DURATION = 300  # 封禁 5 分钟
 
 # 不计入 404 速率限制的路径前缀
 _IGNORED_404_PREFIXES = (
@@ -58,8 +58,8 @@ def _record_404(ip: str) -> None:
         return
     info["count"] += 1
     if info["count"] > _RATE_THRESHOLD:
-        info["blocked_until"] = now + _RATE_BLOCK_DURATION
-        logger.warning("IP %s 因 404 过多被封禁 %d 秒", ip, _RATE_BLOCK_DURATION)
+        info["blocked_until"] = now + RATE_LIMIT_BLOCK_SECONDS
+        logger.warning("IP %s 因 404 过多被封禁 %d 秒", ip, RATE_LIMIT_BLOCK_SECONDS)
 
 
 # 豁免路径（不需要登录即可访问）

@@ -36,6 +36,7 @@ from app.agent_flow.flow_context import FlowState
 from app.agent_flow.node_handlers.base_handler import BaseNodeHandler
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.config.database import AsyncSessionLocal
+from app.constants.timing import MEMORY_CONSOLIDATION_COOLDOWN_SECONDS
 from app.services.memory_service import memory_service
 from app.utils.message_utils import extract_text_content
 
@@ -107,7 +108,7 @@ class MemoryNodeHandler(BaseNodeHandler):
         self._llm_config: Optional[dict] = None
         self._hot_index_cache: Optional[str] = None
         self._last_consolidate_time: float = 0.0
-        self._consolidate_cooldown: float = 300.0
+        self._consolidate_cooldown: float = MEMORY_CONSOLIDATION_COOLDOWN_SECONDS
         self._consolidate_locks: dict[int, asyncio.Lock] = {}
         self._last_consolidate_times: dict[int, float] = {}
 

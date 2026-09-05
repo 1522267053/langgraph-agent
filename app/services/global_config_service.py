@@ -12,6 +12,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.constants.timing import GLOBAL_CONFIG_CACHE_TTL_SECONDS
 from app.models.global_config import GlobalConfig
 from app.schemas.global_config_schema import (
     InitConfigRequest,
@@ -27,8 +28,6 @@ MARKETPLACE_TOKEN_KEY = "marketplace_token"
 MARKETPLACE_TOKEN_EXPIRES_KEY = "marketplace_token_expires_at"
 MARKETPLACE_PASSWORD_HASH_KEY = "marketplace_password_hash"
 PROXY_URL_KEY = "proxy_url"
-
-_CACHE_TTL = 300
 
 _AI_CONFIG_KEYS = {
     "default_provider",
@@ -79,7 +78,8 @@ class GlobalConfigService:
         now = datetime.now()
         if (
             self._ai_last_refresh
-            and (now - self._ai_last_refresh).total_seconds() < _CACHE_TTL
+            and (now - self._ai_last_refresh).total_seconds()
+            < GLOBAL_CONFIG_CACHE_TTL_SECONDS
         ):
             return
         self._ai_last_refresh = now
@@ -101,7 +101,8 @@ class GlobalConfigService:
         now = datetime.now()
         if (
             self._marketplace_last_refresh
-            and (now - self._marketplace_last_refresh).total_seconds() < _CACHE_TTL
+            and (now - self._marketplace_last_refresh).total_seconds()
+            < GLOBAL_CONFIG_CACHE_TTL_SECONDS
         ):
             return
         self._marketplace_last_refresh = now
