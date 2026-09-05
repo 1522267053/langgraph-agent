@@ -8,7 +8,8 @@ import type {
   AgentFlow,
   AgentSession,
   AgentMessage,
-  AgentDeleteMessagesResult
+  AgentDeleteMessagesResult,
+  AgentFileChangeListItem
 } from '@/types/agent'
 import type { FlowSSEHandlers, SSEWaitData, SSEEvent, SSEEventHandler } from '@/types/sse'
 import type {
@@ -141,6 +142,39 @@ export const useAgentStore = defineStore('agent', () => {
     sessionId: number
     agentName: string
   } | null>(null)
+
+  // ========== 问题反问状态（ask_user_question 工具） ==========
+  interface QuestionOption {
+    label: string
+    description?: string
+    preview?: string
+  }
+  const pendingQuestion = ref<{
+    questionId: string
+    nodeKey: string
+    question: string
+    header?: string | null
+    options: QuestionOption[]
+    multiple: boolean
+  } | null>(null)
+
+  // ========== 文件变更（侧栏 Diff 面板） ==========
+  // 列表缓存：按文件路径聚合（最新一条覆盖旧记录）
+  const fileChanges = ref<AgentFileChangeListItem[]>([])
+  const fileChangesLoading = ref(false)
+  // 当前打开的 diff 详情
+  const activeFileChangeId = ref<number | null>(null)
+  const activeFileChangeDiff = ref<{
+    backup_content: string
+    current_content: string
+    is_binary: boolean
+    backup_missing: boolean
+    file_path: string
+    change_type: string
+  } | null>(null)
+  const activeFileChangeDiffLoading = ref(false)
+  // 单条撤销后的回执消息 key
+  const lastRevertedChangeId = ref<number | null>(null)
 
   // ========== 压缩上下文状态 ==========
   const isCompressing = ref(false)
@@ -277,6 +311,11 @@ export const useAgentStore = defineStore('agent', () => {
     isCompressing.value = false
     const selectionGeneration = streamGeneration
     flowPreview.value = null
+    // 切换会话：清空 Diff 面板状态（避免显示上一会话的文件变更）
+    fileChanges.value = []
+    activeFileChangeId.value = null
+    activeFileChangeDiff.value = null
+    lastRevertedChangeId.value = null
 
     currentSession.value = session
     try {
@@ -711,7 +750,15 @@ export const useAgentStore = defineStore('agent', () => {
     // streamBaseMsgId=0（首轮/空会话）时 dbMsgId > 0 恒真，全部 rebuilt 行参与匹配
     const matchedFresh = new Set<StreamingMessage>()
     if (placeholders.length > 0) {
-      const freshRows = rebuilt.filter(r => r.dbMsgId != null && r.dbMsgId > streamBaseMsgId)
+      // 排除 context-summary：压缩摘要虽是压缩后最新的 DB 行，但属内部标记消息，
+      // 参与对齐会被尾部流式占位行吸收（matchedFresh 跳过摘要行 + dbMsgId 过继给
+      // 占位行），导致摘要卡在下次全量重建前不渲染；占位行只与真实对话行对齐
+      const freshRows = rebuilt.filter(
+        r =>
+          r.dbMsgId != null &&
+          r.dbMsgId > streamBaseMsgId &&
+          r.displayType !== 'context-summary'
+      )
       let freshIdx = freshRows.length - 1
       for (let pi = placeholders.length - 1; pi >= 0 && freshIdx >= 0; pi--) {
         const ph = placeholders[pi]
@@ -998,6 +1045,21 @@ export const useAgentStore = defineStore('agent', () => {
         }
         startApprovalCountdown(298)
       },
+      onQuestionRequest: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
+        pendingQuestion.value = {
+          questionId: event.data.question_id || '',
+          nodeKey: event.data.node_key || '',
+          question: event.data.question || '',
+          header: event.data.header ?? null,
+          options: (event.data.options || []) as QuestionOption[],
+          multiple: Boolean(event.data.multiple)
+        }
+      },
+      onFileChanged: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
+        onFileChanged(event)
+      },
       onSubAgentProgress: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
         const content = event.data.content || ''
@@ -1280,6 +1342,133 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
+  /** 提交问题反问的答案；answers 为空表示取消 */
+  async function resolveQuestion(answers: string[]) {
+    if (!currentAgent.value || !currentSession.value) return
+    const snapshot = pendingQuestion.value
+    pendingQuestion.value = null
+    try {
+      await agentApi.resolveQuestion(
+        currentAgent.value.id,
+        currentSession.value.id,
+        answers
+      )
+    } catch {
+      // 失败时恢复弹窗（让用户重试）
+      pendingQuestion.value = snapshot
+    }
+  }
+
+  // ===== 文件变更（侧栏 Diff 面板） =====
+
+  /**
+   * 拉取当前会话的文件变更列表（去重后按 create_time 倒序）
+   */
+  async function fetchFileChanges(limit = 50) {
+    if (!currentAgent.value || !currentSession.value) return
+    fileChangesLoading.value = true
+    try {
+      const res = await agentApi.listFileChanges(
+        currentAgent.value.id,
+        currentSession.value.id,
+        limit
+      )
+      fileChanges.value = (res.data?.list || []) as AgentFileChangeListItem[]
+    } catch {
+      // ignore，错误条已由 interceptor 弹
+    } finally {
+      fileChangesLoading.value = false
+    }
+  }
+
+  /**
+   * 打开某条变更的 diff 详情（拉取 backup + current 内容）
+   */
+  async function openFileChangeDiff(changeId: number) {
+    if (!currentAgent.value || !currentSession.value) return
+    activeFileChangeId.value = changeId
+    activeFileChangeDiff.value = null
+    activeFileChangeDiffLoading.value = true
+    try {
+      const data = await agentApi.getFileChangeDiff(
+        currentAgent.value.id,
+        currentSession.value.id,
+        changeId
+      )
+      activeFileChangeDiff.value = {
+        backup_content: data.backup_content || '',
+        current_content: data.current_content || '',
+        is_binary: !!data.is_binary,
+        backup_missing: !!data.backup_missing,
+        file_path: data.file_path,
+        change_type: data.change_type
+      }
+    } catch {
+      activeFileChangeId.value = null
+    } finally {
+      activeFileChangeDiffLoading.value = false
+    }
+  }
+
+  /** 关闭 diff 详情 */
+  function closeFileChangeDiff() {
+    activeFileChangeId.value = null
+    activeFileChangeDiff.value = null
+  }
+
+  /**
+   * 撤销单条文件变更（本地乐观更新 + 后端实际恢复）
+   */
+  async function revertFileChangeById(changeId: number) {
+    if (!currentAgent.value || !currentSession.value) return
+    try {
+      await agentApi.revertFileChange(
+        currentAgent.value.id,
+        currentSession.value.id,
+        changeId
+      )
+      lastRevertedChangeId.value = changeId
+      // 乐观更新：本地标 is_reverted
+      fileChanges.value = fileChanges.value.map(c =>
+        c.id === changeId ? { ...c, is_reverted: 1 } : c
+      )
+      if (activeFileChangeId.value === changeId) {
+        closeFileChangeDiff()
+      }
+      ElMessage.success({ message: '已撤销该文件变更', duration: 3000 })
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * SSE file_changed 事件：实时增量更新列表（按 file_path 去重）
+   */
+  function onFileChanged(event: SSEEvent) {
+    const data = event.data
+    const newItem: AgentFileChangeListItem = {
+      id: (data.change_id as number) ?? 0,
+      file_path: (data.file_path as string) || '',
+      change_type: ((data.change_type as string) ||
+        'modify') as AgentFileChangeListItem['change_type'],
+      tool_name: (data.tool_name as string) || '',
+      create_time: (data.create_time as string) || new Date().toISOString(),
+      is_reverted: 0,
+      has_backup: data.change_type !== 'delete'
+    }
+    if (!newItem.file_path) return
+    // 同一文件已有更新记录则替换（按 file_path 去重）
+    const idx = fileChanges.value.findIndex(c => c.file_path === newItem.file_path)
+    if (idx >= 0) {
+      // 复制为新数组再赋值，避免 Vue 对响应式数组项属性赋值漏触发
+      const next = fileChanges.value.slice()
+      next[idx] = newItem
+      fileChanges.value = next
+    } else {
+      fileChanges.value = [newItem, ...fileChanges.value]
+    }
+  }
+
   /**
    * 取消流式输出；中断场景会在启动请求完成后取消后台执行
    * @param waitForSave 是否等待后端 save_to_db 完成后刷新消息（仅中断场景传 true）
@@ -1526,6 +1715,13 @@ export const useAgentStore = defineStore('agent', () => {
     cancelStream()
     stopCompressPolling()
     stopRunningPolling()
+    // 文件变更 Diff：彻底清空
+    fileChanges.value = []
+    fileChangesLoading.value = false
+    activeFileChangeId.value = null
+    activeFileChangeDiff.value = null
+    activeFileChangeDiffLoading.value = false
+    lastRevertedChangeId.value = null
   }
 
   /**
@@ -1643,6 +1839,14 @@ export const useAgentStore = defineStore('agent', () => {
     pendingApprovalNeeded,
     approvalCountdown,
     subAgentApproval,
+    pendingQuestion,
+    // 文件变更 Diff
+    fileChanges,
+    fileChangesLoading,
+    activeFileChangeId,
+    activeFileChangeDiff,
+    activeFileChangeDiffLoading,
+    lastRevertedChangeId,
     isCompressing,
     isStopping,
     flowPreview,
@@ -1665,6 +1869,12 @@ export const useAgentStore = defineStore('agent', () => {
     togglePlanMode,
     approveToolCalls,
     rejectToolCalls,
+    resolveQuestion,
+    // 文件变更
+    fetchFileChanges,
+    openFileChangeDiff,
+    closeFileChangeDiff,
+    revertFileChangeById,
     cancelStream,
     interruptExecution,
     resetState,

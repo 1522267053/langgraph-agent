@@ -287,6 +287,8 @@ export function createFlowSSEConnection(
     context_compressing: handlers.onContextCompressing,
     flow_preview: handlers.onFlowPreview,
     knowledge_citations: handlers.onKnowledgeCitations,
+    question_request: handlers.onQuestionRequest,
+    file_changed: handlers.onFileChanged,
     error: handlers.onError
   }
 
