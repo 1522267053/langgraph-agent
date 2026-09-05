@@ -148,7 +148,7 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
                 AgentFileChange.is_delete == 0,
                 AgentFileChange.is_reverted == 0,
             )
-            .order_by(AgentFileChange.id.asc())
+            .order_by(AgentFileChange.id.desc())
         )
         if since_time is not None:
             query = query.where(AgentFileChange.create_time > since_time)
