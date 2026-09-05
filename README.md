@@ -265,6 +265,7 @@ langgraph-agent/
 | **todo** | 任务计划，LLM 自主进行任务拆分与进度跟踪 | Flow / Agent |
 | **agenda** | 日程管理，LLM 自主创建/查询/更新/删除日程 | Flow / Agent |
 | **sub_agent** | 子 Agent 调用，引用已发布的 Agent 作为子任务执行器 | Flow / Agent |
+| **question** | 问题反问，Agent 向用户抛出结构化选项（1-4 项 + Other 自填） | Flow / Agent |
 
 ### 变量引用
 

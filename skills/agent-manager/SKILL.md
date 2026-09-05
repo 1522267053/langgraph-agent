@@ -36,7 +36,9 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
 | `flow` | 固定步骤、批处理、API/Python/Shell 编排 | `/execution/stream/{id}` |
 | `agent` | 对话、工具调用、记忆、知识库、子 Agent | `/agent/{id}/sessions` |
 
-Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router` 及工具节点，并且只能各有一个 `start`、`end`、`llm`。典型主链为 `start -> llm -> end`，能力节点通过 `tools -> tools` 连接到 LLM。
+Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router` 及工具节点（`mcp` / `skill` / `memory` / `todo` / `python` / `shell` / `api` / `knowledge` / `sub_agent` / `agenda` / `ssh` / `question`），并且只能各有一个 `start`、`end`、`llm`。典型主链为 `start -> llm -> end`，能力节点通过 `tools -> tools` 连接到 LLM。
+
+`question` 是工具节点，与 `skill` / `memory` 同形态（同一 LLM 仅能连接一个实例），但交互行为不同：LLM 调用 `ask_user_question` 工具时由后端 `question_service` 推送 `question_request` SSE 事件，前端弹窗展示选项，用户提交后通过 `POST /agent/{id}/sessions/{session_id}/question/resolve` 唤醒 Future，工具返回 `answers` 给 LLM。完整工具节点列表见 [节点配置](references/node-config.md)。
 
 ## 标准流程
 

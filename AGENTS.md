@@ -125,7 +125,7 @@ npm run format                          # Prettier 格式化
 - **`Flow.nodes`/`Flow.edges`**: 是 `ClassVar`，非 ORM relationship，由 Service 手动查询赋值
 
 ### Schema 层
-- **所有 `*_schema.py` 中的类必须继承 `BaseView`**（含 Base/Create/Update/Condition）
+- **所有 `*_schema.py` 中的类必须继承 `BaseView`**（含 Base/Create/Update/Condition）；**优先考虑 BaseView**，当 ORM 模型无 `creator_*` / `modifier_*` 字段或与 `ChinaDateTime` 序列化格式冲突时（如时间字段需 ISO 8601 而非 `2026-09-05 10:03:28`），可继承 `BaseModel` 并自行实现 `model_to_view()` 静态方法
 - `BaseView` 不含 `is_delete` 字段
 - `BaseService.update()` 使用 `exclude_unset=True`，**无法将字段更新为 `None`**
 - 响应格式: `ApiResponse` 包装（code=1 成功，code=0 失败），HTTP 状态码始终 200
@@ -224,9 +224,16 @@ Session: cookie `auth_session`，httponly + samesite=lax，7 天有效，内容�
 4. `app/api/<resource>_api.py` — 继承 `BaseApi`，导出 `router`
 
 ### 后端新节点类型
-1. `app/models/flow_node.py` — 添加 `NodeType` 枚举值 + `BASIC_NODE_TYPES`
-2. `app/constants/node_types.py` — 添加中文标签
-3. `app/agent_flow/node_handlers/<type>_handler.py` — `@NodeHandlerRegistry.register("type")`
+
+新增节点类型需要在 **3 处**同步声明（启动期断言捕获脱节）：
+
+1. `app/models/flow_node.py` — `NodeType` 枚举添加一行
+2. `app/constants/node_types.py` — `NODE_REGISTRY` 添加对应 `NodeMeta` 条目
+   - **必填字段**：`label` / `source` / `target` / `flow` / `agent` / `agent_tool` / `agent_unique` / `tool_only`
+   - 8 个白名单/集合（`BASIC_NODE_TYPES` / `AGENT_ALLOWED_NODE_TYPES` / `AGENT_TOOL_NODE_TYPES` / `AGENT_UNIQUE_NODE_TYPES` / `TOOL_ONLY_NODE_TYPES` / `NODE_SOURCE_HANDLES` / `NODE_TARGET_HANDLES` / `NODE_TYPE_LABELS`）**自动派生**，无需手写
+3. `app/agent_flow/node_handlers/<type>_handler.py` — `@NodeHandlerRegistry.register("type")` + `allow_multiple_tool_connections()`（仅工具节点需要）
+
+启动期校验：导入 `app.models.flow_node` 时触发 `_validate_registry_consistency()`，捕获 NodeType ↔ NODE_REGISTRY 任何一边新增/遗漏，立即 `RuntimeError`。
 
 ### 前端新节点类型（组件自动发现）
 1. `frontend/src/types/flow.ts` — 添加 `CardNodeType` 联合类型成员

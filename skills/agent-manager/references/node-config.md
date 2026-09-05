@@ -120,6 +120,7 @@ API 节点的请求体里嵌入上游变量：
 | `mcp` / `skill` / `memory` / `todo` | Agent 工具提供者 | `tools -> tools` |
 | `shell` / `sub_agent` / `agenda` | Agent 工具提供者 | `tools -> tools` |
 | `ssh` | Agent 工具提供者（远程命令与 SFTP） | `tools -> tools` |
+| `question` | Agent 反问工具，LLM 调用 `ask_user_question` 时弹出结构化选项 | `tools -> tools` |
 
 `source_handle="tools"` 的边不加入 LangGraph 执行图。MCP 节点同样不执行，只负责向 LLM 提供工具。
 
@@ -141,6 +142,7 @@ API 节点的请求体里嵌入上游变量：
 | `tool_check_script` | 自定义必需工具检查脚本 |
 | `required_tools_max_retries` | 必需工具未调用时的最大重试次数（默认 2，结构化输出共用） |
 | `max_tool_iterations` | 单轮最大工具调用轮次 |
+| `compress_extra_prompt` | 自动压缩上下文时追加的提示词；空则仅使用默认提示词（Agent 模式下对话占用超过 `context_length × 80%` 自动触发压缩） |
 | `approval_required_tools` | Agent 模式下执行前需要审批的完整工具名列表；空列表表示关闭审批 |
 | `json_output_enabled` | 开启后绑定 `structured_output` 虚拟工具，输出变量自动追加 `structured_output`（object） |
 | `json_fields` | 结构化输出字段树，规则见下节 |
