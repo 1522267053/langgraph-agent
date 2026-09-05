@@ -163,6 +163,8 @@ export const useAgentStore = defineStore('agent', () => {
   // 列表缓存：按文件路径聚合（最新一条覆盖旧记录）
   const fileChanges = ref<AgentFileChangeListItem[]>([])
   const fileChangesLoading = ref(false)
+  // 请求序号守卫：会话快速切换时丢弃过期回包（最新请求胜出）
+  let fileChangesReqSeq = 0
   // 当前打开的 diff 详情
   const activeFileChangeId = ref<number | null>(null)
   const activeFileChangeDiff = ref<{
@@ -314,6 +316,7 @@ export const useAgentStore = defineStore('agent', () => {
     flowPreview.value = null
     // 切换会话：清空 Diff 面板状态（避免显示上一会话的文件变更）
     fileChanges.value = []
+    fileChangesReqSeq++
     activeFileChangeId.value = null
     activeFileChangeDiff.value = null
     lastRevertedChangeId.value = null
@@ -331,6 +334,8 @@ export const useAgentStore = defineStore('agent', () => {
         messages.value = res.data.data?.list || []
         messageTotal.value = res.data.data?.total || 0
         rebuildChatMessages()
+        // 预拉取文件变更列表，驱动右上角"文件"badge；SSE file_changed 后续增量维护
+        void fetchFileChanges()
       }
     } finally {
       if (selectionVersion === sessionSelectionVersion) messagesLoading.value = false
@@ -1384,6 +1389,7 @@ export const useAgentStore = defineStore('agent', () => {
    */
   async function fetchFileChanges(limit = 50) {
     if (!currentAgent.value || !currentSession.value) return
+    const reqSeq = ++fileChangesReqSeq
     fileChangesLoading.value = true
     try {
       const res = await agentApi.listFileChanges(
@@ -1391,14 +1397,14 @@ export const useAgentStore = defineStore('agent', () => {
         currentSession.value.id,
         limit
       )
-      if (res.data.code === 1) {
+      if (res.data.code === 1 && reqSeq === fileChangesReqSeq) {
         fileChanges.value = (res.data.data?.list ||
           []) as AgentFileChangeListItem[]
       }
     } catch {
       // ignore，错误条已由 interceptor 弹
     } finally {
-      fileChangesLoading.value = false
+      if (reqSeq === fileChangesReqSeq) fileChangesLoading.value = false
     }
   }
 
@@ -1741,8 +1747,9 @@ export const useAgentStore = defineStore('agent', () => {
     cancelStream()
     stopCompressPolling()
     stopRunningPolling()
-    // 文件变更 Diff：彻底清空
+    // 文件变更 Diff：彻底清空（序号自增使在途回包失效）
     fileChanges.value = []
+    fileChangesReqSeq++
     fileChangesLoading.value = false
     activeFileChangeId.value = null
     activeFileChangeDiff.value = null
