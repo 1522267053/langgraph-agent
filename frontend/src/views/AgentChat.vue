@@ -5,7 +5,7 @@ import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useAgentStore } from '@/stores'
 import { ElMessage, ElMessageBox, ElImageViewer } from 'element-plus'
 import type { ScrollbarDirection, ScrollbarInstance } from 'element-plus'
-import { Operation, Bottom, Notebook, Warning } from '@element-plus/icons-vue'
+import { Operation, Bottom, Notebook, Warning, Document } from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
 import { flowApi } from '@/api/flow'
 import { aiProviderApi, type ModelInfo } from '@/api/ai_provider'
@@ -17,6 +17,8 @@ import MessageItem from '@/components/AgentChat/MessageItem.vue'
 import RunningToolBadge from '@/components/AgentChat/RunningToolBadge.vue'
 import ToolOutputDrawer from '@/components/AgentChat/ToolOutputDrawer.vue'
 import WelcomePage from '@/components/AgentChat/WelcomePage.vue'
+import QuestionDialog from '@/components/AgentChat/QuestionDialog.vue'
+import FileChangePanel from '@/components/AgentChat/FileChangePanel.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import DirectoryPickerDialog from '@/components/common/DirectoryPickerDialog.vue'
 import ChatInput from '@/components/AgentChat/ChatInput.vue'
@@ -325,6 +327,15 @@ const dynamicFields = computed<FlowIOField[]>(() => {
 const inputMessage = ref('')
 const chatInputRef = ref<InstanceType<typeof ChatInput>>()
 const showMemory = ref(false)
+/** 文件变更 Diff 抽屉显隐 */
+const showFileChanges = ref(false)
+/** 抽屉打开时按需拉取；SSE file_changed 会持续增量更新 */
+async function openFileChangesPanel() {
+  showFileChanges.value = true
+  if (store.fileChanges.length === 0) {
+    await store.fetchFileChanges()
+  }
+}
 /** 回退恢复信号：每次回退生成新对象，通知当前挂载的 ChatInput 恢复参数 */
 const restoreParamsSignal = ref<Record<string, unknown> | null>(null)
 
@@ -787,6 +798,10 @@ function handleHumanInputSubmit() {
   humanInputValue.value = ''
 }
 
+async function handleQuestionSubmit(answers: string[]) {
+  await store.resolveQuestion(answers)
+}
+
 async function handleCompress() {
   if (!agentId.value || !store.currentSession) return
   if (store.isStreaming) {
@@ -1029,6 +1044,21 @@ function handleRejectTools() {
             <span>记忆</span>
           </button>
         </el-tooltip>
+        <el-tooltip content="文件变更" placement="bottom">
+          <button
+            class="header-action-btn"
+            :class="{ active: showFileChanges }"
+            @click="openFileChangesPanel"
+          >
+            <el-icon :size="18">
+              <Document />
+            </el-icon>
+            <span>文件</span>
+            <span v-if="store.fileChanges.length > 0" class="header-badge">
+              {{ store.fileChanges.length }}
+            </span>
+          </button>
+        </el-tooltip>
         <el-tooltip content="压缩" placement="bottom">
           <button class="header-action-btn" @click="handleCompress">
             <el-icon :size="18" :class="{ 'is-loading': store.isCompressing }">
@@ -1221,7 +1251,20 @@ function handleRejectTools() {
     </div>
 
     <MemoryPanel v-model:visible="showMemory" :agent-id="agentId" />
+    <el-drawer
+      v-model="showFileChanges"
+      direction="rtl"
+      :size="'520px'"
+      title="文件变更"
+      :destroy-on-close="false"
+    >
+      <FileChangePanel />
+    </el-drawer>
     <ToolOutputDrawer />
+    <QuestionDialog
+      :question="store.pendingQuestion"
+      @submit="handleQuestionSubmit"
+    />
     <DirectoryPickerDialog
       v-model="workDirPickerVisible"
       :initial-path="effectiveInitialPath"
@@ -1421,6 +1464,27 @@ export default {
 .header-action-btn:hover {
   color: #2563eb;
   background: #f8fafc;
+}
+
+.header-action-btn.active {
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.header-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  margin-left: 2px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  border-radius: 8px;
+  font-weight: 600;
 }
 
 .messages-scrollbar {

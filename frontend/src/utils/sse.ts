@@ -4,6 +4,7 @@
  */
 
 import type { SSEEvent, SSEEventHandler, FlowSSEHandlers } from '@/types/sse'
+import { EVENT_HANDLER_MAP } from '@/types/sse'
 
 /** SSE连接配置 */
 export interface SSEConnectionConfig<T extends string> {
@@ -267,29 +268,15 @@ export function createFlowSSEConnection(
     'disconnectTimeout' | 'onEventId' | 'onDisconnect'
   > = {}
 ): () => void {
-  const handlerMap: Record<string, SSEEventHandler | undefined> = {
-    flow_start: handlers.onFlowStart,
-    resume_start: handlers.onFlowStart,
-    node_start: handlers.onNodeStart,
-    node_thinking: handlers.onNodeThinking,
-    node_content: handlers.onNodeContent,
-    node_done: handlers.onNodeDone,
-    tool_call_start: handlers.onToolCallStart,
-    tool_call_end: handlers.onToolCallEnd,
-    tool_call_limit: handlers.onToolCallLimit,
-    token_usage: handlers.onTokenUsage,
-    waiting_human: handlers.onWaitingHuman,
-    tool_approval_required: handlers.onToolApproval,
-    sub_agent_progress: handlers.onSubAgentProgress,
-    todo_update: handlers.onTodoUpdate,
-    flow_done: handlers.onFlowDone,
-    llm_retry: handlers.onLlmRetry,
-    context_compressing: handlers.onContextCompressing,
-    flow_preview: handlers.onFlowPreview,
-    knowledge_citations: handlers.onKnowledgeCitations,
-    question_request: handlers.onQuestionRequest,
-    file_changed: handlers.onFileChanged,
-    error: handlers.onError
+  // 运行时路由表从 EVENT_HANDLER_MAP 自动派生：单一事实源，新增事件只需改 types/sse.ts
+  // 类型上 FlowSSEHandlerKey 保证 key 取到的字段一定在 FlowSSEHandlers 上
+  // （EVENT_HANDLER_MAP 中所有 value 共享同一 handlerKey 的多个事件类型会重复赋值，但最后值一致，无副作用）
+  const handlerMap: Record<string, SSEEventHandler | undefined> = {}
+  for (const [eventType, handlerKey] of Object.entries(EVENT_HANDLER_MAP) as [
+    string,
+    keyof FlowSSEHandlers
+  ][]) {
+    handlerMap[eventType] = handlers[handlerKey]
   }
 
   return createSSEConnection({

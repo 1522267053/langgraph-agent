@@ -20,6 +20,7 @@ import type {
   TodoItem
 } from '@/composables/useStreamingMessage'
 import { agentApi } from '@/api/agent'
+import { USER_RESPONSE_COUNTDOWN_SECONDS } from '@/constants/timing'
 import { createOnToolCallLimitHandler, createOnLlmRetryHandler } from '@/composables/useSSEHandlers'
 import { useStreamingMessage } from '@/composables'
 import { ElMessage } from 'element-plus'
@@ -773,6 +774,16 @@ export const useAgentStore = defineStore('agent', () => {
           ph.total_tokens = candidate.total_tokens
           if (candidate.latest_prompt_tokens)
             ph.latest_prompt_tokens = candidate.latest_prompt_tokens
+          // reattach 补段：页面刷新重连只回放尾部事件，占位行缺刷新前的 thinking/
+          // tool 段。候选组（DB 重建）持有占位行完全缺失的段类型时，以候选组段
+          // 整体替换（保留占位行 id/key）。live 流式场景占位行段类型为候选组超集
+          // 不触发，DB 缺段场景候选组不会多出类型也不触发，均保持防回退语义
+          const phSegTypes = new Set(ph.segments.map(s => s.type))
+          if (candidate.segments.some(s => !phSegTypes.has(s.type))) {
+            ph.segments = candidate.segments
+            ph.content = candidate.content
+            ph.thinking = candidate.thinking
+          }
           matchedFresh.add(candidate)
           break
         }
@@ -1043,7 +1054,12 @@ export const useAgentStore = defineStore('agent', () => {
         } else {
           subAgentApproval.value = null
         }
-        startApprovalCountdown(298)
+        // 后端权威剩余秒数（live 发布时=完整超时，刷新重连回放时由服务端按死线
+        // 重算），缺失时回退常量——保证前端倒计时与后端超时死线不脱节
+        const expiresIn = Math.floor(Number(event.data.expires_in) || 0)
+        startApprovalCountdown(
+          expiresIn > 0 ? expiresIn : USER_RESPONSE_COUNTDOWN_SECONDS
+        )
       },
       onQuestionRequest: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
@@ -1345,6 +1361,8 @@ export const useAgentStore = defineStore('agent', () => {
   /** 提交问题反问的答案；answers 为空表示取消 */
   async function resolveQuestion(answers: string[]) {
     if (!currentAgent.value || !currentSession.value) return
+    // 幂等保护：pendingQuestion 已被清空时（用户已成功提交过）直接忽略后续重复调用
+    if (!pendingQuestion.value) return
     const snapshot = pendingQuestion.value
     pendingQuestion.value = null
     try {
@@ -1373,7 +1391,10 @@ export const useAgentStore = defineStore('agent', () => {
         currentSession.value.id,
         limit
       )
-      fileChanges.value = (res.data?.list || []) as AgentFileChangeListItem[]
+      if (res.data.code === 1) {
+        fileChanges.value = (res.data.data?.list ||
+          []) as AgentFileChangeListItem[]
+      }
     } catch {
       // ignore，错误条已由 interceptor 弹
     } finally {
@@ -1390,18 +1411,23 @@ export const useAgentStore = defineStore('agent', () => {
     activeFileChangeDiff.value = null
     activeFileChangeDiffLoading.value = true
     try {
-      const data = await agentApi.getFileChangeDiff(
+      const res = await agentApi.getFileChangeDiff(
         currentAgent.value.id,
         currentSession.value.id,
         changeId
       )
-      activeFileChangeDiff.value = {
-        backup_content: data.backup_content || '',
-        current_content: data.current_content || '',
-        is_binary: !!data.is_binary,
-        backup_missing: !!data.backup_missing,
-        file_path: data.file_path,
-        change_type: data.change_type
+      if (res.data.code === 1 && res.data.data) {
+        const data = res.data.data
+        activeFileChangeDiff.value = {
+          backup_content: data.backup_content || '',
+          current_content: data.current_content || '',
+          is_binary: !!data.is_binary,
+          backup_missing: !!data.backup_missing,
+          file_path: data.file_path,
+          change_type: data.change_type
+        }
+      } else {
+        activeFileChangeId.value = null
       }
     } catch {
       activeFileChangeId.value = null

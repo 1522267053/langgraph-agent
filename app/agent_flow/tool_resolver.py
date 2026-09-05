@@ -7,6 +7,8 @@
 import logging
 import re
 
+from pydantic import BaseModel, Field
+
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.graph_builder import FlowLike
 from app.models.flow import Flow
@@ -16,24 +18,57 @@ from app.models.flow_node import FlowNode, NodeType
 logger = logging.getLogger(__name__)
 
 
-class LlmToolConfig:
-    """LLM节点的工具配置"""
+class LlmToolConfig(BaseModel):
+    """LLM节点的工具配置
 
-    def __init__(self):
-        self.mcp_server_ids: list[int] = []
-        self.enable_human_assist: bool = False
-        self.human_assist_config: dict = {}
-        self.human_node_keys: list[str] = []
-        self.api_node_keys: list[str] = []
-        self.api_configs: dict[str, dict] = {}
-        self.knowledge_node_keys: list[str] = []
-        self.knowledge_configs: dict[str, dict] = {}
-        self.skill_node_keys: list[str] = []
-        self.skill_configs: dict[str, dict] = {}
-        self.memory_node_keys: list[str] = []
-        self.memory_configs: dict[str, dict] = {}
-        self.sub_agent_node_keys: list[str] = []
-        self.sub_agent_configs: dict[str, dict] = {}
+    工具收集阶段由各 handler 的 get_tool_config 写入。声明式字段使新增
+    工具族时漏定义能在类型检查阶段暴露，而非运行时 AttributeError。
+    """
+
+    mcp_server_ids: list[int] = Field(
+        default_factory=list, description="连接的 MCP 服务器 ID 列表"
+    )
+    enable_human_assist: bool = Field(default=False, description="是否启用人工协助")
+    human_assist_config: dict = Field(default_factory=dict, description="人工协助配置")
+    human_node_keys: list[str] = Field(
+        default_factory=list, description="Human 节点 key 列表"
+    )
+    api_node_keys: list[str] = Field(
+        default_factory=list, description="API 节点 key 列表"
+    )
+    api_configs: dict[str, dict] = Field(
+        default_factory=dict, description="API 节点配置"
+    )
+    knowledge_node_keys: list[str] = Field(
+        default_factory=list, description="知识库节点 key 列表"
+    )
+    knowledge_configs: dict[str, dict] = Field(
+        default_factory=dict, description="知识库节点配置"
+    )
+    skill_node_keys: list[str] = Field(
+        default_factory=list, description="Skill 节点 key 列表"
+    )
+    skill_configs: dict[str, dict] = Field(
+        default_factory=dict, description="Skill 节点配置"
+    )
+    memory_node_keys: list[str] = Field(
+        default_factory=list, description="Memory 节点 key 列表"
+    )
+    memory_configs: dict[str, dict] = Field(
+        default_factory=dict, description="Memory 节点配置"
+    )
+    sub_agent_node_keys: list[str] = Field(
+        default_factory=list, description="子Agent 节点 key 列表"
+    )
+    sub_agent_configs: dict[str, dict] = Field(
+        default_factory=dict, description="子Agent 节点配置"
+    )
+    question_node_keys: list[str] = Field(
+        default_factory=list, description="问题反问节点 key 列表"
+    )
+    question_configs: dict[str, dict] = Field(
+        default_factory=dict, description="问题反问节点配置"
+    )
 
 
 def get_connected_tool_nodes(

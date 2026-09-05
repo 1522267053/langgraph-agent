@@ -1746,7 +1746,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
                 if nt not in AGENT_ALLOWED_NODE_TYPES:
                     raise ValueError(
                         f"智能体不支持「{nt}」类型的节点，"
-                        f"仅支持：开始、结束、大模型调用、条件、意图路由和工具节点"
+                        f"仅支持：开始、结束、大模型调用、条件、意图路由、问题反问和工具节点"
                     )
             self._check_agent_unique_for_batch(db, flow_id, nodes_data, existing_nodes)
 
