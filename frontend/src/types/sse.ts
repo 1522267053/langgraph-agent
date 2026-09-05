@@ -74,6 +74,8 @@ export interface SSEEventData {
   download_url?: string
   /** 流程名称（flow_preview 事件） */
   flow_name?: string
+  /** 流程类型（flow_preview 事件：flow / agent，前端编辑跳转路由时按此选 AgentEdit/FlowEdit） */
+  flow_type?: 'flow' | 'agent'
   /** 变更类型（flow_preview 事件） */
   action?: string
   /** 节点列表（flow_preview 事件） */
