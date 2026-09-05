@@ -1,8 +1,10 @@
 <template>
   <!--
-    自研轻量 diff 渲染器（LCS line-level）
+    文件 diff 渲染器：jsdiff 生成补丁 + diff2html 渲染（GitHub 风格）
+    - 双栏/单栏切换、滚动同步、行内字符级差异高亮、语法高亮（highlight.js）
+    - 默认紧凑视图（context=3），可切换显示完整文件
+    - diff2html 相关 JS/CSS 均为弹窗打开时动态加载，不进主包
     入参：backup（旧文本）+ current（新文本）+ is_binary + backup_missing + change_type
-    不引入 monaco / diff 库；超大文件（>5000 行）走窗口折叠
   -->
   <div v-if="!isBinary" class="diff-viewer">
     <div v-if="backupMissing" class="diff-banner">
@@ -18,32 +20,26 @@
       <span>文件已删除（无法对比当前内容）</span>
     </div>
 
-    <div v-if="lines.length === 0" class="diff-empty">
-      <el-empty description="文件内容为空" :image-size="60" />
+    <div v-if="!backupMissing && showToolbar" class="diff-toolbar">
+      <el-radio-group v-model="viewMode" size="small">
+        <el-radio-button value="side-by-side">双栏</el-radio-button>
+        <el-radio-button value="line-by-line">单栏</el-radio-button>
+      </el-radio-group>
+      <el-checkbox v-model="showFullFile" size="small">显示完整文件</el-checkbox>
+      <span v-if="stats" class="diff-stats-inline">
+        <span class="add">+{{ stats.added }}</span>
+        <span class="del">-{{ stats.removed }}</span>
+      </span>
     </div>
-    <table v-else class="diff-table">
-      <colgroup>
-        <col class="gutter-old" />
-        <col class="gutter-new" />
-        <col class="content" />
-      </colgroup>
-      <tbody>
-        <tr v-for="row in lines" :key="row.key" :class="rowClass(row.type)">
-          <td class="gutter gutter-old">{{ row.oldLine || '' }}</td>
-          <td class="gutter gutter-new">{{ row.newLine || '' }}</td>
-          <td class="content">
-            <span class="prefix">{{ rowPrefix(row.type) }}</span>
-            <span class="text">{{ row.text }}</span>
-          </td>
-        </tr>
-      </tbody>
-    </table>
 
-    <div v-if="stats" class="diff-stats">
-      <span class="add">+{{ stats.added }}</span>
-      <span class="del">-{{ stats.removed }}</span>
-      <span class="total">{{ stats.total }} 行</span>
-      <span v-if="truncated" class="truncated">（已折叠超大文件）</span>
+    <div v-if="renderError" class="diff-empty">{{ renderError }}</div>
+    <div v-else-if="renderLoading" class="diff-empty">
+      <el-icon class="is-loading"><Loading /></el-icon>
+      <span>渲染 diff 中…</span>
+    </div>
+    <div v-show="!renderLoading" ref="containerRef" class="d2h-mount"></div>
+    <div v-if="isEmptyDiff" class="diff-empty">
+      <el-empty description="两个版本内容一致" :image-size="60" />
     </div>
   </div>
   <div v-else class="diff-binary">
@@ -53,8 +49,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { Warning, Plus, Delete, Document } from '@element-plus/icons-vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { Warning, Plus, Delete, Document, Loading } from '@element-plus/icons-vue'
+// d2h 结构样式必须静态导入（动态 import 纯 CSS 在 dev/部分构建下不注入，
+// 会导致 diff 表格裸渲染：行背景透明、左右 pane 堆叠溢出弹窗）
+import 'diff2html/bundles/css/diff2html.min.css'
 
 interface Props {
   backupContent: string
@@ -62,171 +61,123 @@ interface Props {
   isBinary: boolean
   backupMissing: boolean
   changeType: 'create' | 'modify' | 'delete' | string
-  /** 单文件最大参与 diff 的行数（超过则只展示前 N 行 + 提示） */
-  maxLines?: number
+  /** 初始视图模式（工具块内联场景用单栏） */
+  defaultViewMode?: 'side-by-side' | 'line-by-line'
+  /** 是否显示工具栏（视图切换 + 完整文件开关） */
+  showToolbar?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  maxLines: 5000
+  defaultViewMode: 'side-by-side',
+  showToolbar: true
 })
 
-type RowType = 'context' | 'add' | 'del' | 'meta'
-interface Row {
-  key: string
-  oldLine: number | null
-  newLine: number | null
-  text: string
-  type: RowType
+const containerRef = ref<HTMLElement | null>(null)
+const viewMode = ref<'side-by-side' | 'line-by-line'>(props.defaultViewMode)
+const showFullFile = ref(false)
+const renderError = ref('')
+const renderLoading = ref(false)
+const stats = ref<{ added: number; removed: number } | null>(null)
+
+const isEmptyDiff = computed(
+  () => !renderError.value && !renderLoading.value && stats.value === null
+)
+
+/** 紧凑视图上下文行数：改动块外保留 3 行 */
+const COMPACT_CONTEXT = 3
+/** 完整文件视图的 context：取超大值等效于不裁剪 */
+const FULL_CONTEXT = 1_000_000
+
+let renderSeq = 0
+
+/** 动态加载 diff 渲染 JS（diff2html-ui 静态集成 highlight.js，跟随弹窗 chunk 懒加载） */
+async function loadDeps() {
+  const [{ createTwoFilesPatch, diffLines }, { Diff2HtmlUI }] = await Promise.all([
+    import('diff'),
+    import('diff2html/lib/ui/js/diff2html-ui')
+  ])
+  return { createTwoFilesPatch, diffLines, Diff2HtmlUI }
 }
 
-// ===== 行级 LCS diff =====
+async function render(): Promise<void> {
+  const el = containerRef.value
+  if (props.isBinary || props.backupMissing || !el) return
+  const seq = ++renderSeq
+  renderError.value = ''
+  renderLoading.value = true
+  try {
+    const { createTwoFilesPatch, diffLines, Diff2HtmlUI } = await loadDeps()
+    if (seq !== renderSeq || !containerRef.value) return
 
-/** 按行切分（保留空行） */
-function splitLines(s: string): string[] {
-  if (s === '') return []
-  return s.split(/\r?\n/)
-}
+    const oldStr = props.changeType === 'create' ? '' : props.backupContent
+    const newStr = props.changeType === 'delete' ? '' : props.currentContent
 
-/**
- * 计算 LCS 长度表（O(m*n) 空间，省略后端 diff 库依赖）
- * 单文件最大 5000 行 → 25M 单元格（≤200MB），正常工程文件远低于此
- */
-function lcsTable(a: string[], b: string[]): number[][] {
-  const m = a.length
-  const n = b.length
-  // 单维滚动数组：内存 O(min(m,n))
-  const prev = new Array<number>(n + 1).fill(0)
-  const cur = new Array<number>(n + 1).fill(0)
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      cur[j] = a[i - 1] === b[j - 1]
-        ? (prev[j - 1] || 0) + 1
-        : Math.max(prev[j] || 0, cur[j - 1] || 0)
+    // 统计新增/删除行数（jsdiff 行级分块）
+    let added = 0
+    let removed = 0
+    for (const part of diffLines(oldStr, newStr)) {
+      if (part.added) added += part.count || 0
+      else if (part.removed) removed += part.count || 0
     }
-    for (let j = 0; j <= n; j++) {
-      prev[j] = cur[j]
-      cur[j] = 0
-    }
-  }
-  return [prev]
-}
+    stats.value = added + removed > 0 ? { added, removed } : null
 
-/**
- * 反向回溯生成行级 diff
- */
-function buildDiff(a: string[], b: string[]): Row[] {
-  const out: Row[] = []
-  // 极端大文件：直接做对比不上 LCS，避免卡死
-  if (a.length > props.maxLines || b.length > props.maxLines) {
-    const truncated = [
-      ...a.map((t, i) => ({ type: 'del' as RowType, oldLine: i + 1, newLine: null, text: t })),
-      ...b.map((t, i) => ({ type: 'add' as RowType, oldLine: null, newLine: i + 1, text: t }))
-    ]
-    return truncated.slice(0, props.maxLines).map((r, i) => ({ ...r, key: `tr-${i}` }))
-  }
-  const table = lcsTable(a, b)
-  let i = a.length
-  let j = b.length
-  while (i > 0 && j > 0) {
-    if (a[i - 1] === b[j - 1]) {
-      out.push({
-        key: `c-${i}-${j}`,
-        oldLine: i,
-        newLine: j,
-        text: a[i - 1],
-        type: 'context'
-      })
-      i--
-      j--
-    } else if ((table[0][j - 1] || 0) >= (table[0][j] || 0)) {
-      out.push({
-        key: `d-${i}-${j}`,
-        oldLine: i,
-        newLine: null,
-        text: a[i - 1],
-        type: 'del'
-      })
-      i--
-    } else {
-      out.push({
-        key: `a-${i}-${j}`,
-        oldLine: null,
-        newLine: j,
-        text: b[j - 1],
-        type: 'add'
-      })
-      j--
+    const patch = createTwoFilesPatch(
+      props.changeType === 'create' ? 'dev/null' : 'a/backup',
+      props.changeType === 'delete' ? 'dev/null' : 'b/current',
+      oldStr,
+      newStr,
+      undefined,
+      undefined,
+      { context: showFullFile.value ? FULL_CONTEXT : COMPACT_CONTEXT }
+    )
+
+    el.innerHTML = ''
+    if (!patch || !patch.trim()) {
+      stats.value = null
+      return
     }
-  }
-  while (i > 0) {
-    out.push({
-      key: `dt-${i}`,
-      oldLine: i,
-      newLine: null,
-      text: a[i - 1],
-      type: 'del'
+
+    const ui = new Diff2HtmlUI(el, patch, {
+      drawFileList: false,
+      outputFormat: viewMode.value,
+      showFiles: false,
+      matching: 'words',
+      synchronisedScroll: true,
+      highlight: true,
+      renderNothingWhenEmpty: false,
+      colorScheme: 'light'
     })
-    i--
+    ui.draw()
+  } catch (e) {
+    if (seq === renderSeq) {
+      renderError.value = `diff 渲染失败：${e instanceof Error ? e.message : String(e)}`
+    }
+  } finally {
+    if (seq === renderSeq) renderLoading.value = false
   }
-  while (j > 0) {
-    out.push({
-      key: `at-${j}`,
-      oldLine: null,
-      newLine: j,
-      text: b[j - 1],
-      type: 'add'
-    })
-    j--
-  }
-  return out.reverse()
 }
 
-const lines = computed<Row[]>(() => {
-  if (props.isBinary) return []
-  // 文件已被删除 → 无 current；create → 无 backup；modify 双向都有
-  const oldLines = props.changeType === 'create' ? [] : splitLines(props.backupContent)
-  const newLines = props.changeType === 'delete' ? [] : splitLines(props.currentContent)
-  return buildDiff(oldLines, newLines)
-})
+watch(
+  [
+    () => props.backupContent,
+    () => props.currentContent,
+    () => props.isBinary,
+    () => props.backupMissing,
+    () => props.changeType,
+    viewMode,
+    showFullFile
+  ],
+  () => void render()
+)
 
-const stats = computed(() => {
-  if (props.isBinary) return null
-  let added = 0
-  let removed = 0
-  for (const row of lines.value) {
-    if (row.type === 'add') added++
-    else if (row.type === 'del') removed++
-  }
-  return {
-    added,
-    removed,
-    total: lines.value.length
-  }
-})
-
-const truncated = computed(() => {
-  if (props.isBinary) return false
-  return (
-    splitLines(props.backupContent).length > props.maxLines ||
-    splitLines(props.currentContent).length > props.maxLines
-  )
-})
-
-function rowClass(type: RowType): string {
-  if (type === 'add') return 'row-add'
-  if (type === 'del') return 'row-del'
-  return 'row-context'
-}
-
-function rowPrefix(type: RowType): string {
-  if (type === 'add') return '+'
-  if (type === 'del') return '-'
-  return ' '
-}
+onMounted(() => void render())
 </script>
 
 <style scoped lang="scss">
 .diff-viewer {
+  // 定位祖先兜底：确保 d2h 绝对定位的行号以本组件为包含块链的一部分，
+  // 与滚动容器（.dialog-diff-body，同样 relative）形成正确裁剪链
+  position: relative;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   overflow: hidden;
@@ -268,73 +219,21 @@ function rowPrefix(type: RowType): string {
   color: var(--el-text-color-secondary);
 }
 
-.diff-table {
-  width: 100%;
-  border-collapse: collapse;
-  table-layout: fixed;
-
-  .gutter {
-    width: 44px;
-    padding: 0 6px;
-    color: var(--el-text-color-placeholder);
-    text-align: right;
-    user-select: none;
-    background: #f8fafc;
-    border-right: 1px solid var(--el-border-color-lighter);
-    font-size: 11px;
-    vertical-align: top;
-  }
-
-  .content {
-    padding: 0 8px;
-    white-space: pre-wrap;
-    word-break: break-all;
-    vertical-align: top;
-
-    .prefix {
-      display: inline-block;
-      width: 14px;
-      color: var(--el-text-color-placeholder);
-      user-select: none;
-    }
-
-    .text {
-      white-space: pre-wrap;
-    }
-  }
-
-  tr.row-add {
-    background: #dcfce7;
-
-    .prefix {
-      color: #16a34a;
-      font-weight: 600;
-    }
-  }
-
-  tr.row-del {
-    background: #fee2e2;
-
-    .prefix {
-      color: #dc2626;
-      font-weight: 600;
-    }
-  }
-
-  tr.row-context {
-    background: #fff;
-  }
-}
-
-.diff-stats {
+.diff-toolbar {
   display: flex;
-  gap: 12px;
   align-items: center;
+  gap: 12px;
   padding: 6px 12px;
   background: #f8fafc;
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.diff-stats-inline {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
   font-size: 12px;
-  color: var(--el-text-color-regular);
+  font-variant-numeric: tabular-nums;
 
   .add {
     color: #16a34a;
@@ -345,13 +244,37 @@ function rowPrefix(type: RowType): string {
     color: #dc2626;
     font-weight: 600;
   }
+}
 
-  .total {
-    color: var(--el-text-color-secondary);
+.d2h-mount {
+  // 弹窗内 diff 区域恒为白底，防止任何样式缺失时页面内容透出
+  background: #fff;
+  tab-size: 4;
+
+  // 弹窗标题已展示文件名与变更类型，隐藏 d2h 自带文件头
+  :deep(.d2h-file-list-wrapper),
+  :deep(.d2h-file-header) {
+    display: none;
   }
 
-  .truncated {
-    color: #d97706;
+  :deep(.d2h-file-wrapper) {
+    border: none;
+    border-radius: 0;
+    margin: 0;
+  }
+
+  // 行内代码：等宽字号行高与外层一致
+  :deep(.d2h-code-line),
+  :deep(.d2h-code-side-line) {
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+
+  // 语法高亮容器适配浅色 diff：vs2015 主题的暗色底与本弹窗冲突，
+  // token 颜色（蓝/橙/绿）在白底上仍可读
+  :deep(.hljs) {
+    background: transparent !important;
+    color: #24292e;
   }
 }
 </style>

@@ -133,10 +133,13 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
         db: AsyncSession,
         session_id: int,
         since_time: Optional[datetime] = None,
+        limit: int = 0,
     ) -> List[AgentFileChange]:
         """查询指定会话自 since_time（不含）之后的未回退变更记录，按时间正序
 
         since_time 为 None 时返回全部未回退变更（回退到会话开头）。
+        limit > 0 时仅返回最新 limit 条（如侧栏面板）；回退/预览等内部
+        调用方保持 limit=0 不限制。
         """
         query = (
             select(AgentFileChange)
@@ -150,7 +153,11 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
         if since_time is not None:
             query = query.where(AgentFileChange.create_time > since_time)
         result = await db.execute(query)
-        return list(result.scalars().all())
+        items = list(result.scalars().all())
+        if limit > 0 and len(items) > limit:
+            # 保留最新 limit 条（列表为升序，截取尾部）
+            items = items[-limit:]
+        return items
 
     async def get_changes_boundary(
         self, db: AsyncSession, session_id: int, message_id: int
