@@ -329,7 +329,7 @@ const chatInputRef = ref<InstanceType<typeof ChatInput>>()
 const showMemory = ref(false)
 /** 文件变更 Diff 抽屉显隐 */
 const showFileChanges = ref(false)
-/** 抽屉打开时按需拉取；SSE file_changed 会持续增量更新 */
+/** 抽屉打开时仅在列表为空时兜底刷新；进入会话时 store 已预拉取，SSE file_changed 持续增量更新 */
 async function openFileChangesPanel() {
   showFileChanges.value = true
   if (store.fileChanges.length === 0) {
@@ -1045,19 +1045,23 @@ function handleRejectTools() {
           </button>
         </el-tooltip>
         <el-tooltip content="文件变更" placement="bottom">
-          <button
-            class="header-action-btn"
-            :class="{ active: showFileChanges }"
-            @click="openFileChangesPanel"
+          <el-badge
+            :value="store.fileChanges.length"
+            :max="9"
+            :hidden="store.fileChanges.length === 0"
+            :offset="[-10, 10]"
           >
-            <el-icon :size="18">
-              <Document />
-            </el-icon>
-            <span>文件</span>
-            <span v-if="store.fileChanges.length > 0" class="header-badge">
-              {{ store.fileChanges.length }}
-            </span>
-          </button>
+            <button
+              class="header-action-btn"
+              :class="{ active: showFileChanges }"
+              @click="openFileChangesPanel"
+            >
+              <el-icon :size="18">
+                <Document />
+              </el-icon>
+              <span>文件</span>
+            </button>
+          </el-badge>
         </el-tooltip>
         <el-tooltip content="压缩" placement="bottom">
           <button class="header-action-btn" @click="handleCompress">
@@ -1469,22 +1473,6 @@ export default {
 .header-action-btn.active {
   color: #2563eb;
   background: #eff6ff;
-}
-
-.header-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 5px;
-  margin-left: 2px;
-  background: #ef4444;
-  color: #fff;
-  font-size: 10px;
-  line-height: 1;
-  border-radius: 8px;
-  font-weight: 600;
 }
 
 .messages-scrollbar {
