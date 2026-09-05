@@ -3,6 +3,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { CopyDocument, Download, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { collapseHooks } from '@/components/AgentChat/collapseTransition'
+import DiffViewer from '@/components/AgentChat/DiffViewer.vue'
 import { detectFileLanguage } from '@/utils/format'
 
 const props = withDefaults(
@@ -129,18 +130,28 @@ const fileReadMeta = computed(() => {
     : `${fileReadCodeLines.value.length} 行`
 })
 
-interface DiffLine {
-  type: 'remove' | 'add'
-  text: string
-}
-
-const diffLines = computed<DiffLine[]>(() => {
+/**
+ * 从后端 _diff_preview 的 -/+ 行还原新旧文本（格式：旧行 - 前缀在前、新行 + 前缀
+ * 在后；-.../+... 为超限截断标记，按内容行处理），交由 DiffViewer 重新计算
+ * 真正的行级对齐 diff（旧消息的存量数据同样适用）
+ */
+const editorDiffParts = computed(() => {
   const diff: string = parsedResult.value?.diff || ''
-  return diff.split('\n').map(line => {
-    if (line.startsWith('-')) return { type: 'remove', text: line.slice(1) }
-    if (line.startsWith('+')) return { type: 'add', text: line.slice(1) }
-    return { type: 'add', text: line }
-  })
+  const oldLines: string[] = []
+  const newLines: string[] = []
+  let isNew = false
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('-')) {
+      isNew = false
+      oldLines.push(line.slice(1))
+    } else if (line.startsWith('+')) {
+      isNew = true
+      newLines.push(line.slice(1))
+    } else {
+      ;(isNew ? newLines : oldLines).push(line)
+    }
+  }
+  return { oldText: oldLines.join('\n'), newText: newLines.join('\n') }
 })
 
 const mediaInfo = computed(() => {
@@ -270,12 +281,16 @@ watch(
         <el-button :icon="CopyDocument" link size="small" @click="handleCopy">复制</el-button>
       </div>
     </div>
-    <div class="tool-diff-viewer">
-      <div v-for="(line, i) in diffLines" :key="i" :class="['diff-line', line.type]">
-        <span class="diff-prefix">{{ line.type === 'remove' ? '-' : '+' }}</span>
-        <span class="diff-text">{{ line.text }}</span>
-      </div>
-    </div>
+    <DiffViewer
+      class="tool-diff-viewer"
+      :backup-content="editorDiffParts.oldText"
+      :current-content="editorDiffParts.newText"
+      :is-binary="false"
+      :backup-missing="false"
+      change-type="modify"
+      default-view-mode="line-by-line"
+      :show-toolbar="false"
+    />
     <!-- dry_run 多匹配警告：实际执行会因多处匹配被拒 -->
     <div v-if="isDryRun && parsedResult?.warning" class="tool-edit-warning">
       {{ parsedResult.warning }}
@@ -444,45 +459,10 @@ watch(
   white-space: pre;
 }
 
+/* 工具块内联 diff：限制高度内部滚动（DiffViewer 自带边框与配色） */
 .tool-diff-viewer {
   max-height: 300px;
   overflow-y: auto;
-  font-family: 'Fira Code', 'Consolas', monospace;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.diff-line {
-  display: flex;
-  padding: 1px 16px;
-}
-
-.diff-line.remove {
-  background: rgba(248, 113, 113, 0.12);
-}
-
-.diff-line.add {
-  background: rgba(74, 222, 128, 0.1);
-}
-
-.diff-prefix {
-  width: 20px;
-  flex-shrink: 0;
-  user-select: none;
-}
-
-.diff-line.remove .diff-prefix {
-  color: #f87171;
-}
-
-.diff-line.add .diff-prefix {
-  color: #4ade80;
-}
-
-.diff-text {
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: #334155;
 }
 
 .tool-edit-message {

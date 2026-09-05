@@ -341,6 +341,9 @@ function formatTime(iso?: string | null): string {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* 定位祖先：d2h 行号是 position:absolute，包含块必须落在滚动容器内，
+     否则行号不受裁剪/不占滚动高度，会飘到弹窗外面（diff2html#381） */
+  position: relative;
   /* 让 DiffViewer 内部高度不撑开 body */
   display: flex;
   flex-direction: column;

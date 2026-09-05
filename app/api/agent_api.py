@@ -482,15 +482,23 @@ class AgentApi:
             response_model=ApiResponse[AgentFileChangeListResponse],
             summary="获取当前会话所有未回退的文件变更",
         )
-        async def list_file_changes(id: int, session_id: int, db: AsyncSession = Depends(get_db)):
-            """侧栏面板用：返回去重后的最新变更记录（按文件聚合，仅保留最新一条）"""
+        async def list_file_changes(
+            id: int,
+            session_id: int,
+            limit: int = 50,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """侧栏面板用：返回去重后的最新变更记录（按文件聚合，仅保留最新一条）；
+            limit 为返回的最新变更条数上限（0 表示不限制）"""
             from app.services.agent_file_change_service import agent_file_change_service
             from app.schemas.agent_file_change_schema import (
                 AgentFileChangeListItem,
                 AgentFileChangeListResponse,
             )
 
-            changes = await agent_file_change_service.get_changes_since(db, session_id)
+            changes = await agent_file_change_service.get_changes_since(
+                db, session_id, limit=max(0, limit)
+            )
             items = [AgentFileChangeListItem.model_to_view(c) for c in changes]
             return ApiResponse.success(
                 data=AgentFileChangeListResponse(list=items, total=len(items))
