@@ -35,10 +35,12 @@ from app.agent_flow.file_change_context import (
 from app.agent_flow.flow_context import FlowContext
 from app.agent_flow.flow_event import FlowEventFactory
 from app.constants.node_types import NODE_TYPE_LABELS
+from app.constants.timing import COMPLETED_RUN_RETENTION_SECONDS
 from app.services.base_executor_service import BaseExecutorService
 from app.services.agent_conversation_service import agent_conversation_service
 from app.services.file_service import file_service
 from app.services.interrupt_service import interrupt_service
+from app.services.tool_approval_service import tool_approval_service
 from app.config.settings import settings
 from app.utils.media_resolver import guess_mime_by_ext
 from app.utils.message_utils import extract_text_content, extract_token_usage
@@ -75,7 +77,6 @@ _RUN_END_EVENT_TYPES = frozenset({"error", "flow_done", "waiting_human"})
 _PROGRESS_EVENT_TYPES = frozenset(
     {"node_start", "node_content", "tool_call_start", "node_done"}
 )
-_COMPLETED_RUN_RETENTION_SECONDS = 60
 
 
 @dataclass
@@ -137,7 +138,7 @@ class AgentExecutorService(BaseExecutorService):
             if run.done
             and session_id not in self._waiting_sessions
             and run.completed_at is not None
-            and now - run.completed_at > _COMPLETED_RUN_RETENTION_SECONDS
+            and now - run.completed_at > COMPLETED_RUN_RETENTION_SECONDS
         ]
         for session_id in stale_session_ids:
             self._agent_runs.pop(session_id, None)
@@ -543,12 +544,35 @@ class AgentExecutorService(BaseExecutorService):
                 while cursor < run.last_event_id:
                     event = run.events[cursor]
                     cursor = event["id"]
+                    if event["type"] == "tool_approval_required":
+                        # 回放的审批事件以服务端实时剩余时间标注（存量事件是发布
+                        # 时的静态副本），避免刷新重连后前端倒计时与后端死线失同步；
+                        # 审批已终结（无等待句柄）时不标注，前端回退默认倒计时
+                        remaining = tool_approval_service.remaining_seconds(session_id)
+                        if remaining is not None:
+                            event = {
+                                **event,
+                                "data": {**event["data"], "expires_in": remaining},
+                            }
                     yield event
                 if run.done:
                     return
                 await wake_event.wait()
         finally:
             run.subscribers.discard(wake_event)
+
+    def emit_file_change(self, session_id: int, change_dict: dict) -> None:
+        """工具埋点：写入文件后向当前订阅者推送 file_changed 事件。
+
+        由 agent_file_change_service.record_change 调用；无活跃 run 时静默忽略
+        （如页面刷新后历史回退不会触发侧栏实时更新）。
+        """
+        self._prune_agent_runs()
+        run = self._agent_runs.get(session_id)
+        if not run or run.done:
+            return
+        event = FlowEventFactory.file_changed(change=change_dict)
+        self._publish_agent_run_event(run, event)
 
     def get_run_status(self, session_id: int) -> dict[str, Any]:
         """返回会话运行状态及当前可订阅游标。"""

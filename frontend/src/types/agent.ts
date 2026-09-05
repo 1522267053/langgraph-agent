@@ -116,6 +116,17 @@ export interface AgentFileChangeInfo {
   status?: string
 }
 
+/** 文件变更列表条目（侧栏 Diff 面板用） */
+export interface AgentFileChangeListItem {
+  id: number
+  file_path: string
+  change_type: 'create' | 'modify' | 'delete'
+  tool_name: string
+  create_time?: string | null
+  is_reverted: number
+  has_backup: boolean
+}
+
 /** 回退预览结果 */
 export interface AgentRevertPreview {
   /** 将被恢复的文件清单（按文件去重） */

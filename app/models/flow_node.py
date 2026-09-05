@@ -1,5 +1,14 @@
 """
 流程节点模型
+
+节点类型相关常量（BASIC_NODE_TYPES / AGENT_ALLOWED_NODE_TYPES /
+AGENT_TOOL_NODE_TYPES / AGENT_UNIQUE_NODE_TYPES / TOOL_ONLY_NODE_TYPES /
+NODE_SOURCE_HANDLES / NODE_TARGET_HANDLES / NODE_TYPE_LABELS）已统一从
+app.constants.node_types.NODE_REGISTRY 派生。新增节点类型时，只需在 NodeType
+枚举与 NODE_REGISTRY 同时添加一行即可。
+
+为避免循环引用（constants → models → constants），本模块先定义 NodeType 枚举，
+然后再 import NODE_REGISTRY 与派生 helper，最后定义派生常量。
 """
 
 from enum import Enum
@@ -12,7 +21,7 @@ from app.models.flow_edge import FlowEdge
 
 
 class NodeType(str, Enum):
-    """节点类型"""
+    """节点类型枚举（与 app.constants.node_types.NODE_REGISTRY 的 key 保持完全一致）"""
 
     START = "start"
     END = "end"
@@ -33,122 +42,71 @@ class NodeType(str, Enum):
     SUB_AGENT = "sub_agent"
     AGENDA = "agenda"
     SSH = "ssh"
+    QUESTION = "question"
 
 
+# ---- 派生表：从 NODE_REGISTRY 自动生成 ----
+from app.constants.node_types import NODE_REGISTRY  # noqa: E402  必须在 NodeType 之后
+
+
+# Flow 模式可用节点（保持 List[NodeType] 类型，兼容 base_executor_service 的迭代）
 BASIC_NODE_TYPES: List[NodeType] = [
-    NodeType.START,
-    NodeType.END,
-    NodeType.CONDITION,
-    NodeType.CARD,
-    NodeType.LOOP,
-    NodeType.API,
-    NodeType.HUMAN,
-    NodeType.SKILL,
-    NodeType.KNOWLEDGE,
-    NodeType.PYTHON,
-    NodeType.SHELL,
-    NodeType.MEMORY,
-    NodeType.MCP,
-    NodeType.TODO,
-    NodeType.INTENT_ROUTER,
-    NodeType.SUB_AGENT,
-    NodeType.AGENDA,
-    NodeType.SSH,
+    NodeType(k) for k, meta in NODE_REGISTRY.items() if meta.flow
 ]
 
+# Agent 模式可用节点
 AGENT_ALLOWED_NODE_TYPES: List[str] = [
-    NodeType.START.value,
-    NodeType.END.value,
-    NodeType.LLM.value,
-    NodeType.MCP.value,
-    NodeType.KNOWLEDGE.value,
-    NodeType.SKILL.value,
-    NodeType.PYTHON.value,
-    NodeType.SHELL.value,
-    NodeType.MEMORY.value,
-    NodeType.TODO.value,
-    NodeType.API.value,
-    NodeType.CONDITION.value,
-    NodeType.INTENT_ROUTER.value,
-    NodeType.SUB_AGENT.value,
-    NodeType.AGENDA.value,
-    NodeType.SSH.value,
+    k for k, meta in NODE_REGISTRY.items() if meta.agent
 ]
 
+# Agent 工具节点（连接 LLM 的 tools handle）
 AGENT_TOOL_NODE_TYPES: set[str] = {
-    NodeType.MCP.value,
-    NodeType.KNOWLEDGE.value,
-    NodeType.SKILL.value,
-    NodeType.PYTHON.value,
-    NodeType.SHELL.value,
-    NodeType.MEMORY.value,
-    NodeType.TODO.value,
-    NodeType.API.value,
-    NodeType.SUB_AGENT.value,
-    NodeType.AGENDA.value,
-    NodeType.SSH.value,
+    k for k, meta in NODE_REGISTRY.items() if meta.agent_tool
 }
 
-TOOL_ONLY_NODE_TYPES: set[str] = {
-    NodeType.SKILL.value,
-    NodeType.MCP.value,
-    NodeType.MEMORY.value,
-    NodeType.TODO.value,
-    NodeType.SUB_AGENT.value,
-    NodeType.AGENDA.value,
-    NodeType.SSH.value,
-}
-
-NODE_SOURCE_HANDLES: dict[str, set[str]] = {
-    NodeType.START.value: {"default"},
-    NodeType.END.value: set(),
-    NodeType.CONDITION.value: {"default", "true", "false"},
-    NodeType.CARD.value: {"default"},
-    NodeType.LOOP.value: {"default"},
-    NodeType.LLM.value: {"default"},
-    NodeType.MCP.value: {"tools"},
-    NodeType.KNOWLEDGE.value: {"default", "tools"},
-    NodeType.HUMAN.value: {"default", "tools"},
-    NodeType.API.value: {"default", "tools"},
-    NodeType.SKILL.value: {"tools"},
-    NodeType.PYTHON.value: {"default", "tools"},
-    NodeType.SHELL.value: {"tools"},
-    NodeType.MEMORY.value: {"tools"},
-    NodeType.TODO.value: {"tools"},
-    # 意图路由：default + 每个意图 key 动态生成 handle（前端动态生成）
-    NodeType.INTENT_ROUTER.value: {"default"},
-    NodeType.SUB_AGENT.value: {"tools"},
-    NodeType.AGENDA.value: {"tools"},
-    NodeType.SSH.value: {"tools"},
-}
-
-NODE_TARGET_HANDLES: dict[str, set[str]] = {
-    NodeType.START.value: set(),
-    NodeType.END.value: {"default"},
-    NodeType.CONDITION.value: {"default"},
-    NodeType.CARD.value: {"default"},
-    NodeType.LOOP.value: {"default"},
-    NodeType.LLM.value: {"default", "tools"},
-    NodeType.MCP.value: set(),
-    NodeType.KNOWLEDGE.value: {"default"},
-    NodeType.HUMAN.value: {"default"},
-    NodeType.API.value: {"default"},
-    NodeType.SKILL.value: set(),
-    NodeType.PYTHON.value: {"default"},
-    NodeType.SHELL.value: set(),
-    NodeType.MEMORY.value: set(),
-    NodeType.TODO.value: set(),
-    NodeType.INTENT_ROUTER.value: {"default"},
-    NodeType.SUB_AGENT.value: set(),
-    NodeType.AGENDA.value: set(),
-    NodeType.SSH.value: set(),
-}
-
+# Agent 中唯一的节点（一个 Agent 流程只能有一个）
 AGENT_UNIQUE_NODE_TYPES: set[str] = {
-    NodeType.START.value,
-    NodeType.END.value,
-    NodeType.LLM.value,
+    k for k, meta in NODE_REGISTRY.items() if meta.agent_unique
 }
+
+# 仅作为工具节点（不能作为流程主节点）
+TOOL_ONLY_NODE_TYPES: set[str] = {
+    k for k, meta in NODE_REGISTRY.items() if meta.tool_only
+}
+
+# 节点出向 handle
+NODE_SOURCE_HANDLES: dict[str, set[str]] = {
+    k: set(meta.source) for k, meta in NODE_REGISTRY.items()
+}
+
+# 节点入向 handle
+NODE_TARGET_HANDLES: dict[str, set[str]] = {
+    k: set(meta.target) for k, meta in NODE_REGISTRY.items()
+}
+
+
+def _validate_registry_consistency() -> None:
+    """开发期断言：NodeType 枚举与 NODE_REGISTRY 必须一一对应
+
+    在模块导入末尾运行一次，捕获 NodeType 与 NODE_REGISTRY 各自新增/遗漏的情况。
+    """
+    enum_values = {nt.value for nt in NodeType}
+    registry_keys = set(NODE_REGISTRY.keys())
+    missing_in_registry = enum_values - registry_keys
+    missing_in_enum = registry_keys - enum_values
+    if missing_in_registry:
+        raise RuntimeError(
+            f"NodeType 枚举中以下值未在 NODE_REGISTRY 注册: "
+            f"{sorted(missing_in_registry)}"
+        )
+    if missing_in_enum:
+        raise RuntimeError(
+            f"NODE_REGISTRY 中以下 key 未在 NodeType 枚举中: "
+            f"{sorted(missing_in_enum)}"
+        )
+
+
+_validate_registry_consistency()
 
 
 class FlowNode(DbBaseModel):
@@ -167,7 +125,10 @@ class FlowNode(DbBaseModel):
     node_type: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        comment="节点类型：start/end/condition/card/loop/llm/mcp/knowledge/human/api",
+        comment=(
+            "节点类型：start/end/condition/card/loop/llm/mcp/knowledge/human/api/"
+            "skill/python/shell/memory/todo/intent_router/sub_agent/agenda/ssh/question"
+        ),
     )
     node_key: Mapped[str] = mapped_column(
         String(100), nullable=False, comment="节点唯一标识(用于边连接)"

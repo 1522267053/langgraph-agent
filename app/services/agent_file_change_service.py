@@ -73,22 +73,32 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
         backup_path: Optional[str] = None,
         file_id: Optional[int] = None,
     ) -> None:
-        """记录一次文件变更（独立数据库会话，失败仅告警不阻断工具执行）"""
+        """记录一次文件变更（独立数据库会话，失败仅告警不阻断工具执行）
+
+        写库成功后向 agent_executor_service 推送 file_changed SSE 事件，
+        前端侧栏 Diff 面板据此实时增量刷新。
+        """
+        change_id: Optional[int] = None
+        create_time_iso: Optional[str] = None
         try:
             async with AsyncSessionLocal() as db:
-                db.add(
-                    AgentFileChange(
-                        session_id=session_id,
-                        run_id=run_id,
-                        tool_name=tool_name,
-                        file_path=file_path,
-                        file_id=file_id,
-                        change_type=change_type,
-                        backup_path=backup_path,
-                        is_reverted=0,
-                    )
+                change = AgentFileChange(
+                    session_id=session_id,
+                    run_id=run_id,
+                    tool_name=tool_name,
+                    file_path=file_path,
+                    file_id=file_id,
+                    change_type=change_type,
+                    backup_path=backup_path,
+                    is_reverted=0,
                 )
+                db.add(change)
                 await db.commit()
+                await db.refresh(change)
+                change_id = change.id
+                create_time_iso = (
+                    change.create_time.isoformat() if change.create_time else None
+                )
         except Exception as e:
             logger.warning(
                 "文件变更记录失败: session_id=%s, file=%s, error=%s",
@@ -96,6 +106,25 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
                 file_path,
                 e,
             )
+            return
+
+        # 推送 SSE file_changed 事件（侧栏实时刷新）。
+        # 延迟 import 避免 service 之间的循环依赖；无活跃 run 时静默忽略。
+        try:
+            from app.services.agent_executor_service import agent_executor_service
+
+            agent_executor_service.emit_file_change(
+                session_id,
+                {
+                    "change_id": change_id,
+                    "file_path": file_path,
+                    "change_type": change_type,
+                    "tool_name": tool_name,
+                    "create_time": create_time_iso,
+                },
+            )
+        except Exception as e:
+            logger.debug("file_changed SSE 推送失败（不影响主流程）: %s", e)
 
     # ---- 查询（预览/回退共用，复用调用方会话）----
 
@@ -238,6 +267,138 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
         from app.models.file import File
 
         await db.execute(update(File).where(File.id == file_id).values(is_delete=1))
+
+    # ---- Diff 与单条撤销（侧栏面板用） ----
+
+    async def get_diff_content(
+        self,
+        db: AsyncSession,
+        session_id: int,
+        change_id: int,
+        max_bytes: int = 1024 * 1024,
+    ) -> Optional[dict]:
+        """读取单条变更对应的 backup 与 current 内容，返回 diff 友好结构。
+
+        - create → current = 实际文件内容（新建后状态），backup 为空
+        - modify → backup = 修改前内容，current = 修改后内容
+        - delete → backup = 删除前内容，current 为空
+        - 二进制文件 → is_binary=true，content 为空（仅返回大小）
+        - 备份文件已过期（>7d）→ backup_missing=true
+        """
+        change = await db.get(AgentFileChange, change_id)
+        if not change or change.session_id != session_id:
+            return None
+
+        backup_content = ""
+        backup_missing = False
+        if change.backup_path:
+            backup = Path(change.backup_path)
+            if backup.is_file():
+                try:
+                    backup_content = await asyncio.to_thread(
+                        self._read_text_limited, backup, max_bytes
+                    )
+                except Exception:
+                    backup_missing = True
+            else:
+                backup_missing = True
+
+        current_content = ""
+        if change.change_type != "delete":
+            target = Path(change.file_path)
+            if target.is_file():
+                try:
+                    current_content = await asyncio.to_thread(
+                        self._read_text_limited, target, max_bytes
+                    )
+                except Exception:
+                    pass
+
+        is_binary = self._is_binary(backup_content + current_content)
+
+        return {
+            "change_id": change.id,
+            "file_path": change.file_path,
+            "change_type": change.change_type,
+            "tool_name": change.tool_name,
+            "backup_content": "" if is_binary else backup_content,
+            "current_content": "" if is_binary else current_content,
+            "is_binary": is_binary,
+            "backup_missing": backup_missing,
+            "backup_size": len(backup_content.encode("utf-8", errors="ignore")),
+            "current_size": len(current_content.encode("utf-8", errors="ignore")),
+        }
+
+    async def revert_single_change(
+        self,
+        db: AsyncSession,
+        session_id: int,
+        change_id: int,
+    ) -> Optional[dict]:
+        """仅恢复单条变更，不影响其他记录（侧栏「撤销此变更」按钮用）"""
+        change = await db.get(AgentFileChange, change_id)
+        if not change or change.session_id != session_id:
+            return None
+        if change.is_reverted == 1:
+            return {
+                "file_path": change.file_path,
+                "change_type": change.change_type,
+                "status": "already_reverted",
+            }
+
+        item = {
+            "file_path": change.file_path,
+            "change_type": change.change_type,
+            "tool_name": change.tool_name,
+            "status": "ok",
+        }
+        try:
+            if change.change_type == "create":
+                if os.path.exists(change.file_path):
+                    await asyncio.to_thread(os.remove, change.file_path)
+                if change.file_id:
+                    await self._soft_delete_file(db, change.file_id)
+            elif change.change_type in ("modify", "delete"):
+                backup = Path(change.backup_path) if change.backup_path else None
+                if backup and backup.is_file():
+                    await asyncio.to_thread(
+                        self._restore_from_backup, backup, change.file_path
+                    )
+                    await asyncio.to_thread(os.remove, backup)
+                else:
+                    item["status"] = "backup_missing"
+            else:
+                item["status"] = "unknown_type"
+        except Exception as e:
+            logger.warning("单条文件恢复失败: %s, error=%s", change.file_path, e)
+            item["status"] = "failed"
+
+        change.is_reverted = 1
+        change.revert_time = datetime.now()
+        await db.commit()
+        return item
+
+    @staticmethod
+    def _read_text_limited(path: Path, max_bytes: int) -> str:
+        """读取文本文件，超出 max_bytes 截断（UTF-8 安全）"""
+        data = path.read_bytes()
+        if len(data) > max_bytes:
+            data = data[:max_bytes]
+        return data.decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _is_binary(text: str) -> bool:
+        """启发式探测：NUL 字节或 >30% 非可打印字符视为二进制"""
+        if not text:
+            return False
+        sample = text[:8192]
+        nul_count = sample.count("\x00")
+        if nul_count > 0:
+            return True
+        non_printable = sum(
+            1 for c in sample if c not in "\n\r\t" and (ord(c) < 32 or ord(c) == 127)
+        )
+        return non_printable / len(sample) > 0.3
 
     # ---- 清理 ----
 

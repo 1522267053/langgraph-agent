@@ -26,7 +26,8 @@ import {
   Avatar,
   Calendar,
   Postcard,
-  Key
+  Key,
+  QuestionFilled
 } from '@element-plus/icons-vue'
 import type { NodeVariable, FlowIOField, FieldType } from '@/types/flow'
 
@@ -594,6 +595,16 @@ const registry: Record<string, NodeRegistryEntry> = {
     iconBgColor: '#f0f9ff',
     defaultConfig: () => ({}),
     initConfig: () => ({})
+  },
+
+  question: {
+    label: '问题反问',
+    description: '让 Agent 在执行中向用户抛出结构化选项（1-4 项 + Other 自填）',
+    category: 'tool',
+    icon: QuestionFilled,
+    iconColor: '#a855f7',
+    iconBgColor: '#faf5ff',
+    defaultConfig: () => ({ description: '' })
   },
 
   // ========== 交互节点 ==========

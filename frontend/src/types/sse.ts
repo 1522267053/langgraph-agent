@@ -108,31 +108,7 @@ export interface SSEWaitData {
   llm_state?: Record<string, unknown>
 }
 
-/** SSE事件类型（流程执行） */
-export type FlowSSEEventType =
-  | 'flow_start'
-  | 'resume_start'
-  | 'node_start'
-  | 'node_thinking'
-  | 'node_content'
-  | 'node_done'
-  | 'tool_call_start'
-  | 'tool_call_end'
-  | 'tool_call_limit'
-  | 'token_usage'
-  | 'waiting_human'
-  | 'tool_approval_required'
-  | 'sub_agent_progress'
-  | 'todo_update'
-  | 'flow_done'
-  | 'error'
-  | 'llm_retry'
-  | 'context_compressing'
-  | 'flow_preview'
-  | 'knowledge_citations'
-
-/** SSE事件类型（Agent会话） */
-export type AgentSSEEventType = FlowSSEEventType
+/** SSE事件类型（流程执行） — 由下方 EVENT_HANDLER_MAP 自动派生，禁止手写 */
 
 /** SSE事件结构 */
 export interface SSEEvent<T extends string = FlowSSEEventType> {
@@ -147,9 +123,14 @@ export interface SSEEvent<T extends string = FlowSSEEventType> {
 /** SSE事件处理器 */
 export type SSEEventHandler<T extends string = FlowSSEEventType> = (event: SSEEvent<T>) => void
 
-/** 流程执行SSE处理器接口 */
+/**
+ * 流程执行SSE处理器接口（手写字段清单，作为 EVENT_HANDLER_MAP 的校验目标）
+ *
+ * 单一事实源是 EVENT_HANDLER_MAP，新增事件类型只需在那里添加一行；
+ * 此 interface 是 value 的合法命名空间 — 编译期确保 map 中的 handlerKey 必须存在
+ */
 export interface FlowSSEHandlers {
-  /** 流程开始 */
+  /** 流程开始 / 恢复（两种事件复用） */
   onFlowStart?: SSEEventHandler
   /** 节点开始 */
   onNodeStart?: SSEEventHandler
@@ -187,7 +168,49 @@ export interface FlowSSEHandlers {
   onFlowPreview?: SSEEventHandler
   /** 知识库引用 */
   onKnowledgeCitations?: SSEEventHandler
+  /** 问题反问（ask_user_question 工具触发） */
+  onQuestionRequest?: SSEEventHandler
+  /** 文件变更（侧栏实时刷新） */
+  onFileChanged?: SSEEventHandler
 }
 
-/** Agent会话SSE处理器接口 */
+/** 所有合法 handler 字段名（自动从 interface 派生） */
+export type FlowSSEHandlerKey = keyof FlowSSEHandlers
+
+/**
+ * SSE 事件类型 → handler 字段名的单一事实源
+ *
+ * 新增事件只需在此表添加一行：eventType 必须是字符串字面量，
+ * handlerKey 必须存在于 FlowSSEHandlers（satisfies 编译期校验，杜绝拼写错误）。
+ * 同一 handler 可被多个事件类型共用（alias，如 flow_start / resume_start → onFlowStart）。
+ */
+export const EVENT_HANDLER_MAP = {
+  flow_start: 'onFlowStart',
+  resume_start: 'onFlowStart',
+  node_start: 'onNodeStart',
+  node_thinking: 'onNodeThinking',
+  node_content: 'onNodeContent',
+  node_done: 'onNodeDone',
+  tool_call_start: 'onToolCallStart',
+  tool_call_end: 'onToolCallEnd',
+  tool_call_limit: 'onToolCallLimit',
+  token_usage: 'onTokenUsage',
+  waiting_human: 'onWaitingHuman',
+  tool_approval_required: 'onToolApproval',
+  sub_agent_progress: 'onSubAgentProgress',
+  todo_update: 'onTodoUpdate',
+  flow_done: 'onFlowDone',
+  llm_retry: 'onLlmRetry',
+  context_compressing: 'onContextCompressing',
+  flow_preview: 'onFlowPreview',
+  knowledge_citations: 'onKnowledgeCitations',
+  question_request: 'onQuestionRequest',
+  file_changed: 'onFileChanged',
+  error: 'onError'
+} as const satisfies Record<string, FlowSSEHandlerKey>
+
+/** 所有已注册的 SSE 事件类型（自动派生，新增/删除 EVENT_HANDLER_MAP 时同步） */
+export type FlowSSEEventType = keyof typeof EVENT_HANDLER_MAP
+
+/** Agent会话SSE处理器接口（与流程执行共享同一接口） */
 export type AgentSSEHandlers = FlowSSEHandlers

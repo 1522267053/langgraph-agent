@@ -23,6 +23,7 @@ export type CardNodeType =
   | 'todo'
   | 'sub_agent'
   | 'agenda'
+  | 'question'
 
 /** 所有节点类型 */
 export type AllNodeType = NodeType | CardNodeType

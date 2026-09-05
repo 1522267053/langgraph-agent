@@ -33,6 +33,8 @@ class FlowEventType(str, Enum):
     CONTEXT_COMPRESSING = "context_compressing"
     FLOW_PREVIEW = "flow_preview"
     KNOWLEDGE_CITATIONS = "knowledge_citations"
+    QUESTION_REQUEST = "question_request"
+    FILE_CHANGED = "file_changed"
 
 
 class FlowEvent(BaseModel):
@@ -171,6 +173,9 @@ class ToolApprovalEvent(FlowEvent):
     approval_needed: list[str] = Field(
         default_factory=list, description="需要确认的工具名列表"
     )
+    expires_in: Optional[int] = Field(
+        default=None, description="确认剩余秒数（后端权威；断线重连回放时由服务端重算）"
+    )
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.TOOL_APPROVAL_REQUIRED
@@ -304,6 +309,31 @@ class FlowPreviewEvent(FlowEvent):
         return FlowEventType.FLOW_PREVIEW
 
 
+class QuestionRequestEvent(FlowEvent):
+    """问题反问事件（SSE 流内等待用户选择选项）"""
+
+    node_key: str = Field(..., description="问题节点 Key")
+    question_id: str = Field(..., description="问题唯一 ID（前端提交时回传）")
+    question: str = Field(..., description="问题正文")
+    header: Optional[str] = Field(default=None, description="短标题（弹窗表头）")
+    options: list[dict] = Field(
+        default_factory=list, description="选项列表 [{label, description?, preview?}]"
+    )
+    multiple: bool = Field(default=False, description="是否多选")
+
+    def _get_event_type(self) -> FlowEventType:
+        return FlowEventType.QUESTION_REQUEST
+
+
+class FileChangedEvent(FlowEvent):
+    """文件变更事件（侧栏实时刷新）"""
+
+    change: dict = Field(..., description="AgentFileChange 字典（前端可序列化）")
+
+    def _get_event_type(self) -> FlowEventType:
+        return FlowEventType.FILE_CHANGED
+
+
 AnyFlowEvent = Union[
     FlowStartEvent,
     ResumeStartEvent,
@@ -325,6 +355,8 @@ AnyFlowEvent = Union[
     LlmRetryEvent,
     ContextCompressingEvent,
     FlowPreviewEvent,
+    QuestionRequestEvent,
+    FileChangedEvent,
 ]
 
 
@@ -479,3 +511,26 @@ class FlowEventFactory:
             tool_calls=tool_calls,
             approval_needed=approval_needed,
         ).to_dict()
+
+    @staticmethod
+    def file_changed(change: dict) -> dict:
+        """创建文件变更事件（侧栏 Diff 面板实时刷新用）
+
+        change 字段约定：
+        - change_id: AgentFileChange.id（int）
+        - file_path: 绝对路径
+        - change_type: create/modify/delete
+        - tool_name: 触发变更的工具名
+        - create_time: ISO 字符串（可选）
+
+        SSE data 为平铺结构（前端 onFileChanged 直接读 data.change_id 等）
+        """
+        # 平铺字段以便前端直接读 data.change_id / data.file_path 等
+        data = {
+            "change_id": change.get("change_id"),
+            "file_path": change.get("file_path"),
+            "change_type": change.get("change_type"),
+            "tool_name": change.get("tool_name"),
+            "create_time": change.get("create_time"),
+        }
+        return {"type": "file_changed", "data": data}

@@ -12,7 +12,8 @@ import type {
   AgentResumeRequest,
   AgentDeleteMessagesResult,
   AgentRevertPreview,
-  AgentFileChangeInfo
+  AgentFileChangeInfo,
+  AgentFileChangeListItem
 } from '@/types/agent'
 import type { FlowSSEHandlers, SSEEvent, SSEWaitData } from '@/types/sse'
 import { createFlowSSEConnection } from '@/utils/sse'
@@ -324,6 +325,67 @@ export const agentApi = {
   restoreFilesOnly(agentId: number, sessionId: number, messageId: number) {
     return post<{ reverted_files: AgentFileChangeInfo[]; ok_count: number }>(
       `/agent/${agentId}/sessions/${sessionId}/restoreFiles/${messageId}`
+    )
+  },
+
+  /**
+   * 提交问题反问的答案
+   * @param agentId Agent ID
+   * @param sessionId 会话 ID
+   * @param answers 用户所选标签列表（空 = 取消）
+   */
+  resolveQuestion(agentId: number, sessionId: number, answers: string[]) {
+    return post<ApiResponse>(
+      `/agent/${agentId}/sessions/${sessionId}/question/resolve`,
+      { answers }
+    )
+  },
+
+  /**
+   * 获取会话的文件变更列表（按 message_id / 时间倒序）
+   */
+  listFileChanges(agentId: number, sessionId: number, limit = 50) {
+    return get<{ list: AgentFileChangeListItem[]; total: number }>(
+      `/agent/${agentId}/sessions/${sessionId}/file_changes`,
+      { limit }
+    )
+  },
+
+  /**
+   * 获取单条文件变更的 diff 文本（backup → current）
+   */
+  getFileChangeDiff(
+    agentId: number,
+    sessionId: number,
+    changeId: number | string
+  ): Promise<{
+    change_id: number | string
+    file_path: string
+    change_type: string
+    tool_name: string
+    backup_content: string | null
+    current_content: string | null
+    is_binary: boolean
+    backup_missing: boolean
+    backup_size: number
+    current_size: number
+  }> {
+    return get(
+      `/agent/${agentId}/sessions/${sessionId}/file_changes/${changeId}/diff`
+    )
+  },
+
+  /**
+   * 撤销单条文件变更（restore backup over current）
+   */
+  revertFileChange(
+    agentId: number,
+    sessionId: number,
+    changeId: number | string
+  ) {
+    return post<ApiResponse<{ reverted: boolean; path: string }>>(
+      `/agent/${agentId}/sessions/${sessionId}/file_changes/${changeId}/revert`,
+      {}
     )
   },
 
