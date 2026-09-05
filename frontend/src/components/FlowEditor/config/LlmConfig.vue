@@ -55,6 +55,9 @@ if (localConfig.value.json_output_enabled === undefined) {
 if (!localConfig.value.json_fields) {
   localConfig.value.json_fields = []
 }
+if (localConfig.value.compress_extra_prompt === undefined) {
+  localConfig.value.compress_extra_prompt = ''
+}
 
 watch(
   () => props.config,
@@ -91,6 +94,9 @@ watch(
     }
     if (!localConfig.value.file_inputs) {
       localConfig.value.file_inputs = []
+    }
+    if (localConfig.value.compress_extra_prompt === undefined) {
+      localConfig.value.compress_extra_prompt = ''
     }
   }
 )
@@ -455,6 +461,15 @@ watch(connectedToolNodes, fetchConnectedTools, { immediate: true, deep: true })
             </el-select>
           </el-form-item>
         </template>
+        <el-form-item label="自动压缩附加提示语">
+          <el-input
+            v-model="localConfig.compress_extra_prompt"
+            type="textarea"
+            :rows="3"
+            placeholder="Agent 自动压缩上下文时附加的提示词，留空则仅使用默认提示词。支持变量插值（参考下方变量选择器说明）"
+            @blur="updateConfig"
+          />
+        </el-form-item>
       </el-form>
       <div class="config-hint">
         <el-text size="small" type="info">

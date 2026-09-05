@@ -105,6 +105,8 @@ export interface LlmConfig {
   required_tools_hint?: string
   json_output_enabled?: boolean
   json_fields?: JsonOutputField[]
+  /** 自动压缩上下文时追加的提示词（空 = 仅使用默认提示词） */
+  compress_extra_prompt?: string
 }
 
 /** 条件节点配置 */
@@ -234,6 +236,11 @@ export interface ShellConfig {
   default_workdir?: string
   input_variables: NodeVariable[]
   output_variables: NodeVariable[]
+}
+
+/** Question 节点配置 */
+export interface QuestionConfig {
+  description: string
 }
 
 /** SSH节点配置 */
