@@ -430,6 +430,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 FlowPreviewEvent(
                     flow_id=flow_id,
                     flow_name=flow.name,
+                    flow_type=getattr(flow, "flow_type", None),
                     action=action,
                     nodes=nodes_dicts,
                     edges=edges_dicts,

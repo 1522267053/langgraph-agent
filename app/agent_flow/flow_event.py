@@ -304,6 +304,10 @@ class FlowPreviewEvent(FlowEvent):
 
     flow_id: int = Field(..., description="流程ID")
     flow_name: str = Field(default="", description="流程名称")
+    flow_type: Optional[str] = Field(
+        default=None,
+        description="流程类型：flow / agent（前端编辑跳转路由时按此选 AgentEdit / FlowEdit）",
+    )
     action: str = Field(
         default="",
         description="变更类型: create/nodes_changed/edges_changed/config_changed/delete",

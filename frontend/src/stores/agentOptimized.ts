@@ -260,6 +260,7 @@ export const useAgentStore = defineStore('agent', () => {
   const flowPreview = ref<{
     flow_id: number
     flow_name?: string
+    flow_type?: 'flow' | 'agent'
     action?: string
     nodes?: Record<string, unknown>[]
     edges?: Record<string, unknown>[]
@@ -1195,6 +1196,7 @@ export const useAgentStore = defineStore('agent', () => {
         flowPreview.value = {
           flow_id: event.data.flow_id || 0,
           flow_name: event.data.flow_name,
+          flow_type: (event.data.flow_type as 'flow' | 'agent' | undefined) || undefined,
           action: event.data.action,
           nodes: event.data.nodes as Record<string, unknown>[] | undefined,
           edges: event.data.edges as Record<string, unknown>[] | undefined,
