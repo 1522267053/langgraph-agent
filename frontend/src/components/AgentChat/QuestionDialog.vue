@@ -160,14 +160,6 @@ const confirmDisabled = computed(() => {
   return expired.value || (selectedLabels.value.size === 0 && !customText.value.trim())
 })
 
-function cancel() {
-  // 守卫：用户已主动 submit（pickOption / submitCustom / submitMultiple）后，
-  // el-dialog 的 v-model 同步仍会触发 @update:model-value="cancel"，
-  // 此时若不拦截会 emit 第二个 submit([]) → 后端收到两次 /question/resolve 请求
-  if (submitted.value) return
-  submitted.value = true
-  emit('submit', []) // 空数组表示取消
-}
 </script>
 
 <template>
@@ -178,7 +170,6 @@ function cancel() {
     :close-on-press-escape="false"
     :show-close="false"
     destroy-on-close
-    @update:model-value="cancel"
   >
     <template #header>
       <div class="dialog-header">
@@ -253,10 +244,10 @@ function cancel() {
       </div>
     </div>
 
-    <!-- 底部统一确认：多选提交勾选集合；单选仅在其他输入有内容时可确定 -->
+    <!-- 底部统一确认：多选提交勾选集合；单选仅在其他输入有内容时可确定。
+         无取消按钮——用户必须从选项中选一个答案；超时由后端兜底 -->
     <template v-if="visible" #footer>
       <div class="dialog-footer">
-        <el-button @click="cancel">取消</el-button>
         <el-button type="primary" :disabled="confirmDisabled" @click="submitDialog">
           确定
         </el-button>

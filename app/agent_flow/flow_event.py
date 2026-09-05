@@ -167,6 +167,9 @@ class ToolApprovalEvent(FlowEvent):
     """工具确认事件（SSE 流内等待前端确认）"""
 
     node_key: str = Field(..., description="节点Key")
+    approval_id: str = Field(
+        ..., description="审批唯一 ID（前端提交时回传，精确路由到指定审批批次）"
+    )
     tool_calls: list[ToolCall] = Field(
         default_factory=list, description="待确认的工具调用列表"
     )
@@ -175,6 +178,13 @@ class ToolApprovalEvent(FlowEvent):
     )
     expires_in: Optional[int] = Field(
         default=None, description="确认剩余秒数（后端权威；断线重连回放时由服务端重算）"
+    )
+    total: Optional[int] = Field(
+        default=None,
+        description=(
+            "本轮 LLM 响应中需审批的工具总数（仅首事件填，后续同值）"
+            "，供前端展示 N/M 进度指示器；与 rejection 语义 b 配套"
+        ),
     )
 
     def _get_event_type(self) -> FlowEventType:
@@ -506,13 +516,19 @@ class FlowEventFactory:
 
     @staticmethod
     def tool_approval(
-        node_key: str, tool_calls: list[ToolCall], approval_needed: list[str]
+        node_key: str,
+        approval_id: str,
+        tool_calls: list[ToolCall],
+        approval_needed: list[str],
+        total: int | None = None,
     ) -> dict:
         """创建工具确认事件"""
         return ToolApprovalEvent(
             node_key=node_key,
+            approval_id=approval_id,
             tool_calls=tool_calls,
             approval_needed=approval_needed,
+            total=total,
         ).to_dict()
 
     @staticmethod

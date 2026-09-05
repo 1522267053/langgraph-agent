@@ -430,7 +430,7 @@ async def _handle_tool_approval(conn: WSConnection, cmd: WsToolApprovalCommand):
 
     from app.services.tool_approval_service import tool_approval_service
 
-    resolved = tool_approval_service.resolve(session_id, cmd.result)
+    resolved = tool_approval_service.resolve(session_id, cmd.approval_id, cmd.result)
     await conn.websocket.send_json(
         {
             "type": "tool_approval_result",

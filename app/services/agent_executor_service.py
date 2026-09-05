@@ -560,11 +560,19 @@ class AgentExecutorService(BaseExecutorService):
                             if data.get("is_sub_agent")
                             else session_id
                         )
-                        remaining = tool_approval_service.remaining_seconds(
-                            approval_session_id
-                        ) if event["type"] == "tool_approval_required" else (
-                            question_service.remaining_seconds(approval_session_id)
-                        )
+                        # 队列化后：按 (session_id, item_id) 精确查询剩余秒数
+                        # item_id 从事件 data 中取（question_id / approval_id），
+                        # 缺失时回退到该 session 首个 pending（兼容历史事件）
+                        if event["type"] == "tool_approval_required":
+                            aid = data.get("approval_id", "")
+                            remaining = tool_approval_service.remaining_seconds(
+                                approval_session_id, aid
+                            )
+                        else:
+                            qid = data.get("question_id", "")
+                            remaining = question_service.remaining_seconds(
+                                approval_session_id, qid
+                            )
                         if remaining is not None:
                             event = {
                                 **event,

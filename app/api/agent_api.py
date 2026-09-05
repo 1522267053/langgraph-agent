@@ -43,10 +43,16 @@ logger = logging.getLogger(__name__)
 
 
 class ToolApprovalRequest(BaseModel):
+    approval_id: str = Field(
+        ..., description="对应 ToolApprovalEvent.approval_id，精确路由到指定审批批次"
+    )
     action: str = Field(..., description="approved 或 rejected")
 
 
 class QuestionResolveRequest(BaseModel):
+    question_id: str = Field(
+        ..., description="对应 QuestionRequestEvent.question_id，精确路由到指定问题"
+    )
     answers: list[str] = Field(
         ..., description="用户所选标签列表（含 Other 自填文本）；空表示取消"
     )
@@ -400,7 +406,9 @@ class AgentApi:
             """前端确认/拒绝工具执行"""
             if req.action not in ("approved", "rejected"):
                 return ApiResponse.error(msg="action 必须为 approved 或 rejected")
-            resolved = tool_approval_service.resolve(session_id, req.action)
+            resolved = tool_approval_service.resolve(
+                session_id, req.approval_id, req.action
+            )
             if not resolved:
                 return ApiResponse.error(msg="没有待确认的工具")
             return ApiResponse.success(msg="操作成功")
@@ -423,7 +431,7 @@ class AgentApi:
                 if text and text not in seen:
                     cleaned.append(text)
                     seen.add(text)
-            resolved = question_service.resolve(session_id, cleaned)
+            resolved = question_service.resolve(session_id, req.question_id, cleaned)
             if not resolved:
                 return ApiResponse.error(msg="没有待回答的问题")
             return ApiResponse.success(msg="操作成功")

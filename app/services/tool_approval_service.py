@@ -1,6 +1,9 @@
 """
 工具确认服务（仅 Agent 模式生效）
 
+复用 AsyncPendingService 基类的队列化生命周期管理，
+支持同一 session 多个审批批次同时 pending（队列展示）。
+
 通过 asyncio.Event 实现 SSE 流内的工具确认等待/唤醒，
 不使用 LangGraph interrupt 机制，避免节点重执行问题。
 """
@@ -13,6 +16,7 @@ from dataclasses import dataclass, field
 from langchain_core.messages import ToolCall
 
 from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
+from app.services.async_pending_service import AsyncPendingService
 
 logger = logging.getLogger(__name__)
 
@@ -29,64 +33,39 @@ class ToolApprovalFuture:
     expires_at: float = 0.0
 
 
-class ToolApprovalService:
-    """管理工具确认的等待/唤醒，以 session_id 为 key"""
+class ToolApprovalService(AsyncPendingService[ToolApprovalFuture, str]):
+    """管理工具确认的等待/唤醒，以 (session_id, approval_id) 为 key"""
 
     def __init__(self):
-        self._pending: dict[int, ToolApprovalFuture] = {}
+        super().__init__(timeout_seconds=USER_RESPONSE_TIMEOUT_SECONDS)
 
-    def register(
-        self,
-        session_id: int,
-        tool_calls: list[ToolCall],
-        approval_needed: list[str],
-    ) -> ToolApprovalFuture:
-        """注册一个待确认的工具调用，返回 Future 供 await"""
-        future = ToolApprovalFuture(
-            tool_calls=tool_calls,
-            approval_needed=approval_needed,
-            expires_at=time.time() + USER_RESPONSE_TIMEOUT_SECONDS,
+    def _create_future(self, item_id: str, **kwargs) -> ToolApprovalFuture:
+        """构造 ToolApprovalFuture（接收 tool_calls + approval_needed kwargs）"""
+        now = time.time()
+        return ToolApprovalFuture(
+            tool_calls=kwargs.get("tool_calls", []),
+            approval_needed=kwargs.get("approval_needed", []),
+            expires_at=now + self._timeout_seconds,
         )
-        self._pending[session_id] = future
-        logger.info(
-            f"工具确认等待注册: session_id={session_id}, "
-            f"approval_needed={approval_needed}"
-        )
-        return future
 
-    def remaining_seconds(self, session_id: int) -> int | None:
-        """返回当前待确认的剩余响应秒数；无等待时返回 None"""
-        future = self._pending.get(session_id)
-        if not future:
-            return None
-        return max(0, int(future.expires_at - time.time()))
-
-    def resolve(self, session_id: int, result: str) -> bool:
-        """前端确认/拒绝后唤醒等待"""
-        future = self._pending.get(session_id)
-        if not future:
-            return False
+    def _resolve_future(self, future: ToolApprovalFuture, result: str) -> None:
+        """resolve 时把审批结果写入 future.result（approved / rejected）"""
         future.result = result
-        future.event.set()
-        logger.info(f"工具确认结果: session_id={session_id}, result={result}")
-        return True
 
-    def remove(self, session_id: int) -> None:
-        """确认完成后移除等待句柄"""
-        self._pending.pop(session_id, None)
+    def _cancel_result(self) -> str:
+        """cancel 时填充 "rejected"（保持原有语义：取消视为拒绝）"""
+        return "rejected"
 
-    def cancel(self, session_id: int) -> None:
-        """取消等待（SSE 断开 / 用户停止时调用）"""
-        future = self._pending.pop(session_id, None)
-        if future:
-            future.result = "rejected"
-            future.event.set()
-
-    def is_pending(self, session_id: int) -> bool:
-        return session_id in self._pending
-
-    def get_pending(self, session_id: int) -> ToolApprovalFuture | None:
-        return self._pending.get(session_id)
+    def _log_register(
+        self, session_id: int, item_id: str, future: ToolApprovalFuture
+    ) -> None:
+        """注册日志（保持原有格式：session_id=XX, approval_needed=[...]）"""
+        logger.info(
+            "工具确认等待注册: session_id=%s, approval_id=%s, approval_needed=%s",
+            session_id,
+            item_id,
+            future.approval_needed,
+        )
 
 
 tool_approval_service = ToolApprovalService()

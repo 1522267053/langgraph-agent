@@ -30,7 +30,8 @@
       </div>
 
       <ul v-else class="change-list">
-        <li v-for="item in fileChanges" :key="item.id"
+        <li
+v-for="item in fileChanges" :key="item.id"
           :class="['change-item', { active: activeFileChangeId === item.id, reverted: item.is_reverted }]"
           @click="onItemClick(item)">
           <div class="change-item-main">
@@ -44,7 +45,8 @@
           </div>
           <div class="change-item-meta">
             <span class="time">{{ formatTime(item.create_time) }}</span>
-            <el-button v-if="!item.is_reverted && activeFileChangeId === item.id" type="danger" link size="small"
+            <el-button
+v-if="!item.is_reverted && activeFileChangeId === item.id" type="danger" link size="small"
               :loading="reverting" @click.stop="onRevert(item)">
               撤销此变更
             </el-button>
@@ -54,7 +56,8 @@
       </ul>
 
       <!-- Diff 详情抽屉/弹窗 -->
-      <el-dialog v-model="dialogVisible" :title="dialogTitle" width="80%" top="5vh" destroy-on-close append-to-body
+      <el-dialog
+v-model="dialogVisible" :title="dialogTitle" width="80%" top="5vh" destroy-on-close append-to-body
         class="file-diff-dialog" @close="onClose">
         <div class="dialog-diff-body">
           <div v-if="activeFileChangeDiffLoading" class="loading">
@@ -63,7 +66,8 @@
             </el-icon>
             <span>加载 diff 中…</span>
           </div>
-          <DiffViewer v-else-if="activeFileChangeDiff" :backup-content="activeFileChangeDiff.backup_content"
+          <DiffViewer
+v-else-if="activeFileChangeDiff" :backup-content="activeFileChangeDiff.backup_content"
             :current-content="activeFileChangeDiff.current_content" :is-binary="activeFileChangeDiff.is_binary"
             :backup-missing="activeFileChangeDiff.backup_missing" :change-type="activeFileChangeDiff.change_type"
             :default-view-mode="defaultViewMode" />
@@ -73,7 +77,8 @@
         </div>
         <template #footer>
           <el-button @click="dialogVisible = false">关闭</el-button>
-          <el-button v-if="activeItem && !activeItem.is_reverted" type="danger" :loading="reverting"
+          <el-button
+v-if="activeItem && !activeItem.is_reverted" type="danger" :loading="reverting"
             @click="onRevert(activeItem)">
             撤销此变更
           </el-button>

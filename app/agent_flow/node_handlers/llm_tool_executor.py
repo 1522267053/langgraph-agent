@@ -466,85 +466,121 @@ async def handle_tool_calls(
             )
         return True, tool_call_count
 
-    # ---- 工具确认（仅 Agent 模式） ----
+    # ---- 工具确认（仅 Agent 模式，逐个工具独立决定） ----
     if session_id > 0:
         if approval_required_tools:
             configured_approval_tools = set(approval_required_tools)
-            approval_names = list(
-                dict.fromkeys(
-                    tc.get("name", "")
-                    for tc in tool_calls
-                    if tc.get("name", "") in configured_approval_tools
-                )
-            )
-            if approval_names:
+            # 仅本轮需审批的工具（按 tc 维度）；每个独立生成 approval_id
+            pending_approval_calls: list[dict] = [
+                tc
+                for tc in tool_calls
+                if tc.get("name", "") in configured_approval_tools
+            ]
+            if pending_approval_calls:
                 from app.services.tool_approval_service import (
                     tool_approval_service,
                 )
 
-                # 注册等待句柄并通过 SSE 通知前端
-                future = tool_approval_service.register(
-                    session_id, tool_calls, approval_names
-                )
-                if emit_fn:
-                    emit_fn(
-                        writer,
-                        ToolApprovalEvent(
-                            node_key=node.node_key,
-                            tool_calls=tool_calls,
-                            approval_needed=approval_names,
-                            expires_in=USER_RESPONSE_TIMEOUT_SECONDS,
-                        ),
+                # 拒绝语义 b：每个 tool_call 独立 register/await，被拒的不执行，
+                # 已批准的进入后续实际执行；超时视为拒绝 + 后续工具不再问
+                approval_results: dict[
+                    str, str
+                ] = {}  # tool_call_id → "approved"/"rejected"/"timeout"
+                total_count = len(pending_approval_calls)
+                for idx, tc in enumerate(pending_approval_calls):
+                    tc_name = tc.get("name", "")
+                    tc_id = tc.get("id", "")
+                    per_approval_id = uuid.uuid4().hex[:16]
+                    per_future = tool_approval_service.register(
+                        session_id,
+                        per_approval_id,
+                        tool_calls=[tc],
+                        approval_needed=[tc_name],
+                    )
+                    if emit_fn:
+                        # 仅首事件携带 total，供前端展示 N/M 进度指示器
+                        emit_fn(
+                            writer,
+                            ToolApprovalEvent(
+                                node_key=node.node_key,
+                                approval_id=per_approval_id,
+                                tool_calls=[tc],
+                                approval_needed=[tc_name],
+                                expires_in=USER_RESPONSE_TIMEOUT_SECONDS,
+                                total=total_count if idx == 0 else None,
+                            ),
+                        )
+
+                    try:
+                        await asyncio.wait_for(
+                            per_future.event.wait(),
+                            timeout=USER_RESPONSE_TIMEOUT_SECONDS,
+                        )
+                    except asyncio.TimeoutError:
+                        tool_approval_service.remove(session_id, per_approval_id)
+                        approval_results[tc_id] = "timeout"
+                        # 超时即拒绝 + 后续工具不再问（与 PM 决策一致）
+                        break
+
+                    tool_approval_service.remove(session_id, per_approval_id)
+                    approval_results[tc_id] = (
+                        per_future.result if per_future.result else "rejected"
                     )
 
-                # 等待前端确认（USER_RESPONSE_TIMEOUT_SECONDS 超时，SSE 流保持连接）
-                try:
-                    await asyncio.wait_for(
-                        future.event.wait(), timeout=USER_RESPONSE_TIMEOUT_SECONDS
+                # 处理结果：被拒 / 超时的工具写 ToolMessage 反馈给 LLM；
+                # 批准的保留在 tool_calls 中进入后续实际执行。
+                # 拒绝语义 b：仅被拒的工具不执行，已批准的继续执行，不中断整轮。
+                # 被拒工具必须先发 tool_call_start 再发 tool_call_end——
+                # 前端 updateToolSegment 需要找到 running segment 才能更新状态，
+                # 否则静默 return 导致 UI 不实时显示，需刷新页面才看到。
+                for tc in pending_approval_calls:
+                    tc_id = tc.get("id", "")
+                    result = approval_results.get(tc_id, "rejected")
+                    if result == "approved":
+                        continue
+                    tc_name = tc.get("name", "")
+                    tc_args = tc.get("args", {})
+                    msg = (
+                        f"工具确认超时（{USER_RESPONSE_TIMEOUT_SECONDS // 60}分钟未响应），自动取消执行"
+                        if result == "timeout"
+                        else "用户拒绝执行"
                     )
-                except asyncio.TimeoutError:
-                    tool_approval_service.remove(session_id)
-                    state.set_interrupted()
-                    for tc in tool_calls:
-                        tc_name = tc.get("name", "")
-                        tc_id = tc.get("id", "")
-                        msg = (
-                            f"工具确认超时（{USER_RESPONSE_TIMEOUT_SECONDS // 60}分钟未响应），"
-                            "自动取消执行"
+                    msg_buf.append(
+                        ToolMessage(
+                            content=msg,
+                            tool_call_id=tc_id,
+                            name=tc_name,
+                            status="error",  # 与 emit_tool_end_fn 的 status="error" 保持一致，
+                            # 修复 SSE 实时显示红色 vs 刷新页面后 DB 默认 success 变绿色的不一致
                         )
-                        msg_buf.append(
-                            ToolMessage(content=msg, tool_call_id=tc_id, name=tc_name)
+                    )
+                    # 先 start 后 end：与被批工具保持一致的 SSE 事件时序
+                    if emit_tool_start_fn:
+                        emit_tool_start_fn(
+                            writer,
+                            node.node_key,
+                            tc_name,
+                            tc_args,
+                            tool_call_id=tc_id,
                         )
-                        if emit_tool_end_fn:
-                            emit_tool_end_fn(
-                                writer,
-                                node.node_key,
-                                tc_name,
-                                msg,
-                                status="error",
-                                tool_call_id=tc_id,
-                            )
-                    return False, tool_call_count
+                    if emit_tool_end_fn:
+                        emit_tool_end_fn(
+                            writer,
+                            node.node_key,
+                            tc_name,
+                            msg,
+                            status="error",
+                            tool_call_id=tc_id,
+                        )
 
-                tool_approval_service.remove(session_id)
-                if future.result == "rejected":
-                    state.set_interrupted()
-                    for tc in tool_calls:
-                        tc_name = tc.get("name", "")
-                        tc_id = tc.get("id", "")
-                        msg = "用户拒绝执行"
-                        msg_buf.append(
-                            ToolMessage(content=msg, tool_call_id=tc_id, name=tc_name)
-                        )
-                        if emit_tool_end_fn:
-                            emit_tool_end_fn(
-                                writer,
-                                node.node_key,
-                                tc_name,
-                                msg,
-                                status="error",
-                                tool_call_id=tc_id,
-                            )
+                # 过滤 tool_calls：仅批准的工具进入后续实际执行；
+                # 不调用 state.set_interrupted()——按拒绝语义 b，已批准的工具应继续执行
+                tool_calls = [
+                    tc
+                    for tc in tool_calls
+                    if approval_results.get(tc.get("id", "")) == "approved"
+                ]
+                if not tool_calls:
                     return False, tool_call_count
 
     # ---- 检查工具调用次数是否超限（整批检查） ----
@@ -797,6 +833,8 @@ async def handle_tool_calls(
                 tool_call_id=tool_id,
                 name=tool_name,
                 artifact=artifact,
+                status=tool_status,  # 与 _build_end_payload 计算的 status 一致
+                # 修复 SSE 实时与 DB 刷新后状态不一致
             )
         )
 

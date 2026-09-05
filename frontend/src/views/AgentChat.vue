@@ -1236,9 +1236,12 @@ function handleRejectTools() {
             <Warning />
           </el-icon>
           <span v-if="store.subAgentApproval?.isSubAgent">
-            子Agent「{{ store.subAgentApproval.agentName }}」请求执行以下工具：
+            子Agent「{{ store.subAgentApproval.agentName }}」
           </span>
-          <span v-else>请求执行以下工具：</span>
+          <span v-if="store.approvalProgress.total > 1">
+            工具 {{ store.approvalProgress.current }}/{{ store.approvalProgress.total }}
+          </span>
+          <span v-else>请求执行工具</span>
           <span class="approval-countdown">{{ formatCountdown(store.approvalCountdown) }}</span>
         </div>
         <div class="approval-tools">
@@ -1262,8 +1265,8 @@ function handleRejectTools() {
         </div>
         <template #footer>
           <div style="display: flex; justify-content: space-between; width: 100%">
-            <el-button type="danger" @click="handleRejectTools">拒绝并停止</el-button>
-            <el-button type="primary" @click="handleApproveTools">批准执行</el-button>
+            <el-button type="danger" @click="handleRejectTools">拒绝</el-button>
+            <el-button type="primary" @click="handleApproveTools">批准</el-button>
           </div>
         </template>
       </el-card>
