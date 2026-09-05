@@ -675,6 +675,14 @@ class BuiltinAgentService:
                     600,
                     fill_node_defaults("sub_agent"),
                 ),
+                (
+                    "question_tool",
+                    NodeType.QUESTION.value,
+                    "问题反问",
+                    100,
+                    750,
+                    fill_node_defaults("question"),
+                ),
             ]
         )
         for key, ntype, name, x, y, cfg in tool_nodes:

@@ -812,6 +812,13 @@ _register(
                 position_y=-50,
                 base_config={"auth_type": "password", "command_timeout": 300},
             ),
+            TemplateNode(
+                node_type="question",
+                node_key="question",
+                node_name="问题反问",
+                position_x=100,
+                position_y=-200,
+            ),
             # ---- 结束 ----
             TemplateNode(
                 node_type="end",
