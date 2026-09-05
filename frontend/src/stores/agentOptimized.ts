@@ -3,7 +3,7 @@
  * @description 使用composables重构的Agent Store，提供更好的代码复用
  */
 import { defineStore } from 'pinia'
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, reactive } from 'vue'
 import type {
   AgentFlow,
   AgentSession,
@@ -129,10 +129,46 @@ export const useAgentStore = defineStore('agent', () => {
   const currentWaitData = ref<SSEWaitData | null>(null)
   const isWaitingHuman = ref(false)
 
-  // ========== 工具确认状态（仅Agent模式） ==========
-  const isWaitingToolApproval = ref(false)
-  const pendingToolCalls = ref<{ name: string; args: Record<string, unknown>; id?: string }[]>([])
-  const pendingApprovalNeeded = ref<string[]>([])
+  // ========== 工具确认状态（仅Agent模式，队列化：同一 session 可同时多个审批批次） ==========
+  interface PendingToolCall {
+    name: string
+    args: Record<string, unknown>
+    id?: string
+  }
+  // approvalId → { toolCalls, approvalNeeded }，不同 approvalId 同时入队
+  // 用 reactive 包装 Map 实例（不是 ref(new Map())），确保 set/delete/clear 触发响应式
+  const pendingApprovals = reactive(new Map<string, { toolCalls: PendingToolCall[]; approvalNeeded: string[] }>())
+  // 当前展示的 approvalId（FIFO：取最早入队的）
+  const currentApprovalId = ref<string | null>(null)
+  // 派生：当前展示的工具确认数据（兼容旧 store.pendingToolCalls / pendingApprovalNeeded 引用）
+  const pendingToolCalls = computed<PendingToolCall[]>(() => {
+    const id = currentApprovalId.value
+    if (!id) return []
+    return pendingApprovals.get(id)?.toolCalls ?? []
+  })
+  const pendingApprovalNeeded = computed<string[]>(() => {
+    const id = currentApprovalId.value
+    if (!id) return []
+    return pendingApprovals.get(id)?.approvalNeeded ?? []
+  })
+  const isWaitingToolApproval = computed(() => currentApprovalId.value !== null)
+  // 已提交的 approvalId 集合（按 approvalId 幂等，防止同一批次重复提交）
+  const resolvedApprovalIds = new Set<string>()
+  // 队列推进：删除当前后从 Map 取最早入队的 key 顶上来
+  function advanceApprovalQueue(): void {
+    const nextId = pendingApprovals.keys().next().value ?? null
+    currentApprovalId.value = nextId
+    // 推进后 current +1（用于 N/M 指示器）
+    if (approvalProgress.value.total > 0 && nextId) {
+      approvalProgress.value.current += 1
+    }
+    if (!nextId) {
+      // 队列清空，重置进度
+      approvalProgress.value = { current: 0, total: 0 }
+    }
+  }
+  // 审批进度 N/M：后端在首个 ToolApprovalEvent 携带 total（整轮需审批的工具总数）
+  const approvalProgress = ref<{ current: number; total: number }>({ current: 0, total: 0 })
   const approvalCountdown = ref(0)
   let approvalTimer: ReturnType<typeof setInterval> | null = null
 
@@ -144,13 +180,13 @@ export const useAgentStore = defineStore('agent', () => {
     agentName: string
   } | null>(null)
 
-  // ========== 问题反问状态（ask_user_question 工具） ==========
+  // ========== 问题反问状态（ask_user_question 工具，队列化） ==========
   interface QuestionOption {
     label: string
     description?: string
     preview?: string
   }
-  const pendingQuestion = ref<{
+  interface PendingQuestion {
     questionId: string
     nodeKey: string
     question: string
@@ -159,7 +195,25 @@ export const useAgentStore = defineStore('agent', () => {
     multiple: boolean
     /** 后端权威回答剩余秒数（刷新重连回放时由服务端重算） */
     expiresIn?: number
-  } | null>(null)
+  }
+  // questionId → PendingQuestion，不同 questionId 同时入队
+  // 用 reactive 包装 Map 实例，确保 set/delete 触发响应式（队列推进时 <100ms 内更新下一个弹窗）
+  const pendingQuestions = reactive(new Map<string, PendingQuestion>())
+  // 当前展示的 questionId（FIFO）
+  const currentQuestionId = ref<string | null>(null)
+  // 派生：当前展示的问题（兼容旧 store.pendingQuestion 引用）
+  const pendingQuestion = computed<PendingQuestion | null>(() => {
+    const id = currentQuestionId.value
+    if (!id) return null
+    return pendingQuestions.get(id) ?? null
+  })
+  // 已提交的 questionId 集合（幂等）
+  const resolvedQuestionIds = new Set<string>()
+  // 队列推进：删除当前后从 Map 取最早入队的 key 顶上来
+  function advanceQuestionQueue(): void {
+    const nextId = pendingQuestions.keys().next().value ?? null
+    currentQuestionId.value = nextId
+  }
 
   // ========== 文件变更（侧栏 Diff 面板） ==========
   // 列表缓存：按文件路径聚合（最新一条覆盖旧记录）
@@ -1047,9 +1101,29 @@ export const useAgentStore = defineStore('agent', () => {
       onWaitingHuman: applyWaitingHuman,
       onToolApproval: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
-        isWaitingToolApproval.value = true
-        pendingToolCalls.value = event.data.tool_calls || []
-        pendingApprovalNeeded.value = event.data.approval_needed || []
+        const approvalId = String(event.data.approval_id || '')
+        // 首事件携带 total（整轮需审批的工具总数）；用于 N/M 指示器
+        const totalFromEvent = Number(event.data.total) || 0
+        if (totalFromEvent > 0 && approvalProgress.value.total === 0) {
+          approvalProgress.value = { current: 1, total: totalFromEvent }
+        }
+        if (!approvalId) {
+          // 后端未提供 approval_id（极老的事件回放），按空字符串兼容：直接替换当前批次
+          currentApprovalId.value = '__legacy__'
+          pendingApprovals.set('__legacy__', {
+            toolCalls: (event.data.tool_calls || []) as PendingToolCall[],
+            approvalNeeded: (event.data.approval_needed || []) as string[]
+          })
+        } else {
+          // 同一 approval_id 重复到达（重连回放）原地更新；新 id 入队
+          pendingApprovals.set(approvalId, {
+            toolCalls: (event.data.tool_calls || []) as PendingToolCall[],
+            approvalNeeded: (event.data.approval_needed || []) as string[]
+          })
+          if (!currentApprovalId.value) {
+            currentApprovalId.value = approvalId
+          }
+        }
         // 检测子Agent审批
         if (event.data.is_sub_agent) {
           subAgentApproval.value = {
@@ -1070,15 +1144,21 @@ export const useAgentStore = defineStore('agent', () => {
       },
       onQuestionRequest: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
+        const questionId = String(event.data.question_id || '')
         const expiresIn = Math.floor(Number(event.data.expires_in) || 0)
-        pendingQuestion.value = {
-          questionId: event.data.question_id || '',
+        const q: PendingQuestion = {
+          questionId,
           nodeKey: event.data.node_key || '',
           question: event.data.question || '',
           header: event.data.header ?? null,
           options: (event.data.options || []) as QuestionOption[],
           multiple: Boolean(event.data.multiple),
           expiresIn: expiresIn > 0 ? expiresIn : undefined
+        }
+        // 入队：同一 question_id 重复到达原地更新；新 id 加入队列
+        pendingQuestions.set(questionId, q)
+        if (!currentQuestionId.value) {
+          currentQuestionId.value = questionId
         }
       },
       onFileChanged: (event: SSEEvent) => {
@@ -1126,15 +1206,16 @@ export const useAgentStore = defineStore('agent', () => {
         stopStreaming()
         isCompressing.value = false
         if (isWaitingToolApproval.value) {
-          isWaitingToolApproval.value = false
-          pendingToolCalls.value = []
-          pendingApprovalNeeded.value = []
+          pendingApprovals.clear()
+          currentApprovalId.value = null
+          approvalProgress.value = { current: 0, total: 0 }
           stopApprovalCountdown()
           ElMessage.warning({ message: '工具确认超时，连接已断开', duration: 5000 })
         }
         // 问题反问兜底清理：正常回答时 resolveQuestion 已清空；后端超时/异常结束时
         // 前端弹窗不会被动清除，避免留下无效弹窗
-        pendingQuestion.value = null
+        pendingQuestions.clear()
+        currentQuestionId.value = null
         if (isResume) {
           isResume = false
         }
@@ -1157,12 +1238,13 @@ export const useAgentStore = defineStore('agent', () => {
         stopStreaming()
         isCompressing.value = false
         if (isWaitingToolApproval.value) {
-          isWaitingToolApproval.value = false
-          pendingToolCalls.value = []
-          pendingApprovalNeeded.value = []
+          pendingApprovals.clear()
+          currentApprovalId.value = null
+          approvalProgress.value = { current: 0, total: 0 }
           stopApprovalCountdown()
         }
-        pendingQuestion.value = null
+        pendingQuestions.clear()
+        currentQuestionId.value = null
         try {
           await refreshStreamMessages(context, false, false, true)
         } catch (e) {
@@ -1329,20 +1411,29 @@ export const useAgentStore = defineStore('agent', () => {
    */
   async function approveToolCalls() {
     if (!currentAgent.value || !currentSession.value) return
-    isWaitingToolApproval.value = false
-    pendingToolCalls.value = []
-    pendingApprovalNeeded.value = []
+    const approvalId = currentApprovalId.value
+    // 幂等保护：同一 approval_id 已提交过则直接跳过
+    if (!approvalId || resolvedApprovalIds.has(approvalId)) return
+    resolvedApprovalIds.add(approvalId)
+    pendingApprovals.delete(approvalId)
+    advanceApprovalQueue()
     stopApprovalCountdown()
     try {
       if (subAgentApproval.value?.isSubAgent) {
         await agentApi.toolApproval(
           subAgentApproval.value.agentId,
           subAgentApproval.value.sessionId,
+          approvalId,
           'approved'
         )
         subAgentApproval.value = null
       } else {
-        await agentApi.toolApproval(currentAgent.value.id, currentSession.value.id, 'approved')
+        await agentApi.toolApproval(
+          currentAgent.value.id,
+          currentSession.value.id,
+          approvalId,
+          'approved'
+        )
       }
     } catch {
       // error handled by interceptor
@@ -1351,20 +1442,28 @@ export const useAgentStore = defineStore('agent', () => {
 
   async function rejectToolCalls() {
     if (!currentAgent.value || !currentSession.value) return
-    isWaitingToolApproval.value = false
-    pendingToolCalls.value = []
-    pendingApprovalNeeded.value = []
+    const approvalId = currentApprovalId.value
+    if (!approvalId || resolvedApprovalIds.has(approvalId)) return
+    resolvedApprovalIds.add(approvalId)
+    pendingApprovals.delete(approvalId)
+    advanceApprovalQueue()
     stopApprovalCountdown()
     try {
       if (subAgentApproval.value?.isSubAgent) {
         await agentApi.toolApproval(
           subAgentApproval.value.agentId,
           subAgentApproval.value.sessionId,
+          approvalId,
           'rejected'
         )
         subAgentApproval.value = null
       } else {
-        await agentApi.toolApproval(currentAgent.value.id, currentSession.value.id, 'rejected')
+        await agentApi.toolApproval(
+          currentAgent.value.id,
+          currentSession.value.id,
+          approvalId,
+          'rejected'
+        )
       }
     } catch {
       // error handled by interceptor
@@ -1374,28 +1473,45 @@ export const useAgentStore = defineStore('agent', () => {
   /** 提交问题反问的答案；answers 为空表示取消 */
   async function resolveQuestion(answers: string[]) {
     if (!currentAgent.value || !currentSession.value) return
-    // 幂等保护：pendingQuestion 已被清空时（用户已成功提交过）直接忽略后续重复调用
-    if (!pendingQuestion.value) return
-    const snapshot = pendingQuestion.value
-    pendingQuestion.value = null
+    const questionId = currentQuestionId.value
+    // 幂等保护：当前 questionId 已提交过则直接跳过
+    if (!questionId || resolvedQuestionIds.has(questionId)) return
+    if (!pendingQuestions.has(questionId)) return
+    resolvedQuestionIds.add(questionId)
+    pendingQuestions.delete(questionId)
+    advanceQuestionQueue()
     try {
       await agentApi.resolveQuestion(
         currentAgent.value.id,
         currentSession.value.id,
+        questionId,
         answers
       )
     } catch {
       // 失败时恢复弹窗（让用户重试）
-      pendingQuestion.value = snapshot
+      pendingQuestions.set(questionId, {
+        questionId,
+        nodeKey: '',
+        question: '',
+        header: null,
+        options: [],
+        multiple: false
+      })
+      resolvedQuestionIds.delete(questionId)
+      currentQuestionId.value = questionId
     }
   }
 
   /**
-   * 问题倒计时归零：本地关闭弹窗，不调 resolve——后端超时后会自行向 LLM 返回
-   * 过期错误并继续执行，此处若提交取消可能与后端超时路径竞态产生无效请求
+   * 问题倒计时归零：本地关闭当前问题弹窗（仅删除该 questionId），不调 resolve。
+   * 后端超时后会自行向 LLM 返回过期错误并继续执行。
+   * 队列中其他问题自动顶上。
    */
   function dismissExpiredQuestion() {
-    pendingQuestion.value = null
+    const questionId = currentQuestionId.value
+    if (!questionId) return
+    pendingQuestions.delete(questionId)
+    advanceQuestionQueue()
   }
 
   // ===== 文件变更（侧栏 Diff 面板） =====
@@ -1529,9 +1645,11 @@ export const useAgentStore = defineStore('agent', () => {
     }
     isWaitingHuman.value = false
     currentWaitData.value = null
-    isWaitingToolApproval.value = false
-    pendingToolCalls.value = []
-    pendingApprovalNeeded.value = []
+    pendingApprovals.clear()
+    currentApprovalId.value = null
+    approvalProgress.value = { current: 0, total: 0 }
+    pendingQuestions.clear()
+    currentQuestionId.value = null
     stopApprovalCountdown()
     stopSavePolling()
     stopRunningPolling()
@@ -1873,9 +1991,14 @@ export const useAgentStore = defineStore('agent', () => {
     isWaitingToolApproval,
     pendingToolCalls,
     pendingApprovalNeeded,
+    pendingApprovals,
+    currentApprovalId,
+    approvalProgress,
     approvalCountdown,
     subAgentApproval,
     pendingQuestion,
+    pendingQuestions,
+    currentQuestionId,
     // 文件变更 Diff
     fileChanges,
     fileChangesLoading,

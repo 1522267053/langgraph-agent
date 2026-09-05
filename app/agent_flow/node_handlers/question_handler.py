@@ -182,7 +182,7 @@ class QuestionNodeHandler(BaseNodeHandler):
             question_id = uuid.uuid4().hex[:16]
 
             # 3. 注册 Future + emit SSE 事件
-            future = question_service.register(session_id)
+            future = question_service.register(session_id, question_id)
             writer(
                 QuestionRequestEvent(
                     node_key=node_key,
@@ -201,7 +201,7 @@ class QuestionNodeHandler(BaseNodeHandler):
                     future.event.wait(), timeout=USER_RESPONSE_TIMEOUT_SECONDS
                 )
             except asyncio.TimeoutError:
-                question_service.remove(session_id)
+                question_service.remove(session_id, question_id)
                 return json.dumps(
                     {
                         "error": (
@@ -212,7 +212,7 @@ class QuestionNodeHandler(BaseNodeHandler):
                     ensure_ascii=False,
                 )
 
-            question_service.remove(session_id)
+            question_service.remove(session_id, question_id)
             answers = future.answers
             if answers is None:
                 return json.dumps({"error": "用户取消了问题"}, ensure_ascii=False)

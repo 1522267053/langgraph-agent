@@ -332,12 +332,18 @@ export const agentApi = {
    * 提交问题反问的答案
    * @param agentId Agent ID
    * @param sessionId 会话 ID
+   * @param questionId 对应 QuestionRequestEvent.question_id
    * @param answers 用户所选标签列表（空 = 取消）
    */
-  resolveQuestion(agentId: number, sessionId: number, answers: string[]) {
+  resolveQuestion(
+    agentId: number,
+    sessionId: number,
+    questionId: string,
+    answers: string[]
+  ) {
     return post<ApiResponse>(
       `/agent/${agentId}/sessions/${sessionId}/question/resolve`,
-      { answers }
+      { question_id: questionId, answers }
     )
   },
 
@@ -495,8 +501,16 @@ export const agentApi = {
    * @param sessionId 会话ID
    * @param action "approved" 或 "rejected"
    */
-  toolApproval(agentId: number, sessionId: number, action: 'approved' | 'rejected') {
-    return post<void>(`/agent/${agentId}/sessions/${sessionId}/tool_approval`, { action })
+  toolApproval(
+    agentId: number,
+    sessionId: number,
+    approvalId: string,
+    action: 'approved' | 'rejected'
+  ) {
+    return post<void>(`/agent/${agentId}/sessions/${sessionId}/tool_approval`, {
+      approval_id: approvalId,
+      action
+    })
   },
 
   /**

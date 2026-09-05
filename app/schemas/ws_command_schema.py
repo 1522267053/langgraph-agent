@@ -73,6 +73,9 @@ class WsResumeCommand(WsCommandView):
 class WsToolApprovalCommand(WsCommandView):
     """tool_approval 指令：确认/拒绝待审批的工具调用（仅 Agent 类型）"""
 
+    approval_id: str = Field(
+        ..., description="对应 ToolApprovalEvent.approval_id，精确路由到指定审批批次"
+    )
     result: Literal["approved", "rejected"] = Field(..., description="审批结果")
     session_id: int = Field(..., gt=0, description="会话ID")
 

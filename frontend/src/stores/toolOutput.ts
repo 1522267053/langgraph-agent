@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { toolApi, type BackgroundTask } from '@/api/tool'
 import { setToolOutputHandler } from '@/composables/useWebSocket'
 
@@ -17,29 +17,25 @@ export interface RunningTool {
 const POLL_INTERVAL = 1500
 
 export const useToolOutputStore = defineStore('toolOutput', () => {
-  const tools = ref<Map<string, RunningTool>>(new Map())
+  // 用 reactive 包装 Map 实例（不是 ref(new Map())），确保 set/delete/clear 触发响应式
+  const tools = reactive(new Map<string, RunningTool>())
   const drawerVisible = ref(false)
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let handlerRegistered = false
 
   const runningCount = computed(() => {
     let count = 0
-    for (const t of tools.value.values()) {
+    for (const t of tools.values()) {
       if (t.status === 'running') count++
     }
     return count
   })
 
-  const toolList = computed(() => Array.from(tools.value.values()))
-
-  const _reactivityTrigger = ref(0)
-  function triggerReactivity() {
-    _reactivityTrigger.value++
-  }
+  const toolList = computed(() => Array.from(tools.values()))
 
   function addOrUpdateTask(task: BackgroundTask) {
-    const existing = tools.value.get(task.task_id)
-    tools.value.set(task.task_id, {
+    const existing = tools.get(task.task_id)
+    tools.set(task.task_id, {
       task_id: task.task_id,
       command: task.command,
       status: task.status,
@@ -49,7 +45,6 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
       elapsed_seconds: task.elapsed_seconds,
       startTime: existing?.startTime || Date.now()
     })
-    triggerReactivity()
   }
 
   function endTask(
@@ -58,12 +53,11 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
     returnCode: number | null,
     elapsed: number | null
   ) {
-    const task = tools.value.get(taskId)
+    const task = tools.get(taskId)
     if (task) {
       task.status = status as RunningTool['status']
       task.return_code = returnCode
       task.elapsed_seconds = elapsed
-      triggerReactivity()
     }
     stopPollIfDone()
   }
@@ -94,18 +88,17 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
           addOrUpdateTask(task)
         }
         const serverTaskIds = new Set(res.data.data.map(t => t.task_id))
-        for (const [localId, local] of tools.value) {
+        for (const [localId, local] of tools) {
           if (serverTaskIds.has(localId)) continue
           if (local.status !== 'running') {
             // 服务端已过期清理的非 running 任务，本地同步删除
-            tools.value.delete(localId)
+            tools.delete(localId)
           } else {
             // 本地 running 但服务端列表缺失：查单个任务状态兜底，
             // 仍查不到（服务重启/过期清理）则标记结束，避免 UI 永远显示运行中
             await finalizeVanishedTask(localId)
           }
         }
-        triggerReactivity()
       }
       if (runningCount.value === 0) {
         stopPolling()
@@ -138,7 +131,7 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
     try {
       const res = await toolApi.getRunning()
       if (res.data.code === 1 && res.data.data) {
-        tools.value.clear()
+        tools.clear()
         for (const task of res.data.data) {
           addOrUpdateTask(task)
         }
@@ -158,28 +151,25 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
       // 取消失败（如任务已结束/不存在）：后端返回 code=0 被 axios 拦截器 reject，
       // 任务在服务端已不存在，本地同样落地为 cancelled，避免停止按钮点击无效
     }
-    const task = tools.value.get(taskId)
+    const task = tools.get(taskId)
     if (task && task.status === 'running') {
       task.status = 'cancelled'
-      triggerReactivity()
     }
     stopPollIfDone()
   }
 
   function removeTask(taskId: string) {
-    tools.value.delete(taskId)
-    triggerReactivity()
+    tools.delete(taskId)
   }
 
   /** 关闭抽屉时清理所有非 running 任务 */
   function closeDrawer() {
     drawerVisible.value = false
-    for (const [id, task] of tools.value) {
+    for (const [id, task] of tools) {
       if (task.status !== 'running') {
-        tools.value.delete(id)
+        tools.delete(id)
       }
     }
-    triggerReactivity()
   }
 
   function registerWsHandler() {
@@ -219,7 +209,6 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
     toolList,
     runningCount,
     drawerVisible,
-    _reactivityTrigger,
     loadRunning,
     cancelTask,
     removeTask,
