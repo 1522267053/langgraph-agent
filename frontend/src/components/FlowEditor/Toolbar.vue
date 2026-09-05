@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { ArrowDown, ArrowLeft, CaretRight, FolderChecked, VideoPlay } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flowStore'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 
 const props = defineProps<{
   isAgent?: boolean
@@ -10,7 +10,6 @@ const props = defineProps<{
 
 const store = useFlowStore()
 const router = useRouter()
-const route = useRoute()
 
 const emit = defineEmits<{
   (e: 'save'): void
@@ -21,6 +20,11 @@ const emit = defineEmits<{
 }>()
 
 const isBuiltin = computed(() => store.flowInfo?.is_builtin === 1)
+
+// 按 store 真实数据判断 agent/flow，而不是依赖 URL 路径：
+// FlowPreviewCard 跳转时只 push 了 name: 'FlowEdit'，路由解析为 /flow/edit/:id，
+// 若仅用 route.path 区分，编辑 agent 会被错误当成 flow 展示
+const isAgent = computed(() => props.isAgent ?? store.flowInfo?.flow_type === 'agent')
 
 const statusLabel = computed(() => {
   const status = store.flowInfo?.status
@@ -57,11 +61,11 @@ function handleShowSnapshot() {
 }
 
 function handleBack() {
-  router.push('/flow')
+  router.push(isAgent.value ? '/flow?type=agent' : '/flow')
 }
 
 function handleOpenFiles() {
-  const base = route.path.startsWith('/agent') ? '/agent' : '/flow'
+  const base = isAgent.value ? '/agent' : '/flow'
   if (store.flowInfo?.id) {
     router.push(`${base}/files/${store.flowInfo.id}`)
   }
@@ -103,7 +107,7 @@ function handleMobileCommand(command: string) {
         <div class="flow-meta">
           <div class="flow-title-row">
             <span class="flow-name">
-              {{ store.flowInfo?.name || (props.isAgent ? '未命名智能体' : '未命名流程') }}
+              {{ store.flowInfo?.name || (isAgent ? '未命名智能体' : '未命名流程') }}
             </span>
             <span v-if="store.flowInfo?.id" class="flow-status-tag" :class="statusClass">
               {{ statusLabel }}
@@ -121,7 +125,7 @@ function handleMobileCommand(command: string) {
           <button class="tab-btn" @click="handleShowHistory">执行历史</button>
           <button class="tab-btn" @click="handleShowSnapshot">版本快照</button>
           <button class="tab-btn" @click="handleOpenFiles">
-            {{ props.isAgent ? '智能体文件资源' : '流程文件资源' }}
+            {{ isAgent ? '智能体文件资源' : '流程文件资源' }}
           </button>
           <button v-if="isBuiltin" class="tab-btn reset-btn" @click="emit('resetBuiltin')">
             恢复出厂设置
@@ -134,7 +138,7 @@ function handleMobileCommand(command: string) {
           </el-button>
           <button class="action-execute" @click="handleExecute">
             <el-icon size="18"><CaretRight /></el-icon>
-            {{ props.isAgent ? '执行智能体' : '执行流程' }}
+            {{ isAgent ? '执行智能体' : '执行流程' }}
           </button>
         </div>
       </div>
@@ -153,12 +157,12 @@ function handleMobileCommand(command: string) {
           <el-dropdown-menu>
             <el-dropdown-item command="save" :icon="FolderChecked">保存</el-dropdown-item>
             <el-dropdown-item command="execute" :icon="CaretRight">
-              {{ props.isAgent ? '执行智能体' : '执行流程' }}
+              {{ isAgent ? '执行智能体' : '执行流程' }}
             </el-dropdown-item>
             <el-dropdown-item command="history" divided>执行历史</el-dropdown-item>
             <el-dropdown-item command="snapshot">版本快照</el-dropdown-item>
             <el-dropdown-item command="files">
-              {{ props.isAgent ? '智能体文件资源' : '流程文件资源' }}
+              {{ isAgent ? '智能体文件资源' : '流程文件资源' }}
             </el-dropdown-item>
           </el-dropdown-menu>
         </template>

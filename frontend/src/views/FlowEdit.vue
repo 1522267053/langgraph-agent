@@ -113,7 +113,10 @@ function handleMobileOverlayClick() {
 
 const inputFields = computed(() => store.flowInfo?.input_schema?.fields || [])
 
-const isAgentMode = computed(() => route.path.startsWith('/agent'))
+// 按 store 真实数据判断 agent/flow，而不是依赖 URL 路径：
+// FlowPreviewCard 跳转时只 push 了 name: 'FlowEdit'，路由解析为 /flow/edit/:id，
+// 若仅用 route.path 区分，编辑 agent 会被错误当成 flow 展示
+const isAgentMode = computed(() => store.flowInfo?.flow_type === 'agent')
 
 const nodeCount = computed(() => store.nodes.length)
 const edgeCount = computed(() => store.edges.length)

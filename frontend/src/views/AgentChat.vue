@@ -1276,6 +1276,7 @@ function handleRejectTools() {
       <FlowPreviewCard
         :flow-id="store.flowPreview.flow_id"
         :flow-name="store.flowPreview.flow_name"
+        :flow-type="store.flowPreview.flow_type"
         :nodes="store.flowPreview.nodes"
         :edges="store.flowPreview.edges"
         :deleted="store.flowPreview.deleted"

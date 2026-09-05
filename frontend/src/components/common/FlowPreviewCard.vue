@@ -17,6 +17,7 @@ import '@vue-flow/controls/dist/style.css'
 const props = defineProps<{
   flowId: number
   flowName?: string
+  flowType?: 'flow' | 'agent'
   nodes?: Record<string, unknown>[]
   edges?: Record<string, unknown>[]
   deleted?: boolean
@@ -72,7 +73,9 @@ function toggleMinimize(): void {
 }
 
 function openEditor(): void {
-  router.push({ name: 'FlowEdit', params: { id: props.flowId } })
+  // 按真实数据 flow_type 选路由名：agent → /agent/edit/:id，否则 → /flow/edit/:id
+  const targetName = props.flowType === 'agent' ? 'AgentEdit' : 'FlowEdit'
+  router.push({ name: targetName, params: { id: props.flowId } })
 }
 </script>
 
