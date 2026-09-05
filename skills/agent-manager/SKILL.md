@@ -13,10 +13,14 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
 2. **先读后改**：修改已有流程前，先调用 `GET /ai/flow/{id}/detail`，保留无关节点、边和配置。
 3. **按 Schema 传原生 JSON**：`base_config` 是对象；数组、对象和布尔值保持原生类型，除非实时 Schema 明确要求字符串。
 4. **配置更新是字段级合并**：`POST /ai/flow/{id}/nodes/batch/config` 只覆盖传入的 `base_config` 键，未传键保留。
-5. **模型优先用全局默认值**：LLM 的 `provider/model/api_key/base_url` 可留空；系统有默认模型时会自动注入。
-6. **工具边不参与执行图**：`source_handle="tools"` 只声明工具能力；普通数据流使用 `default -> default`。
-7. **必须执行验证**：创建或修改后实际运行一次，检查 SSE 是否出现 `flow_done` 且 `data.status="success"`，不能只确认 API 返回成功。
-8. **不要泄露密钥**：响应中的 `api_key`、`password`、`private_key`、`passphrase` 等敏感字段都是掩码展示，只用于原样保留回传，不在回复或日志中展示明文。
+5. **节点字段分两层**：`config-schema` 接口只描述 `base_config` 的字段，**不会列出** `node_name`、`position_x`、`position_y`、`node_key`、`node_type` 等节点对象的**顶层字段**。这意味着：
+   - 创建节点时，`node_name`、`position_x`、`position_y` 必须放在**节点对象顶层**（与 `node_type`、`node_key`、`base_config` 平级），**不要塞进 `base_config`**，否则会被忽略或污染配置。
+   - `/nodes/batch/config` 接口**不支持改 `node_name` 和坐标**，因为它们不是 `base_config` 的字段；要调整必须删除重建。
+   - 当不确定某个字段属于哪一层时，先 `GET /ai/flow/{id}/detail` 查实际节点结构反推，或对照 `references/api.md` 的请求体示例。
+6. **模型优先用全局默认值**：LLM 的 `provider/model/api_key/base_url` 可留空；系统有默认模型时会自动注入。
+7. **工具边不参与执行图**：`source_handle="tools"` 只声明工具能力；普通数据流使用 `default -> default`。
+8. **必须执行验证**：创建或修改后实际运行一次，检查 SSE 是否出现 `flow_done` 且 `data.status="success"`，不能只确认 API 返回成功。
+9. **不要泄露密钥**：响应中的 `api_key`、`password`、`private_key`、`passphrase` 等敏感字段都是掩码展示，只用于原样保留回传，不在回复或日志中展示明文。
 
 ## 按需参考
 
@@ -47,7 +51,7 @@ Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router` 及工�
 3. **查找复用**：调用 `GET /ai/flow/list?keyword=...`，避免创建重复流程。
 4. **创建容器**：调用 `POST /ai/flow/create`，明确 `flow_type` 和 `input_schema`。
 5. **查询 Schema**：对每种节点类型调用配置 Schema 接口。
-6. **批量建节点**：调用 `POST /ai/flow/{id}/nodes/batch`，使用稳定、语义化的 `node_key`。
+6. **批量建节点**：调用 `POST /ai/flow/{id}/nodes/batch`，使用稳定、语义化的 `node_key`。同时在节点对象**顶层**填上 `node_name`、`position_x`、`position_y`（命名空间均匀分布，避免全部堆在原点）；这些字段不属于 `base_config`。
 7. **批量连边**：调用 `POST /ai/flow/{id}/edges/batch`；工具边和普通边分开判断。
 8. **检查工具发现**：调用 `GET /ai/flow/{id}/node/{llm_node_key}/connected-tools`；需要强制调用时，将准确工具名写入 LLM 的 `required_tools`。
 9. **检查结构**：再次读取详情，确认节点、边和字段级合并结果符合预期。
