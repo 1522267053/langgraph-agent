@@ -111,11 +111,15 @@ def remove_unmatched_tool_calls(msg: BaseMessage, pending_ids: set) -> None:
 def extract_tool_status(msg: BaseMessage) -> Optional[str]:
     """从 ToolMessage 中推断工具执行状态。
 
-    依次检查 additional_kwargs.status、content 中的 success 字段。
+    依次检查 msg.status 直接属性、additional_kwargs.status、content 中的 success 字段。
     返回 'success' 或 'error'，非 ToolMessage 返回 None。
     """
     if not isinstance(msg, ToolMessage):
         return None
+    # LangChain ToolMessage(status="error") 把 status 存到直接属性，不在 additional_kwargs
+    status = getattr(msg, "status", None)
+    if status in ("success", "error"):
+        return status
     status = msg.additional_kwargs.get("status")
     if status in ("success", "error"):
         return status
