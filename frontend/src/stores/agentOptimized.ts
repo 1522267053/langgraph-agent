@@ -9,7 +9,7 @@ import type {
   AgentSession,
   AgentMessage,
   AgentDeleteMessagesResult,
-  AgentFileChangeListItem
+  AgentFileChangeBase
 } from '@/types/agent'
 import type { FlowSSEHandlers, SSEWaitData, SSEEvent, SSEEventHandler } from '@/types/sse'
 import type {
@@ -163,7 +163,7 @@ export const useAgentStore = defineStore('agent', () => {
 
   // ========== 文件变更（侧栏 Diff 面板） ==========
   // 列表缓存：按文件路径聚合（最新一条覆盖旧记录）
-  const fileChanges = ref<AgentFileChangeListItem[]>([])
+  const fileChanges = ref<AgentFileChangeBase[]>([])
   const fileChangesLoading = ref(false)
   // 请求序号守卫：会话快速切换时丢弃过期回包（最新请求胜出）
   let fileChangesReqSeq = 0
@@ -1401,21 +1401,17 @@ export const useAgentStore = defineStore('agent', () => {
   // ===== 文件变更（侧栏 Diff 面板） =====
 
   /**
-   * 拉取当前会话的文件变更列表（去重后按 create_time 倒序）
+   * 分页拉取当前会话的文件变更（后端 id 倒序，最新在前）
    */
   async function fetchFileChanges(limit = 50) {
-    if (!currentAgent.value || !currentSession.value) return
+    if (!currentSession.value) return
     const reqSeq = ++fileChangesReqSeq
     fileChangesLoading.value = true
     try {
-      const res = await agentApi.listFileChanges(
-        currentAgent.value.id,
-        currentSession.value.id,
-        limit
-      )
+      const res = await agentApi.pageFileChanges(currentSession.value.id, 1, limit)
       if (res.data.code === 1 && reqSeq === fileChangesReqSeq) {
-        fileChanges.value = (res.data.data?.list ||
-          []) as AgentFileChangeListItem[]
+        fileChanges.value = (res.data.data?.items ||
+          []) as AgentFileChangeBase[]
       }
     } catch {
       // ignore，错误条已由 interceptor 弹
@@ -1428,16 +1424,12 @@ export const useAgentStore = defineStore('agent', () => {
    * 打开某条变更的 diff 详情（拉取 backup + current 内容）
    */
   async function openFileChangeDiff(changeId: number) {
-    if (!currentAgent.value || !currentSession.value) return
+    if (!currentSession.value) return
     activeFileChangeId.value = changeId
     activeFileChangeDiff.value = null
     activeFileChangeDiffLoading.value = true
     try {
-      const res = await agentApi.getFileChangeDiff(
-        currentAgent.value.id,
-        currentSession.value.id,
-        changeId
-      )
+      const res = await agentApi.getFileChangeDiff(changeId)
       if (res.data.code === 1 && res.data.data) {
         const data = res.data.data
         activeFileChangeDiff.value = {
@@ -1468,13 +1460,8 @@ export const useAgentStore = defineStore('agent', () => {
    * 撤销单条文件变更（本地乐观更新 + 后端实际恢复）
    */
   async function revertFileChangeById(changeId: number) {
-    if (!currentAgent.value || !currentSession.value) return
     try {
-      await agentApi.revertFileChange(
-        currentAgent.value.id,
-        currentSession.value.id,
-        changeId
-      )
+      await agentApi.revertFileChange(changeId)
       lastRevertedChangeId.value = changeId
       // 乐观更新：本地标 is_reverted
       fileChanges.value = fileChanges.value.map(c =>
@@ -1494,11 +1481,11 @@ export const useAgentStore = defineStore('agent', () => {
    */
   function onFileChanged(event: SSEEvent) {
     const data = event.data
-    const newItem: AgentFileChangeListItem = {
+    const newItem: AgentFileChangeBase = {
       id: (data.change_id as number) ?? 0,
       file_path: (data.file_path as string) || '',
       change_type: ((data.change_type as string) ||
-        'modify') as AgentFileChangeListItem['change_type'],
+        'modify') as AgentFileChangeBase['change_type'],
       tool_name: (data.tool_name as string) || '',
       create_time: (data.create_time as string) || new Date().toISOString(),
       is_reverted: 0,

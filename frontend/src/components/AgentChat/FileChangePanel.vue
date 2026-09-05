@@ -111,7 +111,7 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Document, Refresh, Loading } from '@element-plus/icons-vue'
 import { useAgentStore } from '@/stores/agentOptimized'
-import type { AgentFileChangeListItem } from '@/types/agent'
+import type { AgentFileChangeBase } from '@/types/agent'
 import DiffViewer from './DiffViewer.vue'
 
 const store = useAgentStore()
@@ -148,7 +148,7 @@ function refresh() {
   store.fetchFileChanges()
 }
 
-function onItemClick(item: AgentFileChangeListItem) {
+function onItemClick(item: AgentFileChangeBase) {
   if (item.is_reverted) {
     // 已撤销的项允许查看但不可操作
     store.openFileChangeDiff(item.id)
@@ -157,7 +157,7 @@ function onItemClick(item: AgentFileChangeListItem) {
   store.openFileChangeDiff(item.id)
 }
 
-async function onRevert(item: AgentFileChangeListItem) {
+async function onRevert(item: AgentFileChangeBase) {
   reverting.value = true
   try {
     await store.revertFileChangeById(item.id)

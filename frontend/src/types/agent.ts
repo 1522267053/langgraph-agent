@@ -117,7 +117,7 @@ export interface AgentFileChangeInfo {
 }
 
 /** 文件变更列表条目（侧栏 Diff 面板用） */
-export interface AgentFileChangeListItem {
+export interface AgentFileChangeBase {
   id: number
   file_path: string
   change_type: 'create' | 'modify' | 'delete'

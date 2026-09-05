@@ -13,7 +13,7 @@ import type {
   AgentDeleteMessagesResult,
   AgentRevertPreview,
   AgentFileChangeInfo,
-  AgentFileChangeListItem
+  AgentFileChangeBase
 } from '@/types/agent'
 import type { FlowSSEHandlers, SSEEvent, SSEWaitData } from '@/types/sse'
 import { createFlowSSEConnection } from '@/utils/sse'
@@ -342,23 +342,28 @@ export const agentApi = {
   },
 
   /**
-   * 获取会话的文件变更列表（按 message_id / 时间倒序）
+   * 分页查询会话的文件变更（按 id 倒序，最新在前）
    */
-  listFileChanges(agentId: number, sessionId: number, limit = 50) {
-    return get<{ list: AgentFileChangeListItem[]; total: number }>(
-      `/agent/${agentId}/sessions/${sessionId}/file_changes`,
-      { limit }
-    )
+  pageFileChanges(sessionId: number, page = 1, pageSize = 50) {
+    return post<{
+      items: AgentFileChangeBase[]
+      total: number
+      page: number
+      page_size: number
+      total_pages: number
+    }>(`/agent_file_change/page`, {
+      page,
+      page_size: pageSize,
+      order_by: 'id',
+      is_asc: false,
+      condition: { session_id: sessionId }
+    })
   },
 
   /**
    * 获取单条文件变更的 diff 文本（backup → current）
    */
-  getFileChangeDiff(
-    agentId: number,
-    sessionId: number,
-    changeId: number | string
-  ): Promise<{
+  getFileChangeDiff(changeId: number | string): Promise<{
     change_id: number | string
     file_path: string
     change_type: string
@@ -370,21 +375,15 @@ export const agentApi = {
     backup_size: number
     current_size: number
   }> {
-    return get(
-      `/agent/${agentId}/sessions/${sessionId}/file_changes/${changeId}/diff`
-    )
+    return get(`/agent_file_change/${changeId}/diff`)
   },
 
   /**
    * 撤销单条文件变更（restore backup over current）
    */
-  revertFileChange(
-    agentId: number,
-    sessionId: number,
-    changeId: number | string
-  ) {
+  revertFileChange(changeId: number | string) {
     return post<ApiResponse<{ reverted: boolean; path: string }>>(
-      `/agent/${agentId}/sessions/${sessionId}/file_changes/${changeId}/revert`,
+      `/agent_file_change/${changeId}/revert`,
       {}
     )
   },
