@@ -1262,6 +1262,11 @@ class ShellNodeHandler(BaseNodeHandler):
                 and not task._monitor_task.done()
             ):
                 await asyncio.wait({task._monitor_task}, timeout=wait_time)
+            # 运行中 task.stdout/stderr 仍是空（_monitor_process 的 finally 块
+            # 仅在任务结束时才解码填充）。这里用累积的字节缓冲区实时覆盖，
+            # 确保运行中也能拿到当前 stdout/stderr（与 get_task_by_id 一致）。
+            task.stdout = _decode_output(bytes(task._stdout_bytes))
+            task.stderr = _decode_output(bytes(task._stderr_bytes))
             result = {"success": True, **task.to_dict()}
             if task.stdout or task.stderr:
                 _apply_shell_output_truncation(result, task)
@@ -1285,6 +1290,9 @@ class ShellNodeHandler(BaseNodeHandler):
                 "wait_time 参数指定阻塞等待秒数（8~120秒），长任务建议设置较大值一次性等待完成。"
                 "返回字段: status(running/completed/failed/timeout), stdout, stderr, return_code, elapsed_seconds。"
                 "失败时附带 error_type(timeout/not_found/permission_denied/runtime_error/empty_stdout)，可据此决定重试或换方案。"
+                "运行中（status=running）的 stdout/stderr 也会实时返回——若含交互提示（如"
+                "'Enter your name:'/'Password:'/'Continue? [y/n]'），应据此立即调用 shell_task_input 写入回复文本，"
+                "避免流程卡在等待输入而误判为超时。"
             ),
             func=None,
             coroutine=query_task_status,
@@ -1319,8 +1327,11 @@ class ShellNodeHandler(BaseNodeHandler):
             name="shell_task_input",
             description=(
                 "向正在运行的后台Shell任务发送输入（写入进程的stdin）。"
-                "当命令需要交互输入（如确认提示、密码等）时使用。"
-                "输入内容会自动追加换行符。"
+                "典型用法：先用 shell_task_status 查询 task_id 拿到 stdout（含交互提示如"
+                "'Enter your name:'/'Password:'/'Are you sure? [y/n]'），"
+                "然后用本工具把 LLM 根据上下文生成的回复文本作为 input_text 写入进程 stdin。"
+                "input_text 会自动追加换行符（无需手写 \\n）；多个连续输入请分多次调用本工具。"
+                "仅当 shell_task_status 返回 status=running 时本工具才会真正写入 stdin。"
             ),
             func=None,
             coroutine=send_task_input,
@@ -2227,6 +2238,17 @@ class ShellNodeHandler(BaseNodeHandler):
             "期间可继续执行其他工具调用\n"
             "- 需要等待时（后台任务推进、服务启动、文件生成、重试间隔）用 shell_wait 主动等待（1~120秒），"
             "不要用高频空转轮询消耗调用次数\n"
+            "### 后台任务三件套（status / input / cancel）联动模式\n"
+            "后台任务推荐按以下顺序使用三个工具：\n"
+            "1. shell_task_status(task_id, wait_time)：查询进度。运行中（status=running）也会实时返回 stdout/stderr，"
+            "**stdout 含交互提示时立即调 shell_task_input**（不要用更大的 wait_time 继续等）\n"
+            "2. shell_task_input(task_id, input_text)：当 shell_task_status 返回的 stdout 含"
+            "'Enter your name:'/'Password:'/'Continue? [y/n]'/'Press any key' 等交互提示时，"
+            "用 LLM 根据上下文生成的回复文本作为 input_text 写入进程 stdin。input_text 自动追加换行符\n"
+            "3. shell_task_cancel(task_id)：任务超时或用户要求中止时调用，"
+            "整树清杀进程（不会留孤儿进程）\n"
+            "**反模式**：用 shell_wait 轮询后台任务的进度——shell_wait 仅适合无 task_id 的等待场景；"
+            "后台任务应始终用 shell_task_status 的 wait_time 阻塞等待\n"
             + ps_compat_hint
             + (
                 f"\n临时文件输出目录: `{temp_dir}`（7天后自动清理，勿存放重要数据）。"
