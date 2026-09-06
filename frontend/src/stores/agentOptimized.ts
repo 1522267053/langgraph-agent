@@ -545,6 +545,10 @@ export const useAgentStore = defineStore('agent', () => {
           result.push(currentAssistant)
           currentAssistant = null
         }
+        // 防线 A：context-summary 仅采纳一次；任何后续重复（后端重复推送 / DB 残留 /
+        // 用户在 human 输入里模仿"上下文摘要"格式）直接丢弃。摘要识别按 message_type
+        // 判定，与文本前缀无关，human 输入里的"上下文摘要"四字天然不会误判。
+        if (result.some(m => m.displayType === 'context-summary')) continue
         const removedCount = Number(msg.input_data?.removed_count || 0)
         result.push({
           id: `msg-${msg.id}`,
@@ -713,6 +717,21 @@ export const useAgentStore = defineStore('agent', () => {
 
     if (currentAssistant) {
       result.push(currentAssistant)
+    }
+
+    // 防线 B（防御性兜底）：即便防线 A 已保证 result 最多一条 context-summary，
+    // 若旧数据 / 迁移期残留导致出现多条，仅保留「第一条 human 之前」的那一条；
+    // 从后往前遍历 splice 避免下标错位。
+    const firstHumanIdx = result.findIndex(m => m.role === 'human')
+    // 仅当确实存在 ≥1 条 human 时裁剪「位置错」的摘要；无 human 场景保持防线 A 的
+    // 天然去重结果（最多 1 条，位于头部——这是防线 A 留下的首条，按业务语义可接受；
+    // 真出现此场景说明该会话仅含摘要而无对话，渲染层会按 0 human 正常处理）。
+    if (firstHumanIdx !== -1) {
+      for (let i = result.length - 1; i >= 0; i--) {
+        if (result[i].displayType === 'context-summary' && i !== firstHumanIdx - 1) {
+          result.splice(i, 1)
+        }
+      }
     }
 
     return result
