@@ -18,6 +18,7 @@ class ScheduledTaskTargetType(str, Enum):
     SELF = "self"
     FLOW = "flow"
     AGENT = "agent"
+    REMINDER = "reminder"
 
 
 class ScheduleType(str, Enum):

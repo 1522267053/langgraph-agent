@@ -4,11 +4,12 @@ description: |
   创建、管理、触发和查询定时任务(Cron/Scheduled Task)。适用场景：
   (1) 用户要求创建定时任务，按 Cron 表达式周期执行流程或智能体
   (2) 用户要求在指定时间只执行一次流程或智能体（schedule_type=once）
-  (3) 用户想查看、修改、启用/禁用或删除已有的定时任务
-  (4) 用户需要手动触发定时任务立即执行
-  (5) 用户想查看定时任务的执行日志和历史记录
+  (3) 用户想创建周期性提醒（如每 20/30 分钟护眼、喝水、起身），仅推送 WebSocket 通知，不执行流程（target_type=reminder）
+  (4) 用户想查看、修改、启用/禁用或删除已有的定时任务
+  (5) 用户需要手动触发定时任务立即执行
+  (6) 用户想查看定时任务的执行日志和历史记录
 
-  触发词：「创建定时任务」「管理定时任务」「cron调度」「周期执行」「单次执行」「指定时间执行」「执行一次」「手动触发」「定时任务日志」「定时任务」
+  触发词：「创建定时任务」「管理定时任务」「cron调度」「周期执行」「单次执行」「指定时间执行」「执行一次」「手动触发」「定时任务日志」「定时任务」「定时提醒」「间隔提醒」「护眼提醒」「周期提醒」
 ---
 
 # Scheduled Task Manager
@@ -22,11 +23,15 @@ description: |
    - `cron`（默认）：循环执行，必须提供 `cron_expression`（5 字段）
    - `once`：在指定时间执行一次，必须提供 `run_at`（未来时间，格式 `YYYY-MM-DD HH:MM:SS`），到达时间后触发执行，**执行完毕自动禁用**（`is_enabled` 置 0）
 3. **Cron 5 字段**（仅 `schedule_type=cron`）：格式为 `分 时 日 月 周`，无秒字段。支持 `*`、`/`、`-`、`,`、`?`（`?` 自动转为 `*`）
-4. **目标 Flow 不能含 human 节点**：创建、更新、启用、手动触发四个时机均校验，包含 human 节点则拒绝
+4. **目标 Flow 不能含 human 节点**：创建、更新、启用、手动触发四个时机均校验，包含 human 节点则拒绝（**reminder 类型不受此约束**）
 5. **启用后才注册到调度器**：`is_enabled=0` 时任务不执行，需 `toggle` 启用
 6. **并发控制**：`max_instances=1`，同一任务上次未完成时跳过本次触发
 7. **所有接口需登录态**：`/api/scheduled-task/*` 全部需要 session cookie 认证
 8. **更新使用 `exclude_unset`**：未传字段保持不变，无法将字段更新为 `None`
+9. **三种目标类型**（`target_type`）：
+   - `flow`：执行指定流程（target_id 为流程 ID）
+   - `agent`：在 Agent 中创建临时会话发送消息（target_id 为 Agent ID）
+   - `reminder`：仅推送 WebSocket 通知，不执行任何流程/Agent（`target_id=0` 约定值，`input_data` 必含 `title`，`description` 可选。触发频率由 `cron_expression` 决定，无独立的 `interval_minutes` 字段）
 
 ## API 速查
 
@@ -86,6 +91,26 @@ POST /api/scheduled-task/create
 
 > `once` 任务启用后到达 `run_at` 自动执行一次，执行完毕自动禁用。若服务重启时已过 `run_at` 但在 24 小时内，启动时会立即补执行。
 
+### 创建示例（周期性提醒）
+
+```json
+POST /api/scheduled-task/create
+{
+  "name": "护眼提醒",
+  "schedule_type": "cron",
+  "cron_expression": "*/20 * * * *",
+  "target_type": "reminder",
+  "target_id": 0,
+  "input_data": {
+    "title": "护眼提醒",
+    "description": "看远方 20 米 20 秒"
+  },
+  "is_enabled": 1
+}
+```
+
+> reminder 类型到点触发时**仅推送一条 WebSocket 通知**给当前用户，不执行任何 flow/agent、不创建 execution 记录。`cron_expression` 推荐用 `*/N * * * *` 形式（如 `*/20` 每 20 分钟、`*/30` 每 30 分钟）。如需工作日/指定时刻，改用 `0 9 * * 1-5`（周一至周五 9 点）等任意 cron 表达式。不再使用独立的 `interval_minutes` 字段——cron 表达式是触发频率的唯一来源。
+
 ### 启用
 
 ```json
@@ -129,6 +154,7 @@ POST /api/scheduled-task/trigger/1
 | 场景 | Cron |
 |------|------|
 | 每分钟 | `* * * * *` |
+| 每 30 分钟 | `*/30 * * * *` |
 | 每小时整点 | `0 * * * *` |
 | 每天 8 点 | `0 8 * * *` |
 | 每天 0 点 | `0 0 * * *` |
@@ -137,13 +163,16 @@ POST /api/scheduled-task/trigger/1
 
 ## 目标类型差异
 
-| | Flow | Agent |
-|--|------|-------|
-| 执行方式 | `flow_executor_service.execute_stream` | 创建临时会话 → `chat_stream` |
-| 会话标题 | 无（走 FlowExecution） | `[定时任务] {task_name}` |
-| 关联记录 | `execution_id` → `flow_execution.id` | `session_id` → `agent_session.id` |
-| 消息前缀 | 无 | `[定时任务，触发时间: YYYY-MM-DD HH:MM:SS (UTC)]` |
-| human 节点 | 创建/启用/触发时校验，运行时自动取消并禁用任务 | 同上 |
+| | Flow | Agent | Reminder |
+|--|------|-------|----------|
+| 执行方式 | `flow_executor_service.execute_stream` | 创建临时会话 → `chat_stream` | 推送一条 WebSocket 通知（`ws_manager.notify_agenda_reminder(category="reminder")`）|
+| 目标 ID | `target_id` = 流程 ID | `target_id` = Agent ID | `target_id` = 0（约定值，无意义）|
+| 元数据位置 | `input_data.message` 等流程输入参数 | `input_data.message` 等会话输入 | `input_data.title` / `description`（必填 title，description 可选）|
+| 会话标题 | 无（走 FlowExecution） | `[定时任务] {task_name}` | 无（不创建会话） |
+| 关联记录 | `execution_id` → `flow_execution.id` | `session_id` → `agent_session.id` | 无 |
+| 消息前缀 | 无 | `[定时任务，触发时间: YYYY-MM-DD HH:MM:SS (UTC)]` | 无（标题直接来自 `input_data.title`）|
+| human 节点 | 创建/启用/触发时校验，运行时自动取消并禁用任务 | 同上 | 不校验（reminder 不执行流程）|
+| 适用场景 | 周期执行数据处理、报表生成 | 周期对话（每日资讯推送等）| 周期性个人提醒（护眼、喝水、起身）|
 
 ## 执行日志
 
@@ -157,6 +186,8 @@ POST /api/scheduled-task/trigger/1
 | `error_message` | 失败时的错误信息 |
 | `execution_id` | Flow 目标时关联的执行记录 ID |
 | `session_id` | Agent 目标时关联的会话 ID |
+
+> **Reminder 类型的日志特征**：`execution_id` 与 `session_id` 均为 NULL（不创建流程执行与会话）；`duration_ms` 通常极短（毫秒级，仅推送 WebSocket）。`status` 取决于 WebSocket 是否成功推送成功，若用户离线推送失败仍可能记为成功（推送通道本身不会抛错）。
 
 ### 查询日志
 

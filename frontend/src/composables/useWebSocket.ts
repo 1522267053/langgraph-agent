@@ -39,6 +39,8 @@ interface ToolOutputEndData {
 
 interface WSMessage {
   type: 'execution_done' | 'agenda_reminder' | 'tool_output_start' | 'tool_output_end'
+  /** 推送类型（仅 agenda_reminder 时使用） */
+  category?: 'agenda_reminder' | 'reminder'
   browser_notify?: boolean
   data: ExecutionDoneData | AgendaReminderData | ToolOutputStartData | ToolOutputEndData
 }
@@ -158,58 +160,76 @@ function handleNotification(msg: WSMessage) {
     }
   } else if (msg.type === 'agenda_reminder') {
     const data = msg.data as AgendaReminderData
-    const parts: string[] = []
-    if (data.start_time) parts.push(`时间: ${data.start_time}`)
-    if (data.location) parts.push(`地点: ${data.location}`)
-    if (data.description) parts.push(data.description)
+    const category = msg.category || 'agenda_reminder'
 
-    const noti = ElNotification({
-      type: 'warning',
-      title: `日程提醒: ${data.title}`,
-      message: h('div', [
-        h('p', { style: 'margin: 4px 0 12px' }, parts.join(' | ') || '该日程开始了'),
-        h('div', { style: 'display: flex; gap: 8px' }, [
-          h(
-            ElButton,
-            {
-              type: 'primary',
-              size: 'small',
-              onClick: async () => {
-                try {
-                  await agendaApi.complete(data.agenda_id)
-                  noti.close()
-                } catch {
-                  // ignore
-                }
-              }
-            },
-            () => '完成'
-          ),
-          h(
-            ElButton,
-            {
-              size: 'small',
-              onClick: async () => {
-                try {
-                  await agendaApi.postpone(data.agenda_id)
-                  noti.close()
-                } catch {
-                  // ignore
-                }
-              }
-            },
-            () => '延后15分钟'
-          )
-        ])
-      ]),
-      duration: 0,
-      position: 'top-right'
-    })
-    if (msg.browser_notify !== false) {
-      notify(`日程提醒: ${data.title}`, {
-        body: parts.join(' | ') || '该日程开始了',
-        icon: '/logo.ico'
+    if (category === 'reminder') {
+      // 定时任务触发的提醒：最简 UI，无完成/延后按钮
+      const body = data.description || '该提醒已到时间'
+      ElNotification({
+        type: 'info',
+        title: `⏰ ${data.title}`,
+        message: body,
+        duration: 0,
+        position: 'top-right'
       })
+      if (msg.browser_notify !== false) {
+        notify(`⏰ ${data.title}`, { body, icon: '/logo.ico' })
+      }
+    } else {
+      // 日程提醒：保留「完成」「延后15分钟」按钮
+      const parts: string[] = []
+      if (data.start_time) parts.push(`时间: ${data.start_time}`)
+      if (data.location) parts.push(`地点: ${data.location}`)
+      if (data.description) parts.push(data.description)
+
+      const noti = ElNotification({
+        type: 'warning',
+        title: `日程提醒: ${data.title}`,
+        message: h('div', [
+          h('p', { style: 'margin: 4px 0 12px' }, parts.join(' | ') || '该日程开始了'),
+          h('div', { style: 'display: flex; gap: 8px' }, [
+            h(
+              ElButton,
+              {
+                type: 'primary',
+                size: 'small',
+                onClick: async () => {
+                  try {
+                    await agendaApi.complete(data.agenda_id)
+                    noti.close()
+                  } catch {
+                    // ignore
+                  }
+                }
+              },
+              () => '完成'
+            ),
+            h(
+              ElButton,
+              {
+                size: 'small',
+                onClick: async () => {
+                  try {
+                    await agendaApi.postpone(data.agenda_id)
+                    noti.close()
+                  } catch {
+                    // ignore
+                  }
+                }
+              },
+              () => '延后15分钟'
+            )
+          ])
+        ]),
+        duration: 0,
+        position: 'top-right'
+      })
+      if (msg.browser_notify !== false) {
+        notify(`日程提醒: ${data.title}`, {
+          body: parts.join(' | ') || '该日程开始了',
+          icon: '/logo.ico'
+        })
+      }
     }
   } else if (msg.type === 'tool_output_start' || msg.type === 'tool_output_end') {
     if (toolOutputHandler) {
