@@ -129,12 +129,19 @@ class WebSocketManager:
         start_time: Optional[str] = None,
         location: Optional[str] = None,
         browser_notify: bool = True,
+        category: str = "agenda_reminder",
     ) -> None:
-        """定向推送日程提醒给指定用户（不受通知开关限制）"""
+        """定向推送日程/提醒给指定用户（不受通知开关限制）
+
+        category 用于前端按类型区分弹窗样式：
+        - agenda_reminder（默认）：日程提醒，含完成、延后按钮
+        - reminder：定时任务触发的提醒（最简 UI）
+        """
         await self.broadcast_to_user(
             username,
             {
                 "type": "agenda_reminder",
+                "category": category,
                 "browser_notify": browser_notify,
                 "data": {
                     "agenda_id": agenda_id,

@@ -48,7 +48,8 @@ const runStatusMap: Record<number, { text: string; type: 'success' | 'danger' }>
 
 const targetMap: Record<string, string> = {
   flow: '流程',
-  agent: 'Agent'
+  agent: 'Agent',
+  reminder: '提醒'
 }
 
 const scheduleTypeMap: Record<string, { text: string; type: 'primary' | 'warning' }> = {
@@ -179,6 +180,7 @@ onMounted(() => {
 
 const cronPresets = [
   { label: '每分钟', value: '* * * * *' },
+  { label: '每30分钟', value: '*/30 * * * *' },
   { label: '每小时', value: '0 * * * *' },
   { label: '每天8点', value: '0 8 * * *' },
   { label: '每天0点', value: '0 0 * * *' },
@@ -212,7 +214,10 @@ const form = reactive({
   target_type: 'flow' as string,
   target_id: undefined as number | undefined,
   is_enabled: 0 as number,
-  input_data: ''
+  input_data: '',
+  // reminder 类型专属字段（仅 target_type=reminder 时使用）
+  reminder_title: '',
+  reminder_description: ''
 })
 
 function resetForm() {
@@ -224,6 +229,8 @@ function resetForm() {
   form.target_id = undefined
   form.is_enabled = 0
   form.input_data = ''
+  form.reminder_title = ''
+  form.reminder_description = ''
   targetOptions.value = []
   targetSearchKeyword.value = ''
   inputFields.value = []
@@ -255,7 +262,12 @@ async function openEditDialog(row: ScheduledTask) {
   targetSearchKeyword.value = ''
   dialogVisible.value = true
   await loadTargets(true)
-  if (form.target_id) {
+  if (form.target_type === 'reminder') {
+    // 反向解析 reminder 专属字段（cron 已独立存于 row.cron_expression）
+    const data = (row.input_data || {}) as Record<string, unknown>
+    form.reminder_title = (data.title as string) || ''
+    form.reminder_description = (data.description as string) || ''
+  } else if (form.target_id) {
     await fetchTargetById(form.target_id)
     await loadInputSchema(form.target_id)
     if (row.input_data) {
@@ -388,13 +400,27 @@ async function handleSubmit() {
       return
     }
   }
-  if (!form.target_id) {
-    ElMessage.warning({ message: '请选择执行目标', duration: 5000 })
-    return
+  // reminder 类型的校验与组装
+  if (form.target_type === 'reminder') {
+    if (!form.reminder_title.trim()) {
+      ElMessage.warning({ message: '请输入提醒标题', duration: 5000 })
+      return
+    }
+    // cron 必填（与 flow/agent 共用同一校验，已在 schedule_type=cron 分支校验过）
+  } else {
+    if (!form.target_id) {
+      ElMessage.warning({ message: '请选择执行目标', duration: 5000 })
+      return
+    }
   }
 
   let inputData: Record<string, unknown> | undefined
-  if (inputFormRef.value && inputFields.value.length > 0) {
+  if (form.target_type === 'reminder') {
+    inputData = {
+      title: form.reminder_title.trim(),
+      description: form.reminder_description.trim() || undefined
+    }
+  } else if (inputFormRef.value && inputFields.value.length > 0) {
     const error = inputFormRef.value.validate()
     if (error) {
       ElMessage.warning({ message: error, duration: 5000 })
@@ -412,7 +438,7 @@ async function handleSubmit() {
       cron_expression: form.schedule_type === 'cron' ? form.cron_expression : undefined,
       run_at: form.schedule_type === 'once' ? form.run_at : undefined,
       target_type: form.target_type,
-      target_id: form.target_id,
+      target_id: form.target_type === 'reminder' ? 0 : form.target_id,
       is_enabled: form.is_enabled,
       input_data: inputData
     }
@@ -580,7 +606,7 @@ async function loadLogs() {
         <el-form-item label="启用" required>
           <el-switch v-model="form.is_enabled" :active-value="1" :inactive-value="0" />
         </el-form-item>
-        <el-form-item label="调度类型" required>
+        <el-form-item v-if="form.target_type !== 'reminder'" label="调度类型" required>
           <el-radio-group v-model="form.schedule_type">
             <el-radio value="cron">循环执行</el-radio>
             <el-radio value="once">执行一次</el-radio>
@@ -641,9 +667,30 @@ async function loadLogs() {
           <el-radio-group v-model="form.target_type" @change="handleTargetTypeChange">
             <el-radio value="flow">流程</el-radio>
             <el-radio value="agent">Agent</el-radio>
+            <el-radio value="reminder">提醒</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="目标" required>
+        <template v-if="form.target_type === 'reminder'">
+          <el-form-item label="提醒标题" required>
+            <el-input
+              v-model="form.reminder_title"
+              placeholder="例如：护眼提醒"
+              maxlength="50"
+              show-word-limit
+            />
+          </el-form-item>
+          <el-form-item label="提醒内容">
+            <el-input
+              v-model="form.reminder_description"
+              type="textarea"
+              :rows="2"
+              placeholder="可选，展示在通知正文"
+              maxlength="200"
+              show-word-limit
+            />
+          </el-form-item>
+        </template>
+        <el-form-item v-else label="目标" required>
           <el-select
             v-model="form.target_id"
             :placeholder="form.target_type === 'flow' ? '选择流程' : '选择Agent'"

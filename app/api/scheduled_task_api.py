@@ -116,9 +116,10 @@ class ScheduledTaskApi(
         """创建 - 校验名称唯一性 + 调度配置 + 流程目标合法性，启用时注册调度"""
         await self._check_name_unique(db, data.name)
         self._validate_schedule(data)
-        if not data.target_id:
+        # reminder 类型的 target_id 固定为 0，跳过必填校验
+        if data.target_type != "reminder" and not data.target_id:
             raise HTTPException(status_code=400, detail="target_id 不能为空")
-        await self._check_flow_target(db, data.target_type, data.target_id)
+        await self._check_flow_target(db, data.target_type, data.target_id or 0)
         task = await self.service.create(db, data)
         if task.is_enabled == 1:
             self._sync_scheduler(task)
@@ -174,9 +175,10 @@ class ScheduledTaskApi(
                 return ApiResponse.error(msg="任务不存在")
             is_enabling = task.is_enabled != 1
             if is_enabling:
-                if not task.target_id:
+                # reminder 类型的 target_id 固定为 0，跳过必填校验
+                if task.target_type != "reminder" and not task.target_id:
                     raise HTTPException(status_code=400, detail="target_id 不能为空")
-                await self._check_flow_target(db, task.target_type, task.target_id)
+                await self._check_flow_target(db, task.target_type, task.target_id or 0)
             task = await scheduled_task_service.toggle_enabled(db, task_id)
             if task is None:
                 return ApiResponse.error(msg="任务不存在")
@@ -190,9 +192,10 @@ class ScheduledTaskApi(
             task = await scheduled_task_service.get_by_id(db, task_id)
             if not task:
                 return ApiResponse.error(msg="任务不存在")
-            if not task.target_id:
+            # reminder 类型的 target_id 固定为 0，跳过必填校验
+            if task.target_type != "reminder" and not task.target_id:
                 raise HTTPException(status_code=400, detail="target_id 不能为空")
-            await self._check_flow_target(db, task.target_type, task.target_id)
+            await self._check_flow_target(db, task.target_type, task.target_id or 0)
             log = await scheduled_task_service.manual_trigger(db, task_id)
             return ApiResponse.success(
                 data=ScheduledTaskLogBase.model_to_view(log), msg="已触发执行"

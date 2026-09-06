@@ -139,11 +139,19 @@ class ScheduledTaskService(
                 target_type = task.target_type
                 target_id = task.target_id
                 input_data = task.input_data or {}
-                if not target_id:
+                if (
+                    target_type
+                    != ScheduledTaskTargetType.REMINDER.value
+                    and not target_id
+                ):
                     raise ValueError(f"定时任务[{task.name}]缺少目标ID，无法执行")
                 if target_type == ScheduledTaskTargetType.AGENT.value:
                     await self._execute_agent_task(
                         db, log, target_id, input_data, task.name
+                    )
+                elif target_type == ScheduledTaskTargetType.REMINDER.value:
+                    await self._execute_reminder_task(
+                        db, log, task, input_data
                     )
                 else:
                     await self._execute_flow_task(db, log, target_id, input_data)
@@ -293,6 +301,41 @@ class ScheduledTaskService(
                 pass
         except Exception:
             pass
+
+    async def _execute_reminder_task(
+        self,
+        db: AsyncSession,
+        log: ScheduledTaskLog,
+        task: ScheduledTask,
+        input_data: dict,
+    ) -> None:
+        """执行提醒类定时任务：仅推送 WebSocket 通知，不执行任何 flow/agent。
+
+        reminder 任务的元数据（title / description）存放在 input_data JSON 中，
+        target_id 固定为 0（模型字段 NOT NULL 但语义无关）。
+        触发频率由 task.cron_expression 决定，不另存 interval_minutes。
+
+        推送用户名：优先 task.creator_name，否则取当前全局登录用户名，
+        最后 fallback "default"。reminder 任务创建时 BaseService._set_creator_fields
+        不会写 creator_name（只设 create_time），所以 fallback 到当前用户是必要路径。
+        """
+        from app.utils.user_util import get_current_username
+        from app.services.ws_manager import ws_manager
+
+        title = input_data.get("title") or task.name or "提醒"
+        description = input_data.get("description") or task.name or ""
+
+        username = task.creator_name or await get_current_username()
+        await ws_manager.notify_agenda_reminder(
+            username=username,
+            agenda_id=-task.id,
+            title=title,
+            description=description or None,
+            start_time=None,
+            location=None,
+            browser_notify=True,
+            category="reminder",
+        )
 
     async def get_task_logs(
         self,
