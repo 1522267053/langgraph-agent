@@ -148,6 +148,12 @@ const TODO_ITEM_HEIGHT = 31
 const TODO_ITEM_GAP = 6
 /** todo 列表封顶（.todo-block :deep(.todo-list) max-height: 320px） */
 const TODO_BODY_MAX = 320
+/** compress-summary 内容封顶（.compress-summary-content max-height: 400px） */
+const SUMMARY_BODY_MAX = 400
+/** compress-summary 块外 chrome：label 行 ~28（14px 文本 + 6px margin-bottom）+ 容器 padding 28 + 块外边距 8 */
+const SUMMARY_CHROME = 64
+/** compress-summary 内容内边距：与 .compress-summary 的 padding 14px × 2 一致 */
+const SUMMARY_BODY_PADDING = 28
 
 /** CJK/全角字符（近似全角宽度），其余按半宽 0.5 单位 */
 const CJK_CHAR = /[\u2e80-\u9fff\uF900-\uFAFF\uFF00-\uFFEF\u3000-\u303F]/g
@@ -204,8 +210,20 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
   switch (row.kind) {
     case 'typing':
       return 56
-    case 'summary':
-      return 140
+    case 'summary': {
+      // 摘要正文 13px / line-height 1.6，与 .compress-summary-content CSS 对齐；
+      // 受渲染层 400px max-height 封顶：文本超长时走 SUMMARY_BODY_MAX 而非无限生长，
+      // 避免 virtualizer 首次挂载产生巨量 delta 触发滚动条跳变。
+      const body = Math.min(
+        SUMMARY_BODY_MAX,
+        estimateTextHeight(
+          row.msg?.content,
+          unitsPerLine(prefs?.containerWidth, 13, CONTENT_UNITS_PER_LINE),
+          13 * 1.6
+        ) + SUMMARY_BODY_PADDING
+      )
+      return SUMMARY_CHROME + body
+    }
     case 'human':
       return 90
     case 'ai': {
