@@ -29,6 +29,7 @@ from app.schemas.agent_schema import (
     AgentSessionPageRequest,
     AgentSessionCreateRequest,
     AgentSessionWorkDirRequest,
+    AgentSessionPlanModeRequest,
     AgentMessageResponse,
     AgentMessageListResponse,
     AgentMessagePageRequest,
@@ -180,7 +181,10 @@ class AgentApi:
                 return ApiResponse.error(msg=str(exc))
 
             session = await agent_executor_service.create_session(
-                db, id, work_dir=work_dir
+                db,
+                id,
+                work_dir=work_dir,
+                plan_mode=int(req.plan_mode) if req and req.plan_mode else 0,
             )
             return ApiResponse.success(
                 data=AgentSessionResponse.model_validate(session), msg="创建成功"
@@ -204,6 +208,27 @@ class AgentApi:
                 )
             except ValueError as exc:
                 return ApiResponse.error(msg=str(exc))
+            if not session:
+                return ApiResponse.error(msg="会话不存在")
+            return ApiResponse.success(
+                data=AgentSessionResponse.model_validate(session), msg="更新成功"
+            )
+
+        @self.router.put(
+            "/{id}/sessions/{session_id}/plan-mode",
+            response_model=ApiResponse[AgentSessionResponse],
+            summary="切换会话计划模式",
+        )
+        async def update_plan_mode(
+            id: int,
+            session_id: int,
+            req: AgentSessionPlanModeRequest,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """切换会话计划模式（只读探索，禁用写操作工具）；按会话独立存储"""
+            session = await agent_executor_service.update_plan_mode(
+                db, session_id, req.plan_mode
+            )
             if not session:
                 return ApiResponse.error(msg="会话不存在")
             return ApiResponse.success(

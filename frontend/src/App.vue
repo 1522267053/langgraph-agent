@@ -36,6 +36,7 @@ import {
 } from '@/composables/useWebSocket'
 import { agentApi } from '@/api/agent'
 import { loadWorkDirForAgent } from '@/utils/workdir'
+import { loadPlanModeForAgent } from '@/utils/planmode'
 import { agendaApi } from '@/api/agenda'
 import {
   requestPermission as requestNotifyPermission,
@@ -482,10 +483,15 @@ function navigateTo(path: string) {
 
 async function handleNewSession(): Promise<void> {
   if (!chatAgentId.value) return
-  // 新建会话时自动复用 Agent 维度记忆的工作路径（前端 localStorage 偏好）
-  // 让工具栏工作路径红框在「新建会话」瞬间就显示，不需要等用户发消息
+  // 新建会话时自动复用 Agent 维度记忆的工作路径 / 计划模式（前端 localStorage 偏好）
+  // 让工具栏状态在「新建会话」瞬间就显示，不需要等用户发消息
   const rememberedWorkDir = loadWorkDirForAgent(chatAgentId.value)
-  const session = await store.createSession(chatAgentId.value, rememberedWorkDir || undefined)
+  const rememberedPlanMode = loadPlanModeForAgent(chatAgentId.value)
+  const session = await store.createSession(
+    chatAgentId.value,
+    rememberedWorkDir || undefined,
+    rememberedPlanMode || undefined
+  )
   if (session) {
     await store.selectSession(chatAgentId.value, session)
   }

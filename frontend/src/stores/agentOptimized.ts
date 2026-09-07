@@ -20,6 +20,7 @@ import type {
   TodoItem
 } from '@/composables/useStreamingMessage'
 import { agentApi } from '@/api/agent'
+import { savePlanModeForAgent } from '@/utils/planmode'
 import { USER_RESPONSE_COUNTDOWN_SECONDS } from '@/constants/timing'
 import { createOnToolCallLimitHandler, createOnLlmRetryHandler } from '@/composables/useSSEHandlers'
 import { useStreamingMessage } from '@/composables'
@@ -257,11 +258,34 @@ export const useAgentStore = defineStore('agent', () => {
   let runningPollTimer: ReturnType<typeof setTimeout> | null = null
   let runningPollVersion = 0
 
-  // ========== 计划模式（只读探索，不执行修改），localStorage 持久化 ==========
-  const planMode = ref(localStorage.getItem('agent_plan_mode') === '1')
-  function togglePlanMode(): void {
-    planMode.value = !planMode.value
-    localStorage.setItem('agent_plan_mode', planMode.value ? '1' : '0')
+  // ========== 计划模式（只读探索，不执行修改），按会话独立存储 ==========
+  // 有会话时以 currentSession.plan_mode（DB 字段）为权威；无会话时暂存到
+  // pendingPlanMode，首次创建会话时随 createSession 传入。
+  // Agent 级记忆（utils/planmode.ts）供新建会话继承最近偏好
+  const pendingPlanMode = ref(false)
+  const planMode = computed(
+    () => (currentSession.value ? !!currentSession.value.plan_mode : pendingPlanMode.value)
+  )
+  async function togglePlanMode(): Promise<void> {
+    const next = !planMode.value
+    const agentId = currentAgent.value?.id
+    const sessionId = currentSession.value?.id
+    if (agentId && sessionId) {
+      try {
+        const res = await agentApi.updatePlanMode(agentId, sessionId, next)
+        // await 期间用户可能已切换会话，只回写仍是目标会话的标志
+        if (res.data.code === 1 && currentSession.value?.id === sessionId) {
+          currentSession.value.plan_mode = next ? 1 : 0
+        }
+      } catch {
+        // error handled by interceptor
+        return
+      }
+    } else {
+      pendingPlanMode.value = next
+    }
+    // Agent 级记忆：新建会话继承最近一次的计划模式偏好
+    savePlanModeForAgent(agentId ?? null, next)
   }
 
   // ========== 流程预览（AI 创建/修改流程时推送，独立于消息分段） ==========
@@ -334,9 +358,13 @@ export const useAgentStore = defineStore('agent', () => {
    * 创建新会话
    * @param workDir 可选，会话级项目工作路径
    */
-  async function createSession(agentId: number, workDir?: string): Promise<AgentSession | null> {
+  async function createSession(
+    agentId: number,
+    workDir?: string,
+    planMode?: boolean
+  ): Promise<AgentSession | null> {
     try {
-      const res = await agentApi.createSession(agentId, workDir)
+      const res = await agentApi.createSession(agentId, workDir, planMode)
       if (res.data.code === 1) {
         await loadSessions(agentId, 1)
         const session = res.data.data
@@ -1916,6 +1944,8 @@ export const useAgentStore = defineStore('agent', () => {
     currentAgent.value = null
     sessions.value = []
     currentSession.value = null
+    // 计划模式的会话暂存值一并复位（有会话时标志随 session.plan_mode 走）
+    pendingPlanMode.value = false
     messages.value = []
     clearMessages()
     streamBaseMsgId = 0
