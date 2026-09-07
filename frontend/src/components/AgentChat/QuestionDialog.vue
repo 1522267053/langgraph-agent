@@ -32,6 +32,8 @@ interface PendingQuestion {
 
 const props = defineProps<{
   question: PendingQuestion | null
+  /** 子Agent名称（子Agent ask_user_question 穿透时显示来源标识，空表示当前Agent） */
+  subAgentName?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -175,6 +177,9 @@ const confirmDisabled = computed(() => {
       <div class="dialog-header">
         <el-icon :size="20" class="dialog-icon"><QuestionFilled /></el-icon>
         <span class="dialog-title">{{ question?.header || '问题反问' }}</span>
+        <span v-if="subAgentName" class="dialog-sub-agent">
+          子Agent「{{ subAgentName }}」
+        </span>
         <span v-if="expired" class="dialog-expired">已过期</span>
         <span v-else-if="remainingSeconds > 0" class="dialog-countdown">{{
           formatCountdown(remainingSeconds)
@@ -271,6 +276,16 @@ const confirmDisabled = computed(() => {
   font-weight: 600;
   font-size: 15px;
   color: #303133;
+}
+
+.dialog-sub-agent {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #b45309;
+  background: #fef3c7;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
 }
 
 .dialog-countdown {

@@ -84,14 +84,16 @@ export interface SSEEventData {
   edges?: Record<string, unknown>[]
   /** LLM 回答中经过校验的知识库引用 */
   citations?: KnowledgeReference[]
-  /** 子Agent ID（sub_agent_progress 事件） */
+  /** 子Agent ID（sub_agent_progress / 子Agent转发事件） */
   sub_agent_id?: number
-  /** 子Agent会话ID（sub_agent_progress 事件） */
+  /** 子Agent会话ID（sub_agent_progress / 子Agent转发事件） */
   sub_session_id?: number
-  /** 子Agent名称（sub_agent_progress 事件） */
+  /** 子Agent名称（sub_agent_progress / 子Agent转发事件） */
   sub_agent_name?: string
   /** 子Agent执行状态（sub_agent_progress 事件） */
   sub_status?: string
+  /** 是否来自子Agent（tool_approval_required / question_request 转发事件） */
+  is_sub_agent?: boolean
 }
 
 /** 人工等待数据 */

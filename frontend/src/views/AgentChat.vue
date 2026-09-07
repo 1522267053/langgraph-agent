@@ -1317,6 +1317,9 @@ function handleRejectTools() {
     <ToolOutputDrawer />
     <QuestionDialog
       :question="store.pendingQuestion"
+      :sub-agent-name="
+        store.subAgentQuestion?.isSubAgent ? store.subAgentQuestion.agentName : ''
+      "
       @submit="handleQuestionSubmit"
       @expire="store.dismissExpiredQuestion"
     />
