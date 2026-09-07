@@ -88,6 +88,7 @@ class _AgentRun:
     session_id: int
     approval_callback: Callable[[dict[str, Any]], None] | None = None
     event_callback: Callable[[dict[str, Any]], None] | None = None
+    question_callback: Callable[[dict[str, Any]], None] | None = None
     events: list[dict[str, Any]] = dataclass_field(default_factory=list)
     subscribers: set[asyncio.Event] = dataclass_field(default_factory=set)
     result_ready: asyncio.Event = dataclass_field(default_factory=asyncio.Event)
@@ -173,6 +174,16 @@ class AgentExecutorService(BaseExecutorService):
                     run.run_id,
                     exc_info=True,
                 )
+        if stored_event["type"] == "question_request" and run.question_callback:
+            try:
+                run.question_callback(stored_event)
+            except Exception:
+                logger.warning(
+                    "转发子Agent问题反问事件失败: session_id=%s, run_id=%s",
+                    run.session_id,
+                    run.run_id,
+                    exc_info=True,
+                )
         for wake_event in tuple(run.subscribers):
             wake_event.set()
 
@@ -244,6 +255,7 @@ class AgentExecutorService(BaseExecutorService):
         finally:
             run.approval_callback = None
             run.event_callback = None
+            run.question_callback = None
             run.result = result
             run.done = True
             run.completed_at = time.monotonic()
@@ -334,6 +346,7 @@ class AgentExecutorService(BaseExecutorService):
         allow_waiting: bool = False,
         approval_callback: Callable[[dict[str, Any]], None] | None = None,
         event_callback: Callable[[dict[str, Any]], None] | None = None,
+        question_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
         """启动单个会话的后台执行并返回 run_id。"""
         if self._shutting_down:
@@ -354,6 +367,7 @@ class AgentExecutorService(BaseExecutorService):
             session_id=session_id,
             approval_callback=approval_callback,
             event_callback=event_callback,
+            question_callback=question_callback,
         )
         self._agent_runs[session_id] = run
         stream_generator = stream_factory()
@@ -396,6 +410,7 @@ class AgentExecutorService(BaseExecutorService):
         model: str | None = None,
         approval_callback: Callable[[dict[str, Any]], None] | None = None,
         event_callback: Callable[[dict[str, Any]], None] | None = None,
+        question_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> str:
         """启动后台 Agent 对话。"""
         return self._start_agent_run(
@@ -409,6 +424,7 @@ class AgentExecutorService(BaseExecutorService):
             ),
             approval_callback=approval_callback,
             event_callback=event_callback,
+            question_callback=question_callback,
         )
 
     def start_resume_run(self, session_id: int, human_input: str) -> str:
@@ -445,6 +461,9 @@ class AgentExecutorService(BaseExecutorService):
         from app.services.tool_approval_service import tool_approval_service
 
         tool_approval_service.cancel(session_id)
+        # 子会话可能正阻塞在 ask_user_question 上，一并释放 Future（父 Agent
+        # 停止会级联取消子会话 run，与 tool_approval 同理）
+        question_service.cancel(session_id)
         self._pending_save_sessions.add(session_id)
 
         if run.done:

@@ -342,6 +342,15 @@ class QuestionRequestEvent(FlowEvent):
         return FlowEventType.QUESTION_REQUEST
 
 
+class SubAgentQuestionRequestEvent(QuestionRequestEvent):
+    """子Agent问题反问转发事件（通过父Agent的SSE流转发到前端）"""
+
+    is_sub_agent: bool = Field(default=True, description="是否来自子Agent")
+    sub_agent_id: int = Field(default=0, description="子Agent ID")
+    sub_session_id: int = Field(default=0, description="子Agent会话ID")
+    sub_agent_name: str = Field(default="", description="子Agent名称")
+
+
 class FileChangedEvent(FlowEvent):
     """文件变更事件（侧栏实时刷新）"""
 

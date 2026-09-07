@@ -180,6 +180,14 @@ export const useAgentStore = defineStore('agent', () => {
     agentName: string
   } | null>(null)
 
+  // ========== 子Agent问题反问状态（子Agent ask_user_question 穿透） ==========
+  const subAgentQuestion = ref<{
+    isSubAgent: boolean
+    agentId: number
+    sessionId: number
+    agentName: string
+  } | null>(null)
+
   // ========== 问题反问状态（ask_user_question 工具，队列化） ==========
   interface QuestionOption {
     label: string
@@ -1180,6 +1188,18 @@ export const useAgentStore = defineStore('agent', () => {
         if (!currentQuestionId.value) {
           currentQuestionId.value = questionId
         }
+        // 检测子Agent反问（与 onToolApproval 的 is_sub_agent 同模式）：
+        // resolve 需路由到子会话
+        if (event.data.is_sub_agent) {
+          subAgentQuestion.value = {
+            isSubAgent: true,
+            agentId: event.data.sub_agent_id || 0,
+            sessionId: event.data.sub_session_id || 0,
+            agentName: event.data.sub_agent_name || '子Agent'
+          }
+        } else {
+          subAgentQuestion.value = null
+        }
       },
       onFileChanged: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
@@ -1237,6 +1257,7 @@ export const useAgentStore = defineStore('agent', () => {
         // 前端弹窗不会被动清除，避免留下无效弹窗
         pendingQuestions.clear()
         currentQuestionId.value = null
+        subAgentQuestion.value = null
         if (isResume) {
           isResume = false
         }
@@ -1266,6 +1287,7 @@ export const useAgentStore = defineStore('agent', () => {
         }
         pendingQuestions.clear()
         currentQuestionId.value = null
+        subAgentQuestion.value = null
         try {
           await refreshStreamMessages(context, false, false, true)
         } catch (e) {
@@ -1501,13 +1523,25 @@ export const useAgentStore = defineStore('agent', () => {
     resolvedQuestionIds.add(questionId)
     pendingQuestions.delete(questionId)
     advanceQuestionQueue()
+    // 子Agent反问：按事件携带的子会话路由（Future 注册在子会话的等待句柄上）
+    const isSubAgentQuestion = subAgentQuestion.value?.isSubAgent
     try {
-      await agentApi.resolveQuestion(
-        currentAgent.value.id,
-        currentSession.value.id,
-        questionId,
-        answers
-      )
+      if (isSubAgentQuestion && subAgentQuestion.value) {
+        await agentApi.resolveQuestion(
+          subAgentQuestion.value.agentId,
+          subAgentQuestion.value.sessionId,
+          questionId,
+          answers
+        )
+        subAgentQuestion.value = null
+      } else {
+        await agentApi.resolveQuestion(
+          currentAgent.value.id,
+          currentSession.value.id,
+          questionId,
+          answers
+        )
+      }
     } catch {
       // 失败时恢复弹窗（让用户重试）
       pendingQuestions.set(questionId, {
@@ -1533,6 +1567,10 @@ export const useAgentStore = defineStore('agent', () => {
     if (!questionId) return
     pendingQuestions.delete(questionId)
     advanceQuestionQueue()
+    // 队列清空时同步清理子Agent反问标记，避免残留影响下一次路由
+    if (!pendingQuestions.size) {
+      subAgentQuestion.value = null
+    }
   }
 
   // ===== 文件变更（侧栏 Diff 面板） =====
@@ -2017,6 +2055,7 @@ export const useAgentStore = defineStore('agent', () => {
     approvalProgress,
     approvalCountdown,
     subAgentApproval,
+    subAgentQuestion,
     pendingQuestion,
     pendingQuestions,
     currentQuestionId,

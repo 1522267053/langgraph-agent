@@ -25,6 +25,7 @@ from app.agent_flow.flow_event import (
     NodeStartEvent,
     NodeDoneEvent,
     SubAgentProgressEvent,
+    SubAgentQuestionRequestEvent,
     SubAgentToolApprovalEvent,
 )
 from app.services.flow_service import flow_service
@@ -263,6 +264,25 @@ class SubAgentNodeHandler(BaseNodeHandler):
                         )
                     )
 
+                def forward_question(event: dict[str, Any]) -> None:
+                    event_data = event.get("data") or {}
+                    if not _parent_writer:
+                        return
+                    _parent_writer(
+                        SubAgentQuestionRequestEvent(
+                            node_key=event_data.get("node_key", ""),
+                            question_id=event_data.get("question_id", ""),
+                            question=event_data.get("question", ""),
+                            header=event_data.get("header"),
+                            options=event_data.get("options", []),
+                            multiple=bool(event_data.get("multiple", False)),
+                            expires_in=event_data.get("expires_in"),
+                            sub_agent_id=_agent_id,
+                            sub_session_id=session_id,
+                            sub_agent_name=_agent_name,
+                        )
+                    )
+
                 # 每轮 LLM 回复完成后转发一次预览（content→tool_call→content 时逐次覆盖）
                 progress: dict[str, Any] = {"text": ""}
 
@@ -318,6 +338,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
                     extra_params,
                     approval_callback=forward_approval if _parent_writer else None,
                     event_callback=forward_progress,
+                    question_callback=forward_question if _parent_writer else None,
                     error_content_getter=lambda: last_round["content"],
                 )
             except Exception as e:
@@ -376,6 +397,7 @@ async def _run_sub_agent(
     params: dict | None = None,
     approval_callback: Callable[[dict[str, Any]], None] | None = None,
     event_callback: Callable[[dict[str, Any]], None] | None = None,
+    question_callback: Callable[[dict[str, Any]], None] | None = None,
     error_content_getter: Callable[[], str] | None = None,
 ) -> dict | str:
     """启动托管子Agent并等待最终结果，不消费其 SSE 事件。"""
@@ -387,6 +409,7 @@ async def _run_sub_agent(
         params or {},
         approval_callback=approval_callback,
         event_callback=event_callback,
+        question_callback=question_callback,
     )
     try:
         result = await agent_executor_service.wait_run_result(session_id, run_id)
