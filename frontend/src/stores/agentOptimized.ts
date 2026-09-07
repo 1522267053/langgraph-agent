@@ -138,7 +138,9 @@ export const useAgentStore = defineStore('agent', () => {
   }
   // approvalId → { toolCalls, approvalNeeded }，不同 approvalId 同时入队
   // 用 reactive 包装 Map 实例（不是 ref(new Map())），确保 set/delete/clear 触发响应式
-  const pendingApprovals = reactive(new Map<string, { toolCalls: PendingToolCall[]; approvalNeeded: string[] }>())
+  const pendingApprovals = reactive(
+    new Map<string, { toolCalls: PendingToolCall[]; approvalNeeded: string[] }>()
+  )
   // 当前展示的 approvalId（FIFO：取最早入队的）
   const currentApprovalId = ref<string | null>(null)
   // 派生：当前展示的工具确认数据（兼容旧 store.pendingToolCalls / pendingApprovalNeeded 引用）
@@ -263,8 +265,8 @@ export const useAgentStore = defineStore('agent', () => {
   // pendingPlanMode，首次创建会话时随 createSession 传入。
   // Agent 级记忆（utils/planmode.ts）供新建会话继承最近偏好
   const pendingPlanMode = ref(false)
-  const planMode = computed(
-    () => (currentSession.value ? !!currentSession.value.plan_mode : pendingPlanMode.value)
+  const planMode = computed(() =>
+    currentSession.value ? !!currentSession.value.plan_mode : pendingPlanMode.value
   )
   async function togglePlanMode(): Promise<void> {
     const next = !planMode.value
@@ -426,6 +428,11 @@ export const useAgentStore = defineStore('agent', () => {
       ) {
         messages.value = res.data.data?.list || []
         messageTotal.value = res.data.data?.total || 0
+        // 重连对齐基线 = 加载时的最大 DB id：streamBaseMsgId 若保持 0，
+        // rebuildChatMessages 的占位行尾部对齐会把全部历史行当"本轮新增"，
+        // 重连占位行（仅持刷新后增量内容）会错误吸收最后一个 AI 组，
+        // 导致刷新前该轮内容（工具段+回复）从视图消失
+        streamBaseMsgId = messages.value.at(-1)?.id ?? 0
         rebuildChatMessages()
         // 预拉取文件变更列表，驱动右上角"文件"badge；SSE file_changed 后续增量维护
         void fetchFileChanges()
@@ -872,38 +879,35 @@ export const useAgentStore = defineStore('agent', () => {
       // 参与对齐会被尾部流式占位行吸收（matchedFresh 跳过摘要行 + dbMsgId 过继给
       // 占位行），导致摘要卡在下次全量重建前不渲染；占位行只与真实对话行对齐
       const freshRows = rebuilt.filter(
-        r =>
-          r.dbMsgId != null &&
-          r.dbMsgId > streamBaseMsgId &&
-          r.displayType !== 'context-summary'
+        r => r.dbMsgId != null && r.dbMsgId > streamBaseMsgId && r.displayType !== 'context-summary'
       )
       let freshIdx = freshRows.length - 1
       for (let pi = placeholders.length - 1; pi >= 0 && freshIdx >= 0; pi--) {
         const ph = placeholders[pi]
-        while (freshIdx >= 0) {
-          const candidate = freshRows[freshIdx]
-          freshIdx--
-          if (candidate.role !== ph.role) continue
-          // 仅回填元数据：保留原 id 与 segments（行 key 不变 → 虚拟行复用、内容不回退）
-          ph.dbMsgId = candidate.dbMsgId
-          ph.prompt_tokens = candidate.prompt_tokens
-          ph.completion_tokens = candidate.completion_tokens
-          ph.total_tokens = candidate.total_tokens
-          if (candidate.latest_prompt_tokens)
-            ph.latest_prompt_tokens = candidate.latest_prompt_tokens
-          // reattach 补段：页面刷新重连只回放尾部事件，占位行缺刷新前的 thinking/
-          // tool 段。候选组（DB 重建）持有占位行完全缺失的段类型时，以候选组段
-          // 整体替换（保留占位行 id/key）。live 流式场景占位行段类型为候选组超集
-          // 不触发，DB 缺段场景候选组不会多出类型也不触发，均保持防回退语义
-          const phSegTypes = new Set(ph.segments.map(s => s.type))
-          if (candidate.segments.some(s => !phSegTypes.has(s.type))) {
-            ph.segments = candidate.segments
-            ph.content = candidate.content
-            ph.thinking = candidate.thinking
-          }
-          matchedFresh.add(candidate)
-          break
+        const candidate = freshRows[freshIdx]
+        // 角色不匹配时不消费游标：该行留给更早的占位行。中断停止可能只落库
+        // human 行（ai 行未保存），此时 streaming(ai) 占位若吞掉游标会导致
+        // user(human) 占位失配 → DB 行与占位行重复渲染同一用户气泡。
+        // 占位行序列与 freshRows 时序天然同构（human 在前 ai 在后），无需跨行搜索
+        if (candidate.role !== ph.role) continue
+        freshIdx--
+        // 仅回填元数据：保留原 id 与 segments（行 key 不变 → 虚拟行复用、内容不回退）
+        ph.dbMsgId = candidate.dbMsgId
+        ph.prompt_tokens = candidate.prompt_tokens
+        ph.completion_tokens = candidate.completion_tokens
+        ph.total_tokens = candidate.total_tokens
+        if (candidate.latest_prompt_tokens) ph.latest_prompt_tokens = candidate.latest_prompt_tokens
+        // reattach 补段：页面刷新重连只回放尾部事件，占位行缺刷新前的 thinking/
+        // tool 段。候选组（DB 重建）持有占位行完全缺失的段类型时，以候选组段
+        // 整体替换（保留占位行 id/key）。live 流式场景占位行段类型为候选组超集
+        // 不触发，DB 缺段场景候选组不会多出类型也不触发，均保持防回退语义
+        const phSegTypes = new Set(ph.segments.map(s => s.type))
+        if (candidate.segments.some(s => !phSegTypes.has(s.type))) {
+          ph.segments = candidate.segments
+          ph.content = candidate.content
+          ph.thinking = candidate.thinking
         }
+        matchedFresh.add(candidate)
       }
     }
 
@@ -1194,9 +1198,7 @@ export const useAgentStore = defineStore('agent', () => {
         // 后端权威剩余秒数（live 发布时=完整超时，刷新重连回放时由服务端按死线
         // 重算），缺失时回退常量——保证前端倒计时与后端超时死线不脱节
         const expiresIn = Math.floor(Number(event.data.expires_in) || 0)
-        startApprovalCountdown(
-          expiresIn > 0 ? expiresIn : USER_RESPONSE_COUNTDOWN_SECONDS
-        )
+        startApprovalCountdown(expiresIn > 0 ? expiresIn : USER_RESPONSE_COUNTDOWN_SECONDS)
       },
       onQuestionRequest: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
@@ -1613,8 +1615,7 @@ export const useAgentStore = defineStore('agent', () => {
     try {
       const res = await agentApi.pageFileChanges(currentSession.value.id, 1, limit)
       if (res.data.code === 1 && reqSeq === fileChangesReqSeq) {
-        fileChanges.value = (res.data.data?.items ||
-          []) as AgentFileChangeBase[]
+        fileChanges.value = (res.data.data?.items || []) as AgentFileChangeBase[]
       }
     } catch {
       // ignore，错误条已由 interceptor 弹
@@ -1687,8 +1688,7 @@ export const useAgentStore = defineStore('agent', () => {
     const newItem: AgentFileChangeBase = {
       id: (data.change_id as number) ?? 0,
       file_path: (data.file_path as string) || '',
-      change_type: ((data.change_type as string) ||
-        'modify') as AgentFileChangeBase['change_type'],
+      change_type: ((data.change_type as string) || 'modify') as AgentFileChangeBase['change_type'],
       tool_name: (data.tool_name as string) || '',
       create_time: (data.create_time as string) || new Date().toISOString(),
       is_reverted: 0,
