@@ -579,7 +579,9 @@ function convergeScrollToBottom(): void {
     wrap.removeEventListener('pointerdown', onUserInput, { capture: true })
   }
   const finish = () => {
-    wrap.scrollTop = wrap.scrollHeight
+    // 用 composable 的强制贴底而非裸赋值：同步置 isAtBottom=true，
+    // 防止收敛期 scroll 事件的几何重算把贴底判定翻成 false 残留
+    scrollToBottom()
     messagesRevealed.value = true
   }
   const tick = () => {
@@ -594,7 +596,7 @@ function convergeScrollToBottom(): void {
         lastHeight = height
         lastChangeAt = now
       }
-      wrap.scrollTop = height
+      scrollToBottom()
       // 收敛批次间存在短暂平台期（刷新冷启动时更明显）：至少骑 600ms + 高度
       // 连续 250ms 不变才认定收敛并显示
       const elapsed = now - startAt
@@ -609,11 +611,12 @@ function convergeScrollToBottom(): void {
       // follow：高度变化（reveal 引发的重排/晚到内容）才跟随，静止 400ms 或
       // 跟随满 1s 后退出
       if (height !== lastHeight) {
-        wrap.scrollTop = height
+        scrollToBottom()
         lastHeight = height
         lastChangeAt = now
       }
       if (now - lastChangeAt >= 400 || now >= followUntil) {
+        scrollToBottom()
         cleanup()
         return
       }

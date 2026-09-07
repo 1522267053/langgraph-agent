@@ -1,5 +1,9 @@
 import { onScopeDispose, ref, watch, type Ref, type WatchSource } from 'vue'
-import { AUTO_SCROLL_BOTTOM_THRESHOLD, AUTO_SCROLL_THROTTLE_MS } from '@/constants/timing'
+import {
+  AUTO_SCROLL_BOTTOM_THRESHOLD,
+  AUTO_SCROLL_FOLLOW_SETTLE_MS,
+  AUTO_SCROLL_THROTTLE_MS
+} from '@/constants/timing'
 
 interface UseAutoScrollOptions {
   threshold?: number
@@ -45,6 +49,7 @@ export function useAutoScroll(
   const userScrolledUp = ref(false)
   let _lastGestureAt = 0
   let _lastScrollAt = 0
+  let _lastFollowAt = 0
   let _trailingTimer: ReturnType<typeof setTimeout> | null = null
   let _scrollFrame: number | null = null
   let _lastScrollTop = 0
@@ -127,9 +132,7 @@ export function useAutoScroll(
     // 优先使用消费方声明的内容元素；未声明或已脱离容器时退回 firstElementChild
     const declared = options.contentRef?.value
     const content =
-      declared && declared.isConnected && el.contains(declared)
-        ? declared
-        : el.firstElementChild
+      declared && declared.isConnected && el.contains(declared) ? declared : el.firstElementChild
     if (_observedContainer === el && _observedContent === content) return
     _resizeObserver.disconnect()
     _resizeObserver.observe(el)
@@ -159,9 +162,11 @@ export function useAutoScroll(
   function performScrollToBottom(): void {
     const el = containerRef.value
     if (!el) return
-    // 程序化贴底引发的 scroll 事件由手势白名单忽略（见 handleScroll），无需额外标志位
+    // 程序化贴底引发的 scroll 事件由手势白名单忽略（见 handleScroll），无需额外标志位；
+    // 贴底时间戳供 handleScroll 识别追逐延续事件（settle 窗口内不翻转贴底判定）
     el.scrollTop = el.scrollHeight
     _lastScrollTop = el.scrollTop
+    _lastFollowAt = Date.now()
     isAtBottom.value = true
     userScrolledUp.value = false
   }
@@ -174,8 +179,7 @@ export function useAutoScroll(
       _scrollFrame = requestAnimationFrame(() => {
         _scrollFrame = null
         // 与按钮状态联动：仅按钮未显示（仍在底部）且用户未上滚时才贴底
-        if (autoScroll.value && isAtBottom.value && !userScrolledUp.value)
-          performScrollToBottom()
+        if (autoScroll.value && isAtBottom.value && !userScrolledUp.value) performScrollToBottom()
       })
     })
   }
@@ -253,6 +257,7 @@ export function useAutoScroll(
     isAtBottom.value = true
     _lastGestureAt = 0
     _lastScrollAt = 0
+    _lastFollowAt = 0
     _lastScrollTop = containerRef.value?.scrollTop || 0
     _wasScrollable = containerRef.value ? hasScrollableOverflow(containerRef.value) : false
     cancelPendingScroll()
@@ -295,29 +300,57 @@ export function useAutoScroll(
     const { scrollTop, scrollHeight, clientHeight } = el
     const scrollable = scrollHeight - clientHeight > 1
     _wasScrollable = scrollable
-    isAtBottom.value = scrollable ? scrollHeight - scrollTop - clientHeight <= threshold : true
-
     if (!scrollable) {
       // 没有滚动范围时不存在“主动上滚”
       userScrolledUp.value = false
+      isAtBottom.value = true
       _lastScrollTop = scrollTop
       return
     }
 
+    const now = Date.now()
     // 手势白名单：距最近一次真实输入超出窗口期的 scroll 事件一律视为程序化滚动
     // （贴底跟随、内容撑高引发的位置调整等），只更新基准、不推断用户意图
-    if (Date.now() - _lastGestureAt >= gestureWindowMs) {
+    const programmatic = now - _lastGestureAt >= gestureWindowMs
+    // 贴底跟随进行中：有排队的跟随帧，或刚贴底不久（settle 窗口）。高速流式下
+    // scroll 事件派发时内容往往又已增长，几何暂时偏离底部属追逐常态
+    const followingInFlight =
+      _scrollFrame !== null || now - _lastFollowAt < AUTO_SCROLL_FOLLOW_SETTLE_MS
+    const movingUp = scrollTop < _lastScrollTop - 1
+    const distance = scrollHeight - scrollTop - clientHeight
+    const applyGeometry = (): void => {
+      isAtBottom.value = distance <= threshold
+    }
+
+    if (!programmatic) {
+      if (movingUp) {
+        // 用户上滚：立即停止跟随（即使仍在底部阈值内）
+        applyGeometry()
+        markUserScrolledUp()
+        _lastScrollTop = scrollTop
+        return
+      }
+      // 用户下滚/原地：跟随进行中则并入追逐（方向一致不抢位置，防止几何
+      // 重算中断跟随）；空闲则按几何刷新，到底恢复自动滚动
+      if (followingInFlight) {
+        isAtBottom.value = true
+      } else {
+        applyGeometry()
+      }
+      if (isAtBottom.value) userScrolledUp.value = false
       _lastScrollTop = scrollTop
       return
     }
 
-    if (scrollTop < _lastScrollTop - 1) {
-      // 真实输入后的上滚：立即停止跟随（即使仍在底部阈值内）
-      markUserScrolledUp()
-    } else if (scrollTop > _lastScrollTop + 1 && isAtBottom.value) {
-      // 用户主动滚回底部（含拖动滚动条）→ 恢复自动滚动
-      userScrolledUp.value = false
+    if (followingInFlight && !movingUp) {
+      // 追逐中的下滚/原地事件保持贴底判定：此时翻转 isAtBottom 会让按钮
+      // 闪现且跟随永久中断（下次 RO 判定“不在底部”而停跟）
+      isAtBottom.value = true
+      _lastScrollTop = scrollTop
+      return
     }
+    // 其余（非追逐的程序化滚动如 load-more 视口恢复、跟随中的上滚）：按几何刷新
+    applyGeometry()
     _lastScrollTop = scrollTop
   }
 

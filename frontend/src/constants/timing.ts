@@ -12,6 +12,11 @@ export const AUTO_SCROLL_THROTTLE_MS = 50
 /** 距底判定阈值（px）：距底部小于该值视为贴底（外层列表跟随与 thinking 块内部跟随共用） */
 export const AUTO_SCROLL_BOTTOM_THRESHOLD = 60
 
+/** 贴底跟随的收尾窗口（ms）：程序化贴底后该窗口内的 scroll 事件视为跟随
+ *  延续——高速流式下事件派发时内容往往又已增长，几何暂时偏离底部属常态，
+ *  不得据此翻转贴底判定（否则按钮闪现且跟随中断） */
+export const AUTO_SCROLL_FOLLOW_SETTLE_MS = 200
+
 /** 流结束后 mermaid 图表渲染防抖间隔 */
 export const MERMAID_RENDER_DEBOUNCE = 300
 
