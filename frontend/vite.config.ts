@@ -3,7 +3,8 @@ import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
-
+const ip = '127.0.0.1'
+const port = 8800
 export default defineConfig({
   plugins: [
     vue(),
@@ -22,17 +23,17 @@ export default defineConfig({
     port: 3001,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8800',
+        target: `http://${ip}:${port}`,
         changeOrigin: true,
         timeout: 0,
         proxyTimeout: 0,
       },
       '/uploads': {
-        target: 'http://127.0.0.1:8800',
+        target: `http://${ip}:${port}`,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://127.0.0.1:8800',
+        target: `ws://${ip}:${port}`,
         ws: true,
         changeOrigin: true,
       },
