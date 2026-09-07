@@ -391,7 +391,7 @@ async def handle_tool_calls(
                 node.node_key,
                 writer,
                 "该工具在计划模式下被禁用（写操作/有副作用/子Agent 委派），"
-                "请切换到普通执行模式后再调用，或改用只读方式完成当前步骤",
+                "请切换到执行模式后再调用，或改用只读方式完成当前步骤",
                 emit_fn=emit_fn,
                 emit_tool_end_fn=emit_tool_end_fn,
             )

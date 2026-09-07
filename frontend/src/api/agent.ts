@@ -238,10 +238,12 @@ export const agentApi = {
    * 创建会话
    * @param agentId Agent ID
    * @param workDir 可选，项目工作路径
+   * @param planMode 可选，计划模式开关
    */
-  createSession(agentId: number, workDir?: string) {
+  createSession(agentId: number, workDir?: string, planMode?: boolean) {
     return post<AgentSession>(`/agent/${agentId}/sessions`, {
-      work_dir: workDir || null
+      work_dir: workDir || null,
+      plan_mode: planMode ? 1 : planMode === undefined ? null : 0
     })
   },
 
@@ -254,6 +256,15 @@ export const agentApi = {
   updateWorkDir(agentId: number, sessionId: number, workDir: string | null) {
     return put<AgentSession>(`/agent/${agentId}/sessions/${sessionId}/workdir`, {
       work_dir: workDir
+    })
+  },
+
+  /**
+   * 切换会话计划模式（按会话独立存储）
+   */
+  updatePlanMode(agentId: number, sessionId: number, planMode: boolean) {
+    return put<AgentSession>(`/agent/${agentId}/sessions/${sessionId}/plan-mode`, {
+      plan_mode: planMode
     })
   },
 
@@ -335,16 +346,11 @@ export const agentApi = {
    * @param questionId 对应 QuestionRequestEvent.question_id
    * @param answers 用户所选标签列表（空 = 取消）
    */
-  resolveQuestion(
-    agentId: number,
-    sessionId: number,
-    questionId: string,
-    answers: string[]
-  ) {
-    return post<ApiResponse>(
-      `/agent/${agentId}/sessions/${sessionId}/question/resolve`,
-      { question_id: questionId, answers }
-    )
+  resolveQuestion(agentId: number, sessionId: number, questionId: string, answers: string[]) {
+    return post<ApiResponse>(`/agent/${agentId}/sessions/${sessionId}/question/resolve`, {
+      question_id: questionId,
+      answers
+    })
   },
 
   /**

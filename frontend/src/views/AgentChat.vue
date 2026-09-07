@@ -35,6 +35,7 @@ import { useToolOutputStore } from '@/stores/toolOutput'
 import { formatCountdown } from '@/utils/format'
 import { useAutoScroll } from '@/composables/useAutoScroll'
 import { loadWorkDirForAgent, saveWorkDirForAgent } from '@/utils/workdir'
+import { loadPlanModeForAgent } from '@/utils/planmode'
 
 import 'highlight.js/styles/vs2015.css'
 
@@ -762,12 +763,15 @@ async function handleChatSend(
   // 记忆值是上次会话留下的偏好（按 Agent 隔离）——用户未点过按钮时兜底
   const workDirForNew =
     pendingWorkDir.value || loadWorkDirForAgent(agentId.value)
+  // 计划模式同理：新建会话继承 Agent 维度记忆（欢迎页预开的开关已随 toggle 写入记忆）
+  const planModeForNew = loadPlanModeForAgent(agentId.value)
 
   if (!store.currentSession) {
     // 场景 1：完全没有 session（如首次进入页面、刷新后无历史 session）
     const session = await store.createSession(
       agentId.value!,
-      workDirForNew || undefined
+      workDirForNew || undefined,
+      planModeForNew || undefined
     )
     if (!session) return
     await store.selectSession(agentId.value!, session)

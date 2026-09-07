@@ -45,6 +45,12 @@ class AgentSession(DbBaseModel):
         default=None,
         comment="项目工作路径（规范化绝对路径），空则使用 Agent 默认工作目录",
     )
+    plan_mode: Mapped[Optional[int]] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        default=0,
+        comment="计划模式：1=开启（只读探索，禁用写操作工具），0/空=关闭",
+    )
 
     def __repr__(self) -> str:
         return (

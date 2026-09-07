@@ -41,6 +41,8 @@ export interface AgentSession extends BaseEntity {
   status: number
   /** 项目工作路径（空则使用 Agent 默认工作目录） */
   work_dir?: string | null
+  /** 计划模式：1=开启（只读探索），0/空=关闭 */
+  plan_mode?: number | null
   /** 创建时间 */
   created_at?: string
   /** 更新时间 */

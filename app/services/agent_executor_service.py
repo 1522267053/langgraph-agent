@@ -803,14 +803,18 @@ class AgentExecutorService(BaseExecutorService):
         flow_id: int,
         gateway_id: Optional[int] = None,
         work_dir: Optional[str] = None,
+        plan_mode: int = 0,
     ) -> AgentSession:
         """创建新会话（公开方法）
 
         Args:
             gateway_id: 可选，由 网关触发创建时传入，用于区分 网关会话与用户聊天会话
             work_dir: 可选，会话级项目工作路径（需先经 normalize_work_dir 校验）
+            plan_mode: 可选，计划模式（1=开启只读探索）
         """
-        return await self._create_session(db, flow_id, gateway_id, work_dir=work_dir)
+        return await self._create_session(
+            db, flow_id, gateway_id, work_dir=work_dir, plan_mode=plan_mode
+        )
 
     async def update_work_dir(
         self, db: AsyncSession, session_id: int, work_dir: Optional[str]
@@ -820,6 +824,18 @@ class AgentExecutorService(BaseExecutorService):
         if not session:
             return None
         session.work_dir = normalize_work_dir(work_dir)
+        await db.commit()
+        await db.refresh(session)
+        return session
+
+    async def update_plan_mode(
+        self, db: AsyncSession, session_id: int, plan_mode: bool
+    ) -> Optional[AgentSession]:
+        """更新会话计划模式开关（按会话独立存储，切换会话互不影响）"""
+        session = await self._get_session(db, session_id)
+        if not session:
+            return None
+        session.plan_mode = 1 if plan_mode else 0
         await db.commit()
         await db.refresh(session)
         return session
@@ -1142,6 +1158,7 @@ class AgentExecutorService(BaseExecutorService):
         parent_session_id: Optional[int] = None,
         parent_node_key: Optional[str] = None,
         work_dir: Optional[str] = None,
+        plan_mode: int = 0,
     ) -> AgentSession:
         """创建新会话"""
         session = AgentSession(
@@ -1152,6 +1169,7 @@ class AgentExecutorService(BaseExecutorService):
             parent_session_id=parent_session_id,
             parent_node_key=parent_node_key,
             work_dir=work_dir,
+            plan_mode=plan_mode,
         )
         db.add(session)
         await db.commit()

@@ -32,6 +32,9 @@ class AgentSessionCreateRequest(BaseModel):
     work_dir: Optional[str] = Field(
         default=None, description="项目工作路径（可选，空则使用 Agent 默认工作目录）"
     )
+    plan_mode: Optional[int] = Field(
+        default=None, description="计划模式（可选，1=开启只读探索，缺省关闭）"
+    )
 
 
 class AgentSessionWorkDirRequest(BaseModel):
@@ -40,6 +43,14 @@ class AgentSessionWorkDirRequest(BaseModel):
     work_dir: Optional[str] = Field(
         default=None,
         description="项目工作路径（None/空串表示清除，回退 Agent 默认工作目录）",
+    )
+
+
+class AgentSessionPlanModeRequest(BaseModel):
+    """更新会话计划模式请求"""
+
+    plan_mode: bool = Field(
+        ..., description="计划模式开关：true=开启只读探索，false=关闭"
     )
 
 
@@ -52,6 +63,9 @@ class AgentSessionResponse(AgentSessionBase):
     flow_id: int = Field(..., description="关联的Agent Flow ID")
     status: int = Field(..., description="状态：1=活跃，0=已归档")
     work_dir: Optional[str] = Field(default=None, description="项目工作路径")
+    plan_mode: Optional[int] = Field(
+        default=0, description="计划模式：1=开启（只读探索），0/空=关闭"
+    )
     created_at: Optional[ChinaDateTime] = Field(
         default=None,
         validation_alias=AliasChoices("created_at", "create_time"),
