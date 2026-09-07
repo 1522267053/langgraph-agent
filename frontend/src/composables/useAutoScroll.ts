@@ -11,12 +11,17 @@ interface UseAutoScrollOptions {
    *  scrollToBottom 不受影响）。用于流式结束后停用跟随，避免用户手动
    *  展开/收起块撑高内容被误判为流式输出而拉走视口 */
   enabled?: () => boolean
+  /** 内容元素声明：容器内会因 v-if 换根（如欢迎页 → 消息列表）时必须声明，
+   *  否则 RO 绑定 firstElementChild 的旧节点后失联，流式撑高不再触发 */
+  contentRef?: Ref<HTMLElement | null>
 }
 
 /**
  * 通用自动滚动 composable
  *
- * - 用户在底部时自动滚动到最新内容，上滚停止跟随，回到底部恢复
+ * - 按钮未显示（仍在底部，isAtBottom）时自动滚动跟随最新内容，上滚停止跟随，
+ *   回到底部恢复
+ * - 未跟随路径统一刷新 isAtBottom，scroll-to-bottom 按钮状态始终与真实位置一致
  * - 手势白名单：仅 wheel/touchmove/pointerdown 真实输入后的窗口期内，scroll 事件
  *   才被视为用户滚动；程序化贴底（无手势）一律忽略，不依赖启发式推断
  * - wheel 支持嵌套滚动边界穿透：内层容器滚到边界后手势上交主容器
@@ -106,7 +111,7 @@ export function useAutoScroll(
   if (typeof ResizeObserver !== 'undefined') {
     _resizeObserver = new ResizeObserver(() => {
       // 流式输出/Markdown/高亮/图片撑高与视口变化统一汇入条件贴底：
-      // userScrolledUp、节流与合帧由 maybeScrollToBottom 内部裁决
+      // isAtBottom 刷新、userScrolledUp、节流与合帧由 maybeScrollToBottom 内部裁决
       maybeScrollToBottom()
     })
     onScopeDispose(() => {
@@ -115,11 +120,16 @@ export function useAutoScroll(
     })
   }
 
-  /** 绑定容器与其内容子元素；容器切换（如 el-scrollbar wrapRef 就绪）后重绑 */
+  /** 绑定容器与其内容子元素；容器或内容元素切换（wrapRef 就绪、v-if 换根）后重绑 */
   function _observeContentGrowth(): void {
     const el = containerRef.value
     if (!_resizeObserver || !el) return
-    const content = el.firstElementChild
+    // 优先使用消费方声明的内容元素；未声明或已脱离容器时退回 firstElementChild
+    const declared = options.contentRef?.value
+    const content =
+      declared && declared.isConnected && el.contains(declared)
+        ? declared
+        : el.firstElementChild
     if (_observedContainer === el && _observedContent === content) return
     _resizeObserver.disconnect()
     _resizeObserver.observe(el)
@@ -128,13 +138,12 @@ export function useAutoScroll(
     _observedContent = content
   }
 
-  watch(
-    containerRef,
-    () => {
-      _observeContentGrowth()
-    },
-    { flush: 'post' }
-  )
+  watch(containerRef, _observeContentGrowth, { flush: 'post' })
+  // 内容元素换根（如欢迎页 → 消息列表的 v-if/v-else）不改变 wrapRef，
+  // 需单独监听内容元素身份变化重绑 RO，否则 RO 观察已卸载旧节点导致跟随失联
+  if (options.contentRef) {
+    watch(options.contentRef, _observeContentGrowth, { flush: 'post' })
+  }
 
   function cancelPendingScroll(): void {
     if (_trailingTimer) {
@@ -164,7 +173,9 @@ export function useAutoScroll(
       // 再等一帧，让工具结果、高亮和 Markdown 的后续 DOM 更新先完成。
       _scrollFrame = requestAnimationFrame(() => {
         _scrollFrame = null
-        if (autoScroll.value && !userScrolledUp.value) performScrollToBottom()
+        // 与按钮状态联动：仅按钮未显示（仍在底部）且用户未上滚时才贴底
+        if (autoScroll.value && isAtBottom.value && !userScrolledUp.value)
+          performScrollToBottom()
       })
     })
   }
@@ -179,9 +190,15 @@ export function useAutoScroll(
     performScrollToBottom()
   }
 
-  /** 内容变化时条件性滚动（autoScroll && !userScrolledUp），按 throttleMs 节流（leading + trailing） */
+  /**
+   * 内容变化时条件性滚动：按钮未显示（isAtBottom）且用户未上滚才跟随；
+   * 未跟随的所有路径统一刷新 isAtBottom，保证 scroll-to-bottom 按钮状态
+   * 与真实位置一致（内容撑高但未跟随 → 按钮立即出现）。
+   * 按 throttleMs 节流（leading + trailing）
+   */
   function maybeScrollToBottom(): void {
-    if (options.enabled && !options.enabled()) return
+    // 自愈：内容元素可能已被 v-if 换根而 RO 仍绑着旧节点，先尝试重绑
+    _observeContentGrowth()
     const el = containerRef.value
     if (!el) return
     const scrollable = hasScrollableOverflow(el)
@@ -194,14 +211,23 @@ export function useAutoScroll(
       isAtBottom.value = true
       return
     }
-    if (!autoScroll.value) return
+    // 决策时点的贴底状态（即按钮是否隐藏）：不在底部 / 已上滚 / 未启用则不跟随
+    const canFollow =
+      autoScroll.value &&
+      isAtBottom.value &&
+      !userScrolledUp.value &&
+      (!options.enabled || options.enabled())
+    if (!canFollow) {
+      // 未跟随：按真实几何刷新贴底状态，内容继续撑高时按钮立即出现
+      isAtBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
+      return
+    }
     if (becameScrollable) {
       userScrolledUp.value = false
       _lastScrollAt = Date.now()
       scheduleScrollToBottom()
       return
     }
-    if (userScrolledUp.value) return
     const now = Date.now()
     // leading：距上次滚动超过阈值则立即触发
     if (now - _lastScrollAt >= throttleMs) {
