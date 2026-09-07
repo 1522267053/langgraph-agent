@@ -68,6 +68,9 @@ const {
   onUserScrollIntent,
   resetAutoScrollState
 } = useAutoScroll(messagesContainer, [], {
+  // 声明内容元素：欢迎页 → 消息列表的 v-if 换根会替换 wrap 的 firstElementChild，
+  // 不重绑 RO 会导致流式撑高失联（不滚动且 isAtBottom 不刷新）
+  contentRef: messagesContentRef,
   enabled: () => store.isStreaming || Date.now() < roFollowGraceUntil
 })
 
