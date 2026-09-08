@@ -136,7 +136,14 @@ class AgentChatRequest(BaseModel):
     params: dict = Field(default_factory=dict, description="扩展参数（含文件字段）")
     model: Optional[str] = Field(
         default=None,
-        description="临时覆盖 LLM 模型（仅同供应商内切换，capabilities 等随模型元数据联动）",
+        description="临时覆盖 LLM 模型（capabilities 等随模型元数据联动）",
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "与 model 配套的临时覆盖供应商；跨供应商时从供应商连接解析 api_key/base_url，"
+            "为空则沿用 LLM 节点已配置供应商"
+        ),
     )
 
 

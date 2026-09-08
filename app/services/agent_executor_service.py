@@ -408,6 +408,7 @@ class AgentExecutorService(BaseExecutorService):
         params: dict | None = None,
         *,
         model: str | None = None,
+        provider: str | None = None,
         approval_callback: Callable[[dict[str, Any]], None] | None = None,
         event_callback: Callable[[dict[str, Any]], None] | None = None,
         question_callback: Callable[[dict[str, Any]], None] | None = None,
@@ -420,6 +421,7 @@ class AgentExecutorService(BaseExecutorService):
                 user_message,
                 dict(params or {}),
                 model=model,
+                provider=provider,
                 _managed_run=True,
             ),
             approval_callback=approval_callback,
@@ -1357,6 +1359,7 @@ class AgentExecutorService(BaseExecutorService):
         params: dict | None = None,
         *,
         model: str | None = None,
+        provider: str | None = None,
         _managed_run: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
@@ -1366,7 +1369,9 @@ class AgentExecutorService(BaseExecutorService):
             session_id: 会话ID
             user_message: 用户消息
             params: 额外参数
-            model: 临时覆盖 LLM 模型（仅同供应商内，capabilities 等按模型元数据联动）
+            model: 临时覆盖 LLM 模型（capabilities 等按模型元数据联动）
+            provider: 与 model 配套的临时覆盖供应商；跨供应商时从
+                供应商连接解析 api_key/base_url，为空则沿用节点配置
 
         Yields:
             SSE事件字典
@@ -1433,24 +1438,62 @@ class AgentExecutorService(BaseExecutorService):
                 logger.exception(e)
                 return
 
-            # 临时模型覆盖（仅同供应商内切换）：改的是本次从 DB 加载的内存副本，
+            # 临时模型覆盖：改的是本次从 DB 加载的内存副本，
             # expunge 摘除 ORM 变更跟踪，防止后续 commit 把覆盖值写回 flow_node 表；
-            # capabilities/context_length 按模型元数据联动，不回退全局默认
+            # capabilities/context_length 按模型元数据联动，不回退全局默认。
+            # 跨供应商（provider 与节点不同）时从供应商连接解析 api_key/base_url
             if model:
+                from app.services.ai_provider_connection_service import (
+                    ai_provider_connection_service,
+                )
                 from app.utils.node_config_helper import derive_model_runtime_meta
+
+                # 同一供应商连接在本次请求内只解析一次
+                conn_cache: dict[str, Any] = {}
 
                 for node in flow.nodes or []:
                     if node.node_type != NodeType.LLM.value:
                         continue
-                    # 与节点已配置模型相同：视为未切换，跳过覆盖以保留手动定制
-                    if (node.base_config or {}).get("model") == model:
+                    cfg_provider = (node.base_config or {}).get("provider", "")
+                    same_model = (node.base_config or {}).get("model") == model
+                    same_provider = not provider or provider == cfg_provider
+                    # 与节点已配置模型+供应商相同：视为未切换，跳过覆盖以保留手动定制
+                    if same_model and same_provider:
                         continue
                     db.expunge(node)
                     cfg = dict(node.base_config or {})
+                    target_provider = provider or cfg_provider
+                    if provider and provider != cfg_provider:
+                        if provider not in conn_cache:
+                            conn_cache[
+                                provider
+                            ] = await ai_provider_connection_service.get_by_provider_id(
+                                db, provider
+                            )
+                        conn = conn_cache[provider]
+                        if conn:
+                            cfg["api_key"] = conn.api_key
+                            if conn.base_url:
+                                cfg["base_url"] = conn.base_url
+                            else:
+                                from app.services.ai_provider_service import (
+                                    ai_provider_service,
+                                )
+
+                                ai_provider = (
+                                    await ai_provider_service.get_by_provider_id(
+                                        db, provider
+                                    )
+                                )
+                                cfg["base_url"] = (
+                                    ai_provider.api_url
+                                    if ai_provider and ai_provider.api_url
+                                    else ""
+                                )
+                    if provider:
+                        cfg["provider"] = provider
                     cfg["model"] = model
-                    meta = await derive_model_runtime_meta(
-                        db, cfg.get("provider") or "", model
-                    )
+                    meta = await derive_model_runtime_meta(db, target_provider, model)
                     if meta:
                         cfg["capabilities"] = meta["capabilities"]
                         if meta["context_length"]:

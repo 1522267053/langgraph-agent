@@ -1408,7 +1408,8 @@ export const useAgentStore = defineStore('agent', () => {
     content: string,
     params: Record<string, unknown> = {},
     files?: MessageFile[],
-    model?: string
+    model?: string,
+    provider?: string
   ) {
     if (!currentAgent.value || !currentSession.value) return
 
@@ -1427,7 +1428,7 @@ export const useAgentStore = defineStore('agent', () => {
     streamAbort = agentApi.chat(
       context.agentId,
       context.sessionId,
-      { content, params: { ...params, __plan_mode__: planMode.value }, model },
+      { content, params: { ...params, __plan_mode__: planMode.value }, model, provider },
       createStreamHandlers(context)
     )
   }

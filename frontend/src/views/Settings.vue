@@ -13,8 +13,7 @@ import {
   hashPassword
 } from '@/api/config'
 import { useMarketplaceStore } from '@/stores/marketplaceStore'
-import { parseContextLength } from '@/components/FlowEditor/config/types'
-import AiProviderConfig from '@/components/common/AiProviderConfig.vue'
+import ProviderConnectionManager from '@/components/common/ProviderConnectionManager.vue'
 const router = useRouter()
 const route = useRoute()
 const marketplaceStore = useMarketplaceStore()
@@ -23,11 +22,6 @@ const saving = ref(false)
 const activeTab = ref((route.query.tab as string) || 'llm')
 
 const config = ref<GlobalConfigData>({})
-const selectedProvider = ref('')
-const apiKey = ref('')
-const model = ref('')
-const baseUrl = ref('')
-const contextLength = ref<number | undefined>(undefined)
 
 const embeddingApiKey = ref('')
 const embeddingModel = ref('')
@@ -79,10 +73,6 @@ async function loadConfig() {
     const configRes = await configApi.getConfig()
     config.value = configRes.data.data || {}
 
-    selectedProvider.value = config.value.provider || ''
-    model.value = config.value.model || ''
-    baseUrl.value = config.value.base_url || ''
-    contextLength.value = config.value.context_length || undefined
     embeddingModel.value = config.value.embedding_model || ''
     embeddingBaseUrl.value = config.value.embedding_base_url || ''
     executionNotificationEnabled.value = config.value.execution_notification_enabled ?? true
@@ -106,18 +96,6 @@ onUnmounted(() => {
 })
 
 async function handleSave() {
-  if (
-    contextLength.value !== undefined &&
-    contextLength.value !== '' &&
-    parseContextLength(contextLength.value) === undefined
-  ) {
-    ElMessage.error({
-      message: '上下文窗口格式无效，请输入数字或带单位（如 32000、32K、1M）',
-      duration: 5000
-    })
-    return
-  }
-
   const trimmedProxy = proxyUrl.value.trim()
   if (trimmedProxy && !/^(https?|socks5h?):\/\//i.test(trimmedProxy)) {
     ElMessage.error({
@@ -130,19 +108,11 @@ async function handleSave() {
   saving.value = true
   try {
     const data: UpdateConfigRequest = {
-      provider: selectedProvider.value || undefined,
-      model: model.value.trim() || undefined,
-      // 空串显式发送，用于清空 base_url（虚拟供应商）；真实供应商后端会回退官方默认值
-      base_url: baseUrl.value.trim(),
-      context_length: parseContextLength(contextLength.value),
       embedding_model: embeddingModel.value.trim() || undefined,
       embedding_base_url: embeddingBaseUrl.value.trim() || undefined,
       execution_notification_enabled: executionNotificationEnabled.value,
       // 空串显式发送，用于清除代理恢复直连
       proxy_url: trimmedProxy
-    }
-    if (apiKey.value.trim()) {
-      data.api_key = apiKey.value.trim()
     }
     if (embeddingApiKey.value.trim()) {
       data.embedding_api_key = embeddingApiKey.value.trim()
@@ -169,7 +139,6 @@ async function handleSave() {
     await configApi.updateConfig(data)
     ElMessage.success({ message: '配置已保存', duration: 5000 })
     await loadConfig()
-    apiKey.value = ''
     embeddingApiKey.value = ''
     loginPassword.value = ''
     loginPasswordConfirm.value = ''
@@ -329,19 +298,19 @@ function openDownloadUrl(): void {
   <div v-loading="loading" class="settings-page">
     <div class="settings-header">
       <h2>系统设置</h2>
-      <p>配置 AI 模型和全局参数。此配置为全局默认值，在以下场景中使用：</p>
+      <p>管理 AI 模型供应商连接与全局参数。标有「默认」的供应商连接用于：</p>
       <ul class="usage-list">
         <li>
           <b>内置 AI 助手</b>
-          — 对话使用此配置调用 LLM，更新时自动同步
+          — 对话使用默认连接的供应商与模型调用 LLM，连接变更时自动同步
         </li>
         <li>
           <b>新建流程/智能体 LLM 节点</b>
-          — 拖入 LLM 节点时自动填充供应商、模型和 Base URL；API Key 留空则自动注入全局值
+          — 拖入 LLM 节点时自动填充默认连接的供应商、模型和 Base URL
         </li>
         <li>
           <b>AI 创建节点</b>
-          — AI 助手创建智能体时，LLM 节点未指定的配置自动从此处继承
+          — AI 助手创建智能体时，LLM 节点未指定的配置自动从默认连接继承
         </li>
       </ul>
     </div>
@@ -350,31 +319,7 @@ function openDownloadUrl(): void {
       <el-tabs v-model="activeTab" class="settings-tabs">
         <el-tab-pane label="AI 模型配置" name="llm">
           <div class="settings-card">
-            <el-form label-position="top">
-              <AiProviderConfig
-                v-model:provider="selectedProvider"
-                v-model:model="model"
-                v-model:api-key="apiKey"
-                v-model:base-url="baseUrl"
-                v-model:context-length="contextLength"
-                show-context-length
-                show-sync-button
-                :reset-on-provider-change="false"
-                label-position="top"
-                :api-key-placeholder="
-                  config.api_key_masked ? `当前: ${config.api_key_masked}` : '请输入 API Key'
-                "
-              />
-
-              <el-button
-                type="primary"
-                :loading="saving"
-                style="margin-top: 16px"
-                @click="handleSave"
-              >
-                保存配置
-              </el-button>
-            </el-form>
+            <ProviderConnectionManager />
           </div>
         </el-tab-pane>
 

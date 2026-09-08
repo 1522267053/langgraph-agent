@@ -25,8 +25,11 @@ const props = defineProps<{
   restoreParams?: Record<string, unknown> | null
   /** 会话级项目工作路径（空表示未选择，使用 Agent 默认工作目录） */
   workDir?: string
-  /** 可选模型列表（当前 Agent 供应商下的模型；为空时不展示下拉框） */
-  modelOptions?: Array<{ value: string; label: string; multimodal?: boolean }>
+  /** 可选模型分组（按供应商分组；为空时不展示下拉框） */
+  modelGroups?: Array<{
+    label: string
+    options: Array<{ value: string; label: string; multimodal?: boolean }>
+  }>
   /** Agent 配置的默认模型名（仅展示用） */
   defaultModelLabel?: string
 }>()
@@ -50,7 +53,7 @@ const inputMessage = defineModel<string>('inputMessage', { default: '' })
 const selectedModel = defineModel<string>('selectedModel', { default: '' })
 const sendMessageDisabled = computed(() => !inputMessage.value.trim())
 
-const showModelSelect = computed(() => (props.modelOptions?.length ?? 0) > 0)
+const showModelSelect = computed(() => props.modelGroups?.some(g => g.options.length > 0) ?? false)
 
 /** 工作路径缩略显示：取末段目录名 */
 const workDirName = computed(() => {
@@ -385,12 +388,12 @@ function handleStop() {
                 </span>
               </button>
             </el-tooltip>
-            <!-- 模型切换：仅同供应商内覆盖，清空即回退 Agent 默认模型 -->
+            <!-- 模型切换：跨供应商分组展示，清空即回退 Agent 默认模型 -->
             <el-tooltip
               v-if="showModelSelect"
               :content="
                 selectedModel
-                  ? `临时模型：${selectedModel}（清除后回退默认）`
+                  ? `临时模型：${selectedModel.split('::')[1] || selectedModel}（清除后回退默认）`
                   : `默认模型：${defaultModelLabel || 'Agent 配置'}`
               "
               placement="top"
@@ -405,17 +408,23 @@ function handleStop() {
                 :placeholder="'默认模型：' + (defaultModelLabel || 'Agent 配置')"
                 no-data-text="暂无可用模型"
               >
-                <el-option
-                  v-for="opt in modelOptions"
-                  :key="opt.value"
-                  :label="opt.label"
-                  :value="opt.value"
+                <el-option-group
+                  v-for="group in modelGroups"
+                  :key="group.label"
+                  :label="group.label"
                 >
-                  <div class="model-option">
-                    <span class="model-option-name">{{ opt.label }}</span>
-                    <span v-if="opt.multimodal" class="model-option-badge">多模态</span>
-                  </div>
-                </el-option>
+                  <el-option
+                    v-for="opt in group.options"
+                    :key="opt.value"
+                    :label="opt.label"
+                    :value="opt.value"
+                  >
+                    <div class="model-option">
+                      <span class="model-option-name">{{ opt.label }}</span>
+                      <span v-if="opt.multimodal" class="model-option-badge">多模态</span>
+                    </div>
+                  </el-option>
+                </el-option-group>
               </el-select>
             </el-tooltip>
           </div>
