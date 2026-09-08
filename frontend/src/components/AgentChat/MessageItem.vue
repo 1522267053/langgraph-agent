@@ -175,7 +175,6 @@ const emit = defineEmits<{
   font-size: 13px;
   color: #475569;
   line-height: 1.6;
-  white-space: pre-wrap;
   /* 内容封顶：超出滚动查看；封顶值与 chatRow.ts 的 SUMMARY_BODY_MAX 对齐 */
   max-height: 400px;
   overflow-y: auto;
