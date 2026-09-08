@@ -605,7 +605,7 @@ onUnmounted(() => {
 
 <template>
   <div ref="containerRef" class="markdown-body" @click="handleMarkdownClick">
-    <VueMarkdown :source="renderedSource" :plugins="mdPlugins" />
+    <VueMarkdown :source="renderedSource" :plugins="mdPlugins" :options="{ breaks: true }" />
   </div>
 </template>
 
