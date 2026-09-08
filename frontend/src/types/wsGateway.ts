@@ -28,3 +28,14 @@ export interface WsGatewayUpdate {
   input_config?: Record<string, unknown>
   is_enabled?: number
 }
+
+export interface WsRegisteredTool {
+  name: string
+  description?: string
+  parameters?: Record<string, unknown>
+}
+
+export interface WsGatewayToolsStatus {
+  connected: boolean
+  tools: WsRegisteredTool[]
+}

@@ -5,7 +5,11 @@ import { wsGatewayApi } from '@/api/wsGateway'
 import { flowApi } from '@/api/flow'
 import ActionColumn from '@/components/common/ActionColumn.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
-import type { WsGatewayConfig, WsGatewayCreate } from '@/types/wsGateway'
+import type {
+  WsGatewayConfig,
+  WsGatewayCreate,
+  WsGatewayToolsStatus
+} from '@/types/wsGateway'
 import type { Flow, FlowIOField } from '@/types/flow'
 import type { PaginatedResponse } from '@/types/common'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -248,9 +252,30 @@ async function handleDelete(row: WsGatewayConfig) {
 const detailDialogVisible = ref(false)
 const detailGateway = ref<WsGatewayConfig | null>(null)
 
+// ---- 已注册远程工具（运行时内存态，仅智能体类型支持注册） ----
+const toolsLoading = ref(false)
+const toolsStatus = ref<WsGatewayToolsStatus | null>(null)
+
+async function loadTools(gatewayId: number) {
+  toolsLoading.value = true
+  try {
+    const res = await wsGatewayApi.getTools(gatewayId)
+    toolsStatus.value = res.data.data
+  } catch {
+    toolsStatus.value = null
+  } finally {
+    toolsLoading.value = false
+  }
+}
+
 function showDetail(row: WsGatewayConfig) {
   detailGateway.value = row
+  toolsStatus.value = null
   detailDialogVisible.value = true
+  // 流程类型网关不支持工具注册，跳过查询
+  if (flowType(row.flow_id) === '智能体' && row.id) {
+    loadTools(row.id)
+  }
 }
 
 function getWsUrl(row: WsGatewayConfig): string {
@@ -494,6 +519,53 @@ onMounted(() => {
           </el-descriptions-item>
         </el-descriptions>
 
+        <!-- 已注册远程工具（仅智能体类型，运行时状态） -->
+        <div v-if="flowType(detailGateway.flow_id) === '智能体'" class="tools-section">
+          <div class="tools-header">
+            <h4 class="tools-title">已注册远程工具</h4>
+            <el-tag v-if="toolsStatus?.connected" size="small" type="success">客户端在线</el-tag>
+            <el-tag v-else size="small" type="info">客户端离线</el-tag>
+            <el-button
+              size="small"
+              text
+              :icon="Refresh"
+              :loading="toolsLoading"
+              @click="detailGateway.id && loadTools(detailGateway.id)"
+            >
+              刷新
+            </el-button>
+          </div>
+          <el-table
+            v-if="toolsStatus && toolsStatus.tools.length"
+            v-loading="toolsLoading"
+            :data="toolsStatus.tools"
+            size="small"
+          >
+            <el-table-column type="expand" width="32">
+              <!-- 展开行显示工具参数定义（JSON Schema） -->
+              <template #default="{ row }">
+                <pre v-if="row.parameters" class="json-preview expand-json">{{
+                  JSON.stringify(row.parameters, null, 2)
+                }}</pre>
+                <span v-else class="tool-no-params">无参数定义</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="name" label="工具名称" min-width="160" show-overflow-tooltip />
+            <el-table-column prop="description" label="描述" min-width="260" show-overflow-tooltip>
+              <template #default="{ row }">
+                {{ row.description || '-' }}
+              </template>
+            </el-table-column>
+          </el-table>
+          <div v-else v-loading="toolsLoading" class="tools-empty">
+            {{
+              toolsStatus?.connected
+                ? '客户端已连接，但尚未注册工具'
+                : '暂无已注册工具，客户端连接后发送 register_tools 指令即可注册'
+            }}
+          </div>
+        </div>
+
         <!-- 协议说明 -->
         <el-collapse class="proto-guide">
           <el-collapse-item title="WebSocket 协议说明" name="protocol">
@@ -618,6 +690,43 @@ onMounted(() => {
 
 .proto-guide {
   margin-top: 16px;
+}
+
+.tools-section {
+  margin-top: 16px;
+}
+
+.tools-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.tools-title {
+  font-size: 13px;
+  color: #1e293b;
+  margin: 0;
+}
+
+.tools-empty {
+  background: #f8fafc;
+  border: 1px dashed #e2e8f0;
+  border-radius: 4px;
+  padding: 14px;
+  font-size: 12px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.expand-json {
+  margin: 4px 12px;
+}
+
+.tool-no-params {
+  font-size: 12px;
+  color: #94a3b8;
+  padding: 4px 12px;
 }
 
 .proto-section {
