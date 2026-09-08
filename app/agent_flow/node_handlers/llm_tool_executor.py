@@ -410,6 +410,19 @@ async def handle_tool_calls(
     )
     if human_help_idx >= 0:
         skip_msg = "人工介入，跳过其他工具调用"
+
+        def human_skip_reason(call: ToolCall) -> str:
+            # 被拒的 human 调用携带原问题：LLM 能明确知道该问题未发出，
+            # 待用户回复当前问题后重新调用逐个提问（同轮多个反问的独占语义）
+            if call.get("name") == _REQUEST_HUMAN_HELP:
+                question = (call.get("args") or {}).get("question", "")
+                detail = f"（原问题：{question}）" if question else ""
+                return (
+                    f"人工介入，跳过其他工具调用{detail}：本轮仅处理第一个"
+                    "人工反问，待用户回复后请重新调用本工具逐个提问"
+                )
+            return skip_msg
+
         before = tool_calls[:human_help_idx]
         if before:
             reject_remaining_tools(
@@ -420,6 +433,7 @@ async def handle_tool_calls(
                 skip_msg,
                 emit_fn=emit_fn,
                 emit_tool_end_fn=emit_tool_end_fn,
+                reason_for=human_skip_reason,
             )
         after = tool_calls[human_help_idx + 1 :]
         if after:
@@ -431,6 +445,7 @@ async def handle_tool_calls(
                 skip_msg,
                 emit_fn=emit_fn,
                 emit_tool_end_fn=emit_tool_end_fn,
+                reason_for=human_skip_reason,
             )
 
         tool_call = tool_calls[human_help_idx]
@@ -878,6 +893,7 @@ def reject_remaining_tools(
     *,
     emit_fn: Optional[Callable] = None,
     emit_tool_end_fn: Optional[Callable] = None,
+    reason_for: Optional[Callable[[ToolCall], str]] = None,
 ) -> None:
     """拒绝剩余的工具调用（发送失败事件 + ToolMessage）
 
@@ -891,21 +907,23 @@ def reject_remaining_tools(
         reason: 拒绝原因
         emit_fn: 事件发送回调
         emit_tool_end_fn: 工具结束事件发送回调
+        reason_for: 按调用定制拒绝原因（提供时优先于 reason）
     """
     for call in remaining_calls:
         call_id = call.get("id", "")
         call_name = call.get("name", "")
+        call_reason = reason_for(call) if reason_for else reason
         if emit_tool_end_fn:
             emit_tool_end_fn(
                 writer,
                 node_key,
                 call_name,
-                {"success": False, "error": reason},
+                {"success": False, "error": call_reason},
                 status="error",
                 tool_call_id=call_id,
             )
         msg_buf.append(
-            ToolMessage(content=reason, tool_call_id=call_id, name=call_name)
+            ToolMessage(content=call_reason, tool_call_id=call_id, name=call_name)
         )
 
 
