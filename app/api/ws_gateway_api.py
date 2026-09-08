@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
+from app.agent_flow.ws_tool_context import get_active_ws_conn
 from app.schemas.base_schema import ApiResponse
 from app.services.file_service import file_service
 from app.services.flow_service import flow_service
@@ -70,6 +71,30 @@ class WsGatewayApi(
             url = f"/ws/trigger/{gateway.token}"
             return ApiResponse.success(
                 data={"url": url, "token": gateway.token}, msg="查询成功"
+            )
+
+        @self.router.get(
+            "/get/{id}/tools",
+            response_model=ApiResponse,
+            summary="查询网关当前已注册的远程工具",
+        )
+        async def get_ws_gateway_tools(id: int, db: AsyncSession = Depends(get_db)):
+            """查询网关运行时的远程工具注册状态
+
+            工具由外部 WS 客户端连接后通过 register_tools 指令动态注册
+            （仅 Agent 类型生效），随连接断开清空，此处仅读取内存态。
+            """
+            gateway = await ws_gateway_service.get_by_id(db, id)
+            if not gateway:
+                return ApiResponse.error(msg="网关不存在")
+
+            conn = get_active_ws_conn(gateway.flow_id)
+            return ApiResponse.success(
+                data={
+                    "connected": conn is not None,
+                    "tools": conn.registered_tools if conn else [],
+                },
+                msg="查询成功",
             )
 
         @self.router.post("/upload", summary="WS 网关文件上传（token 鉴权）")

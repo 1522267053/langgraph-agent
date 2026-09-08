@@ -39,6 +39,33 @@ description: |
 | POST | `/api/ws-gateway/update` | ✅ | 更新 |
 | GET | `/api/ws-gateway/delete/{id}` | ✅ | 软删除 |
 | GET | `/api/ws-gateway/get/{id}/url` | ✅ | 获取 WebSocket 地址 |
+| GET | `/api/ws-gateway/get/{id}/tools` | ✅ | 查询客户端当前注册的远程工具（运行时内存态） |
+
+## 查询已注册工具
+
+```bash
+curl "http://host/api/ws-gateway/get/{id}/tools"
+```
+
+响应（`data` 字段）：
+
+```json
+{
+  "connected": true,
+  "tools": [
+    {
+      "name": "query_database",
+      "description": "查询本地数据库",
+      "parameters": {"type": "object", "properties": {"sql": {"type": "string"}}}
+    }
+  ]
+}
+```
+
+- 工具由 WS 客户端连接后通过 `register_tools` 指令动态注册，**不落库**，接口返回的是实时内存态；连接断开即清空
+- `connected=false`（客户端离线）时 `tools` 恒为空数组
+- 仅 Agent 类型网关会有工具（Flow 类型不支持注册，恒为空）
+- 前端「WS 网关管理」页的网关详情弹窗即基于此接口展示连接状态与已注册工具
 
 ## 创建网关
 

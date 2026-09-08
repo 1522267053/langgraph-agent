@@ -1,6 +1,11 @@
 import request, { get } from './index'
 import type { ApiResponse, PaginatedResponse, PaginationParams } from '@/types/common'
-import type { WsGatewayConfig, WsGatewayCreate, WsGatewayUpdate } from '@/types/wsGateway'
+import type {
+  WsGatewayConfig,
+  WsGatewayCreate,
+  WsGatewayUpdate,
+  WsGatewayToolsStatus
+} from '@/types/wsGateway'
 
 export const wsGatewayApi = {
   page(params: PaginationParams<WsGatewayConfig>) {
@@ -21,5 +26,9 @@ export const wsGatewayApi = {
 
   getUrl(id: number) {
     return get<{ url: string; token: string }>(`/ws-gateway/get/${id}/url`)
+  },
+
+  getTools(id: number) {
+    return get<WsGatewayToolsStatus>(`/ws-gateway/get/${id}/tools`)
   }
 }

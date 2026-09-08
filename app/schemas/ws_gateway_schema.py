@@ -167,3 +167,25 @@ class WsGatewayMessagePageRequest(BaseView):
         default=None, description="游标ID（返回此ID之前的消息）"
     )
     limit: int = Field(default=20, description="每页条数")
+
+
+# ---- 网关远程工具查询 Schema（仅 Agent 类型流程，运行时内存态） ----
+
+
+class WsGatewayRegisteredTool(BaseView):
+    """已注册远程工具定义"""
+
+    name: str = Field(..., description="工具名称")
+    description: Optional[str] = Field(default=None, description="工具描述")
+    parameters: Optional[dict] = Field(
+        default=None, description="参数定义（JSON Schema）"
+    )
+
+
+class WsGatewayToolsStatusResponse(BaseView):
+    """网关连接与工具注册状态"""
+
+    connected: bool = Field(default=False, description="客户端是否在线")
+    tools: list[WsGatewayRegisteredTool] = Field(
+        default_factory=list, description="已注册工具列表"
+    )
