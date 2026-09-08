@@ -21,9 +21,10 @@ description: |
 1. **WebSocket 触发**：外部客户端通过 `ws://host/ws/trigger/{token}` 连接，以 JSON 指令驱动执行
 2. **token 自动生成**：创建网关 时后端 `uuid.uuid4().hex` 生成 token
 3. **实时流式返回**：执行结果通过 WebSocket 逐 token 流式推送（node_content/flow_done/token_usage 等），无需轮询。**完整事件列表见下方「执行指令」章节**
-4. **Agent 专属功能**：远程工具注册、会话管理（创建/切换/列表/删除/消息查询）仅 Agent 类型支持。Flow 类型调用会返回 `"仅 Agent 类型支持"` 错误
-5. **并发模型（会话级）**：Agent 类型同一 `session_id` 正在执行时新 execute 被拒绝（错误「会话 X 正在执行中」）；不同会话、新建会话、Flow 类型可并发执行。并发时事件流交错，**每个执行事件顶层携带 `call_id`**（调用记录 ID，`call_started` 事件首次下发），客户端按 `call_id` 路由
-6. **CRUD 需登录态**：管理接口（`/api/ws-gateway/page/create/update/delete`）需要 session cookie
+4. **错误码判定**：所有 `error` 事件携带 `data.error_code`（机器可读枚举），客户端**必须按 error_code 判断**而非匹配 message 字符串。完整枚举见 [references/api.md](references/api.md)「错误码枚举」章节
+5. **Agent 专属功能**：远程工具注册、会话管理（创建/切换/列表/删除/消息查询）仅 Agent 类型支持。Flow 类型调用会收到 `error_code="NOT_AGENT_TYPE"` 错误
+6. **并发模型（会话级）**：Agent 类型同一 `session_id` 正在执行时新 execute 被拒绝（`error_code="SESSION_BUSY"`）；不同会话、新建会话、Flow 类型可并发执行。并发时事件流交错，**每个执行事件顶层携带 `call_id`**（调用记录 ID，`call_started` 事件首次下发），客户端按 `call_id` 路由
+7. **CRUD 需登录态**：管理接口（`/api/ws-gateway/page/create/update/delete`）需要 session cookie
 7. **输入合并**：`input_data = {**gateway.input_config, **客户端参数}`（排除 `action` 和 `session_id`），客户端参数覆盖默认模板
 8. **工具名**：远程工具直接使用客户端注册的原始名称，超时 120 秒
 9. **文件传输 token 鉴权**：上传（`POST /api/ws-gateway/upload`）/下载（`GET /api/ws-gateway/download/{file_id}`）由网关 token 自鉴权，**免登录**（已豁免认证白名单）。上传返回 `file_id`，可塞进 `execute` 的 `files` 字段；下载严格校验文件归属该网关关联的 flow
@@ -88,7 +89,7 @@ ws://host/ws/trigger/{token}
 
 > **关键建议**：
 > - 连接后**必须检查 `data.flow_type`**。`"agent"` 才支持远程工具（`register_tools`/`tool_invoke`/`tool_result`）和会话管理（`create_session`/`switch_session` 等），`"flow"` 仅支持 `execute`。
-> - 非 Agent 类型调用 register_tools 或会话操作会收到 `{"type":"error","data":{"message":"仅 Agent 类型支持..."}}`。
+> - 非 Agent 类型调用 register_tools 或会话操作会收到 `{"type":"error","data":{"error_code":"NOT_AGENT_TYPE","message":"仅 Agent 类型支持..."}}`。
 > - `upload_url` 和 `download_url_template` 已在 connected 事件中下发，无需再次查询，直接使用。
 > - **建议客户端实现心跳**：定时发送 `ping` 纯文本消息（不发送 JSON 包装），服务端回 `pong`，避免长时间无数据时连接被中间设备断开。
 >
@@ -191,7 +192,7 @@ Agent 类型 flow 通常有自定义 `input_schema`（如 `bot_name`、`chat_typ
 > | `tool_approval_required` | 工具调用待审批（用 `tool_approval` 指令确认/拒绝） | ❌ |
 > | `tool_approval_result` | tool_approval 指令回执（`data.resolved` 是否命中待审批） | ❌ |
 > | `cancel_accepted` | cancel 指令已受理，随后下发 `flow_done(status=cancelled)` | ❌ |
-> | `error` | 流程出错 | ❌ |
+> | `error` | 流程出错（`data.error_code` 为机器可读枚举，见下表） | ❌ |
 > | `tool_invoke` | Agent 调用 ws-gateway 远程工具（仅 Agent 类型，需通过 `tool_result` 返回结果） | ❌ |
 
 ### 人工交互与控制指令
@@ -391,3 +392,35 @@ pip install httpx
 WS_TOKEN=你的token python references/ws_client_example.py 6     # 文件传输
 WS_TOKEN=你的token python references/ws_client_example.py 7     # 文件工具（前端触发）
 ```
+
+## 错误码枚举（`error.data.error_code`）
+
+所有 `error` 事件必带 `data.error_code`（机器可读枚举），客户端**必须按 error_code 判断**，**不要匹配 message 字符串**。
+
+| error_code | 含义 | 客户端处理建议 |
+|---|---|---|
+| `SESSION_INVALID` | 会话失效/被删/不属于该网关/Agent | **删本地 session_id，自动重建会话并重试** |
+| `EXECUTION_INVALID` | 执行记录失效/不可取消 | 提示用户该执行不可用 |
+| `GATEWAY_NOT_FOUND` | 网关不存在 | 致命错误，需 PM 介入检查网关配置 |
+| `NOT_AGENT_TYPE` | 非 Agent 类型不支持该操作 | 检查网关 flow 配置 |
+| `SESSION_BUSY` | 会话正在执行中 | 短暂等待后重试 |
+| `MISSING_FIELD` | 缺少必填字段 | 检查客户端请求 |
+| `INVALID_PARAMS` | 参数校验失败 | 检查客户端请求 |
+| `INVALID_JSON` | 消息不是合法 JSON | 检查客户端序列化 |
+| `UNKNOWN_ACTION` | 未知 action 指令 | 检查客户端版本 |
+| `IDLE_TIMEOUT` | 空闲超时（连接即将关闭） | 重连并重发待处理请求 |
+| `INTERNAL_ERROR` | 内部异常（兜底） | 记录错误消息后人工排查 |
+| `CONNECTION_CLOSED` | ws 连接被关闭（客户端内部封装使用） | 重连 |
+
+**典型反模式**（不要这样写）：
+```python
+# ❌ 靠 message 字符串判断
+if "正在执行中" in event["data"].get("message", ""):
+    ...
+
+# ✅ 靠 error_code 判断
+if event["data"].get("error_code") == "SESSION_BUSY":
+    ...
+```
+
+**完整协议字段**见 [references/api.md](references/api.md)。
