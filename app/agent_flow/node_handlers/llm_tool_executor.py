@@ -378,8 +378,8 @@ async def handle_tool_calls(
         if not tc.get("id"):
             tc["id"] = f"call_{uuid.uuid4().hex[:24]}"
 
-    # ---- 计划模式硬拦截：禁用工具虽不注入工具列表，但模型仍可能受历史消息误导而调用
-    # （如上一轮普通模式的工具调用记录），此处拒绝执行并反馈，引导切换普通模式 ----
+    # ---- 计划模式硬拦截：禁用工具的工具定义恒定注入（保持前缀缓存），但调用在此
+    # 拒绝执行并反馈（模型可能受指令或历史消息误导而调用），引导切换普通模式 ----
     if state.get_variable("plan_mode"):
         disabled_calls = [
             tc for tc in tool_calls if _is_plan_disabled_tool(tc.get("name", ""))

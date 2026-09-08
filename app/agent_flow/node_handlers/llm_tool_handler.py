@@ -478,11 +478,12 @@ class LlmToolNodeHandler(BaseNodeHandler):
             session_id=self.session_id,
         )
 
-        # 计划模式：禁用写操作工具（含子Agent 委派），并同步剔除 required_tools 中的被禁工具
+        # 计划模式：工具列表保持恒定（跨模式切换不破坏 LLM 前缀缓存），禁用工具的
+        # 调用由 handle_tool_calls 运行时拦截并以 ToolMessage 反馈引导；仅剔除
+        # required_tools 中的被禁工具（后置校验，不进请求）
         is_plan_mode = bool(state.get_variable("plan_mode"))
         plan_required_tools = cfg.required_tools
         if is_plan_mode:
-            tools = [t for t in tools if not _is_plan_disabled_tool(t.name)]
             plan_required_tools = [
                 r for r in cfg.required_tools if not _is_plan_disabled_tool(r)
             ]
@@ -496,11 +497,12 @@ class LlmToolNodeHandler(BaseNodeHandler):
         # 共享已调用工具集合：_run_react_loop 变更，结构化输出工具清单门控读取
         called_tools: set[str] = set()
 
-        # JSON 结构化输出：构建 structured_output 普通工具并入工具列表（计划模式
-        # 不启用），执行/展示复用 handle_tool_calls 统一链路；自动加入必需工具清单
+        # JSON 结构化输出：构建 structured_output 普通工具并入工具列表，注入与否仅由
+        # 节点的结构化输出配置决定，跨模式保持一致（利于 LLM 前缀缓存）；执行/展示
+        # 复用 handle_tool_calls 统一链路，自动加入必需工具清单
         structured_service = StructuredOutputService(cfg.json_fields)
         json_output_tool = None
-        if cfg.json_output_enabled and not is_plan_mode:
+        if cfg.json_output_enabled:
             if structured_service.enabled:
                 json_output_tool = structured_service.build_tool(
                     get_called_tools=lambda: called_tools,

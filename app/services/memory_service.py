@@ -225,7 +225,11 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
     # ---- 热记忆索引 ----
 
     async def get_hot_memories(self, db: AsyncSession, agent_id: int) -> List[Memory]:
-        """获取所有热记忆，按 category 分组后组内按 importance 降序"""
+        """获取所有热记忆，按 importance 降序、id 升序固定排序
+
+        不用 access_count 参与排序：它随 memory_search 命中频繁变化，
+        会导致热索引文本行序不稳定，破坏 system_prompt 的 LLM 前缀缓存。
+        """
         stmt = (
             select(Memory)
             .where(
@@ -234,7 +238,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
                     Memory.memory_type == MemoryType.HOT.value,
                 )
             )
-            .order_by(Memory.importance.desc(), Memory.access_count.desc())
+            .order_by(Memory.importance.desc(), Memory.id.asc())
         )
 
         result = await db.execute(stmt, execution_options={"include_deleted": False})
