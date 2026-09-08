@@ -573,8 +573,7 @@ class AgentExecutorService(BaseExecutorService):
                         # 回放的「等待用户响应」事件以服务端实时剩余时间标注（存量
                         # 事件是发布时的静态副本），避免刷新重连后前端倒计时与后端
                         # 死线失同步。子Agent 审批的死线在子会话的等待句柄上，按
-                        # data.sub_session_id 解析；等待已终结（无句柄）时不标注，
-                        # 前端回退默认倒计时
+                        # data.sub_session_id 解析
                         data = event["data"]
                         approval_session_id = (
                             int(data.get("sub_session_id") or 0)
@@ -582,8 +581,7 @@ class AgentExecutorService(BaseExecutorService):
                             else session_id
                         )
                         # 队列化后：按 (session_id, item_id) 精确查询剩余秒数
-                        # item_id 从事件 data 中取（question_id / approval_id），
-                        # 缺失时回退到该 session 首个 pending（兼容历史事件）
+                        # item_id 从事件 data 中取（question_id / approval_id）
                         if event["type"] == "tool_approval_required":
                             aid = data.get("approval_id", "")
                             remaining = tool_approval_service.remaining_seconds(
@@ -594,11 +592,16 @@ class AgentExecutorService(BaseExecutorService):
                             remaining = question_service.remaining_seconds(
                                 approval_session_id, qid
                             )
-                        if remaining is not None:
-                            event = {
-                                **event,
-                                "data": {**data, "expires_in": remaining},
-                            }
+                        if remaining is None:
+                            # 等待已终结（已回答/已取消/已超时，句柄从 _pending
+                            # 移除）：跳过不回放——否则全量回放会让前端重新弹出
+                            # 一个后端已终结的死弹窗，用户再确认时 resolve 返回
+                            # 失败并卡住
+                            continue
+                        event = {
+                            **event,
+                            "data": {**data, "expires_in": remaining},
+                        }
                     yield event
                 if run.done:
                     return
