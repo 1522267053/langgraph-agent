@@ -494,7 +494,7 @@ class WsGatewayService(
         async with AsyncSessionLocal() as db:
             gateway = await self.get_by_id(db, gateway_id)
             if not gateway:
-                yield {"type": "error", "data": {"message": "网关不存在"}}
+                yield {"type": "error", "data": {"message": "网关不存在", "error_code": "GATEWAY_NOT_FOUND"}}
                 return
 
             flow = await flow_service.get_by_id(
@@ -519,7 +519,8 @@ class WsGatewayService(
                         yield {
                             "type": "error",
                             "data": {
-                                "message": f"会话 {session_id} 不存在或不属于该 Agent"
+                                "message": f"会话 {session_id} 不存在或不属于该 Agent",
+                                "error_code": "SESSION_INVALID",
                             },
                         }
                         return
@@ -603,7 +604,7 @@ class WsGatewayService(
             logger.exception(f"WS 流程执行异常: {e}")
             status = "failed"
             error_message = str(e)
-            yield {"type": "error", "data": {"message": str(e)}}
+            yield {"type": "error", "data": {"message": str(e), "error_code": "INTERNAL_ERROR"}}
 
         await self.finish_call_record(record_id, status, output_data, error_message)
 
@@ -624,7 +625,7 @@ class WsGatewayService(
         async with AsyncSessionLocal() as db:
             gateway = await self.get_by_id(db, gateway_id)
             if not gateway:
-                yield {"type": "error", "data": {"message": "网关不存在"}}
+                yield {"type": "error", "data": {"message": "网关不存在", "error_code": "GATEWAY_NOT_FOUND"}}
                 return
 
             flow = await flow_service.get_by_id(
@@ -644,7 +645,10 @@ class WsGatewayService(
                 if not session:
                     yield {
                         "type": "error",
-                        "data": {"message": f"会话 {target_id} 不存在或不属于该网关"},
+                        "data": {
+                            "message": f"会话 {target_id} 不存在或不属于该网关",
+                            "error_code": "SESSION_INVALID",
+                        },
                     }
                     return
                 ref_type = "session"
@@ -656,7 +660,8 @@ class WsGatewayService(
                     yield {
                         "type": "error",
                         "data": {
-                            "message": f"执行记录 {target_id} 不存在或不属于该网关流程"
+                            "message": f"执行记录 {target_id} 不存在或不属于该网关流程",
+                            "error_code": "EXECUTION_INVALID",
                         },
                     }
                     return
@@ -712,7 +717,7 @@ class WsGatewayService(
             logger.exception(f"WS 恢复执行异常: {e}")
             status = "failed"
             error_message = str(e)
-            yield {"type": "error", "data": {"message": str(e)}}
+            yield {"type": "error", "data": {"message": str(e), "error_code": "INTERNAL_ERROR"}}
 
         await self.finish_call_record(record_id, status, output_data, error_message)
 
