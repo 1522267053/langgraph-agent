@@ -151,8 +151,10 @@ export interface AgentDeleteMessagesResult {
 export interface AgentChatRequest {
   content: string
   params?: Record<string, unknown>
-  /** 临时覆盖 LLM 模型（仅同供应商内切换，capabilities 等由后端按模型元数据联动） */
+  /** 临时覆盖 LLM 模型（capabilities 等由后端按模型元数据联动） */
   model?: string
+  /** 与 model 配套的覆盖供应商；跨供应商时后端从供应商连接解析 api_key/base_url */
+  provider?: string
 }
 
 /** Agent恢复请求（人工交互后继续） */

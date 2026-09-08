@@ -5,10 +5,19 @@ import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useAgentStore } from '@/stores'
 import { ElMessage, ElMessageBox, ElImageViewer } from 'element-plus'
 import type { ScrollbarDirection, ScrollbarInstance } from 'element-plus'
-import { Operation, Bottom, Notebook, Warning, Document, MoreFilled, Loading } from '@element-plus/icons-vue'
+import {
+  Operation,
+  Bottom,
+  Notebook,
+  Warning,
+  Document,
+  MoreFilled,
+  Loading
+} from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
 import { flowApi } from '@/api/flow'
-import { aiProviderApi, type ModelInfo } from '@/api/ai_provider'
+import { aiProviderApi } from '@/api/ai_provider'
+import { providerConnectionApi } from '@/api/aiProviderConnection'
 import type { FlowIOField } from '@/types/flow'
 import type { AgentFileChangeInfo } from '@/types/agent'
 import DisplayToggle from '@/components/AgentChat/DisplayToggle.vue'
@@ -344,11 +353,27 @@ async function openFileChangesPanel() {
 /** 回退恢复信号：每次回退生成新对象，通知当前挂载的 ChatInput 恢复参数 */
 const restoreParamsSignal = ref<Record<string, unknown> | null>(null)
 
-// ---- 临时模型切换（仅同供应商内，capabilities 等由后端按 ai_model 元数据联动）----
+// ---- 临时模型切换（跨供应商：选项 = LLM 节点自有供应商 + 已启用的供应商连接）----
 interface ChatModelOption {
+  /** 复合键 `${provider}::${model_id}`（模型 id 跨供应商可能重复） */
   value: string
   label: string
   multimodal: boolean
+  provider: string
+  providerLabel: string
+}
+
+/** 复合键分隔符：provider_id 不含冒号，安全 */
+const MODEL_VALUE_SEP = '::'
+
+function toModelValue(provider: string, modelId: string): string {
+  return `${provider}${MODEL_VALUE_SEP}${modelId}`
+}
+
+function parseModelValue(value: string): { provider: string; model: string } | null {
+  const idx = value.indexOf(MODEL_VALUE_SEP)
+  if (idx <= 0) return null
+  return { provider: value.slice(0, idx), model: value.slice(idx + MODEL_VALUE_SEP.length) }
 }
 
 const MODEL_PREF_KEY = 'agent-chat-model'
@@ -383,8 +408,30 @@ watch(selectedModel, model => {
   }
 })
 
+/** 按供应商分组（ChatInput 用 el-option-group 展示） */
+const modelGroups = computed(() => {
+  const groups: { label: string; options: ChatModelOption[] }[] = []
+  const byLabel = new Map<string, ChatModelOption[]>()
+  for (const opt of modelOptions.value) {
+    let list = byLabel.get(opt.providerLabel)
+    if (!list) {
+      list = []
+      byLabel.set(opt.providerLabel, list)
+      groups.push({ label: opt.providerLabel, options: list })
+    }
+    list.push(opt)
+  }
+  return groups
+})
+
+/** 当前选中的覆盖模型+供应商（未选返回 null，走 Agent 默认配置） */
+function resolveSelectedModel(): { provider: string; model: string } | null {
+  if (!selectedModel.value) return null
+  return parseModelValue(selectedModel.value)
+}
+
 /**
- * 加载当前 Agent 可切换的模型列表（取 LLM 节点配置的供应商）并恢复上次选择；
+ * 加载当前 Agent 可切换的模型列表：LLM 节点自有供应商 + 全部已启用的供应商连接；
  * 失败时静默降级：下拉框隐藏、发送走 Agent 默认模型
  */
 async function loadModelSelection(id: number) {
@@ -394,22 +441,68 @@ async function loadModelSelection(id: number) {
   restoringModelPref = true
   selectedModel.value = ''
   try {
-    const res = await flowApi.get(id)
-    const llmNode = (res.data.data?.nodes || []).find(n => n.node_type === 'llm')
-    if (!llmNode?.base_config) return
-    const provider = String(llmNode.base_config.provider || '')
-    defaultModelLabel.value = String(llmNode.base_config.model || '')
-    if (!provider) return
-    const modelsRes = await aiProviderApi.getModels(provider)
-    modelOptions.value = (modelsRes.data.data || []).map((m: ModelInfo) => ({
-      value: m.model_id,
-      label: m.name,
-      multimodal: (m.modalities?.input || []).some(t =>
-        ['image', 'video', 'audio', 'pdf'].includes(t)
-      )
-    }))
+    // 节点自有供应商模型 + 启用连接的模型分组，并行拉取
+    const [flowRes, groupsRes] = await Promise.allSettled([
+      flowApi.get(id),
+      providerConnectionApi.modelGroups()
+    ])
+
+    const options: ChatModelOption[] = []
+    const seen = new Set<string>()
+
+    if (groupsRes.status === 'fulfilled') {
+      for (const group of groupsRes.value.data.data || []) {
+        for (const m of group.models) {
+          const value = toModelValue(group.provider_id, m.model_id)
+          if (seen.has(value)) continue
+          seen.add(value)
+          options.push({
+            value,
+            label: m.name,
+            multimodal: (m.modalities?.input || []).some(t =>
+              ['image', 'video', 'audio', 'pdf'].includes(t)
+            ),
+            provider: group.provider_id,
+            providerLabel: group.provider_label
+          })
+        }
+      }
+    }
+
+    let nodeProvider = ''
+    if (flowRes.status === 'fulfilled') {
+      const llmNode = (flowRes.value.data.data?.nodes || []).find(n => n.node_type === 'llm')
+      if (llmNode?.base_config) {
+        nodeProvider = String(llmNode.base_config.provider || '')
+        defaultModelLabel.value = String(llmNode.base_config.model || '')
+      }
+    }
+    // 节点自有供应商（连接分组里未覆盖时）追加为独立分组
+    if (nodeProvider && !options.some(o => o.provider === nodeProvider)) {
+      try {
+        const modelsRes = await aiProviderApi.getModels(nodeProvider)
+        for (const m of modelsRes.data.data || []) {
+          const value = toModelValue(nodeProvider, m.model_id)
+          if (seen.has(value)) continue
+          seen.add(value)
+          options.push({
+            value,
+            label: m.name,
+            multimodal: (m.modalities?.input || []).some(t =>
+              ['image', 'video', 'audio', 'pdf'].includes(t)
+            ),
+            provider: nodeProvider,
+            providerLabel: nodeProvider
+          })
+        }
+      } catch {
+        // 节点供应商模型列表加载失败不阻塞
+      }
+    }
+
+    modelOptions.value = options
     const stored = loadStoredModel(id)
-    if (stored && modelOptions.value.some(o => o.value === stored)) {
+    if (stored && options.some(o => o.value === stored)) {
       selectedModel.value = stored
     }
   } catch {
@@ -433,8 +526,8 @@ const currentWorkDir = computed(() =>
 // ---- Agent 级「记住的工作路径」：helper 已提取到 utils/workdir.ts（多入口复用）----
 
 /** 弹窗定位优先级：当前会话已设置 > Agent 记忆值 > 空（盘符列表） */
-const effectiveInitialPath = computed(() =>
-  currentWorkDir.value || loadWorkDirForAgent(agentId.value) || ''
+const effectiveInitialPath = computed(
+  () => currentWorkDir.value || loadWorkDirForAgent(agentId.value) || ''
 )
 
 function handleSelectWorkDir(): void {
@@ -761,8 +854,7 @@ async function handleChatSend(
   // 优先级 pendingWorkDir > Agent 记忆值（localStorage） > 空
   // pendingWorkDir 是当前 AgentChat 内已选过的最新值；
   // 记忆值是上次会话留下的偏好（按 Agent 隔离）——用户未点过按钮时兜底
-  const workDirForNew =
-    pendingWorkDir.value || loadWorkDirForAgent(agentId.value)
+  const workDirForNew = pendingWorkDir.value || loadWorkDirForAgent(agentId.value)
   // 计划模式同理：新建会话继承 Agent 维度记忆（欢迎页预开的开关已随 toggle 写入记忆）
   const planModeForNew = loadPlanModeForAgent(agentId.value)
 
@@ -791,7 +883,8 @@ async function handleChatSend(
       // error handled by interceptor
     }
   }
-  store.sendMessage(message, params, attachedFiles, selectedModel.value || undefined)
+  const override = resolveSelectedModel()
+  store.sendMessage(message, params, attachedFiles, override?.model, override?.provider)
   await nextTick()
   scrollToBottom()
 }
@@ -1111,16 +1204,14 @@ function handleRejectTools() {
               <el-dropdown-item command="files">
                 <el-icon class="overflow-item-icon"><Document /></el-icon>
                 文件变更
-                <span
-                  v-if="store.fileChanges.length > 0"
-                  class="overflow-item-badge"
-                >{{ store.fileChanges.length > 9 ? '9+' : store.fileChanges.length }}</span>
+                <span v-if="store.fileChanges.length > 0" class="overflow-item-badge">
+                  {{ store.fileChanges.length > 9 ? '9+' : store.fileChanges.length }}
+                </span>
               </el-dropdown-item>
               <el-dropdown-item command="compress" :disabled="store.isCompressing">
-                <el-icon
-                  class="overflow-item-icon"
-                  :class="{ 'is-loading': store.isCompressing }"
-                ><Operation /></el-icon>
+                <el-icon class="overflow-item-icon" :class="{ 'is-loading': store.isCompressing }">
+                  <Operation />
+                </el-icon>
                 {{ store.isCompressing ? '正在压缩…' : '压缩' }}
               </el-dropdown-item>
               <el-dropdown-item command="background">
@@ -1307,7 +1398,7 @@ function handleRejectTools() {
         :latest-prompt-tokens="store.latestPromptTokens"
         :plan-mode="store.planMode"
         :restore-params="restoreParamsSignal"
-        :model-options="modelOptions"
+        :model-groups="modelGroups"
         :default-model-label="defaultModelLabel"
         :work-dir="currentWorkDir"
         @send="handleChatSend"
@@ -1320,13 +1411,11 @@ function handleRejectTools() {
     </div>
 
     <MemoryPanel v-model:visible="showMemory" :agent-id="agentId" />
-    <FileChangePanel v-model:visible="showFileChanges"/>
+    <FileChangePanel v-model:visible="showFileChanges" />
     <ToolOutputDrawer />
     <QuestionDialog
       :question="store.pendingQuestion"
-      :sub-agent-name="
-        store.subAgentQuestion?.isSubAgent ? store.subAgentQuestion.agentName : ''
-      "
+      :sub-agent-name="store.subAgentQuestion?.isSubAgent ? store.subAgentQuestion.agentName : ''"
       @submit="handleQuestionSubmit"
       @expire="store.dismissExpiredQuestion"
     />

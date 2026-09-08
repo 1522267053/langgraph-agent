@@ -45,7 +45,9 @@ async function loadTemplates() {
     const res = await flowTemplateApi.list(flowType)
     if (res.data.code === 1) {
       templates.value = res.data.data || []
-      if (templates.value.length > 0 && !selectedTemplateId.value) {
+      // 上次打开的选中项在当前模式列表中不存在时（flow/agent 复用），重置为第一个
+      const exists = templates.value.some(t => t.id === selectedTemplateId.value)
+      if (templates.value.length > 0 && (!selectedTemplateId.value || !exists)) {
         selectedTemplateId.value = templates.value[0].id
       }
     }

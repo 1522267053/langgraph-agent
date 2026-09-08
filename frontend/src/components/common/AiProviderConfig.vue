@@ -79,8 +79,6 @@ const modelList = ref<
   }[]
 >([])
 
-const selectedModelOption = computed(() => modelList.value.find(m => m.value === model.value))
-
 function getProviderBaseUrl(name: string): string {
   return providerList.value.find(p => p.name === name)?.default_base_url || ''
 }
@@ -91,8 +89,11 @@ function hasAnyCapability(): boolean {
   return caps.image || caps.video || caps.audio || caps.pdf
 }
 
-function applyModelAutoFill(overwriteContextLength = false) {
-  const opt = selectedModelOption.value
+function applyModelAutoFill(overwriteContextLength = false, modelId = model.value) {
+  // modelId 须由调用方显式传入（如 el-select change 回调参数）：
+  // defineModel 的值依赖父组件 prop 回流，change 触发时同步读 model.value 仍是旧值，
+  // 直接读取会填充上一次选中模型的元数据
+  const opt = modelList.value.find(m => m.value === modelId)
   if (!opt) return
   if (capabilities.value && opt.capabilities && !hasAnyCapability()) {
     capabilities.value = { ...opt.capabilities }
@@ -217,8 +218,9 @@ function onProviderSelectChange() {
   onFieldChange()
 }
 
-function onModelSelectChange() {
-  applyModelAutoFill(true)
+function onModelSelectChange(value: string) {
+  // el-select change 回调参数是本次选中的新值；defineModel 同步读仍是旧值，不可用
+  applyModelAutoFill(true, value)
   onFieldChange()
 }
 
@@ -287,7 +289,8 @@ function handleExtraBodyBlur() {
         </el-select>
         <el-tooltip content="从远端刷新供应商与模型列表" placement="top">
           <el-button :loading="syncingModels" :disabled="disabled" @click="handleSyncModels">
-            <el-icon style="margin-right: 4px"><Refresh /></el-icon>同步
+            <el-icon style="margin-right: 4px"><Refresh /></el-icon>
+            同步
           </el-button>
         </el-tooltip>
       </div>
@@ -462,7 +465,7 @@ function handleExtraBodyBlur() {
           filterable
           :clearable="providerClearable"
           :disabled="disabled"
-          @change="onFieldChange"
+          @change="onProviderSelectChange"
         >
           <el-option
             v-for="item in providerList"
@@ -473,7 +476,8 @@ function handleExtraBodyBlur() {
         </el-select>
         <el-tooltip content="从远端刷新供应商与模型列表" placement="top">
           <el-button :loading="syncingModels" :disabled="disabled" @click="handleSyncModels">
-            <el-icon style="margin-right: 4px"><Refresh /></el-icon>同步
+            <el-icon style="margin-right: 4px"><Refresh /></el-icon>
+            同步
           </el-button>
         </el-tooltip>
       </div>
@@ -485,7 +489,7 @@ function handleExtraBodyBlur() {
         filterable
         :clearable="providerClearable"
         :disabled="disabled"
-        @change="onFieldChange"
+        @change="onProviderSelectChange"
       >
         <el-option
           v-for="item in providerList"

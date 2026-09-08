@@ -161,6 +161,13 @@ async def startup() -> None:
         except Exception as e:
             logger.error(f"本地初始化 AI 供应商/模型数据失败: {e}", exc_info=True)
 
+    # ---- 供应商连接：一次性迁移 global_config 默认 LLM 配置 ----
+    from app.services.ai_provider_connection_service import (
+        ai_provider_connection_service,
+    )
+
+    await ai_provider_connection_service.seed_from_global_config()
+
     # ---- 打印自定义启动横幅 ----
     _log_startup_banner()
 

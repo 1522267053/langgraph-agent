@@ -15,11 +15,13 @@ class GlobalConfig(DbBaseModel):
     全局配置表
 
     以 key-value 形式存储配置项，如：
-    - default_provider: 默认供应商
-    - default_api_key: 默认 API Key
-    - default_model: 默认模型
-    - default_base_url: 默认 Base URL
     - initialized: 是否完成初始化 ("true"/"false")
+    - embedding_*: 向量模型配置
+    - login_password_hash / login_username: 登录凭据
+    - proxy_url: 出站网络代理
+
+    注：默认 LLM 配置（provider/model/api_key/base_url/context_length）
+    已迁移至 ai_provider_connection 表（is_default=1 的记录）。
     """
 
     __tablename__ = "global_config"

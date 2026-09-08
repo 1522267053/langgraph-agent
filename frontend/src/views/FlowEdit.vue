@@ -115,8 +115,12 @@ const inputFields = computed(() => store.flowInfo?.input_schema?.fields || [])
 
 // 按 store 真实数据判断 agent/flow，而不是依赖 URL 路径：
 // FlowPreviewCard 跳转时只 push 了 name: 'FlowEdit'，路由解析为 /flow/edit/:id，
-// 若仅用 route.path 区分，编辑 agent 会被错误当成 flow 展示
-const isAgentMode = computed(() => store.flowInfo?.flow_type === 'agent')
+// 若仅用 route.path 区分，编辑 agent 会被错误当成 flow 展示。
+// 创建模式（无 id、flowInfo 未加载）store 无从判断，回退按路由名区分
+const isAgentMode = computed(() => {
+  if (store.flowInfo?.flow_type) return store.flowInfo.flow_type === 'agent'
+  return route.name === 'AgentCreate'
+})
 
 const nodeCount = computed(() => store.nodes.length)
 const edgeCount = computed(() => store.edges.length)

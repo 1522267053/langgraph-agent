@@ -30,11 +30,6 @@ MARKETPLACE_PASSWORD_HASH_KEY = "marketplace_password_hash"
 PROXY_URL_KEY = "proxy_url"
 
 _AI_CONFIG_KEYS = {
-    "default_provider",
-    "default_api_key",
-    "default_model",
-    "default_base_url",
-    "context_length",
     "embedding_api_key",
     "embedding_base_url",
     "embedding_model",
@@ -42,11 +37,6 @@ _AI_CONFIG_KEYS = {
 }
 
 CONFIG_KEYS = {
-    "default_provider": "默认 AI 供应商",
-    "default_api_key": "默认 API Key",
-    "default_model": "默认模型",
-    "default_base_url": "默认 Base URL",
-    "context_length": "模型上下文窗口大小",
     "initialized": "是否完成初始化",
     "embedding_api_key": "向量模型 API Key",
     "embedding_base_url": "向量模型 Base URL",
@@ -176,25 +166,27 @@ class GlobalConfigService:
         return val == "true"
 
     async def init_config(self, db: AsyncSession, request: InitConfigRequest) -> None:
-        """首次初始化配置"""
-        base_url = request.base_url
-        if not base_url:
-            from app.services.ai_provider_service import ai_provider_service
+        """首次初始化配置：LLM 配置写入全局默认供应商连接，其余写入 global_config"""
+        from app.schemas.ai_provider_connection_schema import AIProviderConnectionCreate
+        from app.services.ai_provider_connection_service import (
+            ai_provider_connection_service,
+        )
 
-            provider = await ai_provider_service.get_by_provider_id(
-                db, request.provider
-            )
-            base_url = provider.api_url if provider and provider.api_url else ""
+        # 首条连接自动成为全局默认（create_connection 内保证）
+        conn_data = AIProviderConnectionCreate(
+            provider_id=request.provider,
+            api_key=request.api_key,
+            base_url=(request.base_url or "").strip() or None,
+            default_model=request.model or None,
+            context_length=request.context_length,
+            is_default=1,
+            is_enabled=1,
+        )
+        await ai_provider_connection_service.create_connection(db, conn_data)
 
         configs = {
-            "default_provider": request.provider,
-            "default_api_key": request.api_key,
-            "default_model": request.model,
-            "default_base_url": base_url or "",
             "initialized": "true",
         }
-        if request.context_length is not None:
-            configs["context_length"] = str(request.context_length)
         if request.embedding_api_key:
             configs["embedding_api_key"] = request.embedding_api_key
         if request.embedding_base_url:
@@ -225,25 +217,13 @@ class GlobalConfigService:
     async def update_config(
         self, db: AsyncSession, request: UpdateConfigRequest
     ) -> None:
-        """更新配置（仅更新非 None 字段）"""
+        """更新配置（仅更新非 None 字段）；LLM 部分写入全局默认供应商连接"""
         updates = {}
-        if request.provider is not None:
-            updates["default_provider"] = request.provider
-            from app.services.ai_provider_service import ai_provider_service
-
-            provider = await ai_provider_service.get_by_provider_id(
-                db, request.provider
-            )
-            if provider and provider.api_url:
-                updates["default_base_url"] = request.base_url or provider.api_url
-        if request.api_key is not None:
-            updates["default_api_key"] = request.api_key
-        if request.model is not None:
-            updates["default_model"] = request.model
-        if request.context_length is not None:
-            updates["context_length"] = str(request.context_length)
-        if request.base_url is not None and "default_base_url" not in updates:
-            updates["default_base_url"] = request.base_url
+        if any(
+            getattr(request, field) is not None
+            for field in ("provider", "api_key", "model", "base_url", "context_length")
+        ):
+            await self._update_default_connection(db, request)
 
         if request.embedding_api_key is not None:
             updates["embedding_api_key"] = request.embedding_api_key
@@ -315,13 +295,76 @@ class GlobalConfigService:
 
         logger.info("全局配置已更新: %s", list(updates.keys()))
 
+    async def _update_default_connection(
+        self, db: AsyncSession, request: UpdateConfigRequest
+    ) -> None:
+        """将 LLM 配置更新写入全局默认供应商连接（无默认连接时自动创建）"""
+        from app.services.ai_provider_connection_service import (
+            ai_provider_connection_service,
+        )
+
+        conn = await ai_provider_connection_service.get_default_connection(db)
+        if conn is None:
+            provider = (request.provider or "").strip()
+            api_key = (request.api_key or "").strip()
+            if not provider:
+                raise ValueError("尚未配置默认供应商连接，请先选择供应商")
+            if not api_key:
+                raise ValueError("尚未配置默认供应商连接，请填写 API Key")
+            from app.schemas.ai_provider_connection_schema import (
+                AIProviderConnectionCreate,
+            )
+
+            await ai_provider_connection_service.create_connection(
+                db,
+                AIProviderConnectionCreate(
+                    provider_id=provider,
+                    api_key=api_key,
+                    base_url=(request.base_url or "").strip() or None,
+                    default_model=(request.model or "").strip() or None,
+                    context_length=request.context_length,
+                    is_default=1,
+                    is_enabled=1,
+                ),
+            )
+            return
+
+        if request.provider is not None:
+            new_provider = request.provider.strip()
+            if new_provider and new_provider != conn.provider_id:
+                (
+                    provider_id,
+                    provider_name,
+                ) = await ai_provider_connection_service.validate_provider(
+                    db, new_provider
+                )
+                conn.provider_id = provider_id
+                conn.provider_name = provider_name
+                if request.base_url is None:
+                    # 切换供应商且未指定地址时清空覆盖值，读时回退新供应商默认
+                    conn.base_url = None
+        if request.base_url is not None:
+            conn.base_url = request.base_url.strip() or None
+        if request.api_key is not None and request.api_key.strip():
+            conn.api_key = request.api_key.strip()
+        if request.model is not None:
+            conn.default_model = request.model.strip() or None
+        if request.context_length is not None:
+            conn.context_length = request.context_length
+        await db.commit()
+
     async def get_config(self, db: AsyncSession) -> GlobalConfigResponse:
-        """获取当前配置（API Key 脱敏）"""
+        """获取当前配置（API Key 脱敏；LLM 部分来自全局默认供应商连接）"""
         await self.ensure_ai_cache(db)
-        provider = self._ai_config.get("default_provider")
-        model = self._ai_config.get("default_model")
-        api_key = self._ai_config.get("default_api_key")
-        base_url = self._ai_config.get("default_base_url")
+        from app.services.ai_provider_connection_service import (
+            ai_provider_connection_service,
+        )
+
+        llm = await ai_provider_connection_service.get_default_llm_config(db)
+        provider = llm.get("provider") or None
+        model = llm.get("model") or None
+        api_key = llm.get("api_key") or None
+        base_url = llm.get("base_url") or None
         embedding_model = self._ai_config.get("embedding_model")
         embedding_api_key = self._ai_config.get("embedding_api_key")
         embedding_base_url = self._ai_config.get("embedding_base_url")
@@ -341,8 +384,7 @@ class GlobalConfigService:
 
         username = await self.get_username(db)
 
-        ctx_str = self._ai_config.get("context_length") or ""
-        ctx_length = int(ctx_str) if ctx_str.isdigit() else None
+        ctx_length = llm.get("context_length") or None
 
         notif_str = await self.get_value(db, "execution_notification_enabled")
         notif_enabled = notif_str.lower() != "false" if notif_str else True
@@ -419,17 +461,12 @@ class GlobalConfigService:
         )
 
     async def get_default_llm_config(self, db: AsyncSession) -> dict:
-        """获取默认 LLM 配置字典"""
-        await self.ensure_ai_cache(db)
-        ctx_str = self._ai_config.get("context_length") or ""
-        ctx_length = int(ctx_str) if ctx_str.isdigit() else 0
-        return {
-            "provider": self._ai_config.get("default_provider") or "",
-            "model": self._ai_config.get("default_model") or "",
-            "api_key": self._ai_config.get("default_api_key") or "",
-            "base_url": self._ai_config.get("default_base_url") or "",
-            "context_length": ctx_length,
-        }
+        """获取默认 LLM 配置字典（数据源：全局默认供应商连接）"""
+        from app.services.ai_provider_connection_service import (
+            ai_provider_connection_service,
+        )
+
+        return await ai_provider_connection_service.get_default_llm_config(db)
 
     async def get_embedding_config(self, db: AsyncSession) -> dict:
         """获取 Embedding 配置字典（DB 优先，回退 .env）"""

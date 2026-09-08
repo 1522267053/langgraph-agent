@@ -360,7 +360,11 @@ class AgentApi:
             """启动后台执行，事件通过 /events 独立订阅。"""
             try:
                 run_id = agent_executor_service.start_chat_run(
-                    session_id, request.content, request.params, model=request.model
+                    session_id,
+                    request.content,
+                    request.params,
+                    model=request.model,
+                    provider=request.provider,
                 )
             except ValueError as exc:
                 return ApiResponse.error(msg=str(exc))
