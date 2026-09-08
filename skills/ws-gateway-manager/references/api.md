@@ -424,14 +424,42 @@ Flow 类型：
 
 ### 执行阶段错误
 
+所有 `error` 事件必带 `data.error_code`（机器可读枚举），**客户端必须按 error_code 判断，不要匹配 message 字符串**：
+
 ```json
-{"type": "error", "data": {"message": "会话 5 正在执行中，请等待完成"}}
+{"type": "error", "data": {"message": "会话 5 正在执行中，请等待完成", "error_code": "SESSION_BUSY"}}
 ```
 
-常见错误：
-- `会话 X 正在执行中，请等待完成` — 同一会话并发保护（不同会话/新建会话可并发）
-- `会话 X 不存在或不属于该网关` — session_id 无效或归属校验失败
-- `执行记录 X 不存在或不属于该网关流程` — execution_id 无效或归属校验失败
-- `仅 Agent 类型支持创建会话` — Flow 类型不支持会话操作
-- `result 必须为 approved 或 rejected` — tool_approval 参数错误
-- `远程工具 X 执行超时（120秒）` — tool_result 未在超时内返回
+### 错误码枚举
+
+| error_code | 含义 | 客户端处理建议 |
+|---|---|---|
+| `SESSION_INVALID` | 会话失效/被删/不属于该网关/Agent | **删本地 session_id，自动重建会话并重试** |
+| `EXECUTION_INVALID` | 执行记录失效/不可取消 | 提示用户该执行不可用 |
+| `GATEWAY_NOT_FOUND` | 网关不存在 | 致命错误，需 PM 介入检查网关配置 |
+| `NOT_AGENT_TYPE` | 非 Agent 类型不支持该操作 | 检查网关 flow 配置 |
+| `SESSION_BUSY` | 会话正在执行中 | 短暂等待后重试 |
+| `MISSING_FIELD` | 缺少必填字段 | 检查客户端请求 |
+| `INVALID_PARAMS` | 参数校验失败 | 检查客户端请求 |
+| `INVALID_JSON` | 消息不是合法 JSON | 检查客户端序列化 |
+| `UNKNOWN_ACTION` | 未知 action 指令 | 检查客户端版本 |
+| `IDLE_TIMEOUT` | 空闲超时（连接即将关闭） | 重连并重发待处理请求 |
+| `INTERNAL_ERROR` | 内部异常（兜底） | 记录错误消息后人工排查 |
+
+> **典型反模式**：
+> ```python
+> # ❌ 靠 message 字符串判断（消息措辞可能变化）
+> if "正在执行中" in event["data"].get("message", ""):
+>     ...
+>
+> # ✅ 靠 error_code 字段判断（机器可读，不会变）
+> if event["data"].get("error_code") == "SESSION_BUSY":
+>     ...
+> ```
+
+> **常见 message 提示**（仅供参考，便于排查）：
+> - `会话 X 正在执行中，请等待完成` → `SESSION_BUSY`
+> - `会话 X 不存在或不属于该网关/Agent` → `SESSION_INVALID`
+> - `执行记录 X 不存在或不属于该网关流程` → `EXECUTION_INVALID`
+> - `仅 Agent 类型支持...` → `NOT_AGENT_TYPE`
+> - `网关不存在` → `GATEWAY_NOT_FOUND`

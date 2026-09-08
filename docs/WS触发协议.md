@@ -281,7 +281,7 @@ Agent 调用远程工具时服务端下发：
 | type | 触发时机 |
 |------|---------|
 | `connected` | 连接建立 |
-| `error` | 指令错误/执行异常（`data.message` 为错误信息） |
+| `error` | 指令错误/执行异常（`data.message` 为错误信息，`data.error_code` 为机器可读枚举） |
 | `call_started` | execute/resume 开始（`data.call_id`、`data.session_id`） |
 | `tools_registered` / `tools_unregistered` | 工具注册/注销回执 |
 | `tool_invoke` | Agent 反向调用远程工具 |
@@ -314,6 +314,22 @@ Agent 调用远程工具时服务端下发：
 | `context_compressing` | `status`、`removed_count` | 上下文压缩 |
 | `flow_preview` | `flow_id`、`flow_name`、`action`、`nodes`、`edges` | 流程变更预览 |
 | `error` | `message`、`execution_id`、`node_key` | 执行错误 |
+
+### 错误码枚举（`data.error_code`）
+
+| 错误码 | 含义 | 客户端处理建议 |
+|---|---|---|
+| `SESSION_INVALID` | 会话失效/被删/不属于该网关/Agent | **删本地 session_id，自动重建会话并重试** |
+| `EXECUTION_INVALID` | 执行记录失效/不可取消 | 提示用户该执行不可用 |
+| `GATEWAY_NOT_FOUND` | 网关不存在 | 致命错误，需 PM 介入检查网关配置 |
+| `NOT_AGENT_TYPE` | 非 Agent 类型不支持该操作 | 检查网关 flow 配置 |
+| `SESSION_BUSY` | 会话正在执行中 | 短暂等待后重试 |
+| `MISSING_FIELD` | 缺少必填字段 | 检查客户端请求 |
+| `INVALID_PARAMS` | 参数校验失败 | 检查客户端请求 |
+| `INVALID_JSON` | 消息不是合法 JSON | 检查客户端序列化 |
+| `UNKNOWN_ACTION` | 未知 action 指令 | 检查客户端版本 |
+| `IDLE_TIMEOUT` | 空闲超时（连接即将关闭） | 重连并重发待处理请求 |
+| `INTERNAL_ERROR` | 内部异常（兜底） | 记录错误消息后人工排查 |
 
 ---
 

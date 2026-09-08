@@ -3,6 +3,10 @@ Gateway WebSocket 客户端示例
 
 依赖：pip install websockets
 用法：python ws_client_example.py [示例编号] [session_id]
+
+错误处理约定：
+  所有 error 事件携带 data.error_code（机器可读枚举），按 error_code 判断，不要匹配 message 字符串。
+  完整枚举见 ../SKILL.md「错误码枚举」章节。
 """
 
 import asyncio
@@ -56,7 +60,8 @@ async def _drain(ws, *, on_content=_on_content, on_tool_invoke=None):
             print(f"\n[flow_done] status={e['data'].get('status')} output={json.dumps(e['data'].get('output_data'), ensure_ascii=False)[:200]}")
             return e
         elif t == "error":
-            print(f"\n[错误] {e['data']['message']}")
+            # error_code 才是机器可读的；message 只用于排查
+            print(f"\n[错误 {e['data'].get('error_code', '?')}] {e['data']['message']}")
             return e
     return None
 
@@ -143,6 +148,8 @@ async def example_remote_tools():
         await _send(ws, action="register_tools", tools=tool_defs)
         reg = await _recv(ws)
         if reg["type"] == "error":
+            # 工具注册失败通常是 NOT_AGENT_TYPE（非 Agent 网关）
+            print(f"[register_tools 失败] code={reg['data'].get('error_code', '?')} msg={reg['data'].get('message', '')}")
             return
         print(f"[工具注册] {reg['data']['names']}")
 
@@ -177,7 +184,7 @@ async def example_sessions():
             await _send(ws, action="create_session", title=title)
             r = await _recv(ws)
             if r["type"] == "error":
-                print(f"[错误] {r['data']['message']}")
+                print(f"[create_session 失败] code={r['data'].get('error_code', '?')} msg={r['data'].get('message', '')}")
                 return None
             return r["data"]["session_id"]
 
@@ -250,7 +257,7 @@ class WsGatewayWSClient:
             )
             reg = json.loads(await self.ws.recv())
             if reg["type"] == "error":
-                print(f"[错误] 工具注册失败: {reg['data']['message']}")
+                print(f"[工具注册失败] code={reg['data'].get('error_code', '?')} msg={reg['data'].get('message', '')}")
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         asyncio.create_task(self._loop())
 
@@ -571,7 +578,7 @@ async def example_file_tool():
                 print("\n[一轮对话完成]")
 
             elif t == "error":
-                print(f"\n[错误] {e['data']['message']}")
+                print(f"\n[错误 {e['data'].get('error_code', '?')}] {e['data']['message']}")
 
 
 # ============================================================
@@ -629,7 +636,7 @@ async def example_human_resume():
                 print(f"\n[完成] status={e['data'].get('status')}")
                 break
             elif t == "error":
-                print(f"\n[错误] {e['data'].get('message')}")
+                print(f"\n[错误 {e['data'].get('error_code', '?')}] {e['data'].get('message', '')}")
                 break
 
 
@@ -687,7 +694,7 @@ async def example_tool_approval():
                 print(f"\n[完成] status={e['data'].get('status')}")
                 break
             elif t == "error":
-                print(f"\n[错误] {e['data'].get('message')}")
+                print(f"\n[错误 {e['data'].get('error_code', '?')}] {e['data'].get('message', '')}")
                 break
 
 
@@ -744,7 +751,7 @@ async def example_cancel():
                 print(f"\n[完成] status={status}" + ("（已取消）" if cancelled else ""))
                 break
             elif t == "error":
-                print(f"\n[错误] {e['data'].get('message')}")
+                print(f"\n[错误 {e['data'].get('error_code', '?')}] {e['data'].get('message', '')}")
                 break
 
 
@@ -771,7 +778,10 @@ async def example_concurrent():
             await _send(ws, action="create_session", title=title)
             r = await _recv(ws)
             if r["type"] == "error":
-                raise RuntimeError(r["data"]["message"])
+                # 真实场景建议按 error_code 分支处理，例如 SESSION_INVALID 重试
+                raise RuntimeError(
+                    f"[{r['data'].get('error_code', '?')}] {r['data'].get('message', '')}"
+                )
             return r["data"]["session_id"]
 
         s1 = await create("并发A")
@@ -808,8 +818,9 @@ async def example_concurrent():
                     print(f"[call {cid}] 开始 session={e['data'].get('session_id')}")
                 elif t == "node_content" and cid in streams:
                     streams[cid].append(e["data"]["content"])
-                elif t == "error" and "正在执行中" in e["data"].get("message", ""):
-                    print(f"[会话锁拒绝] {e['data']['message']}")
+                elif t == "error" and e["data"].get("error_code") == "SESSION_BUSY":
+                    # ✅ 按 error_code 判断（同会话并发锁拒绝）；不要匹配 message 字符串
+                    print(f"[SESSION_BUSY] {e['data'].get('message', '')}")
                 elif t == "flow_done" and cid is not None:
                     done_calls.add(cid)
                     text = "".join(streams.get(cid, []))
