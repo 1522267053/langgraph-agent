@@ -476,11 +476,14 @@ export const useAgentStore = defineStore('agent', () => {
         const runId = runRes.data.data?.run_id
         if (runId && runRes.data.data?.managed_running) {
           const lastEventId = runRes.data.data?.last_event_id || 0
+          // 全量回放（after=0）：并发 question/审批等「等待用户响应」事件发布于
+          // 流式中段，仅回放尾部会丢失导致刷新后弹窗不恢复；内容类事件由
+          // createReattachHandlers 的 snapshot 过滤丢弃，气泡不会重复渲染
           streamAbort = agentApi.subscribeRun(
             agentId,
             session.id,
             runId,
-            Math.max(0, lastEventId - 1),
+            0,
             createReattachHandlers(context, lastEventId)
           )
         } else {
@@ -502,11 +505,12 @@ export const useAgentStore = defineStore('agent', () => {
         if (runRes.data.data.waiting_event) {
           handlers.onWaitingHuman?.(runRes.data.data.waiting_event)
         } else if (runRes.data.data.run_id) {
+          // 与上方 running 分支同语义：全量回放 + 前端 snapshot 过滤内容类事件
           streamAbort = agentApi.subscribeRun(
             agentId,
             session.id,
             runRes.data.data.run_id,
-            Math.max(0, runRes.data.data.last_event_id - 1),
+            0,
             handlers
           )
         }
