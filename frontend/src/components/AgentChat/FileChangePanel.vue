@@ -98,7 +98,7 @@ import type { AgentFileChangeBase } from '@/types/agent'
 import DiffViewer from './DiffViewer.vue'
 import { useIsMobile } from '@/composables/useIsMobile.ts'
 
-const props = defineProps<{
+defineProps<{
   visible: boolean
 }>()
 
