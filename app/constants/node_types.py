@@ -206,6 +206,4 @@ def get_node_meta(node_type: str) -> NodeMeta | None:
 
 
 # 中文标签字典（向后兼容：NODE_TYPE_LABELS 派生自 NODE_REGISTRY）
-NODE_TYPE_LABELS: dict[str, str] = {
-    k: meta.label for k, meta in NODE_REGISTRY.items()
-}
+NODE_TYPE_LABELS: dict[str, str] = {k: meta.label for k, meta in NODE_REGISTRY.items()}

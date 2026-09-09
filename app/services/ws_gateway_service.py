@@ -494,7 +494,13 @@ class WsGatewayService(
         async with AsyncSessionLocal() as db:
             gateway = await self.get_by_id(db, gateway_id)
             if not gateway:
-                yield {"type": "error", "data": {"message": "网关不存在", "error_code": "GATEWAY_NOT_FOUND"}}
+                yield {
+                    "type": "error",
+                    "data": {
+                        "message": "网关不存在",
+                        "error_code": "GATEWAY_NOT_FOUND",
+                    },
+                }
                 return
 
             flow = await flow_service.get_by_id(
@@ -604,7 +610,10 @@ class WsGatewayService(
             logger.exception(f"WS 流程执行异常: {e}")
             status = "failed"
             error_message = str(e)
-            yield {"type": "error", "data": {"message": str(e), "error_code": "INTERNAL_ERROR"}}
+            yield {
+                "type": "error",
+                "data": {"message": str(e), "error_code": "INTERNAL_ERROR"},
+            }
 
         await self.finish_call_record(record_id, status, output_data, error_message)
 
@@ -625,7 +634,13 @@ class WsGatewayService(
         async with AsyncSessionLocal() as db:
             gateway = await self.get_by_id(db, gateway_id)
             if not gateway:
-                yield {"type": "error", "data": {"message": "网关不存在", "error_code": "GATEWAY_NOT_FOUND"}}
+                yield {
+                    "type": "error",
+                    "data": {
+                        "message": "网关不存在",
+                        "error_code": "GATEWAY_NOT_FOUND",
+                    },
+                }
                 return
 
             flow = await flow_service.get_by_id(
@@ -717,7 +732,10 @@ class WsGatewayService(
             logger.exception(f"WS 恢复执行异常: {e}")
             status = "failed"
             error_message = str(e)
-            yield {"type": "error", "data": {"message": str(e), "error_code": "INTERNAL_ERROR"}}
+            yield {
+                "type": "error",
+                "data": {"message": str(e), "error_code": "INTERNAL_ERROR"},
+            }
 
         await self.finish_call_record(record_id, status, output_data, error_message)
 
