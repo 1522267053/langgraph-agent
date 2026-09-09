@@ -4,7 +4,8 @@
 三层记忆架构：
 - hot（热）：按分类拆分注入——画像/指令类随 system_prompt（get_system_prompt_hint），
   其余随消息层 <system-reminder>（get_memory_reminder），均为紧凑指针索引
-- warm（温）：LLM 通过 memory_search 向量检索获取
+- warm（温）：LLM 通过 memory_search 向量检索获取；最新若干条以 "| 温" 标记行
+  并入消息层记忆索引（带预览，热前温后）
 - cold（冷）：低优先级记忆，搜索命中后自动升温
 
 为 Agent 提供的 LLM 工具：
@@ -103,7 +104,8 @@ class MemoryNodeHandler(BaseNodeHandler):
     - default_category: save 工具的默认分类
      - max_index_lines: 热记忆索引最大行数（默认200）
      - max_index_bytes: 热记忆索引最大字节数（默认25000）
-      - warm_recent_count: 注入消息层 reminder 的温记忆最新标题条数（默认10，0=关闭）
+      - warm_recent_count: 并入消息层记忆索引的温记忆最新条数（带预览、
+      "| 温" 标记；默认10，0=关闭）
     - auto_promote_threshold: 自动升温阈值（默认5次访问）
     - consolidate_threshold: 热记忆超过此数量时触发 AI 总结整理（默认25）
     - hot_decay_days: 热记忆衰减天数（默认30），超过此天数未更新则降为温记忆
@@ -192,10 +194,13 @@ class MemoryNodeHandler(BaseNodeHandler):
             return None
 
     async def get_memory_reminder(self, node: FlowNode) -> Optional[str]:
-        """动态记忆区块：非画像类热索引 + 温记忆标题，注入消息层 <system-reminder>
+        """动态记忆区块：非画像类热索引 + 温记忆合并为单一索引，注入消息层
 
-        这些内容随 memory_save/整理/升温频繁变化，放 system_prompt 会使整段
-        对话的前缀缓存失效；放消息层 reminder 后变化只影响其后的尾部缓存。
+        注入 <system-reminder> HumanMessage。这些内容随 memory_save/整理/升温
+        频繁变化，放 system_prompt 会使整段对话的前缀缓存失效；放消息层
+        reminder 后变化只影响其后的尾部缓存。
+        索引头部含记忆总数与展示计数，节标题说明展示规则，
+        让模型明确索引≠全量、其余记忆经 memory_search 检索。
         """
         agent_id = self._agent_id
         if not agent_id:
@@ -204,38 +209,23 @@ class MemoryNodeHandler(BaseNodeHandler):
         try:
             async with AsyncSessionLocal() as db:
                 cfg = self._get_config(node)
-                _, dynamic_index = await memory_service.get_hot_index_split(
+                index_text = await memory_service.get_reminder_index(
                     db,
                     agent_id,
-                    cfg.prompt_category_set,
+                    exclude_categories=cfg.prompt_category_set,
+                    warm_recent_count=cfg.warm_recent_count,
                     max_lines=cfg.max_index_lines,
                     max_bytes=cfg.max_index_bytes,
                 )
 
-                # 温记忆最新标题：仅标题+ID+分类，完整内容由模型按需 memory_get 查询
-                warm_titles: list[str] = []
-                if cfg.warm_recent_count > 0:
-                    recent_warm = await memory_service.get_recent(
-                        db, agent_id, limit=cfg.warm_recent_count, tier="warm"
-                    )
-                    for m in recent_warm:
-                        if not m.title:
-                            continue
-                        cat = f", {m.category}" if m.category else ""
-                        warm_titles.append(f"- {m.title} (id={m.id}{cat})")
-
-            if not dynamic_index and not warm_titles:
+            if not index_text:
                 return None
 
-            lines = ["# 记忆索引（完整内容用 memory_get 按 ID 查询）"]
-            if dynamic_index:
-                lines.append(dynamic_index)
-            if warm_titles:
-                lines.append(
-                    "## 温记忆最近标题（完整内容用 memory_get 按 ID 查询）\n"
-                    + "\n".join(warm_titles)
-                )
-            return "\n".join(lines)
+            header = (
+                "# 记忆索引（展示规则：热记忆全部+温记忆最近条目，热前温后、"
+                "组内按重要性排列；未展示的记忆用 memory_search 关键词检索）"
+            )
+            return header + "\n" + index_text
         except Exception:
             return None
 

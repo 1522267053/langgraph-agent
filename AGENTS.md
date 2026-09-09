@@ -207,11 +207,11 @@ Session: cookie `auth_session`，httponly + samesite=lax，7 天有效，内容�
 
 | 层级 | 加载方式 | 升温 | 降温 |
 |------|---------|------|------|
-| hot | 按分类拆分注入：`system_prompt_categories`（默认 profile/preference/instruction）随 system_prompt，其余分类 + 温记忆标题随消息层 `<system-reminder>`（`get_memory_reminder`） | — | 30天未访问 → warm |
-| warm | `memory_search` 向量检索；最新标题注入消息层 reminder | access_count≥5 → hot | 60天未访问 → cold |
+| hot | 按分类拆分注入：`system_prompt_categories`（默认 profile/preference/instruction）随 system_prompt，其余分类随消息层单一记忆索引（`get_memory_reminder`） | — | 30天未访问 → warm |
+| warm | `memory_search` 向量检索；最新若干条以 `\| 温` 标记行并入消息层记忆索引（带预览，热前温后） | access_count≥5 → hot | 60天未访问 → cold |
 | cold | 同 warm | access_count≥5 → warm | — |
 
-热记忆超限（默认25条）自动 AI 总结整理。importance 越高衰减越慢（加成 `(importance-1)*10` 天）。热索引注入位置遵循"静态进 system_prompt、动态进消息层"原则，动态记忆变化只失效 reminder 之后的尾部前缀缓存；`last_access_time` 刷新带 60s 防抖（`MEMORY_ACCESS_REFRESH_INTERVAL_SECONDS`）。
+热记忆超限（默认25条）自动 AI 总结整理。importance 越高衰减越慢（加成 `(importance-1)*10` 天）。热索引注入位置遵循"静态进 system_prompt、动态进消息层"原则，动态记忆变化只失效 reminder 之后的尾部前缀缓存；消息层索引头部含记忆总数与展示计数、节标题说明展示规则（索引≠全量）；`last_access_time` 刷新带 60s 防抖（`MEMORY_ACCESS_REFRESH_INTERVAL_SECONDS`）。
 
 详见 `app/models/memory.py`、`app/services/memory_service.py`、`app/agent_flow/node_handlers/memory_handler.py`。
 
