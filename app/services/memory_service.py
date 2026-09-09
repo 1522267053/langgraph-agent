@@ -247,21 +247,59 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         return list(result.scalars().all())
 
     @staticmethod
-    def build_memory_index(memories: List[Memory]) -> str:
-        """将热记忆列表格式化为紧凑索引文本，按 importance 降序排列"""
-        sorted_memories = sorted(
-            memories, key=lambda m: m.importance or 3, reverse=True
-        )
+    def build_memory_index(
+        memories: List[Memory],
+        mixed_tiers: bool = False,
+        total_count: Optional[int] = None,
+    ) -> str:
+        """将记忆列表格式化为紧凑索引文本
+
+        mixed_tiers=False（默认）：纯热记忆列表，按 importance 降序排列。
+        mixed_tiers=True：热/温混合列表，热前温后分组、组内 importance 降序、
+        id 升序；温条目行尾追加 "| 温" 标记，头部按层级分组计数。
+
+        total_count 提供时（配合 mixed_tiers）头部附带 Agent 记忆总数，
+        让模型明确"索引≠全量"。
+        """
+        if mixed_tiers:
+            sorted_memories = sorted(
+                memories,
+                key=lambda m: (
+                    0 if m.memory_type == MemoryType.HOT.value else 1,
+                    -(m.importance or 3),
+                    m.id or 0,
+                ),
+            )
+        else:
+            sorted_memories = sorted(
+                memories, key=lambda m: m.importance or 3, reverse=True
+            )
         count = len(sorted_memories)
 
-        lines = [f"[记忆索引] {count}条 | 用 memory_get <ID> 查详情", ""]
+        if mixed_tiers:
+            hot_count = sum(
+                1 for m in sorted_memories if m.memory_type == MemoryType.HOT.value
+            )
+            warm_count = count - hot_count
+            tier_parts = [f"热{hot_count}条"]
+            if warm_count:
+                tier_parts.append(f"温{warm_count}条")
+            shown = "展示" + "/".join(tier_parts)
+            if total_count is not None:
+                shown = f"共{total_count}条，{shown}"
+            lines = [f"[记忆索引] {shown} | 用 memory_get <ID> 查详情", ""]
+        else:
+            lines = [f"[记忆索引] {count}条 | 用 memory_get <ID> 查详情", ""]
 
         for m in sorted_memories:
             importance = m.importance or 3
             title = m.title or ""
             content_preview = (m.content or "")[:50]
             detail = f"{title}：{content_preview}..." if content_preview else title
-            lines.append(f"P{importance} [ID:{m.id}] | {detail} | {m.category}")
+            line = f"P{importance} [ID:{m.id}] | {detail} | {m.category}"
+            if mixed_tiers and m.memory_type != MemoryType.HOT.value:
+                line += " | 温"
+            lines.append(line)
 
         return "\n".join(lines)
 
@@ -357,6 +395,53 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
             else ""
         )
         return stable_index, dynamic_index
+
+    async def get_total_count(self, db: AsyncSession, agent_id: int) -> int:
+        """统计该 Agent 全部未删除记忆数（含热/温/冷全部层级与分类）"""
+        from sqlalchemy import func
+
+        stmt = select(func.count(Memory.id)).where(Memory.agent_id == agent_id)
+        result = await db.execute(stmt, execution_options={"include_deleted": False})
+        return int(result.scalar_one())
+
+    async def get_reminder_index(
+        self,
+        db: AsyncSession,
+        agent_id: int,
+        exclude_categories: set[str],
+        warm_recent_count: int = 10,
+        max_lines: int = 200,
+        max_bytes: int = 25000,
+    ) -> str:
+        """构建消息层记忆索引：非画像类热记忆 + 最近温记忆，合并为单一索引块
+
+        - 热记忆（排除随 system_prompt 注入的 exclude_categories 分类）全部展示；
+        - 温记忆取最近 warm_recent_count 条（warm_recent_count=0 时不含温记忆），
+          与热记忆同格式（带预览）并追加 "| 温" 标记，热前温后分组排列；
+        - 头部含 Agent 记忆总数与展示计数，明确"索引≠全量"，
+          未展示的记忆由 memory_search 检索、详情由 memory_get 查询。
+        """
+        memories = await self.get_hot_memories(db, agent_id)
+        hot_dynamic = [
+            m for m in memories if (m.category or "") not in exclude_categories
+        ]
+
+        warm: List[Memory] = []
+        if warm_recent_count > 0:
+            warm = await self.get_recent(
+                db, agent_id, limit=warm_recent_count, tier="warm"
+            )
+
+        if not hot_dynamic and not warm:
+            return ""
+
+        await self._touch_hot_memories(db, memories)
+
+        total = await self.get_total_count(db, agent_id)
+        raw_index = self.build_memory_index(
+            hot_dynamic + warm, mixed_tiers=True, total_count=total
+        )
+        return self.truncate_index(raw_index, max_lines, max_bytes)
 
     async def get_last_consolidate_time(
         self, db: AsyncSession, agent_id: int
