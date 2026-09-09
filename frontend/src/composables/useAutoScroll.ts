@@ -148,6 +148,29 @@ export function useAutoScroll(
     watch(options.contentRef, _observeContentGrowth, { flush: 'post' })
   }
 
+  // ---- visibilitychange：窗口隐藏期间 rAF 暂停、RO 延迟，而 SSE/Vue 渲染照常 ----
+  // 内容继续撑高而跟随帧不执行，视口漂移且贴底判定可能被几何翻转「下毒」。
+  // 隐藏期用户不可能滚动，任何漂移/翻转均为程序性的：恢复可见时若快照为贴底
+  // 且用户从未表达滚动意图，强制回贴底部——切走前在底部，回来必须还在底部
+  let _wasAtBottomOnHide = true
+  const onVisibilityChange = (): void => {
+    if (document.hidden) {
+      _wasAtBottomOnHide = isAtBottom.value
+      return
+    }
+    if (_wasAtBottomOnHide && autoScroll.value && !userScrolledUp.value) {
+      isAtBottom.value = true
+      userScrolledUp.value = false
+      performScrollToBottom()
+    } else {
+      maybeScrollToBottom()
+    }
+  }
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  onScopeDispose(() => {
+    document.removeEventListener('visibilitychange', onVisibilityChange)
+  })
+
   function cancelPendingScroll(): void {
     if (_trailingTimer) {
       clearTimeout(_trailingTimer)
@@ -173,6 +196,12 @@ export function useAutoScroll(
 
   /** rAF 单飞合帧：一帧内多次触发（如 RO 连续回调）只执行一次滚动 */
   function scheduleScrollToBottom(): void {
+    // 隐藏页 rAF 暂停，排队的跟随帧永不执行导致视口漂移；直接同步贴底
+    // （scrollTop 赋值在隐藏文档有效，引发的 scroll 事件由手势白名单归为程序化）
+    if (document.hidden) {
+      if (autoScroll.value && isAtBottom.value && !userScrolledUp.value) performScrollToBottom()
+      return
+    }
     if (_scrollFrame !== null) return
     _scrollFrame = requestAnimationFrame(() => {
       // 再等一帧，让工具结果、高亮和 Markdown 的后续 DOM 更新先完成。
@@ -223,7 +252,10 @@ export function useAutoScroll(
       (!options.enabled || options.enabled())
     if (!canFollow) {
       // 未跟随：按真实几何刷新贴底状态，内容继续撑高时按钮立即出现
-      isAtBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
+      // （隐藏期例外：无手势环境下按几何翻转即「下毒」，交由 visibilitychange 回底自愈）
+      if (!document.hidden) {
+        isAtBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
+      }
       return
     }
     if (becameScrollable) {
@@ -297,6 +329,12 @@ export function useAutoScroll(
   function handleScroll(): void {
     const el = containerRef.value
     if (!el) return
+    // 隐藏期 scroll 事件只可能来自程序化贴底/虚拟列表测量补偿，不做任何状态
+    // 决策（含按几何翻转贴底判定——无手势环境下翻转即「下毒」），仅更新基准
+    if (document.hidden) {
+      _lastScrollTop = el.scrollTop
+      return
+    }
     const { scrollTop, scrollHeight, clientHeight } = el
     const scrollable = scrollHeight - clientHeight > 1
     _wasScrollable = scrollable
