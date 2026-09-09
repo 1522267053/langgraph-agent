@@ -80,6 +80,22 @@ const categoryOptions = [
     <div class="config-section">
       <div class="section-title">热记忆索引</div>
       <el-form label-width="90px" size="small">
+        <el-form-item label="常驻分类">
+          <el-select
+            v-model="localConfig.system_prompt_categories"
+            multiple
+            collapse-tags
+            style="width: 100%"
+            @change="updateConfig"
+          >
+            <el-option
+              v-for="item in categoryOptions"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="最大行数">
           <el-input-number
             v-model="localConfig.max_index_lines"
@@ -103,6 +119,9 @@ const categoryOptions = [
       <div class="config-hint">
         <el-text size="small" type="info">
           热记忆索引每次对话都会注入到LLM上下文中，仅包含指针摘要（标题+重要程度）。
+          <br />
+          「常驻分类」的热记忆随系统提示词注入（适合用户画像、长期指令等低频变化内容）；
+          其余分类的热索引与温记忆标题注入消息层提醒，变化时更利于缓存。
           <br />
           超出限制时自动截断并提示LLM使用搜索工具获取完整记忆。
         </el-text>

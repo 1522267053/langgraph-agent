@@ -2,7 +2,8 @@
 记忆节点处理器
 
 三层记忆架构：
-- hot（热）：每次对话自动注入 system_prompt，紧凑指针索引
+- hot（热）：按分类拆分注入——画像/指令类随 system_prompt（get_system_prompt_hint），
+  其余随消息层 <system-reminder>（get_memory_reminder），均为紧凑指针索引
 - warm（温）：LLM 通过 memory_search 向量检索获取
 - cold（冷）：低优先级记忆，搜索命中后自动升温
 
@@ -73,8 +74,18 @@ class MemoryNodeConfig(BaseModel):
     hot_decay_days: int = 30
     warm_decay_days: int = 60
     consolidate_interval_days: int = 7
+    system_prompt_categories: list[str] = Field(
+        default_factory=lambda: ["profile", "preference", "instruction"],
+        description="注入 system_prompt 的热记忆分类（用户画像/长期指令），其余分类注入消息层 reminder",
+    )
 
     VALID_CATEGORIES: ClassVar[list[str]] = [c.value for c in MemoryCategory]
+
+    @property
+    def prompt_category_set(self) -> set[str]:
+        """解析 system_prompt_categories 并过滤合法分类；非法值静默忽略"""
+        valid = set(self.VALID_CATEGORIES)
+        return {c for c in self.system_prompt_categories if c in valid}
 
 
 @NodeHandlerRegistry.register("memory")
@@ -92,12 +103,14 @@ class MemoryNodeHandler(BaseNodeHandler):
     - default_category: save 工具的默认分类
      - max_index_lines: 热记忆索引最大行数（默认200）
      - max_index_bytes: 热记忆索引最大字节数（默认25000）
-     - warm_recent_count: 注入 system_prompt 的温记忆最新标题条数（默认10，0=关闭）
+      - warm_recent_count: 注入消息层 reminder 的温记忆最新标题条数（默认10，0=关闭）
     - auto_promote_threshold: 自动升温阈值（默认5次访问）
-    - consolidate_threshold: 热记忆超过此数量时触发 AI 总结整理（默认50）
+    - consolidate_threshold: 热记忆超过此数量时触发 AI 总结整理（默认25）
     - hot_decay_days: 热记忆衰减天数（默认30），超过此天数未更新则降为温记忆
     - warm_decay_days: 温记忆衰减天数（默认60），超过此天数未更新则降为冷记忆
     - consolidate_interval_days: 时间触发整理间隔（默认7），距上次整理超过此天数且 hot>0 时强制整理
+    - system_prompt_categories: 注入 system_prompt 的热记忆分类（默认 profile/preference/instruction），
+      其余分类的热索引与温记忆标题注入消息层 <system-reminder>
     """
 
     ConfigClass = MemoryNodeConfig
@@ -143,7 +156,12 @@ class MemoryNodeHandler(BaseNodeHandler):
         return False
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
-        """异步获取热记忆索引和温记忆最新标题并注入 system_prompt"""
+        """异步获取静态工具说明和画像/指令类热记忆索引，注入 system_prompt
+
+        静态工具说明无条件注入（工具始终绑定，且从会话起 system_prompt 即定型，
+        避免首条记忆保存时突然变化破坏前缀缓存）；仅画像/指令类索引随行注入，
+        动态部分见 get_memory_reminder。
+        """
         agent_id = self._agent_id
         if not agent_id:
             return None
@@ -151,11 +169,47 @@ class MemoryNodeHandler(BaseNodeHandler):
         try:
             async with AsyncSessionLocal() as db:
                 cfg = self._get_config(node)
-                max_lines = cfg.max_index_lines
-                max_bytes = cfg.max_index_bytes
+                stable_index, _ = await memory_service.get_hot_index_split(
+                    db,
+                    agent_id,
+                    cfg.prompt_category_set,
+                    max_lines=cfg.max_index_lines,
+                    max_bytes=cfg.max_index_bytes,
+                )
 
-                hot_index = await memory_service.get_hot_index(
-                    db, agent_id, max_lines=max_lines, max_bytes=max_bytes
+            valid_cats = ",".join(MemoryNodeConfig.VALID_CATEGORIES)
+            static_prefix = (
+                "\n\n## 记忆系统\n"
+                f"工具: get(ID)查详情|search(关键词)搜记忆(默认warm/cold,可指定tier=hot)|"
+                f"save(保存,category:{valid_cats},importance=5→hot,3-4→warm,1-2→cold)\n"
+                f"主动保存用户偏好、重要决策、关键信息。\n"
+            )
+            parts = [static_prefix]
+            if stable_index:
+                parts.append(stable_index)
+            return "\n".join(parts)
+        except Exception:
+            return None
+
+    async def get_memory_reminder(self, node: FlowNode) -> Optional[str]:
+        """动态记忆区块：非画像类热索引 + 温记忆标题，注入消息层 <system-reminder>
+
+        这些内容随 memory_save/整理/升温频繁变化，放 system_prompt 会使整段
+        对话的前缀缓存失效；放消息层 reminder 后变化只影响其后的尾部缓存。
+        """
+        agent_id = self._agent_id
+        if not agent_id:
+            return None
+
+        try:
+            async with AsyncSessionLocal() as db:
+                cfg = self._get_config(node)
+                _, dynamic_index = await memory_service.get_hot_index_split(
+                    db,
+                    agent_id,
+                    cfg.prompt_category_set,
+                    max_lines=cfg.max_index_lines,
+                    max_bytes=cfg.max_index_bytes,
                 )
 
                 # 温记忆最新标题：仅标题+ID+分类，完整内容由模型按需 memory_get 查询
@@ -170,25 +224,18 @@ class MemoryNodeHandler(BaseNodeHandler):
                         cat = f", {m.category}" if m.category else ""
                         warm_titles.append(f"- {m.title} (id={m.id}{cat})")
 
-            if not hot_index and not warm_titles:
+            if not dynamic_index and not warm_titles:
                 return None
 
-            valid_cats = ",".join(MemoryNodeConfig.VALID_CATEGORIES)
-            static_prefix = (
-                "\n\n## 记忆系统\n"
-                f"工具: get(ID)查详情|search(关键词)搜记忆(默认warm/cold,可指定tier=hot)|"
-                f"save(保存,category:{valid_cats},importance=5→hot,3-4→warm,1-2→cold)\n"
-                f"主动保存用户偏好、重要决策、关键信息。\n"
-            )
-            parts = [static_prefix]
+            lines = ["# 记忆索引（完整内容用 memory_get 按 ID 查询）"]
+            if dynamic_index:
+                lines.append(dynamic_index)
             if warm_titles:
-                parts.append(
-                    "### 温记忆最近标题（完整内容用 memory_get 按 ID 查询）\n"
+                lines.append(
+                    "## 温记忆最近标题（完整内容用 memory_get 按 ID 查询）\n"
                     + "\n".join(warm_titles)
                 )
-            if hot_index:
-                parts.append(hot_index)
-            return "\n".join(parts)
+            return "\n".join(lines)
         except Exception:
             return None
 

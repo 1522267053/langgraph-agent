@@ -187,7 +187,7 @@ async def setup_tool_handlers(
     handler_registry: dict,
     emit_fn: Optional[Callable] = None,
     session_id: int = 0,
-) -> tuple[list[BaseTool], list[str], list[str]]:
+) -> tuple[list[BaseTool], list[str], list[str], list[str]]:
     """单次遍历工具节点，完成三件事：
 
     1. 注入处理器依赖（_agent_id, _writer, _resolve_context, _llm_config）
@@ -207,16 +207,19 @@ async def setup_tool_handlers(
         session_id: 会话 ID（Agent 模式，用于读取会话级项目工作路径）
 
     Returns:
-        (工具列表, prompt 提示片段列表, 运行时提醒片段列表)
+        (工具列表, prompt 提示片段列表, 运行时提醒片段列表, 记忆动态区块列表)
         第三项来自各工具 handler 的 get_runtime_reminder（动态内容），
-        供消息层 <system-reminder> 拼装，按 handler 实例去重
+        供消息层 <system-reminder> 拼装，按 handler 实例去重；
+        第四项来自记忆节点 handler 的 get_memory_reminder（非画像类热索引 +
+        温记忆标题），独立成节并入同一 <system-reminder>，变化时只失效其后缓存
     """
     tools: list[BaseTool] = []
     prompt_hints: list[tuple[int, int, str]] = []
     runtime_reminders: list[str] = []
+    memory_reminders: list[str] = []
 
     if not flow or not db_session_factory:
-        return tools, [h for _, _, h in prompt_hints], runtime_reminders
+        return tools, [h for _, _, h in prompt_hints], runtime_reminders, []
 
     # 获取工具节点 + 边对，按意图条件过滤
     tool_edge_pairs = get_connected_tool_edges(flow, node.node_key)
@@ -305,6 +308,12 @@ async def setup_tool_handlers(
             if reminder:
                 runtime_reminders.append(reminder)
 
+        # 收集记忆节点的消息层动态区块（非画像类热索引 + 温记忆标题）
+        if hasattr(handler, "get_memory_reminder"):
+            memory_block = await handler.get_memory_reminder(tool_node)
+            if memory_block:
+                memory_reminders.append(memory_block)
+
     # 按优先级排序：静态内容靠前，动态内容（如记忆）靠后，利于 LLM 缓存命中
     prompt_hints.sort(key=lambda x: (x[0], x[1]))
 
@@ -332,7 +341,12 @@ async def setup_tool_handlers(
             seen_names.add(tool.name)
             unique_tools.append(tool)
 
-    return unique_tools, [h for _, _, h in prompt_hints], runtime_reminders
+    return (
+        unique_tools,
+        [h for _, _, h in prompt_hints],
+        runtime_reminders,
+        memory_reminders,
+    )
 
 
 async def handle_tool_calls(

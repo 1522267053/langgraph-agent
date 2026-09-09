@@ -130,19 +130,26 @@ def _build_mode_prompt(is_plan_mode: bool) -> str:
 """
 
 
-def _build_runtime_reminder(is_plan_mode: bool, fragments: list[str]) -> str:
+def _build_runtime_reminder(
+    is_plan_mode: bool,
+    fragments: list[str],
+    memory_blocks: Optional[list[str]] = None,
+) -> str:
     """构建消息层运行时提醒（<system-reminder> 包装），随每轮 LLM 调用临时注入。
 
     不进入 system_prompt/checkpoint/DB：消息层注入紧邻最新对话、注意力权重高，
     且动态内容（模式切换、时间、各 handler 运行时片段）不破坏 system_prompt
     的前缀缓存。时间固定在此拼装（LLM 调用级信息，不属于任何工具 handler）；
     fragments 来自各工具 handler 的 get_runtime_reminder（如工作目录）。
+    memory_blocks 来自记忆节点的 get_memory_reminder（非画像类热索引/温标题），
+    独立成节追加在末尾——其变化仅失效 reminder 之后的尾部缓存。
     """
     sections = [_build_mode_prompt(is_plan_mode)]
     env_lines = [f"- 当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
     # 多行片段续行缩进对齐，保持 "- " 列表项渲染一致
     env_lines.extend(f"- {fragment}".replace("\n", "\n  ") for fragment in fragments)
     sections.append("# 运行环境\n" + "\n".join(env_lines))
+    sections.extend(memory_blocks or [])
     return "<system-reminder>" + "\n".join(sections) + "</system-reminder>"
 
 
@@ -464,8 +471,14 @@ class LlmToolNodeHandler(BaseNodeHandler):
 
         # 单次遍历：收集工具 + 注入处理器依赖 + 收集 prompt 提示
         # runtime_reminders: 各工具 handler 的动态提醒片段（如工作目录），
+        # memory_reminders: 记忆节点的消息层动态区块（非画像类热索引 + 温标题），
         # 供消息层 <system-reminder> 拼装
-        tools, prompt_hints, runtime_reminders = await setup_tool_handlers(
+        (
+            tools,
+            prompt_hints,
+            runtime_reminders,
+            memory_reminders,
+        ) = await setup_tool_handlers(
             node,
             state,
             writer,
@@ -586,7 +599,9 @@ class LlmToolNodeHandler(BaseNodeHandler):
 
         # 始终说明当前模式/时间/运行环境，避免模型仅根据工具列表推断权限；
         # 以消息层 <system-reminder> 注入（见 _run_react_loop），不占用 system_prompt
-        mode_reminder = _build_runtime_reminder(is_plan_mode, runtime_reminders)
+        mode_reminder = _build_runtime_reminder(
+            is_plan_mode, runtime_reminders, memory_reminders
+        )
 
         # 发送 node_start 事件
         self._emit(

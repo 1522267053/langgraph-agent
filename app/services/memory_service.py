@@ -2,7 +2,8 @@
 记忆服务
 
 三层记忆架构：
-- hot（热）：常驻 system_prompt 的指针索引，通过 get_hot_index 获取
+- hot（热）：按分类拆分注入——画像/指令类随 system_prompt，其余随消息层
+  <system-reminder>，通过 get_hot_index_split 获取
 - warm（温）：按需向量检索的详细记忆
 - cold（冷）：低优先级记忆，可被自动升温
 
@@ -22,6 +23,7 @@ from sqlalchemy import select, and_, Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import Memory, MemoryType
+from app.constants.timing import MEMORY_ACCESS_REFRESH_INTERVAL_SECONDS
 from app.schemas.memory_schema import MemoryCondition, MemoryCreate, MemoryUpdate
 from app.services.base_service import BaseService
 from app.services.embedding_service import get_embedding_service_async
@@ -293,25 +295,68 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
 
         return truncated
 
-    async def get_hot_index(
-        self,
-        db: AsyncSession,
-        agent_id: int,
-        max_lines: int = 200,
-        max_bytes: int = 25000,
-    ) -> str:
-        """获取热记忆索引文本（含截断保护），同时刷新最后访问时间"""
-        memories = await self.get_hot_memories(db, agent_id)
-        if not memories:
-            return ""
+    async def _touch_hot_memories(
+        self, db: AsyncSession, memories: List[Memory]
+    ) -> None:
+        """刷新热记忆 last_access_time（带防抖）
 
+        每次构建索引都视为一次"访问"影响衰减计时，但无需每轮 LLM 调用都写库：
+        最新访问时间在防抖窗口内（MEMORY_ACCESS_REFRESH_INTERVAL_SECONDS）时跳过。
+        """
         now = datetime.now()
+        latest = max(
+            (m.last_access_time for m in memories if m.last_access_time),
+            default=None,
+        )
+        if (
+            latest is not None
+            and (now - latest).total_seconds() < MEMORY_ACCESS_REFRESH_INTERVAL_SECONDS
+        ):
+            return
+
         for m in memories:
             m.last_access_time = now
         await db.commit()
 
-        raw_index = self.build_memory_index(memories)
-        return self.truncate_index(raw_index, max_lines, max_bytes)
+    async def get_hot_index_split(
+        self,
+        db: AsyncSession,
+        agent_id: int,
+        prompt_categories: set[str],
+        max_lines: int = 200,
+        max_bytes: int = 25000,
+    ) -> Tuple[str, str]:
+        """获取热记忆索引并按分类拆为两段（各自含截断保护）
+
+        - 第一段（prompt_categories 命中的分类，如用户画像/长期指令）：
+          变化低频，随 system_prompt 注入，获得高指令权威与跨轮缓存；
+        - 第二段（其余分类）：变化频繁（save/整理/降温即变），注入消息层
+          <system-reminder>，变化时仅失效 reminder 之后的尾部缓存，
+          不再拖垮整段对话的前缀缓存。
+
+        Returns:
+            (stable_index, dynamic_index)，无内容时为空字符串
+        """
+        memories = await self.get_hot_memories(db, agent_id)
+        if not memories:
+            return "", ""
+
+        await self._touch_hot_memories(db, memories)
+
+        stable = [m for m in memories if (m.category or "") in prompt_categories]
+        dynamic = [m for m in memories if (m.category or "") not in prompt_categories]
+
+        stable_index = (
+            self.truncate_index(self.build_memory_index(stable), max_lines, max_bytes)
+            if stable
+            else ""
+        )
+        dynamic_index = (
+            self.truncate_index(self.build_memory_index(dynamic), max_lines, max_bytes)
+            if dynamic
+            else ""
+        )
+        return stable_index, dynamic_index
 
     async def get_last_consolidate_time(
         self, db: AsyncSession, agent_id: int
