@@ -349,12 +349,11 @@ const chatInputRef = ref<InstanceType<typeof ChatInput>>()
 const showMemory = ref(false)
 /** 文件变更 Diff 抽屉显隐 */
 const showFileChanges = ref(false)
-/** 抽屉打开时仅在列表为空时兜底刷新；进入会话时 store 已预拉取，SSE file_changed 持续增量更新 */
+/** 每次打开抽屉立即拉取最新数据（store 侧 reqSeq 防竞态，快速开关不会旧响应覆盖新响应）；
+ *  进入会话时 store 已预拉取，SSE file_changed 持续增量更新 */
 async function openFileChangesPanel() {
   showFileChanges.value = true
-  if (store.fileChanges.length === 0) {
-    await store.fetchFileChanges()
-  }
+  await store.fetchFileChanges()
 }
 /** 回退恢复信号：每次回退生成新对象，通知当前挂载的 ChatInput 恢复参数 */
 const restoreParamsSignal = ref<Record<string, unknown> | null>(null)
