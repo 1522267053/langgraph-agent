@@ -76,6 +76,7 @@ const {
   maybeScrollToBottom,
   handleScroll,
   onUserScrollIntent,
+  markProgrammaticAdjustment,
   resetAutoScrollState
 } = useAutoScroll(messagesContainer, [], {
   // 声明内容元素：欢迎页 → 消息列表的 v-if 换根会替换 wrap 的 firstElementChild，
@@ -175,13 +176,18 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
 // 注意：回调在 itemSizeCache.set 之前调用，可用 has() 判定是否首测；
 // item.size 为变更前旧值，新实测 = item.size + delta，同步写入行高实测缓存——
 // 展示开关切换 measure() 清缓存后，估算回落到上次实测而非固定粗估，避免
-// 未挂载行重挂时产生巨量 delta（估算 268px vs 实测 4000px+）引发滚动跳变
+// 未挂载行重挂时产生巨量 delta（估算 268px vs 实测 4000px+）引发滚动跳变。
+// 补偿生效（返回 true）时打标：写入 scrollTop 引发的 scroll 事件由
+// useAutoScroll 的程序化补偿静默窗豁免，防止贴底判定被几何刷新翻成 false
+// （AI 并行多工具行同帧挂载时巨量 delta 补偿拉离底部 → 跟随永久中断）
 rowVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
   if (delta !== 0) rememberRowSize(item.key, item.size + delta)
   const offset = (instance.scrollOffset ?? 0) + instance.scrollAdjustments
-  return !instance.itemSizeCache.has(item.key)
+  const shouldAdjust = !instance.itemSizeCache.has(item.key)
     ? item.start < offset
     : item.start + item.size <= offset
+  if (shouldAdjust) markProgrammaticAdjustment()
+  return shouldAdjust
 }
 
 const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
