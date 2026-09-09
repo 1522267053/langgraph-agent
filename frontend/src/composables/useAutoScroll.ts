@@ -1,5 +1,6 @@
 import { onScopeDispose, ref, watch, type Ref, type WatchSource } from 'vue'
 import {
+  AUTO_SCROLL_ADJUST_QUIET_MS,
   AUTO_SCROLL_BOTTOM_THRESHOLD,
   AUTO_SCROLL_FOLLOW_SETTLE_MS,
   AUTO_SCROLL_THROTTLE_MS
@@ -50,6 +51,9 @@ export function useAutoScroll(
   let _lastGestureAt = 0
   let _lastScrollAt = 0
   let _lastFollowAt = 0
+  // 最近一次外部程序化 scrollTop 写入（虚拟列表测量补偿等）时刻：
+  // 静默窗内的 scroll 事件仅同步基准，不做贴底判定与用户意图推断（见 handleScroll）
+  let _lastProgrammaticAdjustAt = 0
   let _trailingTimer: ReturnType<typeof setTimeout> | null = null
   let _scrollFrame: number | null = null
   let _lastScrollTop = 0
@@ -218,6 +222,17 @@ export function useAutoScroll(
     cancelPendingScroll()
   }
 
+  /**
+   * 外部程序化 scrollTop 写入打标（虚拟列表测量补偿调用）。
+   * 补偿按行高 delta 写 scrollTop，会把视口瞬间拉离底部；随后派发的 scroll
+   * 事件若按几何刷新，会把贴底判定翻成 false——贴底跟随永久中断、scroll-to-bottom
+   * 按钮误现（AI 并行多工具行同帧挂载时的竞态）。打标后静默窗内的 scroll 事件
+   * 被视为补偿延续，不做任何状态决策（与隐藏期处理同一纪律：程序化位移不下毒）
+   */
+  function markProgrammaticAdjustment(): void {
+    _lastProgrammaticAdjustAt = Date.now()
+  }
+
   function scrollToBottom(): void {
     cancelPendingScroll()
     performScrollToBottom()
@@ -290,6 +305,7 @@ export function useAutoScroll(
     _lastGestureAt = 0
     _lastScrollAt = 0
     _lastFollowAt = 0
+    _lastProgrammaticAdjustAt = 0
     _lastScrollTop = containerRef.value?.scrollTop || 0
     _wasScrollable = containerRef.value ? hasScrollableOverflow(containerRef.value) : false
     cancelPendingScroll()
@@ -332,6 +348,14 @@ export function useAutoScroll(
     // 隐藏期 scroll 事件只可能来自程序化贴底/虚拟列表测量补偿，不做任何状态
     // 决策（含按几何翻转贴底判定——无手势环境下翻转即「下毒」），仅更新基准
     if (document.hidden) {
+      _lastScrollTop = el.scrollTop
+      return
+    }
+    // 外部程序化补偿静默窗：补偿写入（如虚拟列表测量补偿把视口拉离底部）引发的
+    // scroll 事件不是滚动意图，按几何刷新会把贴底判定翻成 false 杀死跟随——
+    // 仅同步基准。用户真实上滚由 onUserScrollIntent 手势路径立即落位（不依赖
+    // scroll 事件），本窗口不影响手动停止跟随
+    if (Date.now() - _lastProgrammaticAdjustAt < AUTO_SCROLL_ADJUST_QUIET_MS) {
       _lastScrollTop = el.scrollTop
       return
     }
@@ -414,6 +438,7 @@ export function useAutoScroll(
     maybeScrollToBottom,
     handleScroll,
     onUserScrollIntent,
+    markProgrammaticAdjustment,
     resetAutoScrollState
   }
 }

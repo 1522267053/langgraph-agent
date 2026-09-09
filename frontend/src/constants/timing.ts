@@ -17,6 +17,12 @@ export const AUTO_SCROLL_BOTTOM_THRESHOLD = 60
  *  不得据此翻转贴底判定（否则按钮闪现且跟随中断） */
 export const AUTO_SCROLL_FOLLOW_SETTLE_MS = 200
 
+/** 虚拟列表测量补偿静默窗（ms）：virtualizer 按行高 delta 写 scrollTop 的程序化
+ *  补偿会瞬间拉离底部，随后 scroll 事件按几何刷新会把贴底判定翻成 false（跟随
+ *  永久中断、scroll-to-bottom 按钮误现，AI 并行多工具行同帧挂载时必现竞态）。
+ *  该窗口内的 scroll 事件仅同步基准，不做贴底判定与意图推断 */
+export const AUTO_SCROLL_ADJUST_QUIET_MS = 50
+
 /** 流结束后 mermaid 图表渲染防抖间隔 */
 export const MERMAID_RENDER_DEBOUNCE = 300
 
