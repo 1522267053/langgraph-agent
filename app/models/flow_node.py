@@ -101,8 +101,7 @@ def _validate_registry_consistency() -> None:
         )
     if missing_in_enum:
         raise RuntimeError(
-            f"NODE_REGISTRY 中以下 key 未在 NodeType 枚举中: "
-            f"{sorted(missing_in_enum)}"
+            f"NODE_REGISTRY 中以下 key 未在 NodeType 枚举中: {sorted(missing_in_enum)}"
         )
 
 

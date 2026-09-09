@@ -140,8 +140,7 @@ class ScheduledTaskService(
                 target_id = task.target_id
                 input_data = task.input_data or {}
                 if (
-                    target_type
-                    != ScheduledTaskTargetType.REMINDER.value
+                    target_type != ScheduledTaskTargetType.REMINDER.value
                     and not target_id
                 ):
                     raise ValueError(f"定时任务[{task.name}]缺少目标ID，无法执行")
@@ -150,9 +149,7 @@ class ScheduledTaskService(
                         db, log, target_id, input_data, task.name
                     )
                 elif target_type == ScheduledTaskTargetType.REMINDER.value:
-                    await self._execute_reminder_task(
-                        db, log, task, input_data
-                    )
+                    await self._execute_reminder_task(db, log, task, input_data)
                 else:
                     await self._execute_flow_task(db, log, target_id, input_data)
 

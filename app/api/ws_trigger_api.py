@@ -175,7 +175,11 @@ async def _message_receiver(conn: WSConnection):
             except asyncio.TimeoutError:
                 logger.warning(f"WS trigger 空闲超时断开: gateway_id={conn.gateway_id}")
                 try:
-                    await _send_error(conn, f"连接空闲超过 {idle_timeout} 秒，已断开", error_code="IDLE_TIMEOUT")
+                    await _send_error(
+                        conn,
+                        f"连接空闲超过 {idle_timeout} 秒，已断开",
+                        error_code="IDLE_TIMEOUT",
+                    )
                 except Exception:
                     pass
                 await conn.websocket.close(code=4408)
@@ -190,7 +194,9 @@ async def _message_receiver(conn: WSConnection):
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            await _send_error(conn, "消息格式错误：需要合法 JSON", error_code="INVALID_JSON")
+            await _send_error(
+                conn, "消息格式错误：需要合法 JSON", error_code="INVALID_JSON"
+            )
             continue
 
         action = data.get("action")
@@ -297,7 +303,11 @@ def _resolve_tool_call(conn: WSConnection, cmd: WsToolResultCommand):
 async def _handle_register_tools(conn: WSConnection, cmd: WsRegisterToolsCommand):
     """注册远程工具（仅 Agent 类型生效）"""
     if conn.flow_type != FlowType.AGENT.value:
-        await _send_error(conn, "远程工具仅 Agent 类型支持，当前网关关联的不是智能体", error_code="NOT_AGENT_TYPE")
+        await _send_error(
+            conn,
+            "远程工具仅 Agent 类型支持，当前网关关联的不是智能体",
+            error_code="NOT_AGENT_TYPE",
+        )
         return
     conn.registered_tools = cmd.tools
     names = [t.get("name", "") for t in cmd.tools]
@@ -322,7 +332,11 @@ async def _handle_execute(conn: WSConnection, cmd: WsExecuteCommand):
     if conn.flow_type == FlowType.AGENT.value and explicit_session is not None:
         # check-then-act 中间无 await，asyncio 原子
         if explicit_session in conn.executing_sessions:
-            await _send_error(conn, f"会话 {explicit_session} 正在执行中，请等待完成", error_code="SESSION_BUSY")
+            await _send_error(
+                conn,
+                f"会话 {explicit_session} 正在执行中，请等待完成",
+                error_code="SESSION_BUSY",
+            )
             return
         conn.executing_sessions.add(explicit_session)
         lock_session = explicit_session
@@ -369,7 +383,9 @@ async def _handle_resume(conn: WSConnection, cmd: WsResumeCommand):
     Agent 会话与 execute 共用会话级锁；Flow 由 resume_execution 的 CAS 乐观锁保证并发安全。
     """
     if not cmd.input.strip():
-        await _send_error(conn, "缺少 input 字段（人工输入内容）", error_code="MISSING_FIELD")
+        await _send_error(
+            conn, "缺少 input 字段（人工输入内容）", error_code="MISSING_FIELD"
+        )
         return
     human_input = cmd.input
 
@@ -382,7 +398,11 @@ async def _handle_resume(conn: WSConnection, cmd: WsResumeCommand):
     lock_session: Optional[int] = None
     if conn.flow_type == FlowType.AGENT.value:
         if target_id in conn.executing_sessions:
-            await _send_error(conn, f"会话 {target_id} 正在执行中，请等待完成", error_code="SESSION_BUSY")
+            await _send_error(
+                conn,
+                f"会话 {target_id} 正在执行中，请等待完成",
+                error_code="SESSION_BUSY",
+            )
             return
         conn.executing_sessions.add(target_id)
         lock_session = target_id
@@ -414,7 +434,9 @@ async def _handle_tool_approval(conn: WSConnection, cmd: WsToolApprovalCommand):
     前端 SSE 路径的确认入口在 agent_api，两者共用 tool_approval_service。
     """
     if conn.flow_type != FlowType.AGENT.value:
-        await _send_error(conn, "仅 Agent 类型支持工具审批", error_code="NOT_AGENT_TYPE")
+        await _send_error(
+            conn, "仅 Agent 类型支持工具审批", error_code="NOT_AGENT_TYPE"
+        )
         return
 
     session_id = cmd.session_id
@@ -425,7 +447,11 @@ async def _handle_tool_approval(conn: WSConnection, cmd: WsToolApprovalCommand):
             db, conn.token, session_id
         )
     if not session:
-        await _send_error(conn, f"会话 {session_id} 不存在或不属于该网关", error_code="SESSION_INVALID")
+        await _send_error(
+            conn,
+            f"会话 {session_id} 不存在或不属于该网关",
+            error_code="SESSION_INVALID",
+        )
         return
 
     from app.services.tool_approval_service import tool_approval_service
@@ -464,7 +490,11 @@ async def _handle_cancel(conn: WSConnection, cmd: WsCancelCommand):
         valid = await _validate_ws_target(db, gateway, conn.flow_type, target_id)
     if not valid:
         target_desc = "会话" if conn.flow_type == FlowType.AGENT.value else "执行记录"
-        await _send_error(conn, f"{target_desc} {target_id} 不存在或不属于该网关", error_code="SESSION_INVALID")
+        await _send_error(
+            conn,
+            f"{target_desc} {target_id} 不存在或不属于该网关",
+            error_code="SESSION_INVALID",
+        )
         return
 
     if conn.flow_type == FlowType.AGENT.value:
@@ -482,7 +512,11 @@ async def _handle_cancel(conn: WSConnection, cmd: WsCancelCommand):
         async with AsyncSessionLocal() as db:
             execution = await flow_executor_service.cancel_execution(db, target_id)
         if not execution:
-            await _send_error(conn, f"执行记录 {target_id} 不存在或不可取消", error_code="EXECUTION_INVALID")
+            await _send_error(
+                conn,
+                f"执行记录 {target_id} 不存在或不可取消",
+                error_code="EXECUTION_INVALID",
+            )
             return
         await conn.websocket.send_json(
             {"type": "cancel_accepted", "data": {"execution_id": target_id}}
@@ -518,7 +552,9 @@ async def _validate_ws_target(db, gateway, flow_type: Optional[str], target_id: 
 async def _handle_create_session(conn: WSConnection, cmd: WsCreateSessionCommand):
     """创建新会话（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
-        await _send_error(conn, "仅 Agent 类型支持创建会话", error_code="NOT_AGENT_TYPE")
+        await _send_error(
+            conn, "仅 Agent 类型支持创建会话", error_code="NOT_AGENT_TYPE"
+        )
         return
     session_id, session_title = await ws_gateway_service.create_session_for_ws(
         conn.token, cmd.title
@@ -535,7 +571,9 @@ async def _handle_create_session(conn: WSConnection, cmd: WsCreateSessionCommand
 async def _handle_switch_session(conn: WSConnection, cmd: WsSwitchSessionCommand):
     """切换当前会话（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
-        await _send_error(conn, "仅 Agent 类型支持会话操作", error_code="NOT_AGENT_TYPE")
+        await _send_error(
+            conn, "仅 Agent 类型支持会话操作", error_code="NOT_AGENT_TYPE"
+        )
         return
     session_id = cmd.session_id
     async with AsyncSessionLocal() as db:
@@ -543,7 +581,11 @@ async def _handle_switch_session(conn: WSConnection, cmd: WsSwitchSessionCommand
             db, conn.token, session_id
         )
     if not session:
-        await _send_error(conn, f"会话 {session_id} 不存在或不属于该网关", error_code="SESSION_INVALID")
+        await _send_error(
+            conn,
+            f"会话 {session_id} 不存在或不属于该网关",
+            error_code="SESSION_INVALID",
+        )
         return
     conn.current_session_id = session_id
     await conn.websocket.send_json(
@@ -554,7 +596,9 @@ async def _handle_switch_session(conn: WSConnection, cmd: WsSwitchSessionCommand
 async def _handle_list_sessions(conn: WSConnection, cmd: WsListSessionsCommand):
     """查询会话列表（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
-        await _send_error(conn, "仅 Agent 类型支持会话操作", error_code="NOT_AGENT_TYPE")
+        await _send_error(
+            conn, "仅 Agent 类型支持会话操作", error_code="NOT_AGENT_TYPE"
+        )
         return
     page = cmd.page
     page_size = cmd.page_size
@@ -578,7 +622,9 @@ async def _handle_list_sessions(conn: WSConnection, cmd: WsListSessionsCommand):
 async def _handle_delete_session(conn: WSConnection, cmd: WsDeleteSessionCommand):
     """删除会话（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
-        await _send_error(conn, "仅 Agent 类型支持会话操作", error_code="NOT_AGENT_TYPE")
+        await _send_error(
+            conn, "仅 Agent 类型支持会话操作", error_code="NOT_AGENT_TYPE"
+        )
         return
     session_id = cmd.session_id
     async with AsyncSessionLocal() as db:
@@ -598,7 +644,9 @@ async def _handle_delete_session(conn: WSConnection, cmd: WsDeleteSessionCommand
 async def _handle_get_messages(conn: WSConnection, cmd: WsGetMessagesCommand):
     """查询会话历史消息（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
-        await _send_error(conn, "仅 Agent 类型支持会话操作", error_code="NOT_AGENT_TYPE")
+        await _send_error(
+            conn, "仅 Agent 类型支持会话操作", error_code="NOT_AGENT_TYPE"
+        )
         return
     session_id = cmd.session_id
     before_id = cmd.before_id
@@ -616,7 +664,9 @@ async def _handle_get_messages(conn: WSConnection, cmd: WsGetMessagesCommand):
 async def _handle_delete_message(conn: WSConnection, cmd: WsDeleteMessageCommand):
     """删除会话消息（仅 Agent 类型）"""
     if conn.flow_type != FlowType.AGENT.value:
-        await _send_error(conn, "仅 Agent 类型支持会话操作", error_code="NOT_AGENT_TYPE")
+        await _send_error(
+            conn, "仅 Agent 类型支持会话操作", error_code="NOT_AGENT_TYPE"
+        )
         return
     session_id = cmd.session_id
     message_id = cmd.message_id
@@ -677,7 +727,10 @@ async def _send_error(
       - INTERNAL_ERROR      内部异常（兜底）
     """
     try:
-        payload = {"type": "error", "data": {"message": message, "error_code": error_code, **extra}}
+        payload = {
+            "type": "error",
+            "data": {"message": message, "error_code": error_code, **extra},
+        }
         await conn.websocket.send_json(payload)
     except Exception:
         pass
