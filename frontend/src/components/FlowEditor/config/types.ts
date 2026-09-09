@@ -267,6 +267,7 @@ export interface MemoryConfig {
   default_category: string
   max_index_lines: number
   max_index_bytes: number
+  system_prompt_categories: string[]
   auto_promote_threshold: number
   consolidate_threshold: number
   hot_decay_days: number

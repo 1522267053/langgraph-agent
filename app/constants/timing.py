@@ -20,3 +20,6 @@ SHELL_TASK_EXPIRE_SECONDS = 300
 
 # 记忆整理（hot 超限触发 AI 总结）的冷却时长，防止频繁整理
 MEMORY_CONSOLIDATION_COOLDOWN_SECONDS = 300.0
+
+# 热记忆 last_access_time 刷新防抖窗口：窗口内的重复构建索引不再写库
+MEMORY_ACCESS_REFRESH_INTERVAL_SECONDS = 60
