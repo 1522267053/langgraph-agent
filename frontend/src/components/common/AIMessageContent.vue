@@ -9,7 +9,6 @@ import ToolResultViewer from '@/components/common/ToolResultViewer.vue'
 import type { Segment } from '@/types/segment'
 import { useKnowledgeReferenceDrawer } from '@/composables/useKnowledgeReferenceDrawer'
 import { getBlockExpandOverride, toggleBlockExpand } from '@/components/AgentChat/blockExpand'
-import { collapseHooks } from '@/components/AgentChat/collapseTransition'
 import { formatToolArgs, formatToolArgsExpanded, hasStringifiedJson } from '@/utils/format'
 import { AUTO_SCROLL_BOTTOM_THRESHOLD } from '@/constants/timing'
 
@@ -116,10 +115,6 @@ const { open: openKnowledgeReference } = useKnowledgeReferenceDrawer()
  * 不显示点击手势与箭头 */
 const isToolInteractive = computed(() => !!props.expandKey && !props.isLatestTool)
 
-/** 高度过渡动画开关（每行实例）：仅在用户点击过后置位。流式 handoff / 流结束的
- * 程序性翻转保持瞬时，避免 300ms 行高渐变被贴底跟随逐帧追逐产生滚动抖动 */
-const toolAnimate = ref(false)
-
 /** 工具块内容（入参/结果/错误/加载）显隐：
  * 聊天模式 = 流式最后一轮工具调用强制展开（不允许收缩）；
  * 其余 = 手动操作覆盖 ?? 默认折叠；
@@ -134,7 +129,6 @@ const toolBodyVisible = computed(() => {
 
 function toggleToolBody(): void {
   if (!props.expandKey || props.isLatestTool) return
-  toolAnimate.value = true
   toggleBlockExpand(props.expandKey, !toolBodyVisible.value)
 }
 
@@ -304,29 +298,26 @@ watch(
         </div>
         <pre class="tool-content tool-live-output">{{ segment.tool.liveOutput }}</pre>
       </div>
-      <!-- 入参 JSON：折叠态隐藏，点击头部展开后显示。高度过渡仅在用户点击过后
-           启用（toolAnimate），程序性翻转瞬时完成 -->
-      <Transition v-bind="toolAnimate ? collapseHooks : {}">
-        <div
-          v-if="toolBodyVisible && segment.tool.args && Object.keys(segment.tool.args).length > 0"
-          class="tool-content-args-wrapper"
+      <!-- 入参 JSON：折叠态隐藏，点击头部展开后显示 -->
+      <div
+        v-if="toolBodyVisible && segment.tool.args && Object.keys(segment.tool.args).length > 0"
+        class="tool-content-args-wrapper"
+      >
+        <pre class="tool-content tool-content-args">{{
+          isArgsExpanded(segment, idx)
+            ? formatToolArgsExpanded(segment.tool.args)
+            : formatToolArgs(segment.tool.args)
+        }}</pre>
+        <el-button
+          v-if="hasStringifiedJson(segment.tool.args)"
+          link
+          size="small"
+          class="args-toggle-btn"
+          @click="toggleArgsFormat(segment, idx)"
         >
-          <pre class="tool-content tool-content-args">{{
-            isArgsExpanded(segment, idx)
-              ? formatToolArgsExpanded(segment.tool.args)
-              : formatToolArgs(segment.tool.args)
-          }}</pre>
-          <el-button
-            v-if="hasStringifiedJson(segment.tool.args)"
-            link
-            size="small"
-            class="args-toggle-btn"
-            @click="toggleArgsFormat(segment, idx)"
-          >
-            {{ isArgsExpanded(segment, idx) ? '显示原始' : '显示格式化' }}
-          </el-button>
-        </div>
-      </Transition>
+          {{ isArgsExpanded(segment, idx) ? '显示原始' : '显示格式化' }}
+        </el-button>
+      </div>
       <!-- 结果：完成时滑入淡入动画。不用 Transition 组件（流式 patch 场景下 enter
            hook 时序不稳定），改用 CSS keyframe——元素插入时必然播放一次；动画类仅
            流式中的最后消息携带，历史/Flow 面板静态渲染，虚拟滚动重挂不重播。
@@ -337,7 +328,6 @@ watch(
           :tool-name="segment.tool.name"
           :result="segment.tool.result"
           :hide-plain-json="!toolBodyVisible && segment.tool.status !== 'error'"
-          :animate-json="toolAnimate"
           :collapsed="!!expandKey && !toolBodyVisible && segment.tool.status !== 'error'"
         />
       </div>

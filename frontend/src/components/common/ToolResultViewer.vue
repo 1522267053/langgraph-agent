@@ -2,7 +2,6 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { CopyDocument, Download, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { collapseHooks } from '@/components/AgentChat/collapseTransition'
 import DiffViewer from '@/components/AgentChat/DiffViewer.vue'
 import { detectFileLanguage } from '@/utils/format'
 
@@ -12,15 +11,12 @@ const props = withDefaults(
     result: unknown
     /** 仅展示富结果（文件读取/编辑/媒体预览下载），纯 JSON 回退不渲染 */
     hidePlainJson?: boolean
-    /** 纯 JSON 块显隐是否带高度过渡（仅用户点击过的聊天工具行为 true，
-     * 程序性翻转瞬时完成；Flow 执行面板等列表场景恒为 false） */
-    animateJson?: boolean
     /** 折叠态：只渲染单行结果摘要，代码表/Diff/媒体等富节点不挂载。
      * 聊天虚拟滚动场景下非贴底跟随的工具行恒为折叠态——行高稳定，
      * 流式期间结果到达不再造成大幅高度变化与阅读位置漂移 */
     collapsed?: boolean
   }>(),
-  { hidePlainJson: false, animateJson: false, collapsed: false }
+  { hidePlainJson: false, collapsed: false }
 )
 
 let hljsModule: typeof import('highlight.js').default | null = null
@@ -323,25 +319,22 @@ watch(
     <div v-if="parsedResult?.note" class="tool-edit-note">{{ parsedResult.note }}</div>
   </div>
 
-  <!-- 容器始终渲染（v-else）：折叠/展开只翻转内部 JSON 块的 v-if，让
-       ElCollapseTransition 的 enter/leave 正常触发（若容器随内容一起挂载，
-       内部过渡会被视为初始渲染而吞掉）；无可见内容时隐藏 border 避免空线 -->
+  <!-- 容器始终渲染（v-else）：折叠/展开只翻转内部 JSON 块的 v-if；
+       无可见内容时隐藏 border 避免空线 -->
   <div v-else :class="['tool-fallback-result', { 'tool-fallback-hidden': !hasVisibleFallback }]">
-    <!-- 纯 JSON 转储：折叠态隐藏；高度过渡仅在 animateJson（用户点击过）时启用 -->
-    <Transition v-bind="animateJson ? collapseHooks : {}">
-      <div v-if="!hidePlainJson || isBareString" class="tool-fallback-json">
-        <pre class="tool-fallback-pre">{{ fallbackText }}</pre>
-        <el-button
-          :icon="CopyDocument"
-          link
-          size="small"
-          class="tool-fallback-copy"
-          @click="handleFallbackCopy"
-        >
-          复制
-        </el-button>
-      </div>
-    </Transition>
+    <!-- 纯 JSON 转储：折叠态隐藏 -->
+    <div v-if="!hidePlainJson || isBareString" class="tool-fallback-json">
+      <pre class="tool-fallback-pre">{{ fallbackText }}</pre>
+      <el-button
+        :icon="CopyDocument"
+        link
+        size="small"
+        class="tool-fallback-copy"
+        @click="handleFallbackCopy"
+      >
+        复制
+      </el-button>
+    </div>
     <!-- 文件结果：在返回数据下方追加预览/下载 -->
     <div v-if="isSaveFile && mediaInfo" class="tool-media-result">
       <div class="media-inline-preview">

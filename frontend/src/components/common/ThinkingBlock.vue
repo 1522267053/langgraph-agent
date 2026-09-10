@@ -43,11 +43,9 @@ const contentStyle = computed(() => ({
     </div>
 
     <!-- 内容区域 -->
-    <el-collapse-transition>
-      <div v-show="isExpanded" class="thinking-content" :style="contentStyle">
-        <pre>{{ content }}</pre>
-      </div>
-    </el-collapse-transition>
+    <div v-show="isExpanded" class="thinking-content" :style="contentStyle">
+      <pre>{{ content }}</pre>
+    </div>
   </div>
 </template>
 

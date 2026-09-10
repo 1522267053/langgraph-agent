@@ -33,31 +33,29 @@ function handleClose(): void {
 </script>
 
 <template>
-  <transition name="slide-left">
-    <div v-if="visible && todos.length > 0" class="todo-panel">
-      <div class="todo-panel-header">
-        <span class="todo-panel-title">任务计划</span>
-        <el-button :icon="Close" link size="small" @click="handleClose" />
-      </div>
-
-      <div class="todo-panel-progress">
-        <el-progress
-          :percentage="progressPercent"
-          :stroke-width="6"
-          :show-text="false"
-          status="success"
-        />
-        <div class="progress-stats">
-          <span>{{ completedCount }}/{{ totalCount }} 完成</span>
-          <span v-if="inProgressCount > 0" class="in-progress-count">
-            {{ inProgressCount }} 进行中
-          </span>
-        </div>
-      </div>
-
-      <TodoList :items="todos" />
+  <div v-if="visible && todos.length > 0" class="todo-panel">
+    <div class="todo-panel-header">
+      <span class="todo-panel-title">任务计划</span>
+      <el-button :icon="Close" link size="small" @click="handleClose" />
     </div>
-  </transition>
+
+    <div class="todo-panel-progress">
+      <el-progress
+        :percentage="progressPercent"
+        :stroke-width="6"
+        :show-text="false"
+        status="success"
+      />
+      <div class="progress-stats">
+        <span>{{ completedCount }}/{{ totalCount }} 完成</span>
+        <span v-if="inProgressCount > 0" class="in-progress-count">
+          {{ inProgressCount }} 进行中
+        </span>
+      </div>
+    </div>
+
+    <TodoList :items="todos" />
+  </div>
 </template>
 
 <style scoped>
