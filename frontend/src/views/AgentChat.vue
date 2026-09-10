@@ -62,30 +62,53 @@ const messagesRevealed = ref(false)
 // 收敛循环代际号：新一轮加载开始后旧循环自动失效，防止过早 reveal
 let convergeGeneration = 0
 
-// ---- 贴底跟随（由 TanStack Virtual end-anchored 聊天模式提供）----
-// anchorTo:'end' 下库内负责：流式行增长钉底、prepend 历史视口稳定、
-// followOnAppend 仅在贴底阈值内跟随新输出（autoScroll 偏好关闭时不跟随）。
-// 此处维护两个派生态：
-// - isAtEnd：几何贴底（回底按钮显隐），随滚动/虚拟化状态刷新
-// - followPinned：跟随锁存（门控最新工具行展开），仅用户上滚手势解除、
-//   回到贴底重新锁存——行高不反向耦合几何判定，杜绝展开/塌缩振荡
+// ---- 贴底跟随（TanStack Virtual end-anchored + 本地跟随强制器）----
+// anchorTo:'end' 提供 prepend 历史视口稳定与基础钉底；但库内 wasAtEnd
+// （虚拟距离门控）与 followOnAppend（元素距离门控）在估算先行入账/实测
+// 滞后的交错窗口会互相毒化导致跟随中断，由 syncAtEnd 内的强制器兜底。
+// 本地派生态：
+// - isAtEnd：元素距离贴底（回底按钮显隐）
+// - followPinned：跟随锁存（门控强制器与最新工具行展开），用户上滚手势
+//   解除、真正贴底（≤2px）重新锁存——行高不反向耦合几何判定，杜绝振荡
 const autoScroll = ref(true)
 const isAtEnd = ref(true)
 const followPinned = ref(true)
+/** 贴底阈值：按钮派生与跟随强制器共用的离底判定口径 */
+const SCROLL_END_THRESHOLD = 60
+
+// 内容增长检测基线：跟随强制器只在内容真正变高时出手，用户键盘翻页等
+// 无手势的滚动路径不会被误拉回底部
+let lastKnownScrollHeight = 0
 
 function syncAtEnd(): void {
-  const wrap = messagesContainer.value
-  if (!wrap) return
-  const next = rowVirtualizer.value.isAtEnd()
-  isAtEnd.value = next
-  // 仅在真实滚动事件中重锁存；塌缩/展开引发的几何变化不产生 scroll 事件
-  if (next) followPinned.value = true
+  const v = rowVirtualizer.value
+  const el = messagesContainer.value
+  if (!el) return
+  const grew = el.scrollHeight > lastKnownScrollHeight + 1
+  lastKnownScrollHeight = el.scrollHeight
+  // 贴底判定用元素距离（真实滚动空间口径）：跟随由下方强制器锚定在真实
+  // 底部，稳态 elDist≈0；虚拟距离（totalSize 口径）受估算先行/塌缩级联
+  // 双向污染，曾在 elDist 232px 时假报贴底、误重锁跟随锁存把上滚拽回
+  const elDist = Math.max(el.scrollHeight - el.scrollTop - el.clientHeight, 0)
+  isAtEnd.value = elDist <= SCROLL_END_THRESHOLD
+  // 重锁存仅在真正贴底（≤2px）时发生：上滚第一格 elDist 即超过该阈值，
+  // 杜绝滞后窗口中的假性重锁；用户手动滚回底部时正常重锁
+  if (elDist <= 2) followPinned.value = true
+  // [跟随强制器] 库内两套跟随门控在「估算先行入账、实测滞后补偿」的交错
+  // 窗口会互相毒化：totalSize 先跳变推高虚拟距离 → wasAtEnd 放弃补偿；
+  // 未测 DOM 抬高元素距离 → followOnAppend 拒绝触发，跟随就此中断。只要
+  // 锁存未解除、内容确实变高且不在真实底部，直接强制回底兜底
+  if (followPinned.value && autoScroll.value && grew && elDist > 4) {
+    v.scrollToEnd()
+  }
 }
 
 function scrollToLatest(): void {
   followPinned.value = true
+  // 乐观置位：scrollToEnd 的目标位置经 scroll 事件异步入账，立即 sync 会读到
+  // 滚动前的旧 scrollOffset 而误报离底
+  isAtEnd.value = true
   rowVirtualizer.value.scrollToEnd()
-  syncAtEnd()
 }
 
 /** 用户上滚手势：解除跟随锁存（真实输入才解除，程序化位移不影响） */
@@ -111,7 +134,7 @@ function handleScrollbarPointerDown(event: PointerEvent): void {
 }
 
 // 切窗口：隐藏期渲染暂停（rAF/RO 延迟）而流式内容照常增长，恢复可见时若
-// 隐藏前贴底则强制回底，随后的库内测量钉底（wasAtEnd）无缝接管
+// 隐藏前贴底则强制回底，随后的跟随强制器无缝接管
 let wasAtEndOnHide = true
 function handleVisibilityChange(): void {
   if (document.hidden) {
@@ -199,7 +222,7 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   // 阈值内跟随新输出（autoScroll 偏好关闭时不跟随，getter 保持响应式）
   anchorTo: 'end',
   followOnAppend: autoScroll.value,
-  scrollEndThreshold: 60
+  scrollEndThreshold: SCROLL_END_THRESHOLD
 })
 
 // 贴底补偿回调：保留行高实测缓存写入（未挂载行重挂的估值兜底），补偿规则
@@ -207,9 +230,10 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
 // 后向滚动时补偿（防 #1218 级联）。贴底钉住（anchorTo:'end' 的 wasAtEnd
 // 分支）的尺寸补偿在库内独立处理，不经过本回调
 rowVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
+  const first = !instance.itemSizeCache.has(item.key)
   if (delta !== 0) rememberRowSize(item.key, item.size + delta)
   const offset = (instance.scrollOffset ?? 0) + instance.scrollAdjustments
-  return !instance.itemSizeCache.has(item.key)
+  return first
     ? item.start < offset
     : item.start + item.size <= offset && instance.scrollDirection !== 'backward'
 }
@@ -794,6 +818,9 @@ function onEndReached(direction: ScrollbarDirection) {
 async function handleLoadMore() {
   if (!agentId.value || isLoadingMore.value) return
   isLoadingMore.value = true
+  // 历史前插会推高 scrollHeight，显式解除跟随锁存，防止跟随强制器把视口
+  // 拉回底部
+  followPinned.value = false
   try {
     // anchorTo:'end' 下前插历史按 keyed item 自动保持视口位置，无需手工锚行恢复
     await store.loadMoreMessages(agentId.value)
@@ -1248,7 +1275,8 @@ function handleRejectTools() {
     </el-scrollbar>
 
     <Transition v-if="!isWelcomeMode" name="jump-fade">
-      <div v-show="!isAtEnd" class="scroll-to-bottom-wrap">
+      <!-- 跟随进行中（锁存+自动滚动）即使瞬时离底（估算窗口）也不显示 -->
+      <div v-show="!isAtEnd && !(followPinned && autoScroll)" class="scroll-to-bottom-wrap">
         <div class="scroll-to-bottom" aria-label="回到底部" @click="scrollToLatest">
           <el-icon :size="16">
             <Bottom />
