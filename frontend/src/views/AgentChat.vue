@@ -116,8 +116,10 @@ const showStandaloneTyping = computed(() => {
   return !last || last.role !== 'ai' || last.displayType === 'context-summary'
 })
 
+// 贴底跟随（isAtBottom）门控最新工具行自动展开：上滚阅读时全部工具行折叠为
+// 摘要行，流式期间的程序性展开/收起不再造成行高突变与虚拟滚动位置漂移
 const chatRows = computed<ChatRow[]>(() =>
-  buildChatRows(store.chatMessages, showStandaloneTyping.value, store.isStreaming)
+  buildChatRows(store.chatMessages, showStandaloneTyping.value, store.isStreaming, isAtBottom.value)
 )
 
 // 展示开关：声明须在 rowVirtualizer 之前（estimateSize 闭包在 setup 期间同步求值）
@@ -1025,6 +1027,8 @@ async function executeRevert(mode: RevertMode) {
       const res = await agentApi.restoreFilesOnly(agentId.value, store.currentSession.id, msgId)
       if (res.data.code === 1) {
         notifyFileRestore(res.data.data.reverted_files, res.data.data.ok_count)
+        // 批量回退在后端标记 is_reverted，重拉对齐 badge 与面板
+        void store.fetchFileChanges()
         revertDialog.visible = false
       }
       return
@@ -1036,6 +1040,8 @@ async function executeRevert(mode: RevertMode) {
       // 回退后列表缩短，强制贴底（不受 RO 跟随开关与用户位置限制）
       scrollToBottom()
       notifyFileRestore(deleted.reverted_files ?? [])
+      // 批量回退在后端标记 is_reverted，重拉对齐 badge 与面板
+      void store.fetchFileChanges()
       ElMessage.success({ message: '已回退，可重新发送', duration: 5000 })
     }
     revertDialog.visible = false
@@ -1160,9 +1166,9 @@ function handleRejectTools() {
         <div class="header-overflow-wrapper">
           <el-tooltip content="文件变更" placement="bottom">
             <el-badge
-              :value="store.fileChanges.length"
+              :value="store.fileChangesCount"
               :max="9"
-              :hidden="store.fileChanges.length === 0"
+              :hidden="store.fileChangesCount === 0"
               :offset="[-4, 4]"
             >
               <button
@@ -1209,8 +1215,8 @@ function handleRejectTools() {
               <el-dropdown-item command="files">
                 <el-icon class="overflow-item-icon"><Document /></el-icon>
                 文件变更
-                <span v-if="store.fileChanges.length > 0" class="overflow-item-badge">
-                  {{ store.fileChanges.length > 9 ? '9+' : store.fileChanges.length }}
+                <span v-if="store.fileChangesCount > 0" class="overflow-item-badge">
+                  {{ store.fileChangesCount > 9 ? '9+' : store.fileChangesCount }}
                 </span>
               </el-dropdown-item>
               <el-dropdown-item command="compress" :disabled="store.isCompressing">

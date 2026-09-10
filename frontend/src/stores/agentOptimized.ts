@@ -227,7 +227,8 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   // ========== 文件变更（侧栏 Diff 面板） ==========
-  // 列表缓存：按文件路径聚合（最新一条覆盖旧记录）
+  // 列表缓存：与后端逐条记录口径一致（每次成功改动一条，同文件多次编辑多条共存）；
+  // 已撤销条目仅本地标记（拉取时后端已过滤 is_reverted），badge 数量用 fileChangesCount
   const fileChanges = ref<AgentFileChangeBase[]>([])
   const fileChangesLoading = ref(false)
   // 请求序号守卫：会话快速切换时丢弃过期回包（最新请求胜出）
@@ -245,6 +246,8 @@ export const useAgentStore = defineStore('agent', () => {
   const activeFileChangeDiffLoading = ref(false)
   // 单条撤销后的回执消息 key
   const lastRevertedChangeId = ref<number | null>(null)
+  /** 未撤销变更数：右上角「文件」badge 口径，与后端拉取的 is_reverted=0 过滤一致 */
+  const fileChangesCount = computed(() => fileChanges.value.filter(c => !c.is_reverted).length)
 
   // ========== 压缩上下文状态 ==========
   const isCompressing = ref(false)
@@ -1686,12 +1689,16 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   /**
-   * SSE file_changed 事件：实时增量更新列表（按 file_path 去重）
+   * SSE file_changed 事件：实时增量更新列表（与后端「每次成功改动一条记录」口径一致）。
+   * 仅按 change_id 幂等去重（SSE 重连会回放事件，重复投递需忽略）；不按 file_path
+   * 替换——同一文件的多次编辑是可独立回退的多条记录，按文件聚合会让早期记录从
+   * 面板消失，badge 数量也与后端拉取口径不一致
    */
   function onFileChanged(event: SSEEvent) {
     const data = event.data
+    const changeId = (data.change_id as number) ?? 0
     const newItem: AgentFileChangeBase = {
-      id: (data.change_id as number) ?? 0,
+      id: changeId,
       file_path: (data.file_path as string) || '',
       change_type: ((data.change_type as string) || 'modify') as AgentFileChangeBase['change_type'],
       tool_name: (data.tool_name as string) || '',
@@ -1700,16 +1707,9 @@ export const useAgentStore = defineStore('agent', () => {
       has_backup: data.change_type !== 'delete'
     }
     if (!newItem.file_path) return
-    // 同一文件已有更新记录则替换（按 file_path 去重）
-    const idx = fileChanges.value.findIndex(c => c.file_path === newItem.file_path)
-    if (idx >= 0) {
-      // 复制为新数组再赋值，避免 Vue 对响应式数组项属性赋值漏触发
-      const next = fileChanges.value.slice()
-      next[idx] = newItem
-      fileChanges.value = next
-    } else {
-      fileChanges.value = [newItem, ...fileChanges.value]
-    }
+    // 重连回放幂等：同 change_id 已存在则忽略
+    if (changeId > 0 && fileChanges.value.some(c => c.id === changeId)) return
+    fileChanges.value = [newItem, ...fileChanges.value]
   }
 
   /**
@@ -2096,6 +2096,7 @@ export const useAgentStore = defineStore('agent', () => {
     currentQuestionId,
     // 文件变更 Diff
     fileChanges,
+    fileChangesCount,
     fileChangesLoading,
     activeFileChangeId,
     activeFileChangeDiff,
