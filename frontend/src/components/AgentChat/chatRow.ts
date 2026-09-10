@@ -24,7 +24,7 @@ export interface ChatRow {
   segmentIndex?: number
   /** 是否为列表最后一条消息（流式指示器定位） */
   isLast: boolean
-  /** 贴底跟随中时，属于最后一轮工具调用的 tool 段行自动展开（默认展开态的行级判定） */
+  /** 工具展开窗口内（流式中/结束缓冲期），属于该 AI 回合的 tool 段行自动展开（默认展开态的行级判定） */
   isLatestTool?: boolean
 }
 
@@ -55,16 +55,12 @@ export function clearRowSizeCache(): void {
 /**
  * 将消息列表拍平为虚拟行
  * @param showStandaloneTyping 流式中但最后一条不是 AI 消息时，追加独立输入指示器行
- * @param isStreaming 流式进行中
- * @param followBottom 贴底跟随中时，最后一轮工具调用的 tool 段行默认展开；
- * 上滚阅读时全部工具行折叠为摘要行——程序性展开/收起的行高突变会触发滚动
- * 补偿与视口位移，把用户正在阅读的位置拉走
+ * @param toolExpandActive 工具展开窗口：流式进行中，或流式结束后短暂缓冲期内
  */
 export function buildChatRows(
   chatMessages: StreamingMessage[],
   showStandaloneTyping: boolean,
-  isStreaming: boolean,
-  followBottom: boolean
+  toolExpandActive: boolean
 ): ChatRow[] {
   const rows: ChatRow[] = []
 
@@ -104,17 +100,22 @@ export function buildChatRows(
   if (showStandaloneTyping) {
     rows.push({ key: 'typing', kind: 'typing', part: 'single', msg: null, isLast: true })
   }
-  if (isStreaming && followBottom) {
-    // 最后一轮工具调用默认展开：一轮 LLM 响应可并行发起多个工具，
-    // 对应最后一个非 tool 的 AI 段之后的连续 tool 段
-    const lastNonToolIdx = rows.findLastIndex(
-      row => row.kind === 'ai' && row.segment?.type !== 'tool'
-    )
-    rows.forEach((row, i) => {
-      if (i > lastNonToolIdx && row.kind === 'ai' && row.segment?.type === 'tool') {
-        row.isLatestTool = true
+  if (toolExpandActive) {
+    // 展开窗口内（流式中 + 结束缓冲期）的 AI 回合（列表末条消息）内的全部
+    // tool 段默认展开，窗口结束后统一回摘要（业界模式：展开状态随内容生命
+    // 周期变化，与滚动位置解耦——上滚阅读不影响展开态）。不做「最后一个非
+    // tool 段之后」的边界判定：工具之后开始写正文/插入思考/多轮工具时边界
+    // 后移，已完成工具会流式中途收缩。上一条 AI 消息以 tool 收尾 + 本轮
+    // 人类消息的组合，因 isLast 守卫不会被误展开
+    const lastAiIdx = rows.findLastIndex(row => row.kind === 'ai')
+    if (lastAiIdx >= 0 && rows[lastAiIdx].isLast) {
+      const lastAiRow = rows[lastAiIdx]
+      for (let i = lastAiIdx; i >= 0; i--) {
+        const row = rows[i]
+        if (row.kind !== 'ai' || row.msg !== lastAiRow.msg) break
+        if (row.segment?.type === 'tool') row.isLatestTool = true
       }
-    })
+    }
   }
   return rows
 }
@@ -260,7 +261,7 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
                 )
           break
         case 'tool': {
-          // 展开态判定与渲染层一致：手动操作覆盖 > 贴底跟随中的流式最新工具默认展开。
+          // 展开态判定与渲染层一致：手动操作覆盖 > 流式中最新轮工具默认展开。
           // 展开真实上限 ~555px（头部 40 + args 150 + 结果 400 等封顶组合，各部件
           // 均有 max-height）；折叠态 = 头部 40 + 单行结果摘要 ~28 + 边框/边距 ~17。
           // 估值仅作流式最新工具/无实测行的首帧占位——手动展开只发生在已挂载行

@@ -68,20 +68,20 @@ let convergeGeneration = 0
 // 滞后的交错窗口会互相毒化导致跟随中断，由 syncAtEnd 内的强制器兜底。
 // 本地派生态：
 // - isAtEnd：元素距离贴底（回底按钮显隐）
-// - followPinned：跟随锁存（门控强制器与最新工具行展开），用户上滚手势
-//   解除、真正贴底（≤2px）重新锁存——行高不反向耦合几何判定，杜绝振荡
+// - followPinned：跟随锁存（门控跟随强制器），用户上滚手势解除、真正贴底
+//   （≤2px）重新锁存——行高不反向耦合几何判定，杜绝振荡
 const autoScroll = ref(true)
 const isAtEnd = ref(true)
 const followPinned = ref(true)
-/** 贴底阈值：按钮派生与跟随强制器共用的离底判定口径 */
-const SCROLL_END_THRESHOLD = 60
+/** 贴底阈值系数：按钮派生的离底判定 = 视口高度 × 系数（借鉴 Nuxt UI
+ * ChatMessages 的视口比例哨兵思路），固定像素在大屏上偏小 */
+const SCROLL_END_VIEWPORT_RATIO = 0.15
 
 // 内容增长检测基线：跟随强制器只在内容真正变高时出手，用户键盘翻页等
 // 无手势的滚动路径不会被误拉回底部
 let lastKnownScrollHeight = 0
 
 function syncAtEnd(): void {
-  const v = rowVirtualizer.value
   const el = messagesContainer.value
   if (!el) return
   const grew = el.scrollHeight > lastKnownScrollHeight + 1
@@ -90,25 +90,28 @@ function syncAtEnd(): void {
   // 底部，稳态 elDist≈0；虚拟距离（totalSize 口径）受估算先行/塌缩级联
   // 双向污染，曾在 elDist 232px 时假报贴底、误重锁跟随锁存把上滚拽回
   const elDist = Math.max(el.scrollHeight - el.scrollTop - el.clientHeight, 0)
-  isAtEnd.value = elDist <= SCROLL_END_THRESHOLD
+  isAtEnd.value = elDist <= el.clientHeight * SCROLL_END_VIEWPORT_RATIO
   // 重锁存仅在真正贴底（≤2px）时发生：上滚第一格 elDist 即超过该阈值，
   // 杜绝滞后窗口中的假性重锁；用户手动滚回底部时正常重锁
   if (elDist <= 2) followPinned.value = true
   // [跟随强制器] 库内两套跟随门控在「估算先行入账、实测滞后补偿」的交错
   // 窗口会互相毒化：totalSize 先跳变推高虚拟距离 → wasAtEnd 放弃补偿；
-  // 未测 DOM 抬高元素距离 → followOnAppend 拒绝触发，跟随就此中断。只要
-  // 锁存未解除、内容确实变高且不在真实底部，直接强制回底兜底
+  // 未测 DOM 抬高元素距离 → followOnAppend 拒绝触发，跟随就此中断。
+  // 只要锁存未解除、内容确实变高且不在真实底部，直接写 scrollTop 回底。
+  // 必须直写而非 scrollToEnd/scrollToOffset——库内全部滚动 API 都会武装
+  // 5s 追底 reconcile rAF 循环，流式期间每帧把 scrollTop 写回（增长的）
+  // 底部，无视跟随锁存把用户上滚拽回（virtuoso followOutput 同款直写模式）
   if (followPinned.value && autoScroll.value && grew && elDist > 4) {
-    v.scrollToEnd()
+    el.scrollTop = el.scrollHeight
   }
 }
 
 function scrollToLatest(): void {
   followPinned.value = true
-  // 乐观置位：scrollToEnd 的目标位置经 scroll 事件异步入账，立即 sync 会读到
-  // 滚动前的旧 scrollOffset 而误报离底
   isAtEnd.value = true
-  rowVirtualizer.value.scrollToEnd()
+  // 直写 scrollTop：理由同强制器注释，不走库内滚动 API
+  const el = messagesContainer.value
+  if (el) el.scrollTop = el.scrollHeight
 }
 
 /** 用户上滚手势：解除跟随锁存（真实输入才解除，程序化位移不影响） */
@@ -160,15 +163,36 @@ const showStandaloneTyping = computed(() => {
   return !last || last.role !== 'ai' || last.displayType === 'context-summary'
 })
 
-// 跟随锁存（followPinned）门控最新工具行自动展开：上滚阅读时全部工具行折叠为
-// 摘要行，流式期间的程序性展开/收起不再造成行高突变与虚拟滚动位置漂移
+// 工具行展开窗口：流式进行中为 true；流式结束后延迟 500ms 才收起（借鉴
+// Nuxt UI ChatReasoning 的 autoCloseDelay，结束瞬间立即回摘要太突兀，缓冲
+// 让最后一帧稳定）。展开态只随内容生命周期变化，与滚动位置解耦（业界模式）
+// ——chatRows 不依赖 followPinned
+const TOOL_COLLAPSE_DELAY = 500
+const toolExpandActive = ref(store.isStreaming)
+let collapseTimer: ReturnType<typeof setTimeout> | undefined
+watch(
+  () => store.isStreaming,
+  streaming => {
+    if (streaming) {
+      if (collapseTimer) {
+        clearTimeout(collapseTimer)
+        collapseTimer = undefined
+      }
+      toolExpandActive.value = true
+      return
+    }
+    collapseTimer = setTimeout(() => {
+      collapseTimer = undefined
+      if (!store.isStreaming) toolExpandActive.value = false
+    }, TOOL_COLLAPSE_DELAY)
+  }
+)
+onUnmounted(() => {
+  if (collapseTimer) clearTimeout(collapseTimer)
+})
+
 const chatRows = computed<ChatRow[]>(() =>
-  buildChatRows(
-    store.chatMessages,
-    showStandaloneTyping.value,
-    store.isStreaming,
-    followPinned.value
-  )
+  buildChatRows(store.chatMessages, showStandaloneTyping.value, toolExpandActive.value)
 )
 
 // 展示开关：声明须在 rowVirtualizer 之前（estimateSize 闭包在 setup 期间同步求值）
@@ -217,12 +241,17 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
     }),
   overscan: 8,
   getItemKey: (index: number) => chatRows.value[index]?.key ?? String(index),
-  // 官方聊天模式（virtual-core 3.17+）：列表末端为稳定锚——prepend 历史按
-  // keyed item 自动保持视口、流式行增长自动钉底、followOnAppend 仅在贴底
-  // 阈值内跟随新输出（autoScroll 偏好关闭时不跟随，getter 保持响应式）
+  // 官方聊天模式（virtual-core 3.17+）：anchorTo:'end' 提供 prepend 历史的
+  // keyed 视口稳定。流式跟随不交给库内——wasAtEnd（虚拟距离门控）与
+  // followOnAppend（元素距离门控）在估算滞后窗口互相毒化，且 followOnAppend
+  // 内部走 scrollToEnd 会武装 5s 追底 reconcile 循环与用户上滚冲突，
+  // 统一由 syncAtEnd 的强制器直写 scrollTop 接管
   anchorTo: 'end',
-  followOnAppend: autoScroll.value,
-  scrollEndThreshold: SCROLL_END_THRESHOLD
+  followOnAppend: false,
+  // 库内 wasAtEnd 阈值同口径按视口比例（getter 保持响应式，挂载后取到实际高度）
+  get scrollEndThreshold() {
+    return Math.round((messagesContainer.value?.clientHeight ?? 600) * SCROLL_END_VIEWPORT_RATIO)
+  }
 })
 
 // 贴底补偿回调：保留行高实测缓存写入（未挂载行重挂的估值兜底），补偿规则
@@ -730,9 +759,10 @@ function convergeScrollToBottom(): void {
   }
   const finish = () => {
     // 强制贴底并锁存跟随：防止收敛期 scroll 事件的几何重算把贴底判定翻成
-    // false 残留，后续流式钉底由 end-anchored 的 wasAtEnd 分支接管
+    // false 残留，后续流式钉底由跟随强制器接管；直写 scrollTop 不武装
+    // 库内追底 reconcile 循环（理由见 syncAtEnd 注释）
     followPinned.value = true
-    rowVirtualizer.value.scrollToEnd()
+    wrap.scrollTop = wrap.scrollHeight
     messagesRevealed.value = true
   }
   const tick = () => {
@@ -747,7 +777,7 @@ function convergeScrollToBottom(): void {
         lastHeight = height
         lastChangeAt = now
       }
-      rowVirtualizer.value.scrollToEnd()
+      wrap.scrollTop = wrap.scrollHeight
       // 收敛批次间存在短暂平台期（刷新冷启动时更明显）：至少骑 600ms + 高度
       // 连续 250ms 不变才认定收敛并显示
       const elapsed = now - startAt
@@ -762,12 +792,12 @@ function convergeScrollToBottom(): void {
       // follow：高度变化（reveal 引发的重排/晚到内容）才跟随，静止 400ms 或
       // 跟随满 1s 后退出
       if (height !== lastHeight) {
-        rowVirtualizer.value.scrollToEnd()
+        wrap.scrollTop = wrap.scrollHeight
         lastHeight = height
         lastChangeAt = now
       }
       if (now - lastChangeAt >= 400 || now >= followUntil) {
-        rowVirtualizer.value.scrollToEnd()
+        wrap.scrollTop = wrap.scrollHeight
         cleanup()
         return
       }
@@ -796,8 +826,8 @@ watch(
   () => store.messageRefreshVersion,
   async () => {
     await nextTick()
-    // 流结束的消息刷新/删除/回退后刷新贴底派生态；跟随语义由库内
-    // followOnAppend 与锚定接管，此处仅同步按钮与锁存状态
+    // 流结束的消息刷新/删除/回退后刷新贴底派生态；跟随语义由强制器与
+    // 锚定接管，此处仅同步按钮与锁存状态
     syncAtEnd()
   }
 )
