@@ -15,8 +15,12 @@ const props = withDefaults(
     /** 纯 JSON 块显隐是否带高度过渡（仅用户点击过的聊天工具行为 true，
      * 程序性翻转瞬时完成；Flow 执行面板等列表场景恒为 false） */
     animateJson?: boolean
+    /** 折叠态：只渲染单行结果摘要，代码表/Diff/媒体等富节点不挂载。
+     * 聊天虚拟滚动场景下非贴底跟随的工具行恒为折叠态——行高稳定，
+     * 流式期间结果到达不再造成大幅高度变化与阅读位置漂移 */
+    collapsed?: boolean
   }>(),
-  { hidePlainJson: false, animateJson: false }
+  { hidePlainJson: false, animateJson: false, collapsed: false }
 )
 
 let hljsModule: typeof import('highlight.js').default | null = null
@@ -167,6 +171,16 @@ const mediaInfo = computed(() => {
   }
 })
 
+/** 折叠态单行结果摘要：复用富视图的 meta 信息一行说清结果概况；
+ * 纯 JSON 结果（其他工具）返回空串，由模板隐藏摘要行 */
+const collapsedSummary = computed(() => {
+  if (isFileRead.value) return `${filePath.value}（${fileReadMeta.value}）`
+  if (isTextEditor.value) return `${filePath.value}（${textEditorInfo.value}）`
+  if (mediaInfo.value) return mediaInfo.value.file_name || '生成文件'
+  if (isBareString.value) return String(props.result).trim().slice(0, 200)
+  return ''
+})
+
 const copyText = computed(() => {
   if (isFileRead.value) {
     return fileReadCodeLines.value.map(l => l.text).join('\n')
@@ -219,6 +233,9 @@ async function handleFallbackCopy() {
 }
 
 async function updateHighlighting() {
+  // 折叠态不挂载代码表，跳过 hljs 加载与逐行高亮；展开（collapsed 翻转）时
+  // 由 watch 重新触发补齐
+  if (props.collapsed) return
   await loadHljs()
   if (!hljsModule) return
 
@@ -236,7 +253,7 @@ async function updateHighlighting() {
 }
 
 watch(
-  () => [props.toolName, props.result],
+  () => [props.toolName, props.result, props.collapsed],
   () => {
     nextTick(() => updateHighlighting())
   },
@@ -245,7 +262,13 @@ watch(
 </script>
 
 <template>
-  <div v-if="isFileRead" class="tool-read-result">
+  <!-- 折叠态：单行结果摘要，富节点（代码表/Diff/媒体）不挂载——聊天虚拟滚动
+       场景下折叠行高稳定，流式期间结果到达不造成行高突变与位置漂移 -->
+  <div v-if="collapsed" class="tool-result-summary" :class="{ 'is-empty': !collapsedSummary }">
+    {{ collapsedSummary }}
+  </div>
+
+  <div v-else-if="isFileRead" class="tool-read-result">
     <div class="tool-result-header">
       <div class="tool-result-meta">
         <span class="tool-result-path" :title="filePath">{{ filePath }}</span>
@@ -519,6 +542,24 @@ watch(
 
 .tool-fallback-copy:hover {
   color: #409eff;
+}
+
+/* 折叠态单行结果摘要：替代富视图占位，行高稳定 */
+.tool-result-summary {
+  border-top: 1px solid #e2e8f0;
+  background: rgba(248, 250, 252, 0.8);
+  padding: 8px 16px;
+  font-size: 12px;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 无摘要内容（纯 JSON 结果折叠）时隐藏，避免头部下出现空线与空占位 */
+.tool-result-summary.is-empty {
+  display: none;
 }
 
 .tool-media-result {

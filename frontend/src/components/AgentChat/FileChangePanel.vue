@@ -1,7 +1,7 @@
 <template>
   <!--
     文件变更 Diff 面板（侧栏/抽屉）
-    - 列表：当前会话所有未回退的文件变更（按文件路径聚合）
+    - 列表：当前会话所有未回退的文件变更（每次成功改动一条记录，同文件多次编辑多条共存）
     - 详情：选中一条时显示 backup → current 的 line-level diff
     - 操作：单条「撤销此变更」按钮（已撤销项置灰）
   -->
@@ -20,7 +20,7 @@
             <Document />
           </el-icon>
           文件变更
-          <span v-if="fileChanges.length > 0" class="badge">{{ fileChanges.length }}</span>
+          <span v-if="fileChangesCount > 0" class="badge">{{ fileChangesCount }}</span>
         </span>
         <el-button link :icon="Refresh" :loading="fileChangesLoading" title="刷新" @click="refresh" />
       </div>
@@ -111,6 +111,7 @@ const defaultViewMode = computed(() => (isMobile.value ? 'line-by-line' : 'side-
 const store = useAgentStore()
 const {
   fileChanges,
+  fileChangesCount,
   fileChangesLoading,
   activeFileChangeId,
   activeFileChangeDiff,

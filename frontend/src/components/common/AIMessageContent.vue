@@ -293,9 +293,10 @@ watch(
           <ArrowRight />
         </el-icon>
       </div>
-      <!-- 子Agent实时输出预览（call_sub_agent_* 工具执行中展示，完成后由最终结果替代） -->
+      <!-- 子Agent实时输出预览（call_sub_agent_* 工具执行中展示，完成后由最终结果替代）；
+           折叠态不挂载——阅读时实时输出到达不再撑高行造成位置漂移 -->
       <div
-        v-if="segment.tool.status === 'running' && segment.tool.liveOutput"
+        v-if="toolBodyVisible && segment.tool.status === 'running' && segment.tool.liveOutput"
         class="tool-live-wrapper"
       >
         <div class="tool-live-label">
@@ -329,13 +330,15 @@ watch(
       <!-- 结果：完成时滑入淡入动画。不用 Transition 组件（流式 patch 场景下 enter
            hook 时序不稳定），改用 CSS keyframe——元素插入时必然播放一次；动画类仅
            流式中的最后消息携带，历史/Flow 面板静态渲染，虚拟滚动重挂不重播。
-           折叠态仅隐藏纯 JSON 转储（富结果/裸字符串/错误详情仍展示） -->
+           折叠态渲染单行结果摘要（错误详情仍完整展示），代码表/Diff/媒体等富节点
+           不挂载——行高稳定，流式期间结果到达不再造成虚拟滚动位置漂移 -->
       <div v-if="segment.tool.result !== undefined" :class="{ 'tool-result-in': isStreaming }">
         <ToolResultViewer
           :tool-name="segment.tool.name"
           :result="segment.tool.result"
           :hide-plain-json="!toolBodyVisible && segment.tool.status !== 'error'"
           :animate-json="toolAnimate"
+          :collapsed="!!expandKey && !toolBodyVisible && segment.tool.status !== 'error'"
         />
       </div>
       <pre
