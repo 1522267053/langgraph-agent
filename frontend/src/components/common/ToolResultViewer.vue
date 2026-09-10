@@ -11,12 +11,15 @@ const props = withDefaults(
     result: unknown
     /** 仅展示富结果（文件读取/编辑/媒体预览下载），纯 JSON 回退不渲染 */
     hidePlainJson?: boolean
-    /** 折叠态：只渲染单行结果摘要，代码表/Diff/媒体等富节点不挂载。
-     * 聊天虚拟滚动场景下非贴底跟随的工具行恒为折叠态——行高稳定，
-     * 流式期间结果到达不再造成大幅高度变化与阅读位置漂移 */
+    /** 折叠态：只渲染单行结果摘要（生成媒体附内联下载按钮，预览展开后
+     * 渲染），代码表/Diff/媒体预览等富节点不挂载——聊天虚拟滚动场景下工具
+     * 行恒为折叠态，行高稳定，流式期间结果到达不再造成大幅高度变化与阅读
+     * 位置漂移 */
     collapsed?: boolean
+    /** 工具执行状态：error 时折叠摘要展示错误信息首行 */
+    status?: 'running' | 'success' | 'error'
   }>(),
-  { hidePlainJson: false, collapsed: false }
+  { hidePlainJson: false, collapsed: false, status: undefined }
 )
 
 let hljsModule: typeof import('highlight.js').default | null = null
@@ -167,9 +170,17 @@ const mediaInfo = computed(() => {
   }
 })
 
-/** 折叠态单行结果摘要：复用富视图的 meta 信息一行说清结果概况；
- * 纯 JSON 结果（其他工具）返回空串，由模板隐藏摘要行 */
+/** 折叠态单行结果摘要：复用富视图的 meta 信息一行说清结果概况；错误取
+ * 错误信息首行；纯 JSON 结果（其他工具）返回空串，由模板隐藏摘要行 */
 const collapsedSummary = computed(() => {
+  if (props.status === 'error') {
+    const r = parsedResult.value
+    let raw = ''
+    if (typeof r?.error === 'string') raw = r.error
+    else if (typeof r?.message === 'string') raw = r.message
+    else if (props.result != null) raw = String(props.result)
+    return raw.split('\n')[0].trim().slice(0, 200) || '执行失败'
+  }
   if (isFileRead.value) return `${filePath.value}（${fileReadMeta.value}）`
   if (isTextEditor.value) return `${filePath.value}（${textEditorInfo.value}）`
   if (mediaInfo.value) return mediaInfo.value.file_name || '生成文件'
@@ -261,7 +272,22 @@ watch(
   <!-- 折叠态：单行结果摘要，富节点（代码表/Diff/媒体）不挂载——聊天虚拟滚动
        场景下折叠行高稳定，流式期间结果到达不造成行高突变与位置漂移 -->
   <div v-if="collapsed" class="tool-result-summary" :class="{ 'is-empty': !collapsedSummary }">
-    {{ collapsedSummary }}
+    <span class="tool-result-summary-text" :class="{ 'is-error': status === 'error' }">
+      {{ collapsedSummary }}
+    </span>
+    <!-- 生成媒体折叠态仅保留下载入口，预览展开后才渲染 -->
+    <el-button
+      v-if="mediaInfo?.download_url"
+      :icon="Download"
+      link
+      size="small"
+      class="tool-result-summary-download"
+      tag="a"
+      :href="mediaInfo.download_url"
+      :download="mediaInfo.file_name"
+    >
+      下载
+    </el-button>
   </div>
 
   <div v-else-if="isFileRead" class="tool-read-result">
@@ -545,9 +571,25 @@ watch(
   font-size: 12px;
   font-family: 'Fira Code', 'Consolas', monospace;
   color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-result-summary-text {
+  min-width: 0;
+  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.tool-result-summary-text.is-error {
+  color: #ef4444;
+}
+
+.tool-result-summary-download {
+  flex-shrink: 0;
 }
 
 /* 无摘要内容（纯 JSON 结果折叠）时隐藏，避免头部下出现空线与空占位 */

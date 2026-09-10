@@ -62,7 +62,6 @@ const emit = defineEmits<{
     :show-end-output="showEndOutput"
     :is-streaming="isStreaming"
     :is-last="!!row.isLast"
-    :is-latest-tool="!!row.isLatestTool"
     :expand-key="row.key"
     @delete="m => emit('delete', m)"
     @revert="dbMsgId => emit('revert', dbMsgId)"

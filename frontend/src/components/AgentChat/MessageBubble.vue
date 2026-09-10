@@ -27,9 +27,7 @@ const props = defineProps<{
   isStreaming: boolean
   /** 是否为列表最后一条消息（流式指示器定位） */
   isLast: boolean
-  /** 工具块交互：本行是否为流式中的最新工具段（默认展开态判定） */
-  isLatestTool: boolean
-  /** 工具块交互：本行展开状态存取 key（虚拟行 key） */
+  /** 工具块交互：本行展开状态存放 key（虚拟行 key） */
   expandKey: string
 }>()
 
@@ -124,7 +122,6 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
           :show-thinking="showThinking"
           :is-streaming="segmentStreaming"
           :disable-actions="isStreaming"
-          :is-latest-tool="isLatestTool"
           :expand-key="expandKey"
           @revert="dbMsgId => emit('revert', dbMsgId)"
         />
