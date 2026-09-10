@@ -28,8 +28,6 @@ const props = withDefaults(
     isMsgThinkingInProgress?: boolean
     /** 聊天折叠交互：传入后工具块头部可点击展开/收起，key 为虚拟行 key */
     expandKey?: string
-    /** 聊天折叠交互：本段是否为流式中的最新工具段（默认展开态判定） */
-    isLatestTool?: boolean
   }>(),
   {
     showThinking: true,
@@ -39,8 +37,7 @@ const props = withDefaults(
     isMsgLastSegment: true,
     isMsgLastContent: true,
     isMsgThinkingInProgress: false,
-    expandKey: '',
-    isLatestTool: false
+    expandKey: ''
   }
 )
 
@@ -111,24 +108,19 @@ const { open: openKnowledgeReference } = useKnowledgeReferenceDrawer()
 
 // ---- 工具块折叠交互（聊天段级模式：传入 expandKey 后启用） ----
 
-/** 工具块头部可点击折叠；流式中的最后一轮工具调用强制展开、禁止收起，
- * 不显示点击手势与箭头 */
-const isToolInteractive = computed(() => !!props.expandKey && !props.isLatestTool)
+/** 工具块头部可点击展开/收起；列表模式（无 expandKey）不可交互、始终展开 */
+const isToolInteractive = computed(() => !!props.expandKey)
 
 /** 工具块内容（入参/结果/错误/加载）显隐：
- * 聊天模式 = 流式最后一轮工具调用强制展开（不允许收缩）；
- * 其余 = 手动操作覆盖 ?? 默认折叠；
+ * 聊天模式 = 手动操作覆盖 ?? 默认折叠（业界模式：工具默认状态行，点击回看）；
  * 列表模式（Flow 执行面板等）始终展开 */
 const toolBodyVisible = computed(() => {
-  if (props.expandKey) {
-    if (props.isLatestTool) return true
-    return getBlockExpandOverride(props.expandKey) ?? props.isLatestTool
-  }
+  if (props.expandKey) return getBlockExpandOverride(props.expandKey) ?? false
   return true
 })
 
 function toggleToolBody(): void {
-  if (!props.expandKey || props.isLatestTool) return
+  if (!props.expandKey) return
   toggleBlockExpand(props.expandKey, !toolBodyVisible.value)
 }
 
@@ -278,8 +270,7 @@ watch(
                 : '完成'
           }}
         </span>
-        <!-- 折叠交互：箭头指向提示可点击，展开时旋转 90°；流式最后一轮工具
-             强制展开不可点击，不显示箭头 -->
+        <!-- 折叠交互：箭头指向提示可点击，展开时旋转 90° -->
         <el-icon
           v-if="isToolInteractive"
           :class="['tool-expand-arrow', { 'is-expanded': toolBodyVisible }]"
@@ -321,14 +312,16 @@ watch(
       <!-- 结果：完成时滑入淡入动画。不用 Transition 组件（流式 patch 场景下 enter
            hook 时序不稳定），改用 CSS keyframe——元素插入时必然播放一次；动画类仅
            流式中的最后消息携带，历史/Flow 面板静态渲染，虚拟滚动重挂不重播。
-           折叠态渲染单行结果摘要（错误详情仍完整展示），代码表/Diff/媒体等富节点
-           不挂载——行高稳定，流式期间结果到达不再造成虚拟滚动位置漂移 -->
+           折叠态渲染单行结果摘要（错误为错误信息首行），代码表/Diff/媒体预览等
+           富节点不挂载（生成媒体仅内联下载按钮）——行高稳定，流式期间结果到达
+           不再造成虚拟滚动位置漂移 -->
       <div v-if="segment.tool.result !== undefined" :class="{ 'tool-result-in': isStreaming }">
         <ToolResultViewer
           :tool-name="segment.tool.name"
           :result="segment.tool.result"
-          :hide-plain-json="!toolBodyVisible && segment.tool.status !== 'error'"
-          :collapsed="!!expandKey && !toolBodyVisible && segment.tool.status !== 'error'"
+          :status="segment.tool.status"
+          :hide-plain-json="!toolBodyVisible"
+          :collapsed="!!expandKey && !toolBodyVisible"
         />
       </div>
       <pre

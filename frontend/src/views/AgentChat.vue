@@ -163,36 +163,10 @@ const showStandaloneTyping = computed(() => {
   return !last || last.role !== 'ai' || last.displayType === 'context-summary'
 })
 
-// 工具行展开窗口：流式进行中为 true；流式结束后延迟 500ms 才收起（借鉴
-// Nuxt UI ChatReasoning 的 autoCloseDelay，结束瞬间立即回摘要太突兀，缓冲
-// 让最后一帧稳定）。展开态只随内容生命周期变化，与滚动位置解耦（业界模式）
-// ——chatRows 不依赖 followPinned
-const TOOL_COLLAPSE_DELAY = 500
-const toolExpandActive = ref(store.isStreaming)
-let collapseTimer: ReturnType<typeof setTimeout> | undefined
-watch(
-  () => store.isStreaming,
-  streaming => {
-    if (streaming) {
-      if (collapseTimer) {
-        clearTimeout(collapseTimer)
-        collapseTimer = undefined
-      }
-      toolExpandActive.value = true
-      return
-    }
-    collapseTimer = setTimeout(() => {
-      collapseTimer = undefined
-      if (!store.isStreaming) toolExpandActive.value = false
-    }, TOOL_COLLAPSE_DELAY)
-  }
-)
-onUnmounted(() => {
-  if (collapseTimer) clearTimeout(collapseTimer)
-})
-
+// 工具行恒为折叠状态行、点击头部展开回看（业界模式）——chatRows 不依赖
+// followPinned 与流式状态，行高在流式期间保持稳定
 const chatRows = computed<ChatRow[]>(() =>
-  buildChatRows(store.chatMessages, showStandaloneTyping.value, toolExpandActive.value)
+  buildChatRows(store.chatMessages, showStandaloneTyping.value)
 )
 
 // 展示开关：声明须在 rowVirtualizer 之前（estimateSize 闭包在 setup 期间同步求值）
