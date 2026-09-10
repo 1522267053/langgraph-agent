@@ -42,7 +42,6 @@ import {
 import { clearBlockExpandOverrides } from '@/components/AgentChat/blockExpand'
 import { useToolOutputStore } from '@/stores/toolOutput'
 import { formatCountdown } from '@/utils/format'
-import { useAutoScroll } from '@/composables/useAutoScroll'
 import { loadWorkDirForAgent, saveWorkDirForAgent } from '@/utils/workdir'
 import { loadPlanModeForAgent } from '@/utils/planmode'
 
@@ -63,34 +62,40 @@ const messagesRevealed = ref(false)
 // 收敛循环代际号：新一轮加载开始后旧循环自动失效，防止过早 reveal
 let convergeGeneration = 0
 
-// SSE 状态早于 Markdown DOM 更新，底部跟随以 useAutoScroll 内部 ResizeObserver 的
-// 真实高度变化为准（容器 + 内容子元素自动观测）。
-/** RO 贴底跟随宽限截止时间：流式结束后短暂保留跟随，吸收代码高亮/KaTeX 等
- *  晚到渲染的撑高；此后用户手动展开/收起块撑高内容不再被贴底拉走视口 */
-let roFollowGraceUntil = 0
+// ---- 贴底跟随（由 TanStack Virtual end-anchored 聊天模式提供）----
+// anchorTo:'end' 下库内负责：流式行增长钉底、prepend 历史视口稳定、
+// followOnAppend 仅在贴底阈值内跟随新输出（autoScroll 偏好关闭时不跟随）。
+// 此处维护两个派生态：
+// - isAtEnd：几何贴底（回底按钮显隐），随滚动/虚拟化状态刷新
+// - followPinned：跟随锁存（门控最新工具行展开），仅用户上滚手势解除、
+//   回到贴底重新锁存——行高不反向耦合几何判定，杜绝展开/塌缩振荡
+const autoScroll = ref(true)
+const isAtEnd = ref(true)
+const followPinned = ref(true)
 
-const {
-  autoScroll,
-  isAtBottom,
-  scrollToBottom,
-  maybeScrollToBottom,
-  handleScroll,
-  onUserScrollIntent,
-  markProgrammaticAdjustment,
-  resetAutoScrollState
-} = useAutoScroll(messagesContainer, [], {
-  // 声明内容元素：欢迎页 → 消息列表的 v-if 换根会替换 wrap 的 firstElementChild，
-  // 不重绑 RO 会导致流式撑高失联（不滚动且 isAtBottom 不刷新）
-  contentRef: messagesContentRef,
-  enabled: () => store.isStreaming || Date.now() < roFollowGraceUntil
-})
+function syncAtEnd(): void {
+  const wrap = messagesContainer.value
+  if (!wrap) return
+  const next = rowVirtualizer.value.isAtEnd()
+  isAtEnd.value = next
+  // 仅在真实滚动事件中重锁存；塌缩/展开引发的几何变化不产生 scroll 事件
+  if (next) followPinned.value = true
+}
 
-watch(
-  () => store.isStreaming,
-  streaming => {
-    if (!streaming) roFollowGraceUntil = Date.now() + 800
-  }
-)
+function scrollToLatest(): void {
+  followPinned.value = true
+  rowVirtualizer.value.scrollToEnd()
+  syncAtEnd()
+}
+
+/** 用户上滚手势：解除跟随锁存（真实输入才解除，程序化位移不影响） */
+function onUserScrollUpIntent(): void {
+  followPinned.value = false
+}
+
+function onWheel(event: WheelEvent): void {
+  if (event.deltaY < 0) onUserScrollUpIntent()
+}
 
 function handleScrollbarPointerDown(event: PointerEvent): void {
   const root = scrollbarRef.value?.$el as Element | undefined
@@ -101,9 +106,25 @@ function handleScrollbarPointerDown(event: PointerEvent): void {
     target.closest('.el-scrollbar') === root &&
     target.closest('.el-scrollbar__bar')
   ) {
-    onUserScrollIntent(event)
+    onUserScrollUpIntent()
   }
 }
+
+// 切窗口：隐藏期渲染暂停（rAF/RO 延迟）而流式内容照常增长，恢复可见时若
+// 隐藏前贴底则强制回底，随后的库内测量钉底（wasAtEnd）无缝接管
+let wasAtEndOnHide = true
+function handleVisibilityChange(): void {
+  if (document.hidden) {
+    wasAtEndOnHide = isAtEnd.value
+    return
+  }
+  syncAtEnd()
+  if (wasAtEndOnHide && autoScroll.value) scrollToLatest()
+}
+document.addEventListener('visibilitychange', handleVisibilityChange)
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
 
 // ---- 虚拟滚动（@tanstack/vue-virtual 挂在 el-scrollbar 的原生滚动 wrap 上）----
 // 行模型为「段级」：AI 回合每个 segment 独占一行（见 AgentChat/chatRow.ts），
@@ -116,10 +137,15 @@ const showStandaloneTyping = computed(() => {
   return !last || last.role !== 'ai' || last.displayType === 'context-summary'
 })
 
-// 贴底跟随（isAtBottom）门控最新工具行自动展开：上滚阅读时全部工具行折叠为
+// 跟随锁存（followPinned）门控最新工具行自动展开：上滚阅读时全部工具行折叠为
 // 摘要行，流式期间的程序性展开/收起不再造成行高突变与虚拟滚动位置漂移
 const chatRows = computed<ChatRow[]>(() =>
-  buildChatRows(store.chatMessages, showStandaloneTyping.value, store.isStreaming, isAtBottom.value)
+  buildChatRows(
+    store.chatMessages,
+    showStandaloneTyping.value,
+    store.isStreaming,
+    followPinned.value
+  )
 )
 
 // 展示开关：声明须在 rowVirtualizer 之前（estimateSize 闭包在 setup 期间同步求值）
@@ -167,32 +193,31 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
       containerWidth: contentWidth.value
     }),
   overscan: 8,
-  getItemKey: (index: number) => chatRows.value[index]?.key ?? String(index)
+  getItemKey: (index: number) => chatRows.value[index]?.key ?? String(index),
+  // 官方聊天模式（virtual-core 3.17+）：列表末端为稳定锚——prepend 历史按
+  // keyed item 自动保持视口、流式行增长自动钉底、followOnAppend 仅在贴底
+  // 阈值内跟随新输出（autoScroll 偏好关闭时不跟随，getter 保持响应式）
+  anchorTo: 'end',
+  followOnAppend: autoScroll.value,
+  scrollEndThreshold: 60
 })
 
-// [修复] 向上滚动历史时，已过视口的 Markdown 行会因代码高亮/KaTeX 异步渲染继续撑高，
-// virtual-core 默认在 backward 滚动时跳过重测滚动补偿（防 #1218 级联），导致视口下方
-// 内容被整体推移（滚动跳动）。此处复刻库默认规则但去掉 backward 跳过：
-// - 首测（估算→实测）：行顶在滚动位上方即补偿
-// - 重测：行整体在滚动位上方才补偿（横跨视口的行生长发生在锚点下方，不补偿以防拖动视口）
-// 注意：回调在 itemSizeCache.set 之前调用，可用 has() 判定是否首测；
-// item.size 为变更前旧值，新实测 = item.size + delta，同步写入行高实测缓存——
-// 展示开关切换 measure() 清缓存后，估算回落到上次实测而非固定粗估，避免
-// 未挂载行重挂时产生巨量 delta（估算 268px vs 实测 4000px+）引发滚动跳变。
-// 补偿生效（返回 true）时打标：写入 scrollTop 引发的 scroll 事件由
-// useAutoScroll 的程序化补偿静默窗豁免，防止贴底判定被几何刷新翻成 false
-// （AI 并行多工具行同帧挂载时巨量 delta 补偿拉离底部 → 跟随永久中断）
+// 贴底补偿回调：保留行高实测缓存写入（未挂载行重挂的估值兜底），补偿规则
+// 与库内置默认一致——首测行顶越过滚动位即补偿；重测仅整体在滚动位上方且非
+// 后向滚动时补偿（防 #1218 级联）。贴底钉住（anchorTo:'end' 的 wasAtEnd
+// 分支）的尺寸补偿在库内独立处理，不经过本回调
 rowVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
   if (delta !== 0) rememberRowSize(item.key, item.size + delta)
   const offset = (instance.scrollOffset ?? 0) + instance.scrollAdjustments
-  const shouldAdjust = !instance.itemSizeCache.has(item.key)
+  return !instance.itemSizeCache.has(item.key)
     ? item.start < offset
-    : item.start + item.size <= offset
-  if (shouldAdjust) markProgrammaticAdjustment()
-  return shouldAdjust
+    : item.start + item.size <= offset && instance.scrollDirection !== 'backward'
 }
 
 const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
+
+// 贴底派生态随任意虚拟化变化（数据增删/测量更新/滚动）刷新
+watch(virtualRows, () => syncAtEnd(), { immediate: true })
 
 // 展示开关改变行内内容高度：整体失效 virtualizer 尺寸缓存（行 key 不变，未挂载行
 // 的旧实测尺寸会残留导致滚动错位）；已挂载行由 ResizeObserver 重测，未挂载行回落
@@ -680,9 +705,10 @@ function convergeScrollToBottom(): void {
     wrap.removeEventListener('pointerdown', onUserInput, { capture: true })
   }
   const finish = () => {
-    // 用 composable 的强制贴底而非裸赋值：同步置 isAtBottom=true，
-    // 防止收敛期 scroll 事件的几何重算把贴底判定翻成 false 残留
-    scrollToBottom()
+    // 强制贴底并锁存跟随：防止收敛期 scroll 事件的几何重算把贴底判定翻成
+    // false 残留，后续流式钉底由 end-anchored 的 wasAtEnd 分支接管
+    followPinned.value = true
+    rowVirtualizer.value.scrollToEnd()
     messagesRevealed.value = true
   }
   const tick = () => {
@@ -697,7 +723,7 @@ function convergeScrollToBottom(): void {
         lastHeight = height
         lastChangeAt = now
       }
-      scrollToBottom()
+      rowVirtualizer.value.scrollToEnd()
       // 收敛批次间存在短暂平台期（刷新冷启动时更明显）：至少骑 600ms + 高度
       // 连续 250ms 不变才认定收敛并显示
       const elapsed = now - startAt
@@ -712,12 +738,12 @@ function convergeScrollToBottom(): void {
       // follow：高度变化（reveal 引发的重排/晚到内容）才跟随，静止 400ms 或
       // 跟随满 1s 后退出
       if (height !== lastHeight) {
-        scrollToBottom()
+        rowVirtualizer.value.scrollToEnd()
         lastHeight = height
         lastChangeAt = now
       }
       if (now - lastChangeAt >= 400 || now >= followUntil) {
-        scrollToBottom()
+        rowVirtualizer.value.scrollToEnd()
         cleanup()
         return
       }
@@ -737,7 +763,6 @@ watch(
       return
     }
     if (!wasLoading) return
-    resetAutoScrollState()
     await nextTick()
     convergeScrollToBottom()
   }
@@ -747,9 +772,9 @@ watch(
   () => store.messageRefreshVersion,
   async () => {
     await nextTick()
-    // 条件贴底：流结束的消息刷新也走此路径，须尊重用户位置（上滚查看时不拉回）；
-    // 删除/回退消息的强制贴底在对应操作回调中显式调用 scrollToBottom
-    maybeScrollToBottom()
+    // 流结束的消息刷新/删除/回退后刷新贴底派生态；跟随语义由库内
+    // followOnAppend 与锚定接管，此处仅同步按钮与锁存状态
+    syncAtEnd()
   }
 )
 
@@ -769,84 +794,11 @@ function onEndReached(direction: ScrollbarDirection) {
 async function handleLoadMore() {
   if (!agentId.value || isLoadingMore.value) return
   isLoadingMore.value = true
-  const wrap = messagesContainer.value
   try {
-    // 前插历史后按「锚行坐标差值 + 逐帧收敛」恢复视口：
-    // - 锚点优先按「行 key」定位：段级行模式下，新页尾部回合会被合并吸收进锚行，
-    //   吸收产生的段行插在锚点之前，「前插行数 = 锚点新下标」不再恒等；但段的
-    //   确定性 id 按 DB 行派生，吸收只改变下标不改变 key，findIndex 即精确新下标
-    // - key 找不到（锚行被重建丢弃等极端情况）时回退「行数差」估算：无吸收的
-    //   纯前插场景下两者等价
-    // - 行高仍可能很大（单个超大 content 段不切分），一次性的 scrollToIndex/
-    //   scrollTop 跳转在测量收敛前必然失准；因此恢复后进入 rAF 校正循环：每帧
-    //   以锚行实时 start/size 重算目标位置并施加，直到连续多帧稳定（测量收敛）
-    //   或超时；前 5 帧校正未落地时忽略手势中断（load-more 由连续上滚触发，
-    //   注册监听时手势通常仍在持续，立即让位会停在校正前的位置），之后用户
-    //   滚动输入才立即放弃校正
-    // - 目标差值含锚行自身 size 差：视口随锚行高度变化前移，语义仍正确
-    const first = rowVirtualizer.value.getVirtualItems()[0]
-    const prevFirstStart = first?.start ?? 0
-    const prevFirstSize = first?.size ?? 0
-    const prevScrollTop = wrap?.scrollTop ?? 0
-    const prevRowCount = chatRows.value.length
-    const prevFirstKey = first?.key ?? null
+    // anchorTo:'end' 下前插历史按 keyed item 自动保持视口位置，无需手工锚行恢复
     await store.loadMoreMessages(agentId.value)
     await nextTick()
-    if (!wrap) return
-    let anchorIndex = prevFirstKey ? chatRows.value.findIndex(row => row.key === prevFirstKey) : -1
-    if (anchorIndex === -1) {
-      anchorIndex = chatRows.value.length - prevRowCount
-    }
-    const anchorKey = chatRows.value[anchorIndex]?.key ?? null
-    if (!anchorKey) return
-
-    let aborted = false
-    let totalFrames = 0
-    const abort = () => {
-      // 首批校正未落地前忽略手势：load-more 由连续上滚触发，注册监听时手势通常
-      // 仍在持续，立即中止会让视口停在未校正位置（前插内容整体下移造成视觉跳变，
-      // 表现为「滚动位置被偷走」）。校正满 5 帧后恢复「用户输入立即让位」语义
-      if (totalFrames < 5) return
-      aborted = true
-    }
-    wrap.addEventListener('wheel', abort, { capture: true })
-    wrap.addEventListener('touchstart', abort, { capture: true })
-    wrap.addEventListener('pointerdown', abort, { capture: true })
-    const removeAbortListeners = () => {
-      wrap.removeEventListener('wheel', abort, { capture: true })
-      wrap.removeEventListener('touchstart', abort, { capture: true })
-      wrap.removeEventListener('pointerdown', abort, { capture: true })
-    }
-
-    let stableFrames = 0
-    const tick = () => {
-      if (aborted || !wrap.isConnected) {
-        removeAbortListeners()
-        return
-      }
-      const m = rowVirtualizer.value.getMeasurements()[anchorIndex]
-      if (!m) {
-        removeAbortListeners()
-        return
-      }
-      const desired = Math.max(
-        0,
-        prevScrollTop + (m.start - prevFirstStart) + (m.size - prevFirstSize)
-      )
-      totalFrames += 1
-      if (Math.abs(wrap.scrollTop - desired) > 1) {
-        wrap.scrollTop = desired
-        stableFrames = 0
-      } else {
-        stableFrames += 1
-      }
-      if (stableFrames < 3 && totalFrames < 90) {
-        requestAnimationFrame(tick)
-      } else {
-        removeAbortListeners()
-      }
-    }
-    requestAnimationFrame(tick)
+    syncAtEnd()
   } finally {
     isLoadingMore.value = false
   }
@@ -893,7 +845,7 @@ async function handleChatSend(
   const override = resolveSelectedModel()
   store.sendMessage(message, params, attachedFiles, override?.model, override?.provider)
   await nextTick()
-  scrollToBottom()
+  scrollToLatest()
 }
 
 function handleStop() {
@@ -1037,8 +989,8 @@ async function executeRevert(mode: RevertMode) {
     if (deleted) {
       inputMessage.value = deleted.content
       restoreInputParams(deleted)
-      // 回退后列表缩短，强制贴底（不受 RO 跟随开关与用户位置限制）
-      scrollToBottom()
+      // 回退后列表缩短，强制贴底（不受跟随锁存与用户位置限制）
+      scrollToLatest()
       notifyFileRestore(deleted.reverted_files ?? [])
       // 批量回退在后端标记 is_reverted，重拉对齐 badge 与面板
       void store.fetchFileChanges()
@@ -1245,10 +1197,10 @@ function handleRejectTools() {
       class="messages-scrollbar"
       :distance="50"
       wrap-style="overflow-anchor: none"
-      @scroll="handleScroll"
+      @scroll="syncAtEnd"
       @end-reached="onEndReached"
-      @wheel="onUserScrollIntent"
-      @touchmove.passive="onUserScrollIntent"
+      @wheel="onWheel"
+      @touchmove.passive="onUserScrollUpIntent"
       @pointerdown.capture="handleScrollbarPointerDown"
     >
       <div v-if="isWelcomeMode" class="welcome-wrapper">
@@ -1296,8 +1248,8 @@ function handleRejectTools() {
     </el-scrollbar>
 
     <Transition v-if="!isWelcomeMode" name="jump-fade">
-      <div v-show="!isAtBottom" class="scroll-to-bottom-wrap">
-        <div class="scroll-to-bottom" aria-label="回到底部" @click="scrollToBottom">
+      <div v-show="!isAtEnd" class="scroll-to-bottom-wrap">
+        <div class="scroll-to-bottom" aria-label="回到底部" @click="scrollToLatest">
           <el-icon :size="16">
             <Bottom />
           </el-icon>
