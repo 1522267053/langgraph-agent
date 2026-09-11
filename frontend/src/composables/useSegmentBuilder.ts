@@ -134,7 +134,8 @@ export function updateTool(
       status,
       ...(result !== undefined ? { result } : {}),
       liveOutput: undefined,
-      liveAgentName: undefined
+      liveAgentName: undefined,
+      liveTool: undefined
     }
   }
   return [...segments.slice(0, idx), updated, ...segments.slice(idx + 1)]

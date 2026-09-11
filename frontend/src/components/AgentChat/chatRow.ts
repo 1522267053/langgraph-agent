@@ -5,7 +5,7 @@
  */
 
 import type { StreamingMessage } from '@/composables/useStreamingMessage'
-import type { Segment } from '@/types/segment'
+import type { Segment, ToolCall } from '@/types/segment'
 import { getBlockExpandOverride } from '@/components/AgentChat/blockExpand'
 
 export type ChatRowKind = 'human' | 'summary' | 'typing' | 'ai'
@@ -22,6 +22,9 @@ export interface ChatRow {
   segment?: Segment
   /** 段在消息 segments 中的下标（用于计算消息级上下文标志） */
   segmentIndex?: number
+  /** tool 行专用：折叠态是否有单行结果摘要行（false = 纯 JSON/未出结果，估值取矮行）；
+   * 非工具行为 undefined */
+  toolHasSummary?: boolean
   /** 是否为列表最后一条消息（流式指示器定位） */
   isLast: boolean
 }
@@ -48,6 +51,46 @@ export function rememberRowSize(key: string, size: number): void {
 /** 清空实测缓存（会话切换时调用，避免跨会话残留） */
 export function clearRowSizeCache(): void {
   measuredSizes.clear()
+}
+
+/**
+ * 折叠态工具块是否有单行结果摘要（与 ToolResultViewer.collapsedSummary 同口径，
+ * 构建行时判定一次，避免 estimateSize 滚动期反复 JSON.parse）：
+ * 错误首行 / 裸字符串（shell 输出、子Agent 回复、文件写入消息）/ 文件读写与
+ * 媒体富结果有摘要；子Agent 运行中的实时输出/正在调用的工具状态走裸字符串
+ * 路径，同样有单行摘要；纯 JSON dict（memory、MCP、截断输出等）摘要行隐藏
+ */
+export function hasToolCollapsedSummary(tool: ToolCall): boolean {
+  if (tool.status === 'error') return true
+  if (tool.status === 'running') {
+    const hasOutput = typeof tool.liveOutput === 'string' && !!tool.liveOutput.trim()
+    const hasToolActivity = typeof tool.liveTool === 'string' && !!tool.liveTool.trim()
+    if (hasOutput || hasToolActivity) return true
+  }
+  const raw = tool.result
+  if (raw === undefined || raw === null) return false
+  let parsed: unknown
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return true
+    }
+  } else if (typeof raw === 'object') {
+    parsed = raw
+  } else {
+    return false
+  }
+  if (typeof parsed !== 'object' || parsed === null) return false
+  const r = parsed as Record<string, unknown>
+  if (typeof r.preview_url === 'string' || typeof r.download_url === 'string') return true
+  if (tool.name === 'file_read') {
+    return !!r.success && typeof r.content === 'string' && typeof r.file_path === 'string'
+  }
+  if (tool.name === 'text_editor') {
+    return !!r.success && typeof r.diff === 'string'
+  }
+  return false
 }
 
 /**
@@ -88,6 +131,10 @@ export function buildChatRows(
         msg,
         segment,
         segmentIndex: i,
+        toolHasSummary:
+          segment.type === 'tool' && segment.tool
+            ? hasToolCollapsedSummary(segment.tool)
+            : undefined,
         isLast: isLastMsg
       })
     })
@@ -130,6 +177,11 @@ const CONTENT_CHROME = 52
 const TODO_CHROME = 90
 const TODO_ITEM_HEIGHT = 31
 const TODO_ITEM_GAP = 6
+/** todo 项文本：13px（.todo-content），行高对齐 thinking 的 13×1.6 保守取值 */
+const TODO_LINE_HEIGHT = 13 * 1.6
+/** todo 项折行单位数：块 padding 40 + 状态图标 26 + 优先级标签占位后再留余量，
+ * 取保守低值（低值=高估行数，符合官方"estimate the largest possible size"） */
+const TODO_UNITS_PER_LINE = 30
 /** todo 列表封顶（.todo-block :deep(.todo-list) max-height: 320px） */
 const TODO_BODY_MAX = 320
 /** compress-summary 内容封顶（.compress-summary-content max-height: 400px） */
@@ -241,22 +293,38 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
           break
         case 'tool': {
           // 默认折叠为状态行（业界模式：工具过程是背景细节，点击展开回看）。
-          // 展开真实上限 ~555px（头部 40 + args 150 + 结果 400 等封顶组合，各部件
-          // 均有 max-height）；折叠态 = 头部 40 + 单行结果摘要 ~28 + 边框/边距 ~17。
-          // 手动展开只发生在已挂载行（必有实测缓存），555 仅作手动展开行首帧占位
+          // 展开真实上限 ~455px（头部 40 + args 150 + 结果 300 等封顶组合，各部件
+          // 均有 max-height）；折叠态按是否有单行摘要行区分：有（结果摘要/子Agent
+          // 实时输出单行）= 头部 40 + 摘要行 ~28 + 边框/边距 ~17 ≈ 85；无（纯 JSON/
+          // 运行中无实时输出，摘要行 display:none）= 头部 40 + 边框/边距 ~14 ≈ 56。
+          // 手动展开只发生在已挂载行（必有实测缓存），455 仅作手动展开行首帧占位
           const override = getBlockExpandOverride(row.key)
-          size = override ? 555 : 85
+          size = override ? 455 : row.toolHasSummary === false ? 56 : 85
           break
         }
         case 'todo': {
           // n=0 时段数据尚未到达（模板有 segment.todo 守卫），沿用旧粗估
-          const n = row.segment.todo?.length ?? 0
-          if (n === 0) {
+          const todos = row.segment.todo ?? []
+          if (todos.length === 0) {
             size = 280
             break
           }
-          const body = Math.min(TODO_BODY_MAX, n * TODO_ITEM_HEIGHT + (n - 1) * TODO_ITEM_GAP)
-          size = TODO_CHROME + body
+          // 逐项按内容测高：.todo-content 允许 break-word 折行（无单行省略），
+          // 长项非固定单行，在 31px 单行基准上累加折行额外高度；
+          // 整体仍封顶 320（渲染层 max-height，超长内部滚动），估值与 CSS 一致
+          const itemUnits = unitsPerLine(prefs?.containerWidth, 13, TODO_UNITS_PER_LINE)
+          const itemsHeight = todos.reduce(
+            (sum, item) =>
+              sum +
+              TODO_ITEM_HEIGHT +
+              Math.max(
+                0,
+                estimateTextHeight(item.content, itemUnits, TODO_LINE_HEIGHT) - TODO_LINE_HEIGHT
+              ),
+            0
+          )
+          const body = itemsHeight + (todos.length - 1) * TODO_ITEM_GAP
+          size = TODO_CHROME + Math.min(TODO_BODY_MAX, body)
           break
         }
         default:

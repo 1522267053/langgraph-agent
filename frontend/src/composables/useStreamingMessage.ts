@@ -300,6 +300,7 @@ export function useStreamingMessage() {
         if (result !== undefined) tool.result = result
         delete tool.liveOutput
         delete tool.liveAgentName
+        delete tool.liveTool
       }
     }
 
@@ -325,6 +326,24 @@ export function useStreamingMessage() {
   }
 
   /**
+   * 更新子Agent正在调用的工具名快照（父Agent展示「正在调用xxx工具中」）；
+   * 空串表示子Agent工具全部结束，清除状态
+   */
+  function updateToolLiveTool(name: string, toolName: string): void {
+    const msg = messages.value[messages.value.length - 1]
+    if (msg?.role !== 'ai' || !msg.segments) return
+
+    const segment = [...msg.segments]
+      .reverse()
+      .find(s => s.type === 'tool' && s.tool?.name === name && s.tool?.status === 'running')
+    if (!segment?.tool) return
+
+    if (toolName) segment.tool.liveTool = toolName
+    else delete segment.tool.liveTool
+    triggerRef(messages)
+  }
+
+  /**
    * 将所有仍在 running 的工具分段标记为 error（手动停止场景）
    *
    * 停止后 tool_call_end SSE 不会再来，running 分段会永久转圈；
@@ -340,6 +359,7 @@ export function useStreamingMessage() {
         seg.tool.result = { success: false, error: message }
         delete seg.tool.liveOutput
         delete seg.tool.liveAgentName
+        delete seg.tool.liveTool
       }
       if (msg.tools) {
         for (const tool of msg.tools) {
@@ -348,6 +368,7 @@ export function useStreamingMessage() {
           tool.result = { success: false, error: message }
           delete tool.liveOutput
           delete tool.liveAgentName
+          delete tool.liveTool
         }
       }
     }
@@ -437,6 +458,7 @@ export function useStreamingMessage() {
     addToolSegment,
     updateToolSegment,
     updateToolLiveOutput,
+    updateToolLiveTool,
     failRunningToolSegments,
     addTodoSegment,
     addKnowledgeCitations,

@@ -133,6 +133,28 @@ function toggleArgsFormat(segment: Segment, idx: number): void {
   }
 }
 
+/**
+ * 工具结果统一取值：call_sub_agent_* 运行中且尚无最终结果时，将实时输出
+ * （带状态标签前缀——既保留上下文，也保证字符串不是合法 JSON、稳定命中裸字符串
+ * 路径）作为结果交给 ToolResultViewer 标准渲染：折叠态 = 单行摘要（行高恒定，
+ * 输出到达不再撑高行），展开态 = 内容区（fallback pre，封顶内部滚动）；
+ * 完成后 liveOutput 被删除，无痕切换真实结果。
+ * 正在调用工具时状态行前置为「正在调用xxx工具中」，结束后回退「输出中」
+ */
+function toolDisplayResult(segment: Segment): unknown {
+  if (segment.type !== 'tool' || !segment.tool) return undefined
+  if (segment.tool.result !== undefined) return segment.tool.result
+  const tool = segment.tool
+  const hasOutput = typeof tool.liveOutput === 'string' && !!tool.liveOutput
+  const hasToolActivity = typeof tool.liveTool === 'string' && !!tool.liveTool
+  if (tool.status === 'running' && (hasOutput || hasToolActivity)) {
+    const name = tool.liveAgentName || '子Agent'
+    const action = hasToolActivity ? `正在调用 ${tool.liveTool} 工具中` : '输出中'
+    return `子Agent「${name}」${action}：\n${tool.liveOutput || ''}`
+  }
+  return undefined
+}
+
 function isArgsExpanded(segment: Segment, idx: number): boolean {
   return expandedArgsSegments.value.has(segmentKey(segment, idx))
 }
@@ -278,17 +300,6 @@ watch(
           <ArrowRight />
         </el-icon>
       </div>
-      <!-- 子Agent实时输出预览（call_sub_agent_* 工具执行中展示，完成后由最终结果替代）；
-           折叠态不挂载——阅读时实时输出到达不再撑高行造成位置漂移 -->
-      <div
-        v-if="toolBodyVisible && segment.tool.status === 'running' && segment.tool.liveOutput"
-        class="tool-live-wrapper"
-      >
-        <div class="tool-live-label">
-          子Agent「{{ segment.tool.liveAgentName || '子Agent' }}」输出中
-        </div>
-        <pre class="tool-content tool-live-output">{{ segment.tool.liveOutput }}</pre>
-      </div>
       <!-- 入参 JSON：折叠态隐藏，点击头部展开后显示 -->
       <div
         v-if="toolBodyVisible && segment.tool.args && Object.keys(segment.tool.args).length > 0"
@@ -309,16 +320,18 @@ watch(
           {{ isArgsExpanded(segment, idx) ? '显示原始' : '显示格式化' }}
         </el-button>
       </div>
-      <!-- 结果：完成时滑入淡入动画。不用 Transition 组件（流式 patch 场景下 enter
-           hook 时序不稳定），改用 CSS keyframe——元素插入时必然播放一次；动画类仅
-           流式中的最后消息携带，历史/Flow 面板静态渲染，虚拟滚动重挂不重播。
-           折叠态渲染单行结果摘要（错误为错误信息首行），代码表/Diff/媒体预览等
-           富节点不挂载（生成媒体仅内联下载按钮）——行高稳定，流式期间结果到达
-           不再造成虚拟滚动位置漂移 -->
-      <div v-if="segment.tool.result !== undefined" :class="{ 'tool-result-in': isStreaming }">
+      <!-- 结果（call_sub_agent_* 运行中为实时输出）：统一走 ToolResultViewer 标准管线，
+           折叠态单行摘要 / 展开态内容区，完成后无痕切换真实结果。
+           完成时滑入淡入动画不用 Transition 组件（流式 patch 场景下 enter hook 时序
+           不稳定），改用 CSS keyframe——元素插入时必然播放一次；动画类仅流式中的最后
+           消息携带，历史/Flow 面板静态渲染，虚拟滚动重挂不重播 -->
+      <div
+        v-if="toolDisplayResult(segment) !== undefined"
+        :class="{ 'tool-result-in': isStreaming }"
+      >
         <ToolResultViewer
           :tool-name="segment.tool.name"
-          :result="segment.tool.result"
+          :result="toolDisplayResult(segment)"
           :status="segment.tool.status"
           :hide-plain-json="!toolBodyVisible"
           :collapsed="!!expandKey && !toolBodyVisible"
@@ -631,24 +644,6 @@ watch(
   border-top: 1px solid #fecaca;
   background: rgba(254, 242, 242, 0.6);
   color: #dc2626;
-}
-
-.tool-live-wrapper {
-  border-top: 1px solid #e2e8f0;
-  background: rgba(239, 246, 255, 0.6);
-}
-
-.tool-live-label {
-  padding: 8px 16px 0;
-  font-size: 11px;
-  font-weight: 600;
-  color: #2563eb;
-}
-
-.tool-live-output {
-  border-top: none;
-  max-height: 180px;
-  color: #334155;
 }
 
 .revert-btn {

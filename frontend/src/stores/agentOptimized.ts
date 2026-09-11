@@ -109,6 +109,7 @@ export const useAgentStore = defineStore('agent', () => {
     addToolSegment,
     updateToolSegment,
     updateToolLiveOutput,
+    updateToolLiveTool,
     failRunningToolSegments,
     addTodoSegment,
     addKnowledgeCitations,
@@ -293,6 +294,33 @@ export const useAgentStore = defineStore('agent', () => {
     savePlanModeForAgent(agentId ?? null, next)
   }
 
+  /**
+   * 更新会话级临时模型（按会话独立存储，对标 togglePlanMode）
+   * @param model 模型 id，空串表示清除（回退 LLM 节点默认）
+   * @param provider 与 model 配套的供应商 ID
+   * @returns 是否成功写入（无会话或接口失败返回 false）
+   */
+  async function updateSessionChatModel(
+    model: string,
+    provider?: string
+  ): Promise<boolean> {
+    const sessionId = currentSession.value?.id
+    const agentId = currentAgent.value?.id
+    if (!agentId || !sessionId) return false
+    try {
+      const res = await agentApi.updateChatModel(agentId, sessionId, model || null, provider)
+      // await 期间用户可能已切换会话，只回写仍是目标会话的标志
+      if (res.data.code === 1 && currentSession.value?.id === sessionId) {
+        currentSession.value.chat_model = model || null
+        currentSession.value.chat_provider = model ? provider || null : null
+      }
+      return true
+    } catch {
+      // error handled by interceptor
+      return false
+    }
+  }
+
   // ========== 流程预览（AI 创建/修改流程时推送，独立于消息分段） ==========
   const flowPreview = ref<{
     flow_id: number
@@ -362,14 +390,25 @@ export const useAgentStore = defineStore('agent', () => {
   /**
    * 创建新会话
    * @param workDir 可选，会话级项目工作路径
+   * @param planMode 可选，计划模式开关
+   * @param chatModel 可选，会话级临时覆盖 LLM 模型 id
+   * @param chatProvider 可选，与 chatModel 配套的供应商 ID
    */
   async function createSession(
     agentId: number,
     workDir?: string,
-    planMode?: boolean
+    planMode?: boolean,
+    chatModel?: string,
+    chatProvider?: string
   ): Promise<AgentSession | null> {
     try {
-      const res = await agentApi.createSession(agentId, workDir, planMode)
+      const res = await agentApi.createSession(
+        agentId,
+        workDir,
+        planMode,
+        chatModel,
+        chatProvider
+      )
       if (res.data.code === 1) {
         await loadSessions(agentId, 1)
         const session = res.data.data
@@ -1244,11 +1283,19 @@ export const useAgentStore = defineStore('agent', () => {
       },
       onSubAgentProgress: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
+        if (!event.data.node_key) return
+        const toolKey = `call_sub_agent_${event.data.node_key}`
+        // 工具调用状态（tool_name 字段由后端按需携带：非空=正在调用，空串=清除）；
+        // 纯状态事件无 content，处理后即返回，不触碰 liveOutput 快照
+        if (event.data.tool_name !== undefined) {
+          updateToolLiveTool(toolKey, event.data.tool_name)
+          if (!event.data.content) return
+        }
         const content = event.data.content || ''
-        if (!content || !event.data.node_key) return
+        if (!content) return
         // 写入对应 call_sub_agent_* 工具分段的实时输出区（快照替换，重连回放幂等）
         updateToolLiveOutput(
-          `call_sub_agent_${event.data.node_key}`,
+          toolKey,
           content,
           event.data.sub_agent_name || '子Agent'
         )
@@ -2122,6 +2169,7 @@ export const useAgentStore = defineStore('agent', () => {
     sendMessage,
     resumeWithInput,
     togglePlanMode,
+    updateSessionChatModel,
     approveToolCalls,
     rejectToolCalls,
     resolveQuestion,

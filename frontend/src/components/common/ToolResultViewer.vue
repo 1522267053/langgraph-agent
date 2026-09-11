@@ -461,7 +461,9 @@ watch(
 }
 
 .tool-code-viewer {
-  max-height: 400px;
+  /* 结果区统一封顶 300px（与 Diff/fallback/媒体预览一致）：内部滚动，
+     虚拟行高有界 */
+  max-height: 300px;
   overflow: auto;
   background: #1e1e1e;
 }
@@ -547,7 +549,8 @@ watch(
   color: #64748b;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 150px;
+  /* 结果区统一封顶 300px；裸字符串结果（shell 输出/子Agent 实时输出等）同口径 */
+  max-height: 300px;
   overflow-y: auto;
 }
 
@@ -607,13 +610,13 @@ watch(
 
 .media-video {
   max-width: 100%;
-  max-height: 360px;
+  max-height: 300px;
   border-radius: 6px;
 }
 
 .media-image {
   max-width: 100%;
-  max-height: 360px;
+  max-height: 300px;
   border-radius: 6px;
   cursor: pointer;
 }

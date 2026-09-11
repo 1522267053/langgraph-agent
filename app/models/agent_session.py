@@ -51,6 +51,18 @@ class AgentSession(DbBaseModel):
         default=0,
         comment="计划模式：1=开启（只读探索，禁用写操作工具），0/空=关闭",
     )
+    chat_model: Mapped[Optional[str]] = mapped_column(
+        String(200),
+        nullable=True,
+        default=None,
+        comment="会话级临时覆盖 LLM 模型 id，空则使用 LLM 节点默认配置",
+    )
+    chat_provider: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        default=None,
+        comment="与 chat_model 配套的供应商 ID；跨供应商时从供应商连接解析 api_key/base_url",
+    )
 
     def __repr__(self) -> str:
         return (

@@ -35,6 +35,12 @@ class AgentSessionCreateRequest(BaseModel):
     plan_mode: Optional[int] = Field(
         default=None, description="计划模式（可选，1=开启只读探索，缺省关闭）"
     )
+    chat_model: Optional[str] = Field(
+        default=None, description="会话级临时覆盖 LLM 模型 id（可选）"
+    )
+    chat_provider: Optional[str] = Field(
+        default=None, description="与 chat_model 配套的供应商 ID（可选）"
+    )
 
 
 class AgentSessionWorkDirRequest(BaseModel):
@@ -54,6 +60,22 @@ class AgentSessionPlanModeRequest(BaseModel):
     )
 
 
+class AgentSessionChatModelRequest(BaseModel):
+    """更新会话临时模型请求"""
+
+    model: Optional[str] = Field(
+        default=None,
+        description="临时覆盖 LLM 模型 id；None/空串表示清除，回退 LLM 节点默认配置",
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "与 model 配套的供应商 ID；跨供应商时从供应商连接解析 api_key/base_url，"
+            "为空则沿用 LLM 节点已配置供应商"
+        ),
+    )
+
+
 class AgentSessionResponse(AgentSessionBase):
     """Agent会话响应"""
 
@@ -65,6 +87,12 @@ class AgentSessionResponse(AgentSessionBase):
     work_dir: Optional[str] = Field(default=None, description="项目工作路径")
     plan_mode: Optional[int] = Field(
         default=0, description="计划模式：1=开启（只读探索），0/空=关闭"
+    )
+    chat_model: Optional[str] = Field(
+        default=None, description="会话级临时覆盖 LLM 模型 id，空=使用 LLM 节点默认"
+    )
+    chat_provider: Optional[str] = Field(
+        default=None, description="与 chat_model 配套的供应商 ID"
     )
     created_at: Optional[ChinaDateTime] = Field(
         default=None,

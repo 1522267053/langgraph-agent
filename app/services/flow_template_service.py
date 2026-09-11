@@ -840,6 +840,12 @@ _register(
         edges=[
             TemplateEdge(source_node_key="start", target_node_key="llm"),
             TemplateEdge(
+                source_node_key="question",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
                 source_node_key="knowledge",
                 target_node_key="llm",
                 source_handle="tools",
