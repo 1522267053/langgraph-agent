@@ -285,6 +285,23 @@ class SubAgentNodeHandler(BaseNodeHandler):
 
                 # 每轮 LLM 回复完成后转发一次预览（content→tool_call→content 时逐次覆盖）
                 progress: dict[str, Any] = {"text": ""}
+                # 子Agent 正在执行的工具（call_id → 工具名），供父Agent展示
+                # 「正在调用xxx工具中」；并行调用以「、」连接
+                running_tools: dict[str, str] = {}
+
+                def send_tool_status() -> None:
+                    """转发当前工具调用状态（空串表示全部结束、前端清除状态行）"""
+                    if not _parent_writer:
+                        return
+                    _parent_writer(
+                        SubAgentProgressEvent(
+                            node_key=node.node_key,
+                            sub_agent_id=_agent_id,
+                            sub_session_id=session_id,
+                            sub_agent_name=_agent_name,
+                            tool_name="、".join(running_tools.values()),
+                        )
+                    )
 
                 def send_progress_preview(status: str = "running") -> None:
                     text = progress["text"]
@@ -320,9 +337,27 @@ class SubAgentNodeHandler(BaseNodeHandler):
                     if event_type == "tool_call_start":
                         # content 流结束、进入工具调用，发送该轮回复预览
                         send_progress_preview()
+                        # 记录并转发工具调用状态（父Agent展示「正在调用xxx工具中」）
+                        call_id = str(
+                            event_data.get("tool_call_id")
+                            or event_data.get("tool_name")
+                            or ""
+                        )
+                        running_tools[call_id] = str(event_data.get("tool_name") or "")
+                        send_tool_status()
+                        return
+                    if event_type == "tool_call_end":
+                        call_id = str(
+                            event_data.get("tool_call_id")
+                            or event_data.get("tool_name")
+                            or ""
+                        )
+                        running_tools.pop(call_id, None)
+                        send_tool_status()
                         return
                     if event_type == "node_done":
                         # 最后一轮回复（无工具调用）完成
+                        running_tools.clear()
                         send_progress_preview(status="done")
                         return
                     if (
@@ -331,6 +366,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
                     ):
                         progress["text"] = ""
                         last_round["content"] = ""
+                        running_tools.clear()
 
                 return await _run_sub_agent(
                     session_id,

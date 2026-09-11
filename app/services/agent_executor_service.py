@@ -809,6 +809,8 @@ class AgentExecutorService(BaseExecutorService):
         gateway_id: Optional[int] = None,
         work_dir: Optional[str] = None,
         plan_mode: int = 0,
+        chat_model: Optional[str] = None,
+        chat_provider: Optional[str] = None,
     ) -> AgentSession:
         """创建新会话（公开方法）
 
@@ -816,9 +818,17 @@ class AgentExecutorService(BaseExecutorService):
             gateway_id: 可选，由 网关触发创建时传入，用于区分 网关会话与用户聊天会话
             work_dir: 可选，会话级项目工作路径（需先经 normalize_work_dir 校验）
             plan_mode: 可选，计划模式（1=开启只读探索）
+            chat_model: 可选，会话级临时覆盖 LLM 模型 id
+            chat_provider: 可选，与 chat_model 配套的供应商 ID
         """
         return await self._create_session(
-            db, flow_id, gateway_id, work_dir=work_dir, plan_mode=plan_mode
+            db,
+            flow_id,
+            gateway_id,
+            work_dir=work_dir,
+            plan_mode=plan_mode,
+            chat_model=chat_model,
+            chat_provider=chat_provider,
         )
 
     async def update_work_dir(
@@ -841,6 +851,27 @@ class AgentExecutorService(BaseExecutorService):
         if not session:
             return None
         session.plan_mode = 1 if plan_mode else 0
+        await db.commit()
+        await db.refresh(session)
+        return session
+
+    async def update_chat_model(
+        self,
+        db: AsyncSession,
+        session_id: int,
+        model: Optional[str],
+        provider: Optional[str] = None,
+    ) -> Optional[AgentSession]:
+        """更新会话级临时模型（按会话独立存储）；model 为 None/空串时清除，回退节点默认"""
+        session = await self._get_session(db, session_id)
+        if not session:
+            return None
+        if model:
+            session.chat_model = model
+            session.chat_provider = provider or None
+        else:
+            session.chat_model = None
+            session.chat_provider = None
         await db.commit()
         await db.refresh(session)
         return session
@@ -1164,6 +1195,8 @@ class AgentExecutorService(BaseExecutorService):
         parent_node_key: Optional[str] = None,
         work_dir: Optional[str] = None,
         plan_mode: int = 0,
+        chat_model: Optional[str] = None,
+        chat_provider: Optional[str] = None,
     ) -> AgentSession:
         """创建新会话"""
         session = AgentSession(
@@ -1175,6 +1208,8 @@ class AgentExecutorService(BaseExecutorService):
             parent_node_key=parent_node_key,
             work_dir=work_dir,
             plan_mode=plan_mode,
+            chat_model=chat_model,
+            chat_provider=chat_provider,
         )
         db.add(session)
         await db.commit()

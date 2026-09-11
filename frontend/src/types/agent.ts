@@ -43,6 +43,10 @@ export interface AgentSession extends BaseEntity {
   work_dir?: string | null
   /** 计划模式：1=开启（只读探索），0/空=关闭 */
   plan_mode?: number | null
+  /** 会话级临时覆盖 LLM 模型 id（空=使用 LLM 节点默认） */
+  chat_model?: string | null
+  /** 与 chat_model 配套的供应商 ID */
+  chat_provider?: string | null
   /** 创建时间 */
   created_at?: string
   /** 更新时间 */

@@ -239,11 +239,21 @@ export const agentApi = {
    * @param agentId Agent ID
    * @param workDir 可选，项目工作路径
    * @param planMode 可选，计划模式开关
+   * @param chatModel 可选，会话级临时覆盖 LLM 模型 id
+   * @param chatProvider 可选，与 chatModel 配套的供应商 ID
    */
-  createSession(agentId: number, workDir?: string, planMode?: boolean) {
+  createSession(
+    agentId: number,
+    workDir?: string,
+    planMode?: boolean,
+    chatModel?: string,
+    chatProvider?: string
+  ) {
     return post<AgentSession>(`/agent/${agentId}/sessions`, {
       work_dir: workDir || null,
-      plan_mode: planMode ? 1 : planMode === undefined ? null : 0
+      plan_mode: planMode ? 1 : planMode === undefined ? null : 0,
+      chat_model: chatModel || null,
+      chat_provider: chatProvider || null
     })
   },
 
@@ -265,6 +275,23 @@ export const agentApi = {
   updatePlanMode(agentId: number, sessionId: number, planMode: boolean) {
     return put<AgentSession>(`/agent/${agentId}/sessions/${sessionId}/plan-mode`, {
       plan_mode: planMode
+    })
+  },
+
+  /**
+   * 切换会话级临时模型（按会话独立存储）
+   * @param model 模型 id，空串/null 表示清除（回退 LLM 节点默认）
+   * @param provider 与 model 配套的供应商 ID
+   */
+  updateChatModel(
+    agentId: number,
+    sessionId: number,
+    model: string | null,
+    provider?: string | null
+  ) {
+    return put<AgentSession>(`/agent/${agentId}/sessions/${sessionId}/chat-model`, {
+      model: model || null,
+      provider: provider || null
     })
   },
 

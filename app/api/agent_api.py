@@ -30,6 +30,7 @@ from app.schemas.agent_schema import (
     AgentSessionCreateRequest,
     AgentSessionWorkDirRequest,
     AgentSessionPlanModeRequest,
+    AgentSessionChatModelRequest,
     AgentMessageResponse,
     AgentMessageListResponse,
     AgentMessagePageRequest,
@@ -185,6 +186,8 @@ class AgentApi:
                 id,
                 work_dir=work_dir,
                 plan_mode=int(req.plan_mode) if req and req.plan_mode else 0,
+                chat_model=(req.chat_model or None) if req else None,
+                chat_provider=(req.chat_provider or None) if req else None,
             )
             return ApiResponse.success(
                 data=AgentSessionResponse.model_validate(session), msg="创建成功"
@@ -228,6 +231,27 @@ class AgentApi:
             """切换会话计划模式（只读探索，禁用写操作工具）；按会话独立存储"""
             session = await agent_executor_service.update_plan_mode(
                 db, session_id, req.plan_mode
+            )
+            if not session:
+                return ApiResponse.error(msg="会话不存在")
+            return ApiResponse.success(
+                data=AgentSessionResponse.model_validate(session), msg="更新成功"
+            )
+
+        @self.router.put(
+            "/{id}/sessions/{session_id}/chat-model",
+            response_model=ApiResponse[AgentSessionResponse],
+            summary="切换会话临时模型",
+        )
+        async def update_chat_model(
+            id: int,
+            session_id: int,
+            req: AgentSessionChatModelRequest,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """切换会话级临时模型（按会话独立存储）；model 为空表示清除，回退节点默认"""
+            session = await agent_executor_service.update_chat_model(
+                db, session_id, req.model, req.provider
             )
             if not session:
                 return ApiResponse.error(msg="会话不存在")

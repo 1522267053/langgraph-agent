@@ -2,7 +2,7 @@ import { ref, computed, watch } from 'vue'
 import { executionApi } from '@/api/execution'
 import type { FlowExecution, NodeExecution } from '@/types/execution'
 import type { SSEEvent } from '@/types/sse'
-import type { Segment, TodoItem } from '@/types/segment'
+import type { Segment, TodoItem, ToolCall } from '@/types/segment'
 import {
   appendThinking as appendThinkingToSegments,
   appendContent as appendContentToSegments,
@@ -195,11 +195,21 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
         }
       },
       onSubAgentProgress: (event: SSEEvent) => {
-        // 进度事件携带子Agent节点key，需反查持有同名 call_sub_agent_* running 工具段的 LLM 节点并覆盖预览
+        // 进度事件携带子Agent节点key，需反查持有同名 call_sub_agent_* running 工具段的
+        // LLM 节点并覆盖预览；tool_name 字段按需携带（非空=正在调用的工具名，
+        // 空串=工具全部结束清除），纯状态事件无 content
+        if (!event.data.node_key) return
         const content = event.data.content || ''
-        if (!content || !event.data.node_key) return
+        const hasToolFlag = event.data.tool_name !== undefined
+        if (!content && !hasToolFlag) return
         const toolName = `call_sub_agent_${event.data.node_key}`
         const agentName = event.data.sub_agent_name || '子Agent'
+        const patch: Partial<ToolCall> = {}
+        if (hasToolFlag) patch.liveTool = event.data.tool_name || undefined
+        if (content) {
+          patch.liveOutput = content
+          patch.liveAgentName = agentName
+        }
         for (const [nodeKey, item] of Object.entries(streamingContent.value)) {
           const segments = item?.segments
           if (!segments?.length) continue
@@ -210,7 +220,7 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
           const updated = [...segments]
           updated[idx] = {
             ...segments[idx],
-            tool: { ...segments[idx].tool!, liveOutput: content, liveAgentName: agentName }
+            tool: { ...segments[idx].tool!, ...patch }
           }
           streamingContent.value = { ...streamingContent.value, [nodeKey]: { segments: updated } }
           return

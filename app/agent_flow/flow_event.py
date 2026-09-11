@@ -211,6 +211,13 @@ class SubAgentProgressEvent(FlowEvent):
         default="", description="子Agent当前消息的累计快照（尾部截断）"
     )
     status: str = Field(default="running", description="执行状态: running/done/error")
+    tool_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "子Agent正在调用的工具名（并行多个以「、」连接）；"
+            "None=内容预览事件（序列化时剔除），空串=工具全部结束、清除工具状态"
+        ),
+    )
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.SUB_AGENT_PROGRESS

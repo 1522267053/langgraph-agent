@@ -25,6 +25,8 @@ export interface ToolCall {
   liveOutput?: string
   /** 子Agent名称 */
   liveAgentName?: string
+  /** 子Agent正在调用的工具名（并行多个以「、」连接）；空/undefined=无工具活动 */
+  liveTool?: string
 }
 
 /** 消息分段类型 */

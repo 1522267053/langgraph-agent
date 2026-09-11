@@ -413,6 +413,8 @@ async function openFileChangesPanel() {
 const restoreParamsSignal = ref<Record<string, unknown> | null>(null)
 
 // ---- 临时模型切换（跨供应商：选项 = LLM 节点自有供应商 + 已启用的供应商连接）----
+// 持久化双写（对标计划模式）：会话字段 DB 权威 + Agent 维度 localStorage 记忆
+// （无会话阶段暂存 / 新建会话继承）；有会话时选择即落库，切会话按字段恢复
 interface ChatModelOption {
   /** 复合键 `${provider}::${model_id}`（模型 id 跨供应商可能重复） */
   value: string
@@ -456,6 +458,7 @@ function loadStoredModel(id: number): string {
 
 watch(selectedModel, model => {
   if (restoringModelPref || !agentId.value) return
+  // Agent 维度记忆：新建会话继承最近偏好（无会话阶段也持续记录）
   try {
     const raw = localStorage.getItem(MODEL_PREF_KEY)
     const map = raw ? (JSON.parse(raw) as Record<string, string>) : {}
@@ -465,7 +468,42 @@ watch(selectedModel, model => {
   } catch {
     // ignore
   }
+  // 会话级落库（对标计划模式）：复合键拆回 provider/model，空串表示清除回退默认
+  const parsed = model ? parseModelValue(model) : null
+  void store.updateSessionChatModel(model, parsed?.provider)
 })
+
+/**
+ * 从会话字段恢复选中模型（切会话/换 Agent/选项加载后调用）：
+ * chat_model 有效时优先；为空或模型已失效时回退 Agent 维度记忆值
+ * （对标 work_dir 偏好回退，历史会话未落库时保持记忆体验，发送时才静默回填）
+ */
+function syncSelectedModelFromSession() {
+  const session = store.currentSession
+  let target = ''
+  if (session?.chat_model) {
+    const composite = session.chat_provider
+      ? toModelValue(session.chat_provider, session.chat_model)
+      : session.chat_model
+    if (modelOptions.value.some(o => o.value === composite)) target = composite
+  }
+  if (!target) {
+    const stored = agentId.value ? loadStoredModel(agentId.value) : ''
+    if (stored && modelOptions.value.some(o => o.value === stored)) target = stored
+  }
+  // 恢复属于纯 UI 同步，挂起持久化 watcher 防止误写记忆/会话
+  restoringModelPref = true
+  selectedModel.value = target
+  void nextTick(() => {
+    restoringModelPref = false
+  })
+}
+
+// 切换会话时按会话字段恢复临时模型（有会话时字段为权威，空则回退记忆值）
+watch(
+  () => store.currentSession?.id,
+  () => syncSelectedModelFromSession()
+)
 
 /** 按供应商分组（ChatInput 用 el-option-group 展示） */
 const modelGroups = computed(() => {
@@ -560,10 +598,9 @@ async function loadModelSelection(id: number) {
     }
 
     modelOptions.value = options
-    const stored = loadStoredModel(id)
-    if (stored && options.some(o => o.value === stored)) {
-      selectedModel.value = stored
-    }
+    // 恢复选中：会话字段优先，空/失效回退 Agent 记忆值
+    // （restoringModelPref 仍为 true，恢复不触发持久化；finally 中放行）
+    syncSelectedModelFromSession()
   } catch {
     // 模型列表加载失败不阻塞聊天
   } finally {
@@ -847,13 +884,17 @@ async function handleChatSend(
   const workDirForNew = pendingWorkDir.value || loadWorkDirForAgent(agentId.value)
   // 计划模式同理：新建会话继承 Agent 维度记忆（欢迎页预开的开关已随 toggle 写入记忆）
   const planModeForNew = loadPlanModeForAgent(agentId.value)
+  const override = resolveSelectedModel()
 
   if (!store.currentSession) {
     // 场景 1：完全没有 session（如首次进入页面、刷新后无历史 session）
+    // 临时模型随会话创建落库（对标计划模式随 createSession 传入）
     const session = await store.createSession(
       agentId.value!,
       workDirForNew || undefined,
-      planModeForNew || undefined
+      planModeForNew || undefined,
+      override?.model,
+      override?.provider
     )
     if (!session) return
     await store.selectSession(agentId.value!, session)
@@ -873,7 +914,11 @@ async function handleChatSend(
       // error handled by interceptor
     }
   }
-  const override = resolveSelectedModel()
+  // 场景 3：已有会话 chat_model 为空但当前选中了临时模型——发送前静默回填落库
+  // （历史会话未落库时恢复阶段回退记忆值，此处让展示与 DB 保持一致）
+  if (store.currentSession && !store.currentSession.chat_model && override) {
+    await store.updateSessionChatModel(override.model, override.provider)
+  }
   store.sendMessage(message, params, attachedFiles, override?.model, override?.provider)
   await nextTick()
   scrollToLatest()
