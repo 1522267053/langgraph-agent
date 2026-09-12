@@ -186,6 +186,13 @@ class ToolApprovalEvent(FlowEvent):
             "，供前端展示 N/M 进度指示器；与 rejection 语义 b 配套"
         ),
     )
+    approval_reason: Optional[str] = Field(
+        default=None,
+        description=(
+            "审批触发原因（如 '工具已配置为需审批' / '命令匹配危险模式: rm\\s+-rf'）；"
+            "可选，前端展示用。新版由工具节点（shell/ssh handler）内 emit 时填充"
+        ),
+    )
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.TOOL_APPROVAL_REQUIRED

@@ -92,6 +92,8 @@ class SshNodeConfig(BaseNodeConfig):
         NodeVariable(name="stderr", type="string"),
         NodeVariable(name="exit_code", type="number"),
     ]
+    # 注：approval_required_tools / approval_required_patterns 字段已在 BaseNodeConfig 提供，
+    # 本 Config 通过继承自动获得 default=[]。
 
 
 # ---- 工具入参模型 ----
@@ -377,6 +379,10 @@ class SshNodeHandler(BaseNodeHandler):
     # 由 llm_tool_executor 仅对 Agent 类型注入，用作下载默认目录
     _working_dir: Optional[Path] = None
 
+    # 注：_writer / _session_id / _compiled_patterns / _resolve_context /
+    # _ensure_patterns_compiled / _request_tool_approval 已下沉到 BaseNodeHandler，
+    # 本类继承即可直接调用。
+
     def _resolve_working_dir(self) -> Optional[Path]:
         """解析本地默认工作目录：注入值优先，回退 Agent 工作目录（非 Agent 流程返回 None）"""
         if self._working_dir is not None:
@@ -462,6 +468,25 @@ class SshNodeHandler(BaseNodeHandler):
         async def run_remote_command(
             command: str, timeout: Optional[int] = None
         ) -> dict:
+            # 审批钩子（基类 _check_and_request_approval 统一处理白名单 + 正则）
+            approval_result = await self._check_and_request_approval(
+                tool_name="ssh_executor",
+                tool_args={"command": command, "timeout": timeout},
+                cfg=cfg,
+                content_for_pattern=command,
+                node_key=node.node_key,
+            )
+            # None / "approved" 都视为放行，仅 rejected/timeout 时中断执行
+            if approval_result not in (None, "approved"):
+                return {
+                    "error": (
+                        f"用户未批准执行远程命令（{approval_result}）。"
+                        "如需继续，请征得用户同意后重新调用。"
+                    ),
+                    "success": False,
+                    "error_type": "approval_rejected",
+                }
+
             effective_timeout = timeout or cfg.command_timeout
 
             def job(client: SSHClient) -> dict:

@@ -4,6 +4,7 @@ import { fieldTypeOptions } from './types'
 import { useConfigBase } from '@/composables/useConfigBase'
 import { useInputVariables } from '@/composables/useInputVariables'
 import VariableSelector from '../components/VariableSelector.vue'
+import ApprovalConfigSection, { type ApprovalConfig } from './ApprovalConfigSection.vue'
 
 const props = defineProps<{
   config: SshConfig
@@ -23,6 +24,31 @@ const { addInputVariable, removeInputVariable, handleSourceTypeChange } = useInp
 function updateVariableSource(index: number, source: string): void {
   if (localConfig.value.input_variables[index])
     localConfig.value.input_variables[index].source = source
+  updateConfig()
+}
+
+// ---- 工具审批配置（approval 已下沉到本节点，复用 ApprovalConfigSection）----
+
+function ensureApprovalArrays(): void {
+  if (!Array.isArray(localConfig.value.approval_required_tools)) {
+    localConfig.value.approval_required_tools = []
+  }
+  if (!Array.isArray(localConfig.value.approval_required_patterns)) {
+    localConfig.value.approval_required_patterns = []
+  }
+}
+ensureApprovalArrays()
+
+const sshAvailableTools = [
+  { label: 'ssh_executor', value: 'ssh_executor' },
+  { label: 'ssh_upload', value: 'ssh_upload' },
+  { label: 'ssh_download', value: 'ssh_download' },
+  { label: 'ssh_list_dir', value: 'ssh_list_dir' }
+]
+
+function onApprovalUpdate(val: ApprovalConfig): void {
+  localConfig.value.approval_required_tools = [...val.approval_required_tools]
+  localConfig.value.approval_required_patterns = [...val.approval_required_patterns]
   updateConfig()
 }
 </script>
@@ -192,6 +218,16 @@ function updateVariableSource(index: number, source: string): void {
         </el-text>
       </div>
     </div>
+
+    <ApprovalConfigSection
+      :model-value="{
+        approval_required_tools: localConfig.approval_required_tools,
+        approval_required_patterns: localConfig.approval_required_patterns
+      }"
+      :available-tools="sshAvailableTools"
+      hint="远程主机为真实系统，删除/重启/格式化等高危命令建议配置模式拦截；ssh_executor 仅在该工具名或命令命中时弹审批，其余工具默认放行。"
+      @update:model-value="onApprovalUpdate"
+    />
 
     <div class="config-section">
       <div class="section-title">输出变量</div>

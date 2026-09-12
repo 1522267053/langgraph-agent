@@ -46,9 +46,6 @@ if (!localConfig.value.required_tools_max_retries) {
 if (localConfig.value.required_tools_hint === undefined) {
   localConfig.value.required_tools_hint = ''
 }
-if (!localConfig.value.approval_required_tools) {
-  localConfig.value.approval_required_tools = []
-}
 if (localConfig.value.json_output_enabled === undefined) {
   localConfig.value.json_output_enabled = false
 }
@@ -82,9 +79,6 @@ watch(
     }
     if (localConfig.value.required_tools_hint === undefined) {
       localConfig.value.required_tools_hint = ''
-    }
-    if (!localConfig.value.approval_required_tools) {
-      localConfig.value.approval_required_tools = []
     }
     if (localConfig.value.json_output_enabled === undefined) {
       localConfig.value.json_output_enabled = false
@@ -180,14 +174,6 @@ async function fetchConnectedTools(): Promise<void> {
       resolvedToolGroups.value = []
     }
   }
-}
-
-function updateApprovalRequiredTools(): void {
-  const names = localConfig.value.approval_required_tools || []
-  localConfig.value.approval_required_tools = [
-    ...new Set(names.map(name => name.trim()).filter(Boolean))
-  ]
-  updateConfig()
 }
 
 // ---- JSON 结构化输出（structured_output 虚拟工具：弹窗编辑字段树，面板只读摘要）----
@@ -434,33 +420,7 @@ watch(connectedToolNodes, fetchConnectedTools, { immediate: true, deep: true })
             />
           </el-form-item>
         </template>
-        <template v-if="isAgentMode">
-          <el-form-item label="工具确认">
-            <el-select
-              v-model="localConfig.approval_required_tools"
-              multiple
-              filterable
-              allow-create
-              default-first-option
-              placeholder="选择或输入需确认的完整工具名（留空不审批）"
-              style="width: 100%"
-              @change="updateApprovalRequiredTools"
-            >
-              <el-option-group
-                v-for="group in connectedToolGroups"
-                :key="group.node_key"
-                :label="group.node_label"
-              >
-                <el-option
-                  v-for="tool in group.tools"
-                  :key="tool.name"
-                  :label="tool.name"
-                  :value="tool.name"
-                />
-              </el-option-group>
-            </el-select>
-          </el-form-item>
-        </template>
+        <!-- 工具确认已下沉到 shell/ssh 节点各管各的，此处不再暴露 -->
         <el-form-item label="自动压缩附加提示语">
           <el-input
             v-model="localConfig.compress_extra_prompt"

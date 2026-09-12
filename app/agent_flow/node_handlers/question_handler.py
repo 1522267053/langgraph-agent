@@ -86,28 +86,8 @@ class QuestionNodeHandler(BaseNodeHandler):
 
     ConfigClass = QuestionNodeConfig
 
-    def __init__(self):
-        super().__init__()
-        self._writer: Optional[StreamWriter] = None
-        self._session_id: int = 0
-
-    def _resolve_context(self, config: Optional[RunnableConfig]) -> None:
-        """记录当前 Agent 会话 ID（与 sub_agent_handler 同样的注入模式）
-
-        不得触碰 _writer：setup_tool_handlers 在调用本方法前已注入 writer，
-        此处重置会把它清成 None，导致工具守卫误判为非 Agent 模式。
-        """
-        self._session_id = 0
-        configurable = (config or {}).get("configurable", {})
-        session_id = configurable.get("session_id")
-        if not session_id:
-            thread_id = str(configurable.get("thread_id") or "")
-            if thread_id.startswith("agent_"):
-                session_id = thread_id.removeprefix("agent_")
-        try:
-            self._session_id = int(session_id or 0)
-        except (TypeError, ValueError):
-            self._session_id = 0
+    # 注：_writer / _session_id / _resolve_context 已下沉到 BaseNodeHandler 基类，
+    # 本类继承即可直接调用（sub_agent_handler 也是同一模式）。
 
     async def execute(
         self,

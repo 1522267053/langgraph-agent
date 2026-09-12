@@ -559,6 +559,32 @@ class ApiNodeHandler(BaseNodeHandler):
                 headers = {}
             if upload_fields is None:
                 upload_fields = []
+            # 审批钩子（基类 _check_and_request_approval 统一处理白名单 + 正则）
+            tool_name = f"api_call_tool_{node.node_key}"
+            body_text = (
+                body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
+            )
+            content = f"{method} {api_url} {body_text[:200]}"
+            approval_result = await handler._check_and_request_approval(
+                tool_name=tool_name,
+                tool_args={
+                    "api_url": api_url,
+                    "method": method,
+                    "body": body_text[:200],
+                },
+                cfg=cfg,
+                content_for_pattern=content,
+                node_key=node.node_key,
+            )
+            if approval_result not in (None, "approved"):
+                return {
+                    "error": (
+                        f"用户未批准执行API调用（{approval_result}）。"
+                        "如需继续，请征得用户同意后重新调用。"
+                    ),
+                    "success": False,
+                    "error_type": "approval_rejected",
+                }
             return await handler._call_api_json(
                 api_url,
                 method,
@@ -648,6 +674,31 @@ class ApiNodeHandler(BaseNodeHandler):
                     parsed_body = json.loads(rendered_body)
                 except json.JSONDecodeError:
                     pass
+
+            # 审批钩子（preset 工具 url/method/body 是固定的，但 LLM 可改 context 触发不同内容）
+            body_text = (
+                rendered_body
+                if isinstance(rendered_body, str)
+                else json.dumps(rendered_body, ensure_ascii=False)
+            )
+            content = f"{cfg.method or 'GET'} {rendered_url} {body_text[:200]}"
+            tool_name = f"api_{node.node_key}"
+            approval_result = await handler._check_and_request_approval(
+                tool_name=tool_name,
+                tool_args={"url": rendered_url, "method": cfg.method or "GET"},
+                cfg=cfg,
+                content_for_pattern=content,
+                node_key=node.node_key,
+            )
+            if approval_result not in (None, "approved"):
+                return {
+                    "error": (
+                        f"用户未批准执行API调用（{approval_result}）。"
+                        "如需继续，请征得用户同意后重新调用。"
+                    ),
+                    "success": False,
+                    "error_type": "approval_rejected",
+                }
             return await handler._call_api_json(
                 rendered_url,
                 cfg.method or "GET",

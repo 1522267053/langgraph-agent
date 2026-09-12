@@ -545,6 +545,25 @@ class PythonNodeHandler(BaseNodeHandler):
         async def execute_python(
             code: str, input_data: Optional[dict[str, Any]] = None
         ) -> dict:
+            # 审批钩子（基类 _check_and_request_approval 统一处理白名单 + 正则）
+            tool_name = f"python_executor_{node.node_key}"
+            approval_result = await handler._check_and_request_approval(
+                tool_name=tool_name,
+                tool_args={"code": code, "input_data": input_data or {}},
+                cfg=cfg,
+                content_for_pattern=code,
+                node_key=node.node_key,
+            )
+            if approval_result not in (None, "approved"):
+                return {
+                    "error": (
+                        f"用户未批准执行Python代码（{approval_result}）。"
+                        "如需继续，请征得用户同意后重新调用。"
+                    ),
+                    "success": False,
+                    "error_type": "approval_rejected",
+                }
+
             input_vars = input_data if input_data else {}
 
             try:
@@ -608,6 +627,25 @@ class PythonNodeHandler(BaseNodeHandler):
         )
 
         async def execute_preset_python(**kwargs) -> dict:
+            # 审批钩子（preset 工具 code 是固定的，用 cfg.code 做正则匹配；白名单按实际 tool_name 匹配）
+            tool_name = _resolve_tool_name(cfg, node.node_key)
+            approval_result = await handler._check_and_request_approval(
+                tool_name=tool_name,
+                tool_args=kwargs,
+                cfg=cfg,
+                content_for_pattern=code,
+                node_key=node.node_key,
+            )
+            if approval_result not in (None, "approved"):
+                return {
+                    "error": (
+                        f"用户未批准执行Python代码（{approval_result}）。"
+                        "如需继续，请征得用户同意后重新调用。"
+                    ),
+                    "success": False,
+                    "error_type": "approval_rejected",
+                }
+
             input_vars = {k: v for k, v in kwargs.items() if k != "_dummy"}
             try:
                 result = await handler._execute_python(code, input_vars, timeout)

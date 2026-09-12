@@ -33,7 +33,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pydantic import Field, field_validator
+from pydantic import Field
 
 from app.models.flow_node import FlowNode
 from app.services.agent_conversation_service import AgentConversationService
@@ -211,10 +211,8 @@ class LlmNodeConfig(BaseNodeConfig):
         ...,
         description="用户提示词模板（必填，否则 LLM 收不到消息。支持变量插值，如: {{message}}）",
     )
-    approval_required_tools: list[str] = Field(
-        default_factory=list,
-        description="执行前需要用户确认的完整工具名列表（仅 Agent 模式生效）",
-    )
+    # approval_required_tools 已下沉到工具节点内部（shell/ssh handler 各管各的）；
+    # 老 LLM 节点 base_config 里若仍含该字段会被 Pydantic 默认忽略，不抛错。
     extra_body: dict = Field(
         default_factory=dict, description="附加请求参数（JSON 对象，会合并到请求体中）"
     )
@@ -262,12 +260,6 @@ class LlmNodeConfig(BaseNodeConfig):
         default="",
         description="上下文压缩时使用的额外提示词，可用于生成指定格式的上下文压缩格式",
     )
-
-    @field_validator("approval_required_tools")
-    @classmethod
-    def normalize_approval_required_tools(cls, value: list[str]) -> list[str]:
-        """清理手动输入的工具名并保持原顺序去重。"""
-        return list(dict.fromkeys(name.strip() for name in value if name.strip()))
 
 
 class LlmToolNodeHandler(BaseNodeHandler):
@@ -686,7 +678,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 emit_flow_preview_fn=self._emit_flow_preview,
                 max_tool_iterations=max_tool_iterations,
                 context_length=cfg_context_length,
-                approval_required_tools=cfg.approval_required_tools,
+                # approval_required_tools 已下沉：审批配置由 shell/ssh 节点各管各的
                 required_tools=plan_required_tools,
                 tool_check_script=cfg.tool_check_script,
                 required_tools_max_retries=cfg.required_tools_max_retries,
