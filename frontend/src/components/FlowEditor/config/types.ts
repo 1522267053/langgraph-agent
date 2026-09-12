@@ -304,6 +304,11 @@ export interface SubAgentConfig {
   agent_id: number | null
 }
 
+/** Flow工具节点配置 */
+export interface FlowToolConfig {
+  flow_id: number | null
+}
+
 /** 卡片节点配置 */
 export interface CardConfig {
   ref_flow_id: number

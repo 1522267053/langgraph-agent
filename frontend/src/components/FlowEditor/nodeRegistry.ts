@@ -611,6 +611,24 @@ const registry: Record<string, NodeRegistryEntry> = {
     defaultConfig: () => ({ description: '' })
   },
 
+  flow_tool: {
+    label: 'Flow工具',
+    description: '将已发布的 Flow 作为工具调用，保留其中断/审批能力（单工具双模式）',
+    category: 'tool',
+    icon: Connection,
+    iconColor: '#8b5cf6',
+    iconBgColor: '#f5f3ff',
+    defaultConfig: () => ({ flow_id: null }),
+    getExtraProps: ctx => ({ nodeId: ctx.selectedNodeId }),
+    getExtraEvents: ctx => ({
+      'update:label': (label: unknown) => {
+        const labelStr = label as string
+        ctx.setNodeLabel(labelStr)
+        ctx.updateNodeData(ctx.selectedNodeId, { label: labelStr })
+      }
+    })
+  },
+
   // ========== 交互节点 ==========
 
   human: {

@@ -24,6 +24,7 @@ export type CardNodeType =
   | 'sub_agent'
   | 'agenda'
   | 'question'
+  | 'flow_tool'
 
 /** 所有节点类型 */
 export type AllNodeType = NodeType | CardNodeType

@@ -32,6 +32,8 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
 | 节点字段、变量路径、边与常见配置 | [节点配置](references/node-config.md) |
 | 子 Agent、会话复用、并发与审批 | [子 Agent](references/sub-agent.md) |
 | 让 Agent 在运行时修改自身 | [运行时自更新](references/runtime-self-update.md) |
+| Flow 作为 Agent 工具（含 interrupt/审批） | [Workflow as Tool](references/workflow-as-tool.md) |
+| 工具审批（shell/ssh/python/api/mcp 危险操作） | [工具审批](references/tool-approval.md) |
 
 ## 选择类型
 
@@ -193,3 +195,11 @@ LLM 节点开启 `json_output_enabled: true` 后绑定 `structured_output` 虚�
 → 详见 [工具审批](references/tool-approval.md)
 
 恢复接口与 SSE 事件已分别在 [API 参考](api.md#sse-事件) 和 [子 Agent](sub-agent.md#工具审批) 描述。
+
+## Workflow as Tool（Agent 模式）
+
+Agent 通过 **Flow 工具** 节点调用已发布的普通 Flow 作为工具，**保留 Flow 的中断/审批能力**（与 dify Workflow→Tool 不同——dify 禁用 interrupt）。
+
+核心是"单工具双模式"：一个工具名 `flow_<flow_id>_tool`，靠 `execution_id` 字段是否提供来路由 execute / resume 模式。LLM 拿到 `status="interrupted"` 的返回值后，下一轮决策里再次调用同一工具 + 传 `execution_id` + `human_input` 即可继续等待中的 Flow。
+
+→ 详见 [Workflow as Tool](references/workflow-as-tool.md)

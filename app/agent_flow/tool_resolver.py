@@ -69,6 +69,12 @@ class LlmToolConfig(BaseModel):
     question_configs: dict[str, dict] = Field(
         default_factory=dict, description="问题反问节点配置"
     )
+    flow_tool_node_keys: list[str] = Field(
+        default_factory=list, description="Flow工具节点 key 列表"
+    )
+    flow_tool_configs: dict[str, dict] = Field(
+        default_factory=dict, description="Flow工具节点配置（flow_id 等）"
+    )
 
 
 def get_connected_tool_nodes(
