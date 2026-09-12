@@ -259,7 +259,7 @@ class FlowNodeApi(
         flow_id: int,
         base_config: dict | None,
     ) -> None:
-        """校验子Agent节点引用的Agent必须已发布、描述非空、且不含sub_agent节点"""
+        """校验子Agent节点引用的Agent必须描述非空、且不含sub_agent节点"""
         agent_id = (
             base_config.get("agent_id") if isinstance(base_config, dict) else None
         )

@@ -1,7 +1,7 @@
 """
 Flow 作为工具调用的服务层
 
-将已发布的 Flow 暴露为 Agent 可调用的工具，保留其中断/审批能力。
+将 Flow 暴露为 Agent 可调用的工具，保留其中断/审批能力。
 与 flow_tool_handler 的关系：
 - handler：负责工具注册（StructuredTool + Pydantic schema）
 - service：负责执行 + structured 返回（含嵌套自调防护）

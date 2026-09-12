@@ -574,7 +574,7 @@ const registry: Record<string, NodeRegistryEntry> = {
 
   sub_agent: {
     label: '子Agent',
-    description: '调用已发布的Agent作为子任务执行器',
+    description: '调用Agent作为子任务执行器',
     category: 'tool',
     icon: Avatar,
     iconColor: '#3b82f6',
@@ -613,7 +613,7 @@ const registry: Record<string, NodeRegistryEntry> = {
 
   flow_tool: {
     label: 'Flow工具',
-    description: '将已发布的 Flow 作为工具调用，保留其中断/审批能力（单工具双模式）',
+    description: '将 Flow 作为工具调用，保留其中断/审批能力（单工具双模式）',
     category: 'tool',
     icon: Connection,
     iconColor: '#8b5cf6',

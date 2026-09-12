@@ -198,7 +198,7 @@ LLM 节点开启 `json_output_enabled: true` 后绑定 `structured_output` 虚�
 
 ## Workflow as Tool（Agent 模式）
 
-Agent 通过 **Flow 工具** 节点调用已发布的普通 Flow 作为工具，**保留 Flow 的中断/审批能力**（与 dify Workflow→Tool 不同——dify 禁用 interrupt）。
+Agent 通过 **Flow 工具** 节点调用普通 Flow 作为工具，**保留 Flow 的中断/审批能力**（与 dify Workflow→Tool 不同——dify 禁用 interrupt）。
 
 核心是"单工具双模式"：一个工具名 `flow_<flow_id>_tool`，靠 `execution_id` 字段是否提供来路由 execute / resume 模式。LLM 拿到 `status="interrupted"` 的返回值后，下一轮决策里再次调用同一工具 + 传 `execution_id` + `human_input` 即可继续等待中的 Flow。
 

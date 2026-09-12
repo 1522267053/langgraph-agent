@@ -1,7 +1,7 @@
 """
 Flow工具节点处理器
 
-将已发布的 Flow 暴露为 Agent 可调用的工具，保留 Flow 的中断/人工审批能力。
+将 Flow 暴露为 Agent 可调用的工具，保留 Flow 的中断/人工审批能力。
 与 sub_agent_handler 的关系：
 - sub_agent 调子 Agent（独立 session）
 - flow_tool 调子 Flow（独立 execution_id + LangGraph checkpoint 持久化中断）
@@ -51,7 +51,7 @@ _TYPE_MAP = {
 class FlowToolNodeConfig(BaseNodeConfig):
     """Flow工具节点配置"""
 
-    flow_id: int = Field(..., description="引用的 Flow ID（必须已发布且类型为 flow）")
+    flow_id: int = Field(..., description="引用的 Flow ID")
 
 
 def _parse_input_schema(input_schema: Any) -> list[dict]:
@@ -272,7 +272,7 @@ class FlowToolNodeHandler(BaseNodeHandler):
         base_desc = flow.description or ""
 
         parts = [
-            f"调用已发布的 Flow「{flow_name}」执行任务。",
+            f"调用的 Flow「{flow_name}」执行任务。",
         ]
         if base_desc:
             parts.append(base_desc)
@@ -318,7 +318,7 @@ class FlowToolNodeHandler(BaseNodeHandler):
             {
                 "name": f"flow_{flow_id}_tool",
                 "description": (
-                    f"调用已发布 Flow #{flow_id} 作为工具（保留中断/审批能力）"
+                    f"调用 Flow #{flow_id} 作为工具（保留中断/审批能力）"
                 ),
             }
         ]
