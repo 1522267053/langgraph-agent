@@ -8,6 +8,9 @@ import FilePickerDialog from '@/components/common/FilePickerDialog.vue'
 import { useConfigBase } from '@/composables/useConfigBase'
 import { useInputVariables } from '@/composables/useInputVariables'
 import VariableSelector from '../components/VariableSelector.vue'
+import ApprovalConfigSection, { type ApprovalConfig } from './ApprovalConfigSection.vue'
+import { useFlowStore } from '@/stores/flowStore'
+import { flowApi } from '@/api/flow'
 
 const props = defineProps<{
   config: ApiConfig
@@ -49,6 +52,66 @@ function ensureDefaults(): void {
   if (!c.file_config.download) {
     c.file_config.download = { enabled: false }
   }
+  if (!Array.isArray(c.approval_required_tools)) {
+    c.approval_required_tools = []
+  }
+  if (!Array.isArray(c.approval_required_patterns)) {
+    c.approval_required_patterns = []
+  }
+}
+
+/** 调后端 resolveConnectedTools 拿本节点运行时实际暴露的工具名（api_call_tool_<node_key> 或 preset 自定义名） */
+const flowStore = useFlowStore()
+const apiAvailableTools = ref<{ label: string; value: string }[]>([])
+let apiToolRequestVersion = 0
+
+async function fetchApiAvailableTools(): Promise<void> {
+  const version = ++apiToolRequestVersion
+  const flowId = flowStore.flowInfo?.id
+  if (!flowId || !props.currentNodeId) {
+    apiAvailableTools.value = []
+    return
+  }
+  try {
+    const res = await flowApi.resolveConnectedTools(flowId, [
+      {
+        node_key: props.currentNodeId,
+        node_type: 'api',
+        node_name: '',
+        base_config: localConfig.value
+      }
+    ])
+    if (version !== apiToolRequestVersion) return
+    if (res.data.code === 1 && Array.isArray(res.data.data)) {
+      const tools = res.data.data.flatMap(g => g.tools || [])
+      apiAvailableTools.value = tools.map(t => ({
+        label: t.description ? `${t.name} - ${t.description.slice(0, 30)}` : t.name,
+        value: t.name
+      }))
+    } else {
+      apiAvailableTools.value = []
+    }
+  } catch {
+    if (version === apiToolRequestVersion) apiAvailableTools.value = []
+  }
+}
+
+// 节点切换 + 关键配置（api_url / method / use_preset_for_tool）变化都重新拉
+watch(
+  () => [
+    props.currentNodeId,
+    localConfig.value.api_url,
+    localConfig.value.method,
+    localConfig.value.use_preset_for_tool
+  ],
+  () => fetchApiAvailableTools(),
+  { immediate: true, deep: true }
+)
+
+function onApprovalUpdate(val: ApprovalConfig): void {
+  localConfig.value.approval_required_tools = [...val.approval_required_tools]
+  localConfig.value.approval_required_patterns = [...val.approval_required_patterns]
+  updateConfig()
 }
 
 watch(
@@ -386,6 +449,18 @@ function updateFormField(): void {
         <el-text size="small" type="info">下游节点通过变量映射使用</el-text>
       </div>
     </div>
+
+    <ApprovalConfigSection
+      :model-value="{
+        approval_required_tools: localConfig.approval_required_tools,
+        approval_required_patterns: localConfig.approval_required_patterns
+      }"
+      :available-tools="apiAvailableTools"
+      tools-placeholder="下拉为本节点运行时的实际工具名；可手动输入其他名"
+      pattern-placeholder="正则表达式（Python re 语法，对 METHOD URL BODY[:200] 逐条 re.search(content, ...)）"
+      hint="AI 调用 api_call_tool 时：工具名匹配「需审批工具名」，或 URL/Method/Body 命中任一正则，则弹审批；仅 Agent 模式生效，留空时不过审批。"
+      @update:model-value="onApprovalUpdate"
+    />
 
     <FilePickerDialog
       v-model="showFilePicker"

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import type { PythonConfig } from './types'
 import { fieldTypeOptions } from './types'
 import { ElMessage } from 'element-plus'
@@ -6,6 +7,9 @@ import { useConfigBase } from '@/composables/useConfigBase'
 import { useInputVariables } from '@/composables/useInputVariables'
 import VariableSelector from '../components/VariableSelector.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
+import ApprovalConfigSection, { type ApprovalConfig } from './ApprovalConfigSection.vue'
+import { useFlowStore } from '@/stores/flowStore'
+import { flowApi } from '@/api/flow'
 
 const props = defineProps<{
   config: PythonConfig
@@ -54,6 +58,68 @@ function validateToolName(): void {
       duration: 5000
     })
   }
+  updateConfig()
+}
+
+// ---- 工具审批配置（approval 已下沉到本节点，复用 ApprovalConfigSection）----
+
+function ensureApprovalArrays(): void {
+  if (!Array.isArray(localConfig.value.approval_required_tools)) {
+    localConfig.value.approval_required_tools = []
+  }
+  if (!Array.isArray(localConfig.value.approval_required_patterns)) {
+    localConfig.value.approval_required_patterns = []
+  }
+}
+ensureApprovalArrays()
+
+/** 调后端 resolveConnectedTools 拿本节点运行时实际暴露的工具名（python_executor_<node_key> 或 preset 自定义名） */
+const flowStore = useFlowStore()
+const pythonAvailableTools = ref<{ label: string; value: string }[]>([])
+let pythonToolRequestVersion = 0
+
+async function fetchPythonAvailableTools(): Promise<void> {
+  const version = ++pythonToolRequestVersion
+  const flowId = flowStore.flowInfo?.id
+  if (!flowId || !props.currentNodeId) {
+    pythonAvailableTools.value = []
+    return
+  }
+  try {
+    const res = await flowApi.resolveConnectedTools(flowId, [
+      {
+        node_key: props.currentNodeId,
+        node_type: 'python',
+        node_name: '',
+        base_config: localConfig.value
+      }
+    ])
+    if (version !== pythonToolRequestVersion) return
+    if (res.data.code === 1 && Array.isArray(res.data.data)) {
+      // res.data.data[].tools[].name 是后端 get_tool_info 返回的实际工具名
+      const tools = res.data.data.flatMap(g => g.tools || [])
+      pythonAvailableTools.value = tools.map(t => ({
+        label: t.description ? `${t.name} - ${t.description.slice(0, 30)}` : t.name,
+        value: t.name
+      }))
+    } else {
+      pythonAvailableTools.value = []
+    }
+  } catch {
+    if (version === pythonToolRequestVersion) pythonAvailableTools.value = []
+  }
+}
+
+// 节点切换 + 配置变化（影响 preset tool_name）都要重新拉
+watch(
+  () => [props.currentNodeId, localConfig.value.tool_name, localConfig.value.use_preset_for_tool],
+  () => fetchPythonAvailableTools(),
+  { immediate: true, deep: true }
+)
+
+function onApprovalUpdate(val: ApprovalConfig): void {
+  localConfig.value.approval_required_tools = [...val.approval_required_tools]
+  localConfig.value.approval_required_patterns = [...val.approval_required_patterns]
   updateConfig()
 }
 </script>
@@ -250,6 +316,18 @@ function validateToolName(): void {
         <el-text size="small" type="info">下游节点通过变量映射使用</el-text>
       </div>
     </div>
+
+    <ApprovalConfigSection
+      :model-value="{
+        approval_required_tools: localConfig.approval_required_tools,
+        approval_required_patterns: localConfig.approval_required_patterns
+      }"
+      :available-tools="pythonAvailableTools"
+      tools-placeholder="下拉为本节点运行时的实际工具名；可手动输入其他名"
+      pattern-placeholder="正则表达式（Python re 语法，对代码全文逐条 re.search(code, ...)）"
+      hint="AI 调用 python_executor 时：工具名匹配「需审批工具名」，或代码内容命中任一正则，则弹审批；仅 Agent 模式生效，留空时不过审批。"
+      @update:model-value="onApprovalUpdate"
+    />
   </div>
 </template>
 
