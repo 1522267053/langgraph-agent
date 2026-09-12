@@ -69,6 +69,8 @@ class ShellNodeConfig(BaseNodeConfig):
         NodeVariable(name="stderr", type="string"),
         NodeVariable(name="exit_code", type="number"),
     ]
+    # 注：approval_required_tools / approval_required_patterns 字段已在 BaseNodeConfig 提供，
+    # 本 Config 通过继承自动获得 default=[]。子类可在 get_config_schema() 输出中由基类一并展示。
 
 
 BLOCKED_COMMANDS = {
@@ -859,6 +861,10 @@ class ShellNodeHandler(BaseNodeHandler):
     # file_read 可自动注入的媒体类型集合（由 llm_tool_executor 按模型能力×适配器注入；空则媒体文件按普通文件处理）
     _media_caps: set = set()
 
+    # 注：_writer / _session_id / _compiled_patterns / _resolve_context /
+    # _ensure_patterns_compiled / _request_tool_approval 已下沉到 BaseNodeHandler，
+    # 本类继承即可直接调用。
+
     def _resolve_working_dir(self) -> Optional[Path]:
         """解析当前 Shell 执行的工作目录
 
@@ -876,6 +882,8 @@ class ShellNodeHandler(BaseNodeHandler):
             if flow_type == "agent" and flow_id:
                 return get_agent_work_dir(flow_id)
         return None
+
+    # 注：_request_tool_approval 已下沉到 BaseNodeHandler，本类继承使用。
 
     def _configured_workdir(
         self, cfg: BaseNodeConfig
@@ -1109,6 +1117,25 @@ class ShellNodeHandler(BaseNodeHandler):
         async def execute_shell(
             command: str, workdir: Optional[str] = None
         ) -> str | dict:
+            # 审批钩子（基类 _check_and_request_approval 统一处理白名单 + 正则）
+            approval_result = await self._check_and_request_approval(
+                tool_name="shell_executor",
+                tool_args={"command": command, "workdir": workdir},
+                cfg=cfg,
+                content_for_pattern=command,
+                node_key=node.node_key,
+            )
+            # None / "approved" 都视为放行，仅 rejected/timeout 时中断执行
+            if approval_result not in (None, "approved"):
+                return {
+                    "error": (
+                        f"用户未批准执行命令（{approval_result}）。"
+                        "如需继续，请征得用户同意后重新调用。"
+                    ),
+                    "success": False,
+                    "error_type": "approval_rejected",
+                }
+
             # Windows cmd 会把换行符当命令分隔符，含换行的命令在首个换行处被截断、
             # 输出静默丢失——直接拒绝并要求改写为单行（多条命令用 && 连接）
             if system_type == "Windows" and "\n" in command:

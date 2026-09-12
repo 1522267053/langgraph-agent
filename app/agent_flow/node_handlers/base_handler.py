@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
+import uuid
 from abc import ABC, abstractmethod
 from typing import Optional, Any, TYPE_CHECKING, Sequence
 
@@ -44,6 +47,22 @@ class BaseNodeConfig(BaseModel):
     model_config = {"extra": "ignore"}
     input_variables: list[NodeVariable] = []
     output_variables: list[NodeVariable] = []
+    # ---- 工具审批（仅 Agent 模式生效；继承 BaseNodeHandler 的工具节点可直接调用
+    # self._request_tool_approval；如 shell/ssh 等"命令工具"会用到）----
+    approval_required_tools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "执行前需用户确认的工具名白名单（完整工具名，如 shell_executor）。"
+            "仅 Agent 模式生效，留空表示全部命令直接执行。"
+        ),
+    )
+    approval_required_patterns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "需用户确认的命令正则模式（Python re 语法，逐条 re.search(command, ...)）。"
+            "仅 Agent 模式生效；适用于『命令工具』节点按内容拦截危险命令。"
+        ),
+    )
 
 
 # ---- Pydantic → 配置描述 ----
@@ -206,6 +225,14 @@ class BaseNodeHandler(ABC):
             resolver: 变量解析器，默认使用全局单例
         """
         self._resolver = resolver or variable_resolver
+        # Agent 模式上下文注入槽（由 setup_tool_handlers 写入）：
+        # _writer 用于 SSE 事件 emit，_session_id 用于 tool_approval_service 路由。
+        # 非 Agent 模式保持 None / 0，对应工具审批钩子直接跳过。
+        self._writer: Optional[StreamWriter] = None
+        self._session_id: int = 0
+        # 审批正则缓存：_compiled_patterns_source 作为缓存 key（tuple 不可哈希问题规避）
+        self._compiled_patterns: list[re.Pattern] = []
+        self._compiled_patterns_source: Optional[tuple[str, ...]] = None
 
     def _get_config(self, node: FlowNode) -> Any:
         """
@@ -264,6 +291,171 @@ class BaseNodeHandler(ABC):
     ) -> None:
         """发送错误事件到流式输出"""
         self._emit(writer, ErrorEvent(message=message, node_key=node_key))
+
+    # ---- 工具审批钩子（基类默认实现，shell/ssh/python 等"命令工具"复用）----
+
+    def _resolve_context(self, config: Optional[RunnableConfig]) -> None:
+        """从 RunnableConfig 提取 session_id（question_handler / shell_handler 同模式）。
+
+        setup_tool_handlers 在调用本方法前已注入 _writer，本方法只负责 session_id。
+        非 Agent 模式（_session_id 保持 0）下工具审批钩子会被调用方跳过。
+        """
+        self._session_id = 0
+        configurable = (config or {}).get("configurable", {})
+        session_id = configurable.get("session_id")
+        if not session_id:
+            thread_id = str(configurable.get("thread_id") or "")
+            if thread_id.startswith("agent_"):
+                session_id = thread_id.removeprefix("agent_")
+        try:
+            self._session_id = int(session_id or 0)
+        except (TypeError, ValueError):
+            self._session_id = 0
+
+    def _ensure_patterns_compiled(self, patterns: list[str]) -> list[re.Pattern]:
+        """懒编译 approval_required_patterns。
+
+        按 patterns 内容做缓存 key：内容变更即重新编译，长度巧合不会复用旧缓存。
+        非法正则单条跳过并记 warning，不阻塞其他。
+        """
+        key = tuple(patterns or ())
+        if self._compiled_patterns_source == key:
+            return self._compiled_patterns
+        compiled: list[re.Pattern] = []
+        for raw in patterns or ():
+            s = (raw or "").strip()
+            if not s:
+                continue
+            try:
+                compiled.append(re.compile(s, re.IGNORECASE))
+            except re.error:
+                logger.warning("approval_required_patterns 跳过非法正则: %r", s)
+        self._compiled_patterns = compiled
+        self._compiled_patterns_source = key
+        return compiled
+
+    async def _check_and_request_approval(
+        self,
+        tool_name: str,
+        tool_args: dict,
+        cfg: BaseNodeConfig,
+        content_for_pattern: str,
+        node_key: str,
+    ) -> Optional[str]:
+        """工具审批统一钩子：白名单 + 正则 → request approval。
+
+        调用方需在工具闭包最前面 await 一次，按返回值决定是否放行：
+
+            approval_result = await self._check_and_request_approval(...)
+            if approval_result not in (None, "approved"):
+                return {"error": "用户未批准...", "success": False}
+
+        Returns:
+            None：未命中审批条件（继续执行工具）；
+            "approved"：用户已批准；
+            "rejected" / "timeout"：拒绝/超时。
+
+        仅 Agent 模式生效（_session_id > 0 且 _writer 非空）；非 Agent 模式直接 None 放行。
+        """
+        if self._session_id <= 0 or self._writer is None:
+            return None
+
+        approval_tools = list(getattr(cfg, "approval_required_tools", []) or [])
+        approval_patterns = list(getattr(cfg, "approval_required_patterns", []) or [])
+
+        # 1) 工具名白名单命中
+        hit_tool = tool_name in approval_tools
+        # 2) 命令/内容正则命中（content_for_pattern 为空时跳过正则，避免误命中）
+        hit_pattern = False
+        matched_pattern: Optional[str] = None
+        if content_for_pattern and approval_patterns:
+            compiled = self._ensure_patterns_compiled(approval_patterns)
+            for i, p in enumerate(compiled):
+                if p.search(content_for_pattern):
+                    hit_pattern = True
+                    matched_pattern = approval_patterns[i]
+                    break
+
+        if not (hit_tool or hit_pattern):
+            return None
+
+        # 拼装审批原因（reason），前端 ToolApprovalEvent 直接展示
+        reason_parts: list[str] = []
+        if hit_tool:
+            reason_parts.append("工具已配置为需审批")
+        if hit_pattern and matched_pattern is not None:
+            reason_parts.append(f"命令匹配危险模式: {matched_pattern}")
+
+        return await self._request_tool_approval(
+            tool_name=tool_name,
+            tool_args=tool_args,
+            node_key=node_key,
+            approval_reason="; ".join(reason_parts) or None,
+        )
+
+    async def _request_tool_approval(
+        self,
+        tool_name: str,
+        tool_args: dict,
+        node_key: str,
+        approval_reason: Optional[str] = None,
+    ) -> str:
+        """工具审批钩子（question_handler 模式：register + emit + await）。
+
+        调用方需先确认 self._session_id > 0 且 self._writer 非空，否则会因写入空
+        session 或无 writer 报错。Returns: "approved" / "rejected" / "timeout"。
+        """
+        # 函数内 import：避免基类加载时强依赖 tool_approval_service / flow_event
+        # （这两个模块在工具链启动期才就绪；基类是几乎所有 handler 的共同祖先）
+        from app.agent_flow.flow_event import ToolApprovalEvent
+        from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
+        from app.services.tool_approval_service import tool_approval_service
+
+        approval_id = uuid.uuid4().hex[:16]
+        future = tool_approval_service.register(
+            self._session_id,
+            approval_id,
+            tool_calls=[
+                {
+                    "id": f"call_{uuid.uuid4().hex[:24]}",
+                    "name": tool_name,
+                    "args": tool_args,
+                }
+            ],
+            approval_needed=[tool_name],
+        )
+        try:
+            self._writer(
+                ToolApprovalEvent(
+                    node_key=node_key,
+                    approval_id=approval_id,
+                    tool_calls=[
+                        {
+                            "id": approval_id,
+                            "name": tool_name,
+                            "args": tool_args,
+                        }
+                    ],
+                    approval_needed=[tool_name],
+                    expires_in=USER_RESPONSE_TIMEOUT_SECONDS,
+                    approval_reason=approval_reason,
+                )
+            )
+        except Exception as e:  # 事件发送失败按拒绝处理，避免继续执行未知命令
+            logger.warning("审批事件发送失败，按拒绝处理: %s", e)
+            tool_approval_service.remove(self._session_id, approval_id)
+            return "rejected"
+
+        try:
+            await asyncio.wait_for(
+                future.event.wait(), timeout=USER_RESPONSE_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            tool_approval_service.remove(self._session_id, approval_id)
+            return "timeout"
+
+        tool_approval_service.remove(self._session_id, approval_id)
+        return future.result or "rejected"
 
     # ---- 配置校验 ----
 

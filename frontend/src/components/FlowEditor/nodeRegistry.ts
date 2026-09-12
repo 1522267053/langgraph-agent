@@ -330,15 +330,13 @@ const registry: Record<string, NodeRegistryEntry> = {
       max_tokens: 8192,
       history_mode: 'node',
       max_history_turns: 10,
-      approval_required_tools: [],
+      // approval_required_tools 已下沉到 shell/ssh 节点，老 rawConfig 里若有此字段
+      // 由 initConfig 的 ensureInputVars 链路过 Pydantic 兼容逻辑（后端忽略）
       json_output_enabled: false,
       json_fields: []
     }),
     initConfig: (rawConfig, ctx) => {
       const config = { ...rawConfig }
-      if (!Array.isArray(config.approval_required_tools)) {
-        config.approval_required_tools = []
-      }
       config.input_variables = ensureInputVars(resolveInputVars(rawConfig, 'llm', ctx))
       if (config.output_variables) {
         // 已有 output_variables，直接用

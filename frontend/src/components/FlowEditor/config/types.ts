@@ -94,7 +94,8 @@ export interface LlmConfig {
   max_tokens: number
   history_mode: 'node' | 'flow' | 'none'
   max_history_turns: number
-  approval_required_tools?: string[]
+  // 工具审批已下沉到 shell/ssh 节点：approval_required_tools / approval_required_patterns
+  // 老配置里若仍有该字段会被忽略（后端 Pydantic 兼容），不在 LLM 节点 UI 暴露
   extra_body?: Record<string, unknown>
   reasoning_effort?: string
   stream_usage?: boolean
@@ -181,12 +182,18 @@ export interface ApiConfig {
   }
   description?: string
   use_preset_for_tool?: boolean
+  // 工具审批配置（已下沉到本节点）：工具名白名单 + URL/method/body 内容正则
+  approval_required_tools?: string[]
+  approval_required_patterns?: string[]
 }
 
 /** MCP节点配置 */
 export interface McpConfig {
   mcp_server_ids: number[]
   mcp_server_names?: string[]
+  // 工具审批配置（已下沉到本节点）：工具名白名单 + 调用内容正则
+  approval_required_tools?: string[]
+  approval_required_patterns?: string[]
 }
 
 /** Human节点配置 */
@@ -227,6 +234,9 @@ export interface PythonConfig {
   description?: string
   use_preset_for_tool?: boolean
   tool_name?: string
+  // 工具审批配置（已下沉到本节点）：工具名白名单 + 代码/输入内容正则
+  approval_required_tools?: string[]
+  approval_required_patterns?: string[]
 }
 
 /** Shell节点配置 */
@@ -236,6 +246,9 @@ export interface ShellConfig {
   default_workdir?: string
   input_variables: NodeVariable[]
   output_variables: NodeVariable[]
+  // 工具审批配置（已下沉到本节点）：工具名白名单 + 命令内容正则
+  approval_required_tools?: string[]
+  approval_required_patterns?: string[]
 }
 
 /** Question 节点配置 */
@@ -258,6 +271,9 @@ export interface SshConfig {
   max_transfer_mb: number
   input_variables: NodeVariable[]
   output_variables: NodeVariable[]
+  // 工具审批配置（已下沉到本节点）
+  approval_required_tools?: string[]
+  approval_required_patterns?: string[]
 }
 
 /** 记忆节点配置 */
