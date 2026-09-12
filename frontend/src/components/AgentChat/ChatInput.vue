@@ -227,8 +227,12 @@ function handleStop() {
         <textarea
           v-model="inputMessage"
           class="input-textarea"
-          placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-          :disabled="isStreaming || isWaitingHuman"
+          :placeholder="
+            isStreaming
+              ? 'AI 输出中…仍可输入，结束后发送 (Enter 发送, Shift+Enter 换行)'
+              : '输入消息... (Enter 发送, Shift+Enter 换行)'
+          "
+          :disabled="isWaitingHuman"
           rows="2"
           @keydown="handleKeyDown"
         ></textarea>
@@ -451,8 +455,8 @@ function handleStop() {
             </button>
             <button
               v-else
-              :class="['send-btn', { disabled: sendMessageDisabled || isWaitingHuman }]"
-              :disabled="sendMessageDisabled || isWaitingHuman"
+              :class="['send-btn', { disabled: sendMessageDisabled || isWaitingHuman || isStreaming }]"
+              :disabled="sendMessageDisabled || isWaitingHuman || isStreaming"
               @click="handleSend"
             >
               <span class="btn-text">发送</span>
