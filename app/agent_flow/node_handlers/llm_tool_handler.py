@@ -29,6 +29,7 @@ from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
 )
+from langchain_core.tools import BaseTool
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -101,12 +102,38 @@ _KNOWLEDGE_CITATION_PROMPT = """
 """
 
 
-def _build_mode_prompt(is_plan_mode: bool) -> str:
-    """构建模式提醒段（<system-reminder> 内的运行模式章节）"""
-    disabled_tools = (
-        "、".join(sorted(_PLAN_DISABLED_TOOL_NAMES))
-        + "（按前缀匹配；call_sub_agent_* 为子Agent 委派工具）"
-    )
+def _build_mode_prompt(
+    is_plan_mode: bool, tools: Optional[list[BaseTool]] = None
+) -> str:
+    """构建模式提醒段（<system-reminder> 内的运行模式章节）
+
+    tools：当前 LLM 节点实际可用的工具列表（用于精准过滤禁用工具列表）。
+    只有"实际存在且属于禁用前缀"的工具才会被列出，避免 LLM 误以为自己有
+    未连接的工具（修复截图 bug：用户没连工具节点时 AI 仍列出 file_write 等）。
+    """
+    # 按 _is_plan_disabled_tool 的前缀匹配逻辑反向：从 _PLAN_DISABLED_TOOL_NAMES
+    # 中筛出"实际存在于 tools 列表"的项
+    available_tool_names = {t.name for t in (tools or [])}
+    actually_disabled = [
+        name
+        for name in _PLAN_DISABLED_TOOL_NAMES
+        if any(
+            tool_name == name or tool_name.startswith(name)
+            for tool_name in available_tool_names
+        )
+    ]
+    # 工具名前缀说明文字：仅在 actually_disabled 含 call_sub_agent_ 时附加
+    # （call_sub_agent_ 是动态后缀名 _node_key 的占位符，对其他前缀无意义）
+    has_sub_agent_marker = "call_sub_agent_" in actually_disabled
+    if actually_disabled:
+        suffix = (
+            "（按前缀匹配；call_sub_agent_* 为子Agent 委派工具）"
+            if has_sub_agent_marker
+            else "（按前缀匹配）"
+        )
+        disabled_tools = "、".join(sorted(actually_disabled)) + suffix
+    else:
+        disabled_tools = "（无）"
     if is_plan_mode:
         return f"""
 # 当前运行模式：计划模式（Plan Mode）
@@ -134,6 +161,7 @@ def _build_runtime_reminder(
     is_plan_mode: bool,
     fragments: list[str],
     memory_blocks: Optional[list[str]] = None,
+    tools: Optional[list[BaseTool]] = None,
 ) -> str:
     """构建消息层运行时提醒（<system-reminder> 包装），随每轮 LLM 调用临时注入。
 
@@ -144,7 +172,7 @@ def _build_runtime_reminder(
     memory_blocks 来自记忆节点的 get_memory_reminder（非画像类热索引/温标题），
     独立成节追加在末尾——其变化仅失效 reminder 之后的尾部缓存。
     """
-    sections = [_build_mode_prompt(is_plan_mode)]
+    sections = [_build_mode_prompt(is_plan_mode, tools)]
     env_lines = [f"- 当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
     # 多行片段续行缩进对齐，保持 "- " 列表项渲染一致
     env_lines.extend(f"- {fragment}".replace("\n", "\n  ") for fragment in fragments)
@@ -592,7 +620,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
         # 始终说明当前模式/时间/运行环境，避免模型仅根据工具列表推断权限；
         # 以消息层 <system-reminder> 注入（见 _run_react_loop），不占用 system_prompt
         mode_reminder = _build_runtime_reminder(
-            is_plan_mode, runtime_reminders, memory_reminders
+            is_plan_mode, runtime_reminders, memory_reminders, tools
         )
 
         # 发送 node_start 事件
