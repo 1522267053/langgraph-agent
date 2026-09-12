@@ -178,3 +178,18 @@ LLM 节点开启 `json_output_enabled: true` 后绑定 `structured_output` 虚�
 - 结构化输出场景：`json_fields` 字段树符合类型规则，执行后 `structured_output` 返回结果符合定义。
 - 详情接口返回的配置符合预期，没有覆盖无关字段。
 - 至少一次真实执行收到状态为 `success` 的 `flow_done`，输出结构满足目标。
+
+## 工具审批（Agent 模式）
+
+工具节点（shell / ssh / python / api / mcp）在执行危险操作前可触发用户审批。在 `base_config` 中配两个独立字段：
+
+- `approval_required_tools`：完整工具名白名单（与 connected-tools 返回的 `name` 完全一致，**不是 `node_key`**）
+- `approval_required_patterns`：对"内容字符串"做正则匹配，命中即触发
+
+**仅 Agent 模式生效**（Workflow 模式忽略这两个字段）。
+
+配置各节点的运行时工具名格式、内容匹配语义、正则匹配 4 层设计、前端方案 C 工具名下拉、基类 `_check_and_request_approval` 实现：
+
+→ 详见 [工具审批](references/tool-approval.md)
+
+恢复接口与 SSE 事件已分别在 [API 参考](api.md#sse-事件) 和 [子 Agent](sub-agent.md#工具审批) 描述。
