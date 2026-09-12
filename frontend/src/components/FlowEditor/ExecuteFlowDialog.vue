@@ -30,7 +30,12 @@ function handleVisibleChange(val: boolean): void {
 }
 
 function confirmExecute(): void {
-  if (!inputFormRef.value) return
+  // 空字段场景：FlowInputForm 未渲染（inputFormRef 为 undefined），
+  // 无需校验，直接提交空 input + 无附件即可。
+  if (!inputFormRef.value) {
+    emit('execute', {}, [])
+    return
+  }
   const error = inputFormRef.value.validate()
   if (error) {
     emit('update:visible', false)

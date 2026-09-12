@@ -91,8 +91,10 @@ class FlowExecutorService(BaseExecutorService):
         """
         self._validate_flow_nodes(flow)
 
-        if not flow.input_schema or not flow.input_schema.get("fields"):
-            raise ValueError("流程缺少输入参数配置")
+        # 注：允许 input_schema 为空 / 无字段。
+        # 场景：Flow 作为 Tool 被 Agent 调用时，Agent 可能不传任何入参；
+        # 普通 Flow 编辑器"运行"按钮也会被 LLM 工具直接调用，无需先强制配 schema。
+        # 真正校验在 _map_input_to_schema 完成（有必填字段时才报错）。
 
         end_nodes = [n for n in flow.nodes if n.node_type == NodeType.END.value]
         for end_node in end_nodes:
