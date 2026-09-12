@@ -43,6 +43,7 @@ class NodeType(str, Enum):
     AGENDA = "agenda"
     SSH = "ssh"
     QUESTION = "question"
+    FLOW_TOOL = "flow_tool"
 
 
 # ---- 派生表：从 NODE_REGISTRY 自动生成 ----
@@ -127,6 +128,7 @@ class FlowNode(DbBaseModel):
         comment=(
             "节点类型：start/end/condition/card/loop/llm/mcp/knowledge/human/api/"
             "skill/python/shell/memory/todo/intent_router/sub_agent/agenda/ssh/question"
+            "/flow_tool"
         ),
     )
     node_key: Mapped[str] = mapped_column(
