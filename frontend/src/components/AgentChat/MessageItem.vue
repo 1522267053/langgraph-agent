@@ -26,7 +26,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div v-if="row?.kind === 'typing'" class="message assistant animate-fade-in">
+  <div v-if="row?.kind === 'typing'" class="message assistant">
     <div class="message-avatar">
       <div class="avatar avatar-ai">
         <el-icon :size="16"><ChatDotRound /></el-icon>
