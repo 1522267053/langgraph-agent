@@ -321,13 +321,9 @@ watch(
         </el-button>
       </div>
       <!-- 结果（call_sub_agent_* 运行中为实时输出）：统一走 ToolResultViewer 标准管线，
-           折叠态单行摘要 / 展开态内容区，完成后无痕切换真实结果。
-           完成时滑入淡入动画不用 Transition 组件（流式 patch 场景下 enter hook 时序
-           不稳定），改用 CSS keyframe——元素插入时必然播放一次；动画类仅流式中的最后
-           消息携带，历史/Flow 面板静态渲染，虚拟滚动重挂不重播 -->
+           折叠态单行摘要 / 展开态内容区，完成后无痕切换真实结果 -->
       <div
         v-if="toolDisplayResult(segment) !== undefined"
-        :class="{ 'tool-result-in': isStreaming }"
       >
         <ToolResultViewer
           :tool-name="segment.tool.name"
@@ -460,24 +456,6 @@ watch(
 
 .tool-expand-arrow.is-expanded {
   transform: rotate(90deg);
-}
-
-/* 结果块流式完成时的滑入淡入动画（挂载时播放一次；transform 不影响布局，
-   不触发行高重测抖动） */
-.tool-result-in {
-  animation: tool-result-in 0.3s ease;
-}
-
-@keyframes tool-result-in {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .tool-header-icon {
