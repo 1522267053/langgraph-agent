@@ -76,7 +76,7 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
 </script>
 
 <template>
-  <div :class="['message', msg.role, `part-${part}`, 'animate-fade-in']">
+  <div :class="['message', msg.role, `part-${part}`]">
     <!-- 头像列：仅 first/single 行渲染头像，mid/last 行渲染等宽占位保持左对齐 -->
     <div class="message-avatar">
       <template v-if="showHeader">
