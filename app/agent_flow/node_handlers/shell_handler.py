@@ -424,8 +424,8 @@ def _decode_output(data: bytes) -> str:
 # 弃用 PowerShell 的原因：无信誉父进程隐藏派生 powershell + 动态多行 -Command
 # 是杀软（火绒/360 等）行为引擎的高危画像，导致每次执行弹窗拦截；
 # cmd 无 .NET 脚本引擎、无内存执行能力，杀软关注度低。
-# 代价与对策：cmd 会把换行符当命令分隔符导致截断丢输出——已在 execute_shell
-# 入口硬性拒绝含换行的命令并提示改写为单行。
+# 代价与对策：cmd 会把换行符当命令分隔符导致截断丢输出——多行命令统一写到
+# <temp_dir>/shell_<uuid>.bat 后用 cmd /c <path> 执行，规避裸换行被截断。
 
 # Windows 下禁止为控制台程序新建窗口（GUI/托盘宿主无控制台时子进程默认弹黑框）；
 # 仅影响控制台创建方式，stdout/stderr 管道捕获不受影响。POSIX 该参数必须缺省。
@@ -442,6 +442,128 @@ _SUBPROCESS_WINDOW_FLAGS = (
 _SUBPROCESS_SESSION_FLAGS = (
     {} if platform.system() == "Windows" else {"start_new_session": True}
 )
+
+
+# 后缀 / shebang 按平台选择。Windows 走 cmd /c <bat>，POSIX 走 /bin/sh <sh>。
+# shell_script 临时目录：脚本落到 get_temp_dir()，与 7 天清理策略一致；
+# POSIX 写 0o700 权限避免被同机其他用户读脚本内容。
+_MULTILINE_SUFFIX = ".bat" if platform.system() == "Windows" else ".sh"
+_MULTILINE_SHEBANG = "" if platform.system() == "Windows" else "#!/bin/sh\n"
+
+
+def _has_multiline(command: str) -> bool:
+    """判断命令是否含多行（裸 \\n 或 CRLF 的 \\r\\n）。单行返回 False。"""
+    return "\n" in command
+
+
+def _validate_multiline_safety(command: str) -> tuple[bool, str]:
+    """多行命令逐行安全审计：DANGEROUS_PATTERNS + BLOCKED_COMMANDS + 数据只读保护。
+
+    validate_command 行 206 first_word 只校验首行首词，多行开放会暴露根因——
+    中间行塞危险指令可绕过。这里对每一行单独跑 validate_command 的同一套规则，
+    任意一行命中即拒绝。空行 / 注释行直接跳过。
+
+    Returns:
+        (是否安全, 错误消息)。安全时错误消息为空串。
+    """
+    # 按行切片，splitlines 自动处理 \n 与 \r\n
+    lines = command.splitlines()
+    for idx, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # 跳过注释行：POSIX # / Windows rem / ::（:: 是 cmd 标签，仅行首有效）
+        if stripped.startswith("#") or stripped.lower().startswith("rem "):
+            continue
+        if stripped.startswith("::"):
+            continue
+        is_valid, error_msg = validate_command(line)
+        if not is_valid:
+            return False, f"第 {idx} 行存在危险操作: {error_msg}"
+    return True, ""
+
+
+def _wrap_multiline_command(command: str) -> tuple[str, Optional[Path]]:
+    """多行命令落到临时脚本文件，返回 (实际执行命令, 临时脚本路径或 None)。
+
+    单行命令（含 \\r 但无 \\n）原样返回，script_path 为 None。
+    多行命令按平台生成 .bat / .sh，写到 <temp_dir>/shell_<uuid>.{bat,sh}，
+    返回 cmd /c <abs_path>（Windows）或 /bin/sh <abs_path>（POSIX）。
+
+    注意：
+    - 不在此处执行安全审计；调用方负责先用 _validate_multiline_safety 校验。
+    - 文件权限（POSIX 0o700）在创建后立即设置。
+    - 临时文件清理由调用方 try/finally 负责 os.unlink(script_path)。
+    """
+    if not _has_multiline(command):
+        return command, None
+
+    temp_dir = get_temp_dir()
+    script_path = temp_dir / f"shell_{uuid.uuid4().hex}{_MULTILINE_SUFFIX}"
+    content = _MULTILINE_SHEBANG + command
+    # 原子写：先写临时文件再 rename，避免读到半截内容
+    fd, tmp_path_str = tempfile.mkstemp(
+        dir=temp_dir, prefix=".shell_", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+        os.replace(tmp_path_str, script_path)
+    except Exception:
+        # 写失败：清理临时文件，避免残留
+        try:
+            os.unlink(tmp_path_str)
+        except OSError:
+            pass
+        raise
+    # POSIX 加可执行位 + 限制读权限（0o700 = rwx for owner only）
+    if platform.system() != "Windows":
+        try:
+            os.chmod(script_path, 0o700)
+        except OSError:
+            # chmod 失败不应阻断执行（容器/挂载点可能不支持）；清理抛异常
+            pass
+
+    abs_path = str(script_path.resolve())
+    if platform.system() == "Windows":
+        wrapped = f'cmd /c ""{abs_path}""'
+    else:
+        wrapped = f"/bin/sh {abs_path}"
+    return wrapped, script_path
+
+
+def _shell_script_marker(script_path: Optional[Path]) -> Optional[str]:
+    """成功执行后，stdout 末尾追加的 [shell_script] <路径> marker。"""
+    if script_path is None:
+        return None
+    return f"[shell_script] {script_path}"
+
+
+def _cleanup_shell_script(script_path: Optional[Path]) -> None:
+    """删除临时脚本文件；不存在或失败都忽略（清理不应掩盖原异常）"""
+    if script_path is None:
+        return
+    try:
+        os.unlink(script_path)
+    except OSError:
+        pass
+
+
+def _append_shell_script_marker(result: dict, script_path: Optional[Path]) -> None:
+    """同步执行的返回 result 上追加 [shell_script] <路径> marker
+
+    追加位置：stdout 末尾（仅当非空时前置换行，避免空输出多空行）。
+    marker 让 LLM 知道临时脚本的真实路径，便于事后诊断 / 复用脚本。
+    """
+    if script_path is None:
+        return
+    marker = _shell_script_marker(script_path)
+    if marker is None:
+        return
+    stdout = result.get("stdout") or ""
+    if stdout and not stdout.endswith("\n"):
+        stdout = stdout + "\n"
+    result["stdout"] = stdout + marker
 
 
 async def _create_subprocess(
@@ -976,6 +1098,13 @@ class ShellNodeHandler(BaseNodeHandler):
             state.add_error(node.node_key, error_msg)
             return state
 
+        # 多行命令逐行安全审计（与 LLM 工具 execute_shell 同根因修复）
+        if _has_multiline(command):
+            multi_valid, multi_err = _validate_multiline_safety(command)
+            if not multi_valid:
+                state.add_error(node.node_key, multi_err)
+                return state
+
         try:
             result = await self._execute_shell(
                 command, timeout, self._effective_working_dir(cfg)
@@ -1003,7 +1132,8 @@ class ShellNodeHandler(BaseNodeHandler):
     ) -> dict:
         """执行Shell命令（Flow 节点专用，stdin 重定向到 DEVNULL 防止交互阻塞）
 
-        Windows 经 cmd.exe 单行执行，POSIX 经 sh。
+        Windows 经 cmd.exe 单行执行，POSIX 经 sh；多行命令已由 execute() 上层
+        完成逐行审计，此处只负责把命令落到临时脚本执行。
 
         Args:
             command: Shell命令字符串
@@ -1013,9 +1143,11 @@ class ShellNodeHandler(BaseNodeHandler):
         Returns:
             包含执行结果的字典
         """
+        # 多行命令包装为临时脚本；单行原样执行，script_path=None
+        actual_command, script_path = _wrap_multiline_command(command)
         try:
             process = await _create_subprocess(
-                command, stdin=asyncio.subprocess.DEVNULL, cwd=cwd
+                actual_command, stdin=asyncio.subprocess.DEVNULL, cwd=cwd
             )
 
             try:
@@ -1030,7 +1162,7 @@ class ShellNodeHandler(BaseNodeHandler):
                     pass
                 raise
 
-            return {
+            result = {
                 "stdout": _decode_output(stdout),
                 "stderr": _decode_output(stderr),
                 "return_code": process.returncode,
@@ -1038,6 +1170,8 @@ class ShellNodeHandler(BaseNodeHandler):
                 "command": command,
                 "cwd": str(cwd) if cwd else os.getcwd(),
             }
+            _append_shell_script_marker(result, script_path)
+            return result
 
         except Exception as e:
             return {
@@ -1047,6 +1181,8 @@ class ShellNodeHandler(BaseNodeHandler):
                 "success": False,
                 "command": command,
             }
+        finally:
+            _cleanup_shell_script(script_path)
 
     @classmethod
     def get_input_content(
@@ -1141,19 +1277,16 @@ class ShellNodeHandler(BaseNodeHandler):
                     "error_type": "approval_rejected",
                 }
 
-            # Windows cmd 会把换行符当命令分隔符，含换行的命令在首个换行处被截断、
-            # 输出静默丢失——直接拒绝并要求改写为单行（多条命令用 && 连接）
-            if system_type == "Windows" and "\n" in command:
-                return {
-                    "error": (
-                        "Windows 命令必须为单行（禁止裸换行）：cmd.exe 会把换行符当作"
-                        "命令分隔符，导致命令在首个换行处被截断、输出被静默丢弃。"
-                        "请将多条独立命令用 && 连成单行；多行 Python 代码先用 file_write "
-                        "写入 .py 文件后以 python <文件路径> 执行。"
-                    ),
-                    "success": False,
-                    "error_type": "multiline_command",
-                }
+            # 多行命令逐行安全审计（首行+中间行+末行，每一行都跑 validate_command）
+            # validate_command first_word 只校验首行首词——多行开放后必须补这一层
+            if _has_multiline(command):
+                multi_valid, multi_err = _validate_multiline_safety(command)
+                if not multi_valid:
+                    return {
+                        "error": multi_err,
+                        "success": False,
+                        "error_type": "blocked_command",
+                    }
 
             is_valid, error_msg = validate_command(command)
             if not is_valid:
@@ -1163,11 +1296,17 @@ class ShellNodeHandler(BaseNodeHandler):
                     "error_type": "blocked_command",
                 }
 
+            # 多行命令落到临时脚本文件，规避 cmd 把换行符当命令分隔符
+            # 单行 command 走 _wrap_multiline_command 不变，script_path 为 None
+            actual_command, script_path = _wrap_multiline_command(command)
+
             try:
                 command_working_dir = self._resolve_tool_working_dir(
                     workdir, base_working_dir
                 )
             except ValueError as e:
+                # workdir 解析失败也要清理已写入的临时脚本
+                _cleanup_shell_script(script_path)
                 return {
                     "error": str(e),
                     "success": False,
@@ -1175,6 +1314,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 }
 
             if command_working_dir is not None and not command_working_dir.exists():
+                _cleanup_shell_script(script_path)
                 return {
                     "error": (
                         f"工作目录不存在: {command_working_dir}"
@@ -1189,9 +1329,10 @@ class ShellNodeHandler(BaseNodeHandler):
 
             try:
                 process = await _create_subprocess(
-                    command, stdin=asyncio.subprocess.PIPE, cwd=command_working_dir
+                    actual_command, stdin=asyncio.subprocess.PIPE, cwd=command_working_dir
                 )
             except Exception as e:
+                _cleanup_shell_script(script_path)
                 return {
                     "error": f"启动进程失败: {e}",
                     "success": False,
@@ -1221,6 +1362,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 if note:
                     result["note"] = note
                 _apply_shell_output_truncation(result, task)
+                _append_shell_script_marker(result, script_path)
                 return result
 
             # 任务超过 async_wait 秒仍未完成 → 转为后台任务，通知前端
@@ -1249,12 +1391,16 @@ class ShellNodeHandler(BaseNodeHandler):
                 **task.to_dict(),
             }
             _apply_shell_output_truncation(result, task)
+            # 后台任务不在此处删脚本（进程仍可能运行）；marker 也暂不追加
+            # 等用户查询 / 取消时再补；临时文件最终由 get_temp_dir() 7 天清理兜底
             return result
 
         ps_hint = (
             (
-                "Windows 上经 cmd.exe 执行：命令必须为单行（含换行会被拒绝），"
-                "多条独立命令用 && 连接；多行 Python 先写入 .py 文件再执行；"
+                "Windows 上经 cmd.exe 执行：多行命令自动处理——逐行危险审计 + "
+                "写入临时 .bat 后用 cmd /c <path> 执行（避免裸换行被截断丢输出）；"
+                "单行命令可直接执行；多条独立命令用 && 连成单行（前一条失败则不继续），"
+                "不看成败的顺序执行用单个 &；多行 Python 先写入 .py 文件再执行；"
                 "%VAR% 与 curl（Win10+ 自带）直接可用（无 wget，下载用 curl -o）；"
                 "无 head/tail，输出过滤用 findstr 或重定向文件。"
                 "禁止调用 powershell/pwsh（含链式与全路径写法，会被直接拦截）。"
@@ -2209,9 +2355,13 @@ class ShellNodeHandler(BaseNodeHandler):
         ps_compat_hint = (
             (
                 "### Windows 命令环境（cmd.exe）\n"
-                "- 命令必须为单行：含裸换行的命令会被直接拒绝（cmd 把换行符当命令分隔符，会截断丢输出）。\n"
-                "- 多条独立命令用 && 连成单行（前一条失败则不继续）；不看成败的顺序执行用单个 &。\n"
-                '- 多行 Python 代码先用 file_write 写入 .py 文件，再 python <文件路径> 执行；单行可用 python -c "..."。\n'
+                "- 多行命令自动处理：检测到 \\n 即落到 <temp_dir>/shell_<uuid>.bat 经 cmd /c <path> 执行；"
+                "执行前对每一行跑 DANGEROUS_PATTERNS + BLOCKED_COMMANDS + 数据库只读保护审计，"
+                "任意一行命中即拒绝（错误消息含「第 N 行」），无需手写单行。\n"
+                "- 单行命令可直接执行；多条独立命令用 && 连成单行（前一条失败则不继续）；"
+                "不看成败的顺序执行用单个 &。\n"
+                "- 多行 Python 代码：可直接在 command 里写多行 python -c，"
+                "或先用 file_write 写入 .py 文件再 python <文件路径> 执行。\n"
                 "- 环境变量用 %VAR%（不是 $env:VAR）；目录列表用 dir；禁止调用 powershell/pwsh（含链式与全路径写法，会被直接拦截），一律使用 cmd 等价命令。\n"
                 "- 大量输出先过滤（findstr / 重定向到文件后用 file_read 分段读取），不要依赖 head/tail（cmd 没有）。\n"
                 "- curl 接口响应常带 UTF-8 BOM：python 解析管道 JSON 禁止 json.load(sys.stdin)，改用 json.loads(sys.stdin.buffer.read().decode('utf-8-sig'))。\n"
