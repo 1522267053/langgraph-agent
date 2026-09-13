@@ -242,9 +242,19 @@ function onApprovalUpdate(val: ApprovalConfig): void {
         <el-form-item label="代码">
           <CodeEditor
             v-model="localConfig.code"
+            debug-slot
             placeholder="# 定义 main 函数，输入变量作为参数&#10;# 可在顶层 import 模块、定义辅助函数供 main 调用&#10;import math&#10;def helper(x):&#10;    return math.sqrt(x)&#10;def main(query, data):&#10;    result = helper(query) + data&#10;    print(f'处理中...')&#10;    return result"
             @blur="updateConfig"
-          />
+          >
+            <template #debug>
+              <PythonDebugPanel
+                :code="localConfig.code"
+                :timeout="localConfig.timeout"
+                :input-variables="localConfig.input_variables"
+                :readonly-code="localConfig.use_preset_for_tool"
+              />
+            </template>
+          </CodeEditor>
         </el-form-item>
         <el-form-item label="超时">
           <el-input-number

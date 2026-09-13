@@ -11,6 +11,7 @@ import VariableSelector from '../components/VariableSelector.vue'
 import AiProviderConfig from '@/components/common/AiProviderConfig.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import JsonFieldTree from './JsonFieldTree.vue'
+import LlmCheckScriptDebugPanel from './LlmCheckScriptDebugPanel.vue'
 
 const props = defineProps<{
   config: LlmConfig
@@ -486,9 +487,18 @@ watch(connectedToolNodes, fetchConnectedTools, { immediate: true, deep: true })
         <el-form-item v-else label="检查脚本">
           <CodeEditor
             v-model="localConfig.tool_check_script"
-            placeholder="def main(called_tools, last_result): &#10;    # called_tools: list[str] 本轮已调用的工具名列表 &#10;    # last_result: str LLM 最后输出的文本内容 &#10;    return {'need_retry': bool, 'hint': str}"
+            debug-slot
+            placeholder="def main(called_tools, last_result):&#10;    # called_tools: list[str] 本轮已调用的工具名列表&#10;    # last_result: str LLM 最后输出的文本内容&#10;    missing = ['search']  # 示例：声明必需的工具&#10;    missing_tools = [t for t in missing if t not in called_tools]&#10;    return {&#10;        'need_retry': bool(missing_tools),&#10;        'hint': f'缺少工具: {missing_tools}'&#10;    }"
             @blur="updateConfig"
-          />
+          >
+            <template #debug>
+              <LlmCheckScriptDebugPanel
+                v-if="localConfig.tool_check_script"
+                :script="localConfig.tool_check_script"
+                :available-tools="connectedToolGroups"
+              />
+            </template>
+          </CodeEditor>
         </el-form-item>
         <el-form-item label="最大重试次数">
           <el-input-number
@@ -512,6 +522,8 @@ watch(connectedToolNodes, fetchConnectedTools, { immediate: true, deep: true })
         <el-text size="small" type="info">
           仅检查本次对话新调用的工具（不查历史）。Agent 模式下重试在 LLM
           内部完成，用户只看到最终回复
+          <br />
+          脚本模式试运行：点击右上角全屏图标，左侧编辑代码，右侧填参试运行
         </el-text>
       </div>
     </div>
