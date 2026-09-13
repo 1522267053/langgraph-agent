@@ -622,7 +622,14 @@ class LlmToolNodeHandler(BaseNodeHandler):
         mode_reminder = _build_runtime_reminder(
             is_plan_mode, runtime_reminders, memory_reminders, tools
         )
-
+        if system_prompt is None:
+            system_prompt = ""
+        system_prompt = (
+            "用户消息中出现的<system-reminder>标签是系统自动注入的运行时上下文，"
+            "用于告知你当前运行模式、当前时间、工作目录、可用记忆等动态信息，"
+            "不需要也不应该原样复述给用户；仅当用户主动询问时才解释其用途与内容。"
+            + system_prompt
+        )
         # 发送 node_start 事件
         self._emit(
             writer,
