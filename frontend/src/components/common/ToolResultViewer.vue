@@ -174,12 +174,7 @@ const mediaInfo = computed(() => {
  * 错误信息首行；纯 JSON 结果（其他工具）返回空串，由模板隐藏摘要行 */
 const collapsedSummary = computed(() => {
   if (props.status === 'error') {
-    const r = parsedResult.value
-    let raw = ''
-    if (typeof r?.error === 'string') raw = r.error
-    else if (typeof r?.message === 'string') raw = r.message
-    else if (props.result != null) raw = String(props.result)
-    return raw.split('\n')[0].trim().slice(0, 200) || '执行失败'
+    return formatErrorSummary(props.result, parsedResult.value) || '执行失败'
   }
   if (isFileRead.value) return `${filePath.value}（${fileReadMeta.value}）`
   if (isTextEditor.value) return `${filePath.value}（${textEditorInfo.value}）`
@@ -187,6 +182,51 @@ const collapsedSummary = computed(() => {
   if (isBareString.value) return String(props.result).trim().slice(0, 200)
   return ''
 })
+
+/**
+ * 提取错误信息首行：覆盖多种返回结构，避免 [object Object]
+ * 优先级：error/message 字符串 → status_code + data → 整对象 JSON 序列化首行
+ * @param result 原始 result（可能是字符串/对象/数组/其他）
+ * @param parsed 已解析对象（与 result 等价当 result 是字符串时为解析结果，否则等于 result）
+ */
+function formatErrorSummary(result: unknown, parsed: unknown): string {
+  if (result === undefined || result === null) return ''
+  const r = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null
+
+  // 1. error / message 字段（最常见的错误约定）
+  if (r) {
+    if (typeof r.error === 'string' && r.error) return r.error
+    if (typeof r.message === 'string' && r.message) return r.message
+    if (typeof r.detail === 'string' && r.detail) return r.detail
+    // 2. status_code + data 组合（api_call_tool_* 通用模式 4xx/5xx 返回结构）
+    if (typeof r.status_code === 'number' && r.status_code >= 400) {
+      const dataStr =
+        typeof r.data === 'string'
+          ? r.data
+          : r.data !== undefined && r.data !== null
+            ? safeJsonStringify(r.data)
+            : ''
+      return `HTTP ${r.status_code}${dataStr ? ` ${dataStr}` : ''}`
+    }
+  }
+
+  // 3. 字符串/对象/数组统一序列化兜底（绝不再用 String(obj)，避免 [object Object]）
+  return safeJsonStringify(result)
+}
+
+/**
+ * 安全 JSON 序列化：失败时返回空串
+ * - 字符串不会被额外加引号（直接返回，与 fallbackText 路径一致）
+ */
+function safeJsonStringify(value: unknown): string {
+  try {
+    if (typeof value === 'string') return value
+    const s = JSON.stringify(value, null, 2)
+    return s || ''
+  } catch {
+    return ''
+  }
+}
 
 const copyText = computed(() => {
   if (isFileRead.value) {
