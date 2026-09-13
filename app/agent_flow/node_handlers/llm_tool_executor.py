@@ -56,9 +56,11 @@ _REQUEST_HUMAN_HELP = "request_human_help"
 
 # 计划模式下禁用的工具名前缀（写操作 / 有副作用；python_executor 与 call_sub_agent_
 # 的实际注册名带动态后缀 _{node_key}，统一按前缀匹配）
+# 注：2026-09-13 起 file_write 单独放开（仅用于让 AI 写入脚本骨架文件，
+# 解决多行命令硬拒绝后无法创建 .py 临时文件的死锁问题）；text_editor /
+# file_delete 仍保持禁用，避免计划阶段对现有业务代码做局部改写 / 删除。
 _PLAN_DISABLED_TOOL_NAMES = (
     "python_executor",
-    "file_write",
     "text_editor",
     "file_delete",
     "call_sub_agent_",
