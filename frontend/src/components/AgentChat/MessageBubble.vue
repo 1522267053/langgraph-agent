@@ -125,28 +125,32 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
           :expand-key="expandKey"
           @revert="dbMsgId => emit('revert', dbMsgId)"
         />
-        <div v-if="showFooter && msg.total_tokens && !streamingActive" class="token-info">
-          <span>
-            输入:
-            <span class="token-value">{{ formatTokenCount(msg.prompt_tokens) }}</span>
-            token
-          </span>
-          <span>
-            输出:
-            <span class="token-value">{{ formatTokenCount(msg.completion_tokens) }}</span>
-            token
-          </span>
-          <span>
-            总计:
-            <span class="token-total">{{ formatTokenCount(msg.total_tokens) }}</span>
-            token
-          </span>
+        <!-- footer 区：三个块共享 .footer-row 容器，统一高度 + 顶部分割线（流式无），
+         chrome 估值见 chatRow.ts 的 FIRST_CHROME / FOOTER_CHROME -->
+        <div v-if="showFooter && msg.total_tokens && !streamingActive" class="footer-row">
+          <div class="token-info">
+            <span>
+              输入:
+              <span class="token-value">{{ formatTokenCount(msg.prompt_tokens) }}</span>
+              token
+            </span>
+            <span>
+              输出:
+              <span class="token-value">{{ formatTokenCount(msg.completion_tokens) }}</span>
+              token
+            </span>
+            <span>
+              总计:
+              <span class="token-total">{{ formatTokenCount(msg.total_tokens) }}</span>
+              token
+            </span>
+          </div>
         </div>
 
         <!-- 结束节点输出：右上角"展示"下拉勾选后显示（该轮 AI 消息携带） -->
         <div
           v-if="showFooter && showEndOutput && msg.end_output && !streamingActive"
-          class="end-output-row"
+          class="footer-row end-output-row"
         >
           <el-button
             link
@@ -169,7 +173,7 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
         </el-dialog>
 
         <!-- 流式输出指示器：复用 @keyframes typing，点更小更轻量 -->
-        <div v-if="showFooter && streamingActive" class="streaming-indicator">
+        <div v-if="showFooter && streamingActive" class="footer-row streaming-indicator">
           <span class="dot"></span>
           <span class="dot"></span>
           <span class="dot"></span>
@@ -295,15 +299,29 @@ export default {
   overflow-wrap: break-word;
 }
 
-.token-info {
-  display: flex;
-  gap: 16px;
-  font-size: 10px;
-  font-family: 'Courier New', monospace;
-  color: #94a3b8;
+/* footer 区统一容器：三个 footer 块（token-info / end-output-row / streaming-indicator）
+   共享同一高度锚点（min-height 28 + 顶部 1px 分割线 + 12px padding-top + 16px margin-top）
+   与 chatRow.ts 的 FOOTER_CHROME 估值对齐，避免虚拟滚动低估导致滚动条错位 */
+.footer-row {
   margin-top: 16px;
   padding-top: 12px;
   border-top: 1px solid #f1f5f9;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+}
+
+.footer-row.streaming-indicator {
+  /* 流式中无分割线，避免视觉跳动 */
+  border-top-color: transparent;
+}
+
+.token-info {
+  display: flex;
+  gap: 16px;
+  font-family: 'Courier New', monospace;
+  color: #94a3b8;
 }
 
 .token-value {
@@ -321,7 +339,6 @@ export default {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 6px 4px;
 }
 
 .streaming-indicator .dot {
@@ -341,6 +358,7 @@ export default {
 }
 
 .end-output-row {
+  /* chrome 全部由 .footer-row 承载，此处仅作语义标记 */
 }
 
 .end-output-pre {

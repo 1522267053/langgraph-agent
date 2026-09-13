@@ -191,6 +191,17 @@ const SUMMARY_CHROME = 64
 /** compress-summary 内容内边距：与 .compress-summary 的 padding 14px × 2 一致 */
 const SUMMARY_BODY_PADDING = 28
 
+/** 消息行 first chrome：header 行高 36 + margin-bottom 8 = 44 */
+const FIRST_CHROME = 44
+/**
+ * 消息行 footer chrome：.footer-row 容器渲染高度 ≈ 28(min-height) + 12(padding-top)
+ *  + 16(margin-top) + 1(border-top) = 57px，扣去 padding-top 与 min-height 内的
+ *  line-height 净算约 42px。三个 footer 块（token-info / end-output-row /
+ * streaming-indicator）共享此容器，估值统一收敛；流式中 footer-row 高度由
+ * min-height 兜底，差异 <4px
+ */
+const FOOTER_CHROME = 42
+
 /** CJK/全角字符（近似全角宽度），其余按半宽 0.5 单位 */
 const CJK_CHAR = /[\u2e80-\u9fff\uF900-\uFAFF\uFF00-\uFFEF\u3000-\u303F]/g
 
@@ -330,8 +341,12 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
         default:
           size = 120
       }
-      if (row.part === 'first') size += 44
-      if (row.part === 'last' || row.part === 'single') size += 48
+      // 消息级 chrome：first 行带 header（36 + margin-bottom 8），last/single 行带
+      // footer-row 容器（与 MessageBubble.vue 的 .footer-row 对齐）。三个 footer 块
+      // （token-info / end-output-row / streaming-indicator）共享同一容器，渲染高度
+      // 统一收敛到 FOOTER_CHROME 附近，避免按各自分支估值的 ±8px 偏差导致滚动条错位
+      if (row.part === 'first') size += FIRST_CHROME
+      if (row.part === 'last' || row.part === 'single') size += FOOTER_CHROME
       return size
     }
   }
