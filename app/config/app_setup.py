@@ -15,7 +15,7 @@ from fastapi.security import HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
 from app.api.ws_api import register_websocket_routes
-from app.config.build_utils import get_frontend_dist_dir
+from app.config.build_utils import get_frontend_dist_dir, get_temp_dir
 from app.config.lifespan import shutdown, startup
 from app.config.settings import settings
 from app.middleware import register_exception_handlers
@@ -126,6 +126,16 @@ def _mount_static_files(app: FastAPI) -> None:
         f"/{settings.upload_dir}",
         StaticFiles(directory=str(upload_abs_path)),
         name="uploads",
+    )
+
+    # 调试临时文件预览（仅暴露 debug_uploads 子目录，不泄露 temp 根目录）
+    # 文件由 Python 节点调试面板生成，7 天后由 scheduler 统一清理
+    debug_uploads_dir = get_temp_dir() / "debug_uploads"
+    debug_uploads_dir.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/debug-uploads",
+        StaticFiles(directory=str(debug_uploads_dir)),
+        name="debug_uploads",
     )
 
     # 前端静态文件（放在所有路由之后，作为 fallback）
