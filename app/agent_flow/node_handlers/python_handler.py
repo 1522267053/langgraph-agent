@@ -261,6 +261,87 @@ def _coerce_default_value(var: PythonParam) -> Any:
     return value
 
 
+async def _run_python_in_sandbox(code: str, input_vars: dict, timeout: float) -> dict:
+    """在 RestrictedPython 沙箱中执行 Python 代码（核心沙箱逻辑，无副作用）
+
+    与 PythonNodeHandler._execute_python 的边界：
+    - 本函数只负责「编译 + 运行 + 捕获 stdout/stderr + 调用 main」，
+      不处理 __save_file__ 文件落盘副作用。
+    - 生产路径（_execute_python）调用本函数后再处理文件保存 + 文件追踪；
+      调试路径（debug_api）直接调用本函数获得原始 main 返回值。
+
+    编译期限制：禁止 __dunder__ 属性访问、str.format() 攻击、
+    try/except* 等，AST 级阻断危险语法。
+    运行时限制：白名单模块导入、受限 builtins。
+
+    Args:
+        code: Python 代码字符串
+        input_vars: 输入变量字典（会注入到 globals 命名空间）
+        timeout: 超时时间（秒）
+
+    Returns:
+        包含执行结果的字典 {"stdout", "stderr", "result", "success"}
+    """
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+
+    result: dict = {"stdout": "", "stderr": "", "result": None, "success": True}
+
+    def run_code():
+        # RestrictedPython 编译：AST 级安全检查
+        compile_result = compile_restricted_exec(code, "<python_node>")
+        if compile_result.errors:
+            error_msg = "; ".join(compile_result.errors)
+            raise SyntaxError(error_msg)
+
+        restricted_globals = _build_restricted_globals()
+
+        # 注入输入变量到全局命名空间
+        restricted_globals.update(input_vars)
+
+        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+            # globals/locals 使用同一命名空间，保证顶层定义的函数/导入对 main 可见
+            if compile_result.code:
+                exec(compile_result.code, restricted_globals)
+
+            # 检查 main 函数是否存在
+            if "main" not in restricted_globals:
+                raise RuntimeError("必须定义 main 函数")
+
+            main_func = restricted_globals["main"]
+            sig = inspect.signature(main_func)
+            params = sig.parameters
+
+            call_args = {}
+            for param_name in params:
+                if param_name in input_vars:
+                    call_args[param_name] = input_vars[param_name]
+
+            return main_func(**call_args)
+
+    loop = asyncio.get_event_loop()
+
+    try:
+        exec_result = await asyncio.wait_for(
+            loop.run_in_executor(None, run_code), timeout=timeout
+        )
+        result["result"] = exec_result
+    except asyncio.TimeoutError:
+        raise
+    except SyntaxError as e:
+        result["success"] = False
+        result["stderr"] = f"语法错误: {str(e)}"
+    except Exception:
+        result["success"] = False
+        tb = traceback.format_exc()
+        result["stderr"] = tb
+    finally:
+        result["stdout"] = stdout_capture.getvalue()
+        result["stderr"] = result["stderr"] or stderr_capture.getvalue()
+
+    return result
+
+
 @NodeHandlerRegistry.register("python")
 class PythonNodeHandler(BaseNodeHandler):
     """
@@ -322,111 +403,50 @@ class PythonNodeHandler(BaseNodeHandler):
     async def _execute_python(
         self, code: str, input_vars: dict, timeout: float
     ) -> dict:
+        """在沙箱中执行 Python 代码（生产路径，触发文件保存副作用）
+
+        委托给模块级 _run_python_in_sandbox 执行核心沙箱逻辑；
+        本方法额外处理 __save_file__ 返回值（落盘 + 文件追踪）。
         """
-        使用 RestrictedPython 在受限环境中执行Python代码
+        result = await _run_python_in_sandbox(code, input_vars, timeout)
 
-        编译期限制：禁止 __dunder__ 属性访问、str.format() 攻击、
-        try/except* 等，AST 级阻断危险语法
-        运行时限制：白名单模块导入、受限 builtins
+        if not result["success"]:
+            return result
 
-        Args:
-            code: Python代码字符串
-            input_vars: 输入变量字典
-            timeout: 超时时间（秒）
+        exec_result = result["result"]
+        if isinstance(exec_result, dict) and exec_result.get("__save_file__"):
+            import base64
 
-        Returns:
-            包含执行结果的字典
-        """
-        stdout_capture = io.StringIO()
-        stderr_capture = io.StringIO()
+            from app.utils.media_file import save_media_bytes
 
-        result = {"stdout": "", "stderr": "", "result": None, "success": True}
-
-        def run_code():
-            # RestrictedPython 编译：AST 级安全检查
-            compile_result = compile_restricted_exec(code, "<python_node>")
-            if compile_result.errors:
-                error_msg = "; ".join(compile_result.errors)
-                raise SyntaxError(error_msg)
-
-            restricted_globals = _build_restricted_globals()
-
-            # 注入输入变量到全局命名空间
-            restricted_globals.update(input_vars)
-
-            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                # globals/locals 使用同一命名空间，保证顶层定义的函数/导入对 main 可见
-                if compile_result.code:
-                    exec(compile_result.code, restricted_globals)
-
-                # 检查 main 函数是否存在
-                if "main" not in restricted_globals:
-                    raise RuntimeError("必须定义 main 函数")
-
-                main_func = restricted_globals["main"]
-                sig = inspect.signature(main_func)
-                params = sig.parameters
-
-                call_args = {}
-                for param_name in params:
-                    if param_name in input_vars:
-                        call_args[param_name] = input_vars[param_name]
-
-                return main_func(**call_args)
-
-        loop = asyncio.get_event_loop()
-
-        try:
-            exec_result = await asyncio.wait_for(
-                loop.run_in_executor(None, run_code), timeout=timeout
-            )
-            result["result"] = exec_result
-
-            if isinstance(exec_result, dict) and exec_result.get("__save_file__"):
-                import base64
-
-                from app.utils.media_file import save_media_bytes
-
-                content_b64 = exec_result.get("content_base64", "")
-                mime_type = exec_result.get("mime_type", "application/octet-stream")
-                filename = exec_result.get("filename", "")
-                if content_b64:
-                    try:
-                        content = base64.b64decode(content_b64)
-                        file_info = await save_media_bytes(
-                            content, mime_type, "tool_python", 0, filename
+            content_b64 = exec_result.get("content_base64", "")
+            mime_type = exec_result.get("mime_type", "application/octet-stream")
+            filename = exec_result.get("filename", "")
+            if content_b64:
+                try:
+                    content = base64.b64decode(content_b64)
+                    file_info = await save_media_bytes(
+                        content, mime_type, "tool_python", 0, filename
+                    )
+                    result["result"] = file_info
+                    result["preview_url"] = file_info.get("preview_url", "")
+                    result["mime_type"] = file_info.get("mime_type", "")
+                    result["file_name"] = file_info.get("file_name", "")
+                    result["download_url"] = file_info.get("download_url", "")
+                    # 文件变更追踪：产物文件记为 create，回退消息时一并移除
+                    stored_rel = file_info.get("preview_url", "").lstrip("/")
+                    if stored_rel and file_info.get("file_id"):
+                        await record_tool_file_change(
+                            tool_name="save_file",
+                            file_path=str(BASE_DIR / stored_rel),
+                            change_type="create",
+                            file_id=int(file_info["file_id"]),
                         )
-                        result["result"] = file_info
-                        result["preview_url"] = file_info.get("preview_url", "")
-                        result["mime_type"] = file_info.get("mime_type", "")
-                        result["file_name"] = file_info.get("file_name", "")
-                        result["download_url"] = file_info.get("download_url", "")
-                        # 文件变更追踪：产物文件记为 create，回退消息时一并移除
-                        stored_rel = file_info.get("preview_url", "").lstrip("/")
-                        if stored_rel and file_info.get("file_id"):
-                            await record_tool_file_change(
-                                tool_name="save_file",
-                                file_path=str(BASE_DIR / stored_rel),
-                                change_type="create",
-                                file_id=int(file_info["file_id"]),
-                            )
-                    except Exception as e:
-                        result["result"] = {
-                            "success": False,
-                            "error": f"文件保存失败: {e}",
-                        }
-        except asyncio.TimeoutError:
-            raise
-        except SyntaxError as e:
-            result["success"] = False
-            result["stderr"] = f"语法错误: {str(e)}"
-        except Exception:
-            result["success"] = False
-            tb = traceback.format_exc()
-            result["stderr"] = tb
-        finally:
-            result["stdout"] = stdout_capture.getvalue()
-            result["stderr"] = result["stderr"] or stderr_capture.getvalue()
+                except Exception as e:
+                    result["result"] = {
+                        "success": False,
+                        "error": f"文件保存失败: {e}",
+                    }
 
         return result
 
