@@ -203,3 +203,83 @@ Agent 通过 **Flow 工具** 节点调用普通 Flow 作为工具，**保留 Flo
 核心是"单工具双模式"：一个工具名 `flow_<flow_id>_tool`，靠 `execution_id` 字段是否提供来路由 execute / resume 模式。LLM 拿到 `status="interrupted"` 的返回值后，下一轮决策里再次调用同一工具 + 传 `execution_id` + `human_input` 即可继续等待中的 Flow。
 
 → 详见 [Workflow as Tool](references/workflow-as-tool.md)
+
+## Python 节点 / 检查脚本试运行
+
+调试 Python 代码（`python` 节点的 `base_config.code` 或 LLM 节点 `tool_check_script`）不需要走完整 Workflow 执行 —— 直接调独立端点即可，**与生产路径共享沙箱核心逻辑但隔离副作用**。
+
+### 端点
+
+```
+POST /api/debug/python
+```
+
+请求体：
+
+```json
+{
+  "code": "def main(x): return x * 2",
+  "timeout": 30,
+  "input_data": {"x": 5},
+  "debug_session_id": "uuid-or-any-stable-string"
+}
+```
+
+- `code`（必填）：完整 Python 代码（含 `main` 函数定义），≤ 200000 字符
+- `timeout`（默认 30，范围 5-300）：沙箱超时秒数
+- `input_data`（默认 `{}`）：注入到沙箱 globals 的入参字典
+- `debug_session_id`（必填）：用于隔离调试产物；非法字符会被兜底为 UUID
+
+响应：
+
+```json
+{
+  "code": 1,
+  "msg": "试运行完成",
+  "data": {
+    "stdout": "...",
+    "stderr": "...",
+    "result": <main 的返回值，已 JSON 序列化>,
+    "success": true
+  }
+}
+```
+
+### 适用节点
+
+| 节点 | 试运行的脚本字段 | main 签名 |
+|---|---|---|
+| `python` | `base_config.code` | 由 `input_variables` 决定（按 name 匹配 main 形参） |
+| `llm`（必填工具检查）| `base_config.tool_check_script` | `def main(called_tools, last_result): return {"need_retry": bool, "hint": str}` |
+
+### 与生产路径的关系
+
+- **沙箱核心共享**：后端抽 `_run_python_in_sandbox(code, input_vars, timeout)` 模块级函数，`python_handler._execute_python`（生产路径）和 `debug_api`（调试路径）都调它，保证试运行结果与流程真实执行**严格一致**（编译限制、白名单模块、超时机制一致）。
+- **副作用隔离**：试运行不写 File DB、不调 `record_tool_file_change`，因此**不会污染会话文件追踪与回退**。
+- **`__save_file__` 落盘隔离**：用户的 `main()` 返回 `{"__save_file__": True, "content_base64": "...", "mime_type": "...", "filename": "..."}` 时，生产路径落盘到 `uploads/` 并写 File DB；调试路径落盘到 `workspace/temp/debug_uploads/<debug_session_id>/` 独立子目录，**不写 DB**，7 天后由 `scheduler_service._cleanup_temp_files` 统一清理。
+- **静态预览路由**：`/debug-uploads/<session_id>/<file>` 仅暴露 `debug_uploads` 子目录（不暴露 temp 根目录）；文件默认在 7 天保留期后清理。
+
+### 序列化容错
+
+`result: Any` 字段在响应序列化时通过 `_make_json_safe` 递归清洗：
+
+- `dict` / `list` / `tuple` / `set` / `frozenset` / `str` / `int` / `float` / `bool` / `None` 直通
+- `bytes` 转 `{__bytes_b64__: "..."}`
+- 其他（type 对象、函数、生成器等）降级为字符串标记：`<non-serializable {TypeName}: {repr}>`，避免 PydanticSerializationError 把接口搞 500
+
+这意味着用户的脚本即使返回 `bool`、`str` 这些类型名（或自定义类实例），前端也会看到降级字符串而非整页错误。
+
+### 高频陷阱
+
+- **不要在试运行面板里复制带类型注解的占位脚本**：LLM 节点 `tool_check_script` placeholder 写成 `{'need_retry': bool, 'hint': str}`（类型名），用户复制粘贴运行会返回 type 对象；后端会降级显示，但 UI 上看不到真实意图。应直接用真实示例值。
+- **试运行不验证审批和上下文**：生产路径还会走 `approval_required_tools` 审批、`record_tool_file_change` 文件追踪；试运行**完全跳过这些**，仅验证 Python 代码本身。
+- **`debug_session_id` 仅用于隔离文件**：与业务的 `session_id`（Agent 对话）无关，**只**决定调试产物落盘目录；同一浏览器所有调试面板共用一个（前端 localStorage 持久化）。
+- **超时是沙箱内 main 执行时间**，不含往返网络；300 秒是上限。
+- **不要用试运行验证状态/上下文**：Python 节点生产时还能引用 `nodes.<key>.<output>` 等流程变量；试运行里 `input_data` 必须是显式传的值，不会自动注入流程上下文。
+
+### 何时不需要试运行
+
+- 仅想看 Python 节点输出结构 → 走 `/execution/stream/{id}` 真实执行更准
+- 想验证 LLM 整体行为（不只是检查脚本）→ 用 Agent 对话模式跑一次
+- 想调试纯逻辑（无副作用、纯函数）→ 试运行是最快路径
+
