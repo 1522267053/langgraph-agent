@@ -45,6 +45,9 @@ from app.agent_flow.node_handlers.base_handler import (
     BaseNodeHandler,
     NodeVariable,
 )
+# ssh_executor 的远端命令复用 shell 的危险模式审计——单点维护避免正则漂移
+# _validate_multiline_safety 单行/多行均适用（多行逐行审计，单行等价 validate_command）
+from app.agent_flow.node_handlers.shell_handler import _validate_multiline_safety
 from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.agent_flow.tools.common import (
     MAX_FILE_SIZE,
@@ -487,6 +490,18 @@ class SshNodeHandler(BaseNodeHandler):
                     "error_type": "approval_rejected",
                 }
 
+            # 远端命令同样套用 shell DANGEROUS_PATTERNS 审计：rm -rf /、format、
+            # Format-Volume、dd 写入设备、curl|sh 等危险操作即使在远端也会被直接拒绝。
+            # _validate_multiline_safety 兼顾单行/多行：单行等价 validate_command，
+            # 多行对每一行跑 validate_command（修补 validate_command 只校验首行首词的根因）。
+            is_valid, error_msg = _validate_multiline_safety(command)
+            if not is_valid:
+                return {
+                    "error": error_msg,
+                    "success": False,
+                    "error_type": "blocked_command",
+                }
+
             effective_timeout = timeout or cfg.command_timeout
 
             def job(client: SSHClient) -> dict:
@@ -508,7 +523,9 @@ class SshNodeHandler(BaseNodeHandler):
                 f"在远程主机 {cfg.username}@{cfg.host}:{cfg.port} 上执行 Shell 命令。"
                 f"每次调用独立建连，cd 不影响后续调用；受超时限制（默认 {cfg.command_timeout} 秒）。"
                 "返回 exit_code/stdout/stderr；大量输出先过滤（| head、| grep 等），"
-                "否则会被自动截断。远程命令为真实系统操作，删除/重启等高危命令务必与用户确认后执行。"
+                "否则会被自动截断。远程命令与本地 shell 同样经过危险模式审计"
+                "（rm -rf /、format、Format-Volume、dd 写入设备、curl|sh 等被直接拒绝），"
+                "多行命令逐行审计；删除/重启等未拦截操作务必先与用户确认。"
             ),
             func=None,
             coroutine=run_remote_command,
@@ -920,5 +937,7 @@ class SshNodeHandler(BaseNodeHandler):
             f"单文件上限 {min(50, cfg.max_transfer_mb)}MB），下载的文件会自动获得 download_url\n"
             "- 远程路径是 POSIX 风格绝对路径；上传远程父目录不存在时会自动创建\n"
             "- 远程操作是真实系统变更：rm/chmod/systemctl restart 类高危命令，务必先向用户说明并获得确认\n"
+            "- 远端命令与本地 shell 同样经过危险模式审计（rm -rf /、format、Format-Volume、"
+            "dd 写入设备、curl|sh 等被直接拒绝）；多行命令逐行审计，无法通过换行绕过\n"
         ]
         return "\n".join(lines)
