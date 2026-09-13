@@ -97,7 +97,7 @@ DANGEROUS_PATTERNS = [
     # windows高危行为
     # 1. 毁灭性删除与格式化
     r"\bdel\s+/f\s+/q\s+(/|\\)",  # 强制删除根目录文件
-    r"\bdel\s+.*\s+\*\.\*",  # 删除所有文件
+    r"\bdel\b[^|;&]*\*\.",  # 删除通配符文件（覆盖 *.exe / *.txt / *.* 等）
     r"(?<!-)\bformat\s+[A-Za-z]:",  # 格式化磁盘（排除 --format 参数）
     r"\brd\s+/s\s+/q\s+(/|\\)",  # 强制删除根目录树
     r"\bdiskpart\b",  # 磁盘分区工具
@@ -119,16 +119,18 @@ DANGEROUS_PATTERNS = [
     r"(?:^|[&|;]\s*)(?:powershell|powershell_ise|pwsh)\b",
     # linux高危行为
     # 1. 毁灭性删除 (强制删除根目录、家目录、所有文件)
-    r"\brm\s+(-[rf]+\s+){0,2}/\b",  # rm -rf /
+    # 末尾用 (?=\s|$) 而非 \b：`/` 不是 word char，原版 `\b` 在 `/` 后永不匹配
+    r"\brm\s+(-[rf]+\s+){0,2}/(?=\s|$)",  # rm -rf /
     r"\brm\s+(-[rf]+\s+){0,2}~",  # rm -rf ~
-    r"\brm\s+(-[rf]+\s+){0,2}\*",  # rm -rf * (在根目录或关键目录)
+    # 兼容 `rm -rf ./*` / `rm -rf /*` / `rm -rf *`。路径前缀含 . / / / 空白均可
+    r"\brm\s+(-[rf]+\s+){0,2}[/.\s]*\*",  # rm -rf * / rm -rf ./* / rm -rf /*
     r"\brm\s+--no-preserve-root",  # 绕过保护机制
     # 2. 磁盘与文件系统破坏 (格式化、底层写入)
     r"\bmkfs\.",  # mkfs.ext4, mkfs.xfs 等
     r"\bdd\s+if=.*\s+of=/dev/",  # dd 写入设备
     r"\bmkswap\b",  # 格式化交换分区
-    r"\b>\s*/dev/sd",  # 重定向写入磁盘设备
-    r"\b>\s*/dev/hd",  # 重定向写入磁盘设备
+    r">\s*/dev/sd",  # 重定向写入磁盘设备
+    r">\s*/dev/hd",  # 重定向写入磁盘设备
     # 3. 系统权限与用户篡改 (锁死系统、提权)
     r"\bchmod\s+(-R\s+)?777\s+/",  # 开放根目录所有权限
     r"\bchmod\s+(-R\s+)?000\s+/",  # 锁死根目录所有权限
@@ -143,8 +145,9 @@ DANGEROUS_PATTERNS = [
     # 5. 远程代码执行与后门 (安全风险)
     r"\bcurl\b.*\|\s*(ba)?sh",  # curl | sh (远程执行脚本)
     r"\bwget\b.*\|\s*(ba)?sh",  # wget | sh
-    r"\bnc\b.*-e\s+(ba)?sh",  # nc 反弹 shell
-    r"\bncat\b.*-e\s+(ba)?sh",  # ncat 反弹 shell
+    # 兼容 sh / bash / /bin/sh / /bin/bash 路径写法
+    r"\bnc\b.*-e\s+(?:(?:/bin/)?(ba)?sh)",  # nc 反弹 shell
+    r"\bncat\b.*-e\s+(?:(?:/bin/)?(ba)?sh)",  # ncat 反弹 shell
     # 6. Windows 用户管理（防止锁死系统）
     r"\bnet\s+user\b",  # Windows 用户管理
     r"\bnet\s+localgroup\b",  # Windows 用户组管理
@@ -158,6 +161,8 @@ DANGEROUS_PATTERNS = [
     r"\bRemove-Item\s+[^;\r\n]*-[Rr]ecurse[^;\r\n]*\s[\"']?[A-Za-z]:\\[\"';\s]*$",  # 递归强删盘根
     r"\bRemove-Item\s+[\"']?[A-Za-z]:\\['\"\s;,]*$",  # 删除盘根（无论是否递归）
     r"\bRemove-Item\s+[\"']?(?:~[/\\]?|/)[\"';\s]*$",  # 强删家目录/根目录
+    # 补充: 单引号 + -Recurse 在路径后 + 路径是 ~ 或 / 等原版漏过的组合
+    r"\bRemove-Item\b[^|;\r\n]*-[Rr]ecurse\b",  # Remove-Item + 任意 -Recurse
 ]
 
 
