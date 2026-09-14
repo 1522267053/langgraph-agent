@@ -1,7 +1,7 @@
 ---
 name: knowledge-manager
 description: |
-  创建、管理知识库及其文档和 AI 知识沉淀。适用场景：
+  创建、管理知识库及其文档和 AI 知识沉淀（管理面/运维面技能）。适用场景：
   (1) 用户要求创建新的知识库
   (2) 用户想上传文档到知识库（支持 txt/md/docx/pdf/xlsx）
   (3) 用户想查看、修改或删除已有的知识库或文档
@@ -9,6 +9,9 @@ description: |
   (5) 用户想搜索知识库分段内容
   (6) 用户想查看或管理 AI 生成的知识沉淀
   (7) 用户想把知识库接入 Agent/Flow，或判断知识库为什么检索不到内容
+
+  注意：Agent 对话中把 Markdown 知识沉淀到已接入的知识库，优先用知识节点内置的
+  文档编辑工具（knowledge_save_document / update_document / delete_document），无需本技能。
 
   触发词：「创建知识库」「添加知识库」「上传文档」「向量化」「知识库检索」「知识沉淀」「文档分段」「搜索知识库」「重新处理文档」「接入 Agent」
 ---
@@ -22,10 +25,20 @@ description: |
 1. **上传是异步处理**：`POST /upload` 立即返回 `processing_status=0`，后台定时任务负责解析、分段、生成标题索引、向量化。需轮询状态直到 `=2`（已完成）才能检索
 2. **处理状态码**：`0=待处理` `1=处理中` `2=已完成` `3=失败` `4=向量化中`
 3. **支持格式**：`txt` / `md` / `docx` / `pdf` / `xlsx`
-4. **向量化独立步骤**：上传处理完成（status=2）后，还需调用向量化接口才会进入 ChromaDB。未向量化的分段无法被语义检索命中
+4. **向量化已自动化**：定时任务拉取待处理文档后自动完成 解析→分段→向量化，`status=2` 即已向量化、可直接语义检索。向量化接口仅用于强制重建（`force=true`）或历史数据补量
 5. **三层结构**：知识库 → 文档（document）→ 分段（segment）。分段会自动建立「标题索引」（按文档标题层级），供 Agent 工具三层导航
 6. **`/api/knowledge/*` 路径需登录态**：本机回环（127.0.0.1）调用免认证，外部调用需 session cookie
-7. **先处理、再向量化、最后接入**：不要在文档仍为待处理或失败状态时连接到 Agent；检索不到时先检查文档状态和向量化状态
+7. **先处理、再接入**：不要在文档仍为待处理或失败状态时连接到 Agent；检索不到时先检查文档处理状态
+
+## 与知识节点写入工具的分工
+
+knowledge 节点已内置文档编辑工具（节点配置 `enable_document_edit`，默认开启）：
+`knowledge_save_document`（保存 Markdown 文档，标题在库内需唯一，重名拒绝需换标题）、
+`knowledge_update_document`（全量覆盖更新）、`knowledge_delete_document`。
+
+分工原则：
+- **Agent 对话中沉淀 Markdown 知识** → 用节点内置文档编辑工具（仅限节点绑定的知识库，纯文本内容）
+- **上传 pdf/docx/xlsx 等文件、建库、批量管理、手动向量化、失败重试、跨库检索与维护** → 用本技能的 REST API
 
 ## 知识库数据模型
 
@@ -83,8 +96,7 @@ AI 综合原始段落得出的结论性知识，与原始文档分层存储，�
 ```
 1. POST /api/knowledge/base/create     # 创建空知识库
 2. POST /api/knowledge/document/upload  # 上传文档（可批量）
-3. 轮询 GET /api/knowledge/document/get/{id}  # 等 processing_status=2
-4. POST /api/knowledge/document/vectorize/{kb_id}  # 向量化
+3. 轮询 GET /api/knowledge/document/get/{id}  # 等 processing_status=2（向量化已自动完成）
 ```
 
 ### 创建知识库
@@ -155,9 +167,9 @@ GET /api/knowledge/document/get/12
 
 > 处理失败时 `error_message` 含错误原因。重试：`POST /api/knowledge/document/reprocess/{id}`（重置为待处理，由后台重新解析）。
 
-## 向量化
+## 向量化（手动/强制重建）
 
-向量化将分段转为向量存入 ChromaDB，是语义检索的前提。
+定时任务已自动完成新上传文档的向量化，此接口用于强制重建向量（`force=true`）或对历史数据补量。
 
 ### 批量向量化整个知识库
 
@@ -224,7 +236,7 @@ POST /api/knowledge/insight/create
 要点：
 1. Agent 中加 `knowledge` 类型节点，配置 `knowledge_base_id` + `top_k`
 2. 用工具边（`source_handle=default` → `target_handle=tools`）连到 LLM 节点
-3. 连接后 LLM 自动获得三层导航工具（search / title_search / get_paragraphs / adjacent / title_lookup）+ 沉淀工具（save_insight / delete_insight）
+3. 连接后 LLM 自动获得三层导航工具（search / title_search / get_paragraphs / adjacent / title_lookup）+ 沉淀工具（save_insight / delete_insight）+ 文档编辑工具（save_document / update_document / delete_document，受节点配置 `enable_document_edit` 控制，默认开启）
 
 ## 通过 Agent/Flow 使用知识库
 
@@ -237,13 +249,14 @@ POST /api/knowledge/insight/create
 5. 将知识库节点的 `tools` 输出连接到 LLM 节点的 `tools` 输入，不要把它当作普通执行边。
 6. 让 LLM 先用全局搜索定位相关内容；需要精确引用时，再按“文档列表 → 标题树 → 段落 → 相邻段落”逐层导航。
 7. 只有在综合多个段落形成稳定结论时才调用 `knowledge_save_insight`；不要把单段原文、临时回答或不确定内容写入沉淀。
+8. 成体系的知识沉淀为 Markdown 文档：`knowledge_save_document`（标题在库内需唯一，重名会被拒绝、需换标题；用 # 层级标题组织内容）；更新已有文档用 `knowledge_update_document` 全量覆盖；保存后约 1 分钟完成分段向量化，期间检索不到属正常现象。
 
 工具模式下的工具名由节点 key 加前缀，具体名称以运行时工具列表为准。知识库节点本身不作为普通执行节点产生流程分支。
 
 ## 添加知识库的最短流程
 
 ```text
-创建知识库 → 上传文档 → 等待 processing_status=2 → 向量化 → 测试搜索 → 连接 knowledge 节点到 LLM
+创建知识库 → 上传文档 → 等待 processing_status=2（含自动向量化） → 测试搜索 → 连接 knowledge 节点到 LLM
 ```
 
 每一步都要确认接口返回 `code=1`。批量上传时逐个记录文档 ID，并逐个检查失败文档的 `error_message`；不要因为同一批次部分成功就跳过失败项。
@@ -251,8 +264,8 @@ POST /api/knowledge/insight/create
 ## 检索不到内容时
 
 1. 用 `GET /api/knowledge/document/get/{id}` 检查是否为 `processing_status=2`。
-2. 如果为 `0` 或 `1`，继续等待后台处理；如果为 `3`，读取 `error_message` 后调用 `POST /api/knowledge/document/reprocess/{id}`。
-3. 如果文档已处理完成但没有向量，调用对应文档或整个知识库的向量化接口，并等待状态从 `4` 回到 `2`。
+2. 如果为 `0`/`1`/`4`，继续等待后台定时任务处理；如果为 `3`，读取 `error_message` 后调用 `POST /api/knowledge/document/reprocess/{id}`。
+3. 如果长时间停留在 `4`（通常因向量模型未配置），检查 `EMBEDDING_API_KEY`/`EMBEDDING_BASE_URL`/`EMBEDDING_MODEL` 配置，配置后定时任务会自动续跑；紧急时也可手动调向量化接口补量。
 4. 用 `POST /api/knowledge/document/search-segments` 做直接搜索，区分是数据问题还是 Agent 节点连接问题。
 5. 直接搜索成功但 Agent 无结果时，检查节点的 `knowledge_base_id`、工具边、LLM 节点和工具调用日志。
 6. 检查 embedding 配置：`EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL` 可来自 `.env` 或全局配置。缺失时提示配置向量模型，不要伪造检索结果。
