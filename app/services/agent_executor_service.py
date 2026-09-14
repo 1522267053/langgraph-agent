@@ -76,7 +76,7 @@ def normalize_work_dir(work_dir: Optional[str]) -> Optional[str]:
 
 _RUN_END_EVENT_TYPES = frozenset({"error", "flow_done", "waiting_human"})
 _PROGRESS_EVENT_TYPES = frozenset(
-    {"node_start", "node_content", "tool_call_start", "node_done"}
+    {"node_start", "node_content", "tool_call_start", "tool_call_end", "node_done"}
 )
 
 
