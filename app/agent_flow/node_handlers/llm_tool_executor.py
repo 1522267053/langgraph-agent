@@ -260,6 +260,15 @@ async def setup_tool_handlers(
         ):
             handler._working_dir = session_work_dir or get_agent_work_dir(flow_id)
 
+        # 注入 _session_work_dir（仅 Agent 类型，用户在聊天页显式配置的会话工作目录，
+        # 未配置为 None；Shell 节点据此实现 会话 > 节点 default_workdir > 默认 的优先级）
+        if (
+            hasattr(handler, "_session_work_dir")
+            and flow_type == "agent"
+            and flow_id is not None
+        ):
+            handler._session_work_dir = session_work_dir
+
         # 注入 _media_caps（file_read 可自动注入的媒体类型，模型能力×适配器交集）
         if hasattr(handler, "_media_caps"):
             from app.services.ai_provider_service import get_adapter_type
