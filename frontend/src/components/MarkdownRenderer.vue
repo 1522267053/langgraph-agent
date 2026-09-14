@@ -281,6 +281,204 @@ let streamRenderTimer: ReturnType<typeof setTimeout> | null = null
 let lastStreamRenderAt = 0
 let hasPendingStreamRender = false
 
+/* ---------- Mermaid 全屏预览（左键拖拽平移 / 滚轮与按钮缩放） ---------- */
+
+const FULLSCREEN_MIN_SCALE = 0.05
+const FULLSCREEN_MAX_SCALE = 8
+
+/** 全屏背景色预设（transparent 显示下层深色遮罩，形成透明效果） */
+const FULLSCREEN_BG_PRESETS = ['#ffffff', '#f1f5f9', '#1e293b', 'transparent']
+const FULLSCREEN_BG_STORAGE_KEY = 'mermaid-fullscreen-bg'
+
+function loadFullscreenBg(): string {
+  try {
+    const saved = localStorage.getItem(FULLSCREEN_BG_STORAGE_KEY)
+    if (saved && FULLSCREEN_BG_PRESETS.includes(saved)) return saved
+  } catch {
+    // localStorage 不可用时回退默认值
+  }
+  return '#ffffff'
+}
+
+const fullscreenVisible = ref(false)
+const fullscreenBg = ref(loadFullscreenBg())
+const fullscreenSvg = ref('')
+const fullscreenSize = ref({ width: 0, height: 0 })
+const fullscreenScale = ref(1)
+const fullscreenTranslateX = ref(0)
+const fullscreenTranslateY = ref(0)
+const fullscreenViewportRef = ref<HTMLDivElement>()
+const fullscreenPanning = ref(false)
+const fullscreenScalePercent = computed(() => `${Math.round(fullscreenScale.value * 100)}%`)
+
+// 平移起点快照（非响应式，避免拖拽过程中多余渲染依赖）
+let panStartX = 0
+let panStartY = 0
+let panBaseX = 0
+let panBaseY = 0
+
+/** 从 SVG 字符串解析原始尺寸：优先 viewBox，其次 width/height 属性 */
+function parseSvgNaturalSize(svg: string): { width: number; height: number } {
+  const viewBox = svg.match(/viewBox\s*=\s*"[^"]*?\s([\d.]+)\s([\d.]+)"/i)
+  if (viewBox) {
+    const width = parseFloat(viewBox[1])
+    const height = parseFloat(viewBox[2])
+    if (width > 0 && height > 0) return { width, height }
+  }
+  const width = parseFloat(svg.match(/\swidth\s*=\s*"([\d.]+)/i)?.[1] || '0')
+  const height = parseFloat(svg.match(/\sheight\s*=\s*"([\d.]+)/i)?.[1] || '0')
+  if (width > 0 && height > 0) return { width, height }
+  return { width: 800, height: 600 }
+}
+
+function clampFullscreenScale(scale: number): number {
+  return Math.min(FULLSCREEN_MAX_SCALE, Math.max(FULLSCREEN_MIN_SCALE, scale))
+}
+
+/** 重置为适应窗口并居中 */
+function fitMermaidToWindow(): void {
+  const viewport = fullscreenViewportRef.value
+  if (!viewport) return
+  const { width, height } = fullscreenSize.value
+  if (width <= 0 || height <= 0) return
+  const padding = 48
+  fullscreenScale.value = clampFullscreenScale(
+    Math.min(
+      (viewport.clientWidth - padding * 2) / width,
+      (viewport.clientHeight - padding * 2) / height
+    )
+  )
+  fullscreenTranslateX.value = (viewport.clientWidth - width * fullscreenScale.value) / 2
+  fullscreenTranslateY.value = (viewport.clientHeight - height * fullscreenScale.value) / 2
+}
+
+/** 以视口局部坐标为中心缩放，保证光标/中心所指内容位置不变 */
+function zoomMermaidAt(localX: number, localY: number, factor: number): void {
+  const scale = clampFullscreenScale(fullscreenScale.value * factor)
+  const ratio = scale / fullscreenScale.value
+  fullscreenTranslateX.value = localX - (localX - fullscreenTranslateX.value) * ratio
+  fullscreenTranslateY.value = localY - (localY - fullscreenTranslateY.value) * ratio
+  fullscreenScale.value = scale
+}
+
+function handleMermaidWheel(event: WheelEvent): void {
+  const viewport = fullscreenViewportRef.value
+  if (!viewport) return
+  const rect = viewport.getBoundingClientRect()
+  const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1
+  zoomMermaidAt(event.clientX - rect.left, event.clientY - rect.top, factor)
+}
+
+/** 按钮缩放：以视口中心为缩放中心 */
+function zoomMermaidCentered(factor: number): void {
+  const viewport = fullscreenViewportRef.value
+  if (!viewport) return
+  zoomMermaidAt(viewport.clientWidth / 2, viewport.clientHeight / 2, factor)
+}
+
+function handlePanStart(event: MouseEvent): void {
+  if (event.button !== 0) return
+  event.preventDefault()
+  fullscreenPanning.value = true
+  panStartX = event.clientX
+  panStartY = event.clientY
+  panBaseX = fullscreenTranslateX.value
+  panBaseY = fullscreenTranslateY.value
+  window.addEventListener('mousemove', handlePanMove)
+  window.addEventListener('mouseup', handlePanEnd)
+}
+
+function handlePanMove(event: MouseEvent): void {
+  fullscreenTranslateX.value = panBaseX + (event.clientX - panStartX)
+  fullscreenTranslateY.value = panBaseY + (event.clientY - panStartY)
+}
+
+function handlePanEnd(): void {
+  fullscreenPanning.value = false
+  window.removeEventListener('mousemove', handlePanMove)
+  window.removeEventListener('mouseup', handlePanEnd)
+}
+
+/* ---------- 触摸手势：单指拖动平移 ---------- */
+
+const isCoarsePointer = ref(false)
+const fullscreenHintText = computed(() =>
+  isCoarsePointer.value ? '单指拖动移动 · 点击 × 关闭' : '左键拖拽移动 · 滚轮缩放 · Esc 关闭'
+)
+
+// 触摸手势快照（非响应式）
+let touchPanStartX = 0
+let touchPanStartY = 0
+let touchPanBaseX = 0
+let touchPanBaseY = 0
+let touchPanning = false
+
+function handleTouchStart(event: TouchEvent): void {
+  if (event.touches.length !== 1) return
+  // 单指：平移
+  const touch = event.touches[0]
+  touchPanning = true
+  touchPanStartX = touch.clientX
+  touchPanStartY = touch.clientY
+  touchPanBaseX = fullscreenTranslateX.value
+  touchPanBaseY = fullscreenTranslateY.value
+}
+
+function handleTouchMove(event: TouchEvent): void {
+  if (!touchPanning || event.touches.length !== 1) return
+  // 阻止浏览器默认的页面滚动/缩放
+  event.preventDefault()
+  const touch = event.touches[0]
+  fullscreenTranslateX.value = touchPanBaseX + (touch.clientX - touchPanStartX)
+  fullscreenTranslateY.value = touchPanBaseY + (touch.clientY - touchPanStartY)
+}
+
+function handleTouchEnd(event: TouchEvent): void {
+  if (event.touches.length === 0) {
+    touchPanning = false
+  }
+}
+
+function openMermaidFullscreen(svg: string): void {
+  fullscreenSvg.value = svg
+  fullscreenSize.value = parseSvgNaturalSize(svg)
+  // 手机/平板切换触摸提示文案
+  isCoarsePointer.value = window.matchMedia?.('(pointer: coarse)').matches ?? false
+  fullscreenVisible.value = true
+  nextTick(fitMermaidToWindow)
+}
+
+function closeMermaidFullscreen(): void {
+  fullscreenVisible.value = false
+  fullscreenSvg.value = ''
+}
+
+function setFullscreenBg(color: string): void {
+  fullscreenBg.value = color
+  try {
+    localStorage.setItem(FULLSCREEN_BG_STORAGE_KEY, color)
+  } catch {
+    // ignore
+  }
+}
+
+function handleFullscreenKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') closeMermaidFullscreen()
+}
+
+watch(fullscreenVisible, visible => {
+  if (visible) {
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleFullscreenKeydown)
+    window.addEventListener('resize', fitMermaidToWindow)
+  } else {
+    document.body.style.overflow = ''
+    window.removeEventListener('keydown', handleFullscreenKeydown)
+    window.removeEventListener('resize', fitMermaidToWindow)
+    handlePanEnd()
+  }
+})
+
 function decorateCitationLinks(): void {
   if (!containerRef.value) return
   const links = containerRef.value.querySelectorAll<HTMLAnchorElement>('a')
@@ -406,9 +604,17 @@ async function renderMermaidBlocks(): Promise<void> {
     renderContainer.style.display = 'none'
     document.body.appendChild(renderContainer)
 
+    const fullscreenBtn = document.createElement('button')
+    fullscreenBtn.className = 'mermaid-toggle-btn'
+    fullscreenBtn.textContent = '全屏'
+    fullscreenBtn.title = '全屏预览'
+
     try {
       const { svg } = await m.render(id, code.trim(), renderContainer)
       previewDiv.innerHTML = svg
+      // 仅渲染成功时提供全屏入口（失败态展示错误信息，无图可看）
+      fullscreenBtn.addEventListener('click', () => openMermaidFullscreen(svg))
+      toolbar.appendChild(fullscreenBtn)
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : 'Mermaid 渲染失败'
       previewDiv.innerHTML = `<span class="mermaid-error-label">Mermaid 渲染失败</span><pre class="mermaid-error-msg">${errMsg.replace(/</g, '&lt;')}</pre>`
@@ -595,6 +801,12 @@ onUnmounted(() => {
     clearTimeout(streamRenderTimer)
     streamRenderTimer = null
   }
+  if (fullscreenVisible.value) {
+    document.body.style.overflow = ''
+  }
+  window.removeEventListener('keydown', handleFullscreenKeydown)
+  window.removeEventListener('resize', fitMermaidToWindow)
+  handlePanEnd()
   if (containerRef.value) {
     containerRef.value.querySelectorAll('.mermaid-rendered').forEach(el => {
       el.innerHTML = ''
@@ -607,6 +819,69 @@ onUnmounted(() => {
   <div ref="containerRef" class="markdown-body" @click="handleMarkdownClick">
     <VueMarkdown :source="renderedSource" :plugins="mdPlugins" :options="{ breaks: true }" />
   </div>
+
+  <Teleport to="body">
+    <div v-if="fullscreenVisible" class="mermaid-fullscreen-mask">
+      <div
+        ref="fullscreenViewportRef"
+        class="mermaid-fullscreen-viewport"
+        :class="{ panning: fullscreenPanning }"
+        :style="{ background: fullscreenBg }"
+        @mousedown="handlePanStart"
+        @wheel.prevent="handleMermaidWheel"
+        @touchstart="handleTouchStart"
+        @touchmove.prevent="handleTouchMove"
+        @touchend="handleTouchEnd"
+        @touchcancel="handleTouchEnd"
+      >
+        <div
+          class="mermaid-fullscreen-canvas"
+          :style="{
+            width: `${fullscreenSize.width}px`,
+            height: `${fullscreenSize.height}px`,
+            transform: `translate(${fullscreenTranslateX}px, ${fullscreenTranslateY}px) scale(${fullscreenScale})`
+          }"
+          v-html="fullscreenSvg"
+        />
+      </div>
+
+      <div class="mermaid-fullscreen-toolbar" @mousedown.stop>
+        <button
+          class="mermaid-fullscreen-tool-btn"
+          title="缩小"
+          @click="zoomMermaidCentered(1 / 1.25)"
+        >
+          −
+        </button>
+        <span class="mermaid-fullscreen-scale">{{ fullscreenScalePercent }}</span>
+        <button class="mermaid-fullscreen-tool-btn" title="放大" @click="zoomMermaidCentered(1.25)">
+          +
+        </button>
+        <button class="mermaid-fullscreen-tool-btn" title="适应窗口" @click="fitMermaidToWindow">
+          适应
+        </button>
+        <div class="mermaid-fullscreen-bg-group" title="背景颜色">
+          <button
+            v-for="color in FULLSCREEN_BG_PRESETS"
+            :key="color"
+            class="mermaid-fullscreen-bg-dot"
+            :class="{ active: fullscreenBg === color, transparent: color === 'transparent' }"
+            :style="color === 'transparent' ? undefined : { background: color }"
+            @click="setFullscreenBg(color)"
+          />
+        </div>
+        <button
+          class="mermaid-fullscreen-tool-btn close"
+          title="关闭 (Esc)"
+          @click="closeMermaidFullscreen"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div class="mermaid-fullscreen-hint">{{ fullscreenHintText }}</div>
+    </div>
+  </Teleport>
 </template>
 
 <style>
@@ -917,5 +1192,138 @@ onUnmounted(() => {
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* ---------- Mermaid 全屏预览覆盖层 ---------- */
+
+.mermaid-fullscreen-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(15, 23, 42, 0.92);
+}
+
+.mermaid-fullscreen-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+}
+
+.mermaid-fullscreen-viewport.panning {
+  cursor: grabbing;
+}
+
+.mermaid-fullscreen-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+/* 覆盖 mermaid 内联的 max-width/width，使 SVG 精确铺满 canvas（尺寸随缩放由 transform 控制） */
+.mermaid-fullscreen-canvas svg {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  display: block;
+}
+
+.mermaid-fullscreen-toolbar {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 10px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.mermaid-fullscreen-tool-btn {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: #475569;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mermaid-fullscreen-tool-btn:hover {
+  color: #1e293b;
+  background: #f1f5f9;
+}
+
+.mermaid-fullscreen-tool-btn.close {
+  margin-left: 6px;
+  border-left: 1px solid #e2e8f0;
+  border-radius: 0 4px 4px 0;
+}
+
+.mermaid-fullscreen-scale {
+  min-width: 46px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: #334155;
+  user-select: none;
+}
+
+.mermaid-fullscreen-bg-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 4px;
+  padding: 0 10px;
+  border-right: 1px solid #e2e8f0;
+}
+
+.mermaid-fullscreen-bg-dot {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mermaid-fullscreen-bg-dot:hover {
+  transform: scale(1.15);
+}
+
+.mermaid-fullscreen-bg-dot.active {
+  box-shadow: 0 0 0 2px #409eff;
+}
+
+.mermaid-fullscreen-bg-dot.transparent {
+  background-image: conic-gradient(#cbd5e1 25%, transparent 0 50%, #cbd5e1 0 75%, transparent 0);
+  background-size: 8px 8px;
+  background-color: #fff;
+}
+
+.mermaid-fullscreen-hint {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.78);
+  background: rgba(15, 23, 42, 0.55);
+  border-radius: 12px;
+  user-select: none;
+  pointer-events: none;
 }
 </style>
