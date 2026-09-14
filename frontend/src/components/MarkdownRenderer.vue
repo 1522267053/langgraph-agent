@@ -625,9 +625,9 @@ async function renderMermaidBlocks(): Promise<void> {
       }
     })
 
-    const renderContainer = document.createElement('div')
-    renderContainer.style.display = 'none'
-    document.body.appendChild(renderContainer)
+    // 不再创建 hidden renderContainer —— mermaid 11 在 hidden (display:none) 容器里
+    // 调 getBBox() 会返回异常 bbox，触发 layout 阶段 'Could not find a suitable point' bug。
+    // 直接传 2 参数让 mermaid 自动管理临时 DOM（自动注入 body 并清理）。
 
     const fullscreenBtn = document.createElement('button')
     fullscreenBtn.className = 'mermaid-toggle-btn'
@@ -643,14 +643,14 @@ async function renderMermaidBlocks(): Promise<void> {
 
     let renderedSvg = ''
     try {
-      const { svg } = await m.render(id, code.trim(), renderContainer)
+      const { svg } = await m.render(id, code.trim())
       renderedSvg = svg
     } catch (firstErr) {
       // 第一次解析失败：尝试自动给含保留字符的标签加引号后再渲染
       const fixedCode = quoteMermaidLabels(code.trim())
       if (fixedCode !== code.trim()) {
         try {
-          const { svg } = await m.render(id, fixedCode, renderContainer)
+          const { svg } = await m.render(id, fixedCode)
           renderedSvg = svg
           // 修复成功：同步源码视图与复制按钮内容，并加"已修复"角标
           sourceDiv.textContent = fixedCode
@@ -677,8 +677,6 @@ async function renderMermaidBlocks(): Promise<void> {
       fullscreenBtn.addEventListener('click', () => openMermaidFullscreen(captured))
       toolbar.appendChild(fullscreenBtn)
     }
-
-    renderContainer.remove()
 
     toggleBtn.addEventListener('click', () => {
       toggleBtn.classList.add('active')
@@ -1254,6 +1252,7 @@ onUnmounted(() => {
   display: inline-block;
   padding: 1px 8px;
   margin-left: auto;
+  order: 99;
   font-size: 11px;
   font-weight: 500;
   color: #15803d;
