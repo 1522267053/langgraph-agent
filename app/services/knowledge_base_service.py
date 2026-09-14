@@ -23,7 +23,13 @@ class KnowledgeBaseService(
         应用查询条件
         支持名称模糊搜索
         """
-        query, count_query = super()._apply_filters(query, count_query, condition)
+        if condition and condition.status is not None:
+            if query is not None:
+                query = query.where(KnowledgeBase.status == condition.status)
+            if count_query is not None:
+                count_query = count_query.where(
+                    KnowledgeBase.status == condition.status
+                )
 
         if condition and hasattr(condition, "name") and condition.name:
             keyword = f"%{condition.name}%"
