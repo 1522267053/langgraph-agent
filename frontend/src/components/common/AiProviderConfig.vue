@@ -73,7 +73,7 @@ const isAnthropicProvider = computed(
 
 const reasoningEffortTip = computed(() =>
   isAnthropicProvider.value
-    ? 'Anthropic 兼容模型自动映射为扩展思考：low=2048 / medium=4096 / high=8192 budget tokens（最新代模型 Opus 4.7+ / Sonnet 5 走 adaptive thinking）。注意：思考模式下 Anthropic 要求温度=1 且 max_tokens 大于思考预算，配置冲突时 API 会直接报错，请在本配置中调整后重试。深度需求可在下方附加参数填写 {"thinking": {"type": "enabled", "budget_tokens": N}} 完全自定义并覆盖自动映射'
+    ? '按模型能力自动路由：支持 effort 的 Claude 模型（Opus 4.5+、Sonnet 4.6+，档位 max/xhigh/high/medium/low）走原生 reasoning_effort；其余模型（旧 Claude、GLM/MiniMax 等第三方 Anthropic 兼容端点）映射为扩展思考预算 low=2048 / medium=4096 / high=8192 tokens。注意：思考模式下要求温度=1 且 max_tokens 大于思考预算，配置冲突时 API 会直接报错。深度需求可在下方附加参数填写 {"thinking": {"type": "enabled", "budget_tokens": N}} 覆盖自动映射'
     : 'openai兼容的模型支持设置推理深度。若是anthropic兼容的模型，则可以在下方附加参数添加 {"thinking": {"type": "enabled", "budget_tokens": 2048}}'
 )
 
@@ -447,6 +447,10 @@ function handleExtraBodyBlur() {
         <el-option label="low" value="low" />
         <el-option label="medium" value="medium" />
         <el-option label="high" value="high" />
+        <template v-if="isAnthropicProvider">
+          <el-option label="xhigh" value="xhigh" />
+          <el-option label="max" value="max" />
+        </template>
       </el-select>
     </el-form-item>
     <el-form-item v-if="showStreamUsage">
@@ -626,6 +630,10 @@ function handleExtraBodyBlur() {
         <el-option label="low" value="low" />
         <el-option label="medium" value="medium" />
         <el-option label="high" value="high" />
+        <template v-if="isAnthropicProvider">
+          <el-option label="xhigh" value="xhigh" />
+          <el-option label="max" value="max" />
+        </template>
       </el-select>
     </el-form-item>
     <el-form-item v-if="showStreamUsage" label="流式用量">

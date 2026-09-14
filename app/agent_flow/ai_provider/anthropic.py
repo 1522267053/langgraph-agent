@@ -45,21 +45,17 @@ def _install_request_logger(llm) -> None:
 
 # ---- reasoning_effort → Anthropic thinking 自动映射 ----
 
-# 推理深度 → thinking.budget_tokens 阶梯（low 取 API 下限浅思考；深度需求
-# 可经前端「附加参数」填 {"thinking": {"type": "enabled", "budget_tokens": N}} 覆盖）
+# 推理深度 → thinking.budget_tokens 阶梯（深度需求可经前端「附加参数」
+# 填 {"thinking": {"type": "enabled", "budget_tokens": N}} 覆盖）
 _EFFORT_BUDGET_MAP = {"low": 2048, "medium": 4096, "high": 8192}
-# 新代模型原生 reasoning_effort 合法档位（库字段为 Literal 校验，
-# 超出即 ValidationError 使建模失败，须先过滤降级为告警丢弃）
-_NATIVE_EFFORT_LEVELS = {"max", "xhigh", "high", "medium", "low"}
 
 
-def _model_supports_adaptive_effort(model: str) -> bool:
-    """代次探测：模型是否支持 effort/adaptive thinking（Opus 4.7+/Sonnet 5）。
+def _model_effort_levels(model: str) -> tuple[str, ...]:
+    """查询模型在库 profile 中声明的 effort 档位（langchain-anthropic data/_profiles）。
 
-    复用 langchain_anthropic 内部 profile 判定（与库 payload 组装逻辑一致）：
-    新代模型已在 API 层移除 budget_tokens，传 {"type": "enabled", ...} 会被
-    拒绝；profile 未知（第三方网关自定义模型名等）按不支持处理，回落到
-    budget 形态兜底。
+    返回空 tuple = 该模型不支持 effort 机制：包括 sonnet-4-5 及更早的 Claude、
+    以及所有非 Claude 模型（GLM/MiniMax/DeepSeek 等第三方 Anthropic 兼容端点、
+    自定义网关模型名——_PROFILES 注册表仅收录 claude-* 模型）。
     """
     try:
         from langchain_anthropic.chat_models import (
@@ -67,10 +63,9 @@ def _model_supports_adaptive_effort(model: str) -> bool:
             _reasoning_effort_levels,
         )
 
-        levels = _reasoning_effort_levels(_get_default_model_profile(model))
+        return _reasoning_effort_levels(_get_default_model_profile(model))
     except Exception:  # noqa: BLE001 — 库版本变动时降级为 budget 形态，不阻断建模型
-        return False
-    return "xhigh" in levels
+        return ()
 
 
 def _resolve_thinking(
@@ -82,12 +77,23 @@ def _resolve_thinking(
 
     优先级：用户显式配置（extra_body.thinking）> effort 自动映射 > 不设置。
 
+    两套机制的模型覆盖面不同（Anthropic API 事实）：
+    - effort/output_config：Opus 4.5+、Sonnet 4.6+（profile 声明档位即支持）；
+    - thinking/budget_tokens：Sonnet 系及更早 + 第三方 Anthropic 兼容端点
+      （GLM/MiniMax/DeepSeek 经网关，它们兼容的是 Claude Code 生态的 thinking
+      字段；output_config.effort 是最新代 API，第三方基本不认）。
+
+    注意与库内部门控（chat_models.py L1694-1699）的差异：库仅在 profile 声明
+    xhigh 时自动补 adaptive thinking（因 adaptive+summarized 形态只有最新代
+    认识）；本函数的路由门控是「声明了任意档位」——opus-4-5/4-6/sonnet-4-6
+    声明档位即支持 effort，走原生字段，不发任何 thinking。
+
     Returns:
         (constructor_thinking, native_effort, dropped_effort)
         - constructor_thinking: 传给 ChatAnthropic 构造参数 thinking 的 dict
-        - native_effort: 新代模型走库原生 reasoning_effort（库内部转
-          output_config.effort + adaptive thinking）
-        - dropped_effort: 无法映射需告警丢弃的自定义档位
+        - native_effort: 传给库原生 reasoning_effort 的档位（库内部转
+          output_config.effort）
+        - dropped_effort: 无法映射需告警丢弃的档位
     """
     # 用户显式配置完全接管：构造参数不设 thinking，值留在 model_kwargs
     # 透传（非法形态由 Pydantic 校验报可见错误，不静默吞掉）
@@ -97,20 +103,19 @@ def _resolve_thinking(
         return None, None, None
 
     effort_str = str(effort).lower()
+    levels = _model_effort_levels(model)
+    if levels:
+        # 支持 effort 的模型（Claude Opus 4.5+/Sonnet 4.6+）：
+        # 命中声明档位 → 库原生 reasoning_effort；不在声明档位（如 opus-4-5
+        # 传 max/xhigh）→ 本地丢弃告警，不放行给 API 报错
+        if effort_str in levels:
+            return None, effort_str, None
+        return None, None, effort_str
+    # 不支持 effort（旧 Claude + 第三方兼容端点 + 未知模型名）：
+    # 三档映射为 enabled + budget_tokens；allow-create 自定义档位无对应概念，丢弃
     budget = _EFFORT_BUDGET_MAP.get(effort_str)
-    adaptive_capable = _model_supports_adaptive_effort(model)
-    if budget is not None and not adaptive_capable:
-        # 老代/未知模型（3.7/4 系及兼容网关）：enabled + budget_tokens 形态
+    if budget is not None:
         return {"type": "enabled", "budget_tokens": budget}, None, None
-    if adaptive_capable:
-        if effort_str not in _NATIVE_EFFORT_LEVELS:
-            # 自定义档位超出库 Literal 白名单会触发 ValidationError 使建模失败，
-            # 降级为告警丢弃（与老代自定义档位行为一致）
-            return None, None, effort_str
-        # 新代模型：API 已移除 budget_tokens，effort（含 xhigh 等）交由库
-        # 原生字段转 adaptive thinking
-        return None, effort_str, None
-    # OpenAI 专属档位（allow-create 自定义值）在老代模型上无对应概念，丢弃告警
     return None, None, effort_str
 
 
@@ -190,23 +195,23 @@ class AnthropicProvider(BaseAIProvider):
         )
         if dropped_effort:
             logger.warning(
-                "Anthropic 模型 %s 不支持推理深度档位 %r（OpenAI 专属概念），已忽略。"
-                "可用档位：%s，或在附加参数中自定义 thinking。",
+                "Anthropic 模型 %s 不支持推理深度档位 %r，已忽略。"
+                "支持的档位取决于模型（或在附加参数中自定义 thinking）。",
                 model,
                 dropped_effort,
-                sorted(_EFFORT_BUDGET_MAP),
             )
         elif native_effort:
-            # 新代模型：走库原生字段（库内部转 output_config.effort +
-            # adaptive thinking；thinking 构造参数不设，交给库判定）
+            # 支持 effort 的模型（Opus 4.5+/Sonnet 4.6+）：走库原生字段，
+            # 库内部转 output_config.effort；thinking 构造参数不设，交给库判定
             kwargs["reasoning_effort"] = native_effort
             logger.info(
-                "Anthropic 新代模型 %s：推理深度 %r 走原生 effort（adaptive thinking）",
+                "Anthropic 模型 %s：推理深度 %r 走原生 reasoning_effort（output_config.effort）",
                 model,
                 native_effort,
             )
         elif thinking:
-            # 老代/未知模型：enabled + budget_tokens 形态。
+            # 不支持 effort 的模型（旧 Claude / GLM、MiniMax 等第三方 Anthropic
+            # 兼容端点 / 未知模型名）：enabled + budget_tokens 形态。
             # temperature/max_tokens 不做任何改写：Anthropic API 自带权威校验
             # （thinking 启用时 temperature 必须=1、budget_tokens 必须<max_tokens），
             # 配置冲突时由 API 返回 400 错误消息，用户据此到 LLM 配置自行修正——
