@@ -46,6 +46,45 @@ _TYPE_MAP = {
 # 进度预览截断长度（仅展示每轮回复前 N 字符，超出省略）
 _PROGRESS_PREVIEW_CHARS = 50
 
+# 工具输出预览截断长度（tool_call_end 后驻留展示，比内容预览大以便展开回看）
+_TOOL_OUTPUT_PREVIEW_CHARS = 200
+
+# 工具结果 dict 中可读字段的提取优先级（避免预览显示 JSON 样板）
+_TOOL_PREVIEW_FIELDS = ("error", "content", "output", "result", "diff", "message")
+
+
+def _tool_output_preview(result: Any) -> str:
+    """从工具结果中提取父Agent展示用的输出预览
+
+    dict 结果按 _TOOL_PREVIEW_FIELDS 优先提取可读字段（失败结果优先 error）；
+    其余类型 str() 兜底。截断到 _TOOL_OUTPUT_PREVIEW_CHARS，超出补省略号。
+    空结果返回空串（前端不刷新 liveOutput，保留上一个预览）。
+    """
+    if result is None:
+        return ""
+    text: str
+    if isinstance(result, dict):
+        if result.get("success") is False and result.get("error"):
+            text = str(result["error"])
+        else:
+            for field in _TOOL_PREVIEW_FIELDS:
+                value = result.get(field)
+                if isinstance(value, str) and value.strip():
+                    text = value
+                    break
+            else:
+                text = json.dumps(result, ensure_ascii=False, default=str)
+    elif isinstance(result, str):
+        text = result
+    else:
+        text = json.dumps(result, ensure_ascii=False, default=str)
+    text = text.strip()
+    if not text:
+        return ""
+    if len(text) > _TOOL_OUTPUT_PREVIEW_CHARS:
+        return text[:_TOOL_OUTPUT_PREVIEW_CHARS] + "..."
+    return text
+
 
 class SubAgentNodeConfig(BaseNodeConfig):
     """子Agent节点配置"""
@@ -289,8 +328,12 @@ class SubAgentNodeHandler(BaseNodeHandler):
                 # 「正在调用xxx工具中」；并行调用以「、」连接
                 running_tools: dict[str, str] = {}
 
-                def send_tool_status() -> None:
-                    """转发当前工具调用状态（空串表示全部结束、前端清除状态行）"""
+                def send_tool_status(content: str = "") -> None:
+                    """转发当前工具调用状态（空串表示全部结束、前端清除状态行）
+
+                    content 非空时随状态一并携带（tool_call_end 的输出预览），
+                    前端在更新 liveTool 后落入 updateToolLiveOutput 驻留展示
+                    """
                     if not _parent_writer:
                         return
                     _parent_writer(
@@ -300,6 +343,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
                             sub_session_id=session_id,
                             sub_agent_name=_agent_name,
                             tool_name="、".join(running_tools.values()),
+                            content=content,
                         )
                     )
 
@@ -353,7 +397,10 @@ class SubAgentNodeHandler(BaseNodeHandler):
                             or ""
                         )
                         running_tools.pop(call_id, None)
-                        send_tool_status()
+                        # 携带该工具的输出预览：前端驻留展示直到下一事件替换
+                        send_tool_status(
+                            content=_tool_output_preview(event_data.get("result"))
+                        )
                         return
                     if event_type == "node_done":
                         # 最后一轮回复（无工具调用）完成
