@@ -823,7 +823,7 @@ onMounted(() => {
                   min-width="220"
                   show-overflow-tooltip
                 />
-                <el-table-column prop="answer" label="答案" min-width="360" />
+                <el-table-column prop="answer" label="答案" min-width="360" show-overflow-tooltip />
                 <el-table-column
                   prop="keywords"
                   label="关键词"
