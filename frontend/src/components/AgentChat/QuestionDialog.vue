@@ -99,7 +99,7 @@ watch(
     selectedLabels.value = new Set()
     customText.value = ''
     showCustomInput.value = false
-    submitted.value = false  // 新问题到来时重置提交标志
+    submitted.value = false // 新问题到来时重置提交标志
     if (q) startCountdown(q)
     else stopCountdown()
   }
@@ -161,7 +161,6 @@ function submitDialog() {
 const confirmDisabled = computed(() => {
   return expired.value || (selectedLabels.value.size === 0 && !customText.value.trim())
 })
-
 </script>
 
 <template>
@@ -177,13 +176,15 @@ const confirmDisabled = computed(() => {
       <div class="dialog-header">
         <el-icon :size="20" class="dialog-icon"><QuestionFilled /></el-icon>
         <span class="dialog-title">{{ question?.header || '问题反问' }}</span>
-        <span v-if="subAgentName" class="dialog-sub-agent">
-          子Agent「{{ subAgentName }}」
+        <!-- 模式标识：单选点击替换选中，多选可勾选多项后统一提交 -->
+        <span class="dialog-mode" :class="isMultiple ? 'is-multiple' : 'is-single'">
+          {{ isMultiple ? '多选' : '单选' }}
         </span>
+        <span v-if="subAgentName" class="dialog-sub-agent">子Agent「{{ subAgentName }}」</span>
         <span v-if="expired" class="dialog-expired">已过期</span>
-        <span v-else-if="remainingSeconds > 0" class="dialog-countdown">{{
-          formatCountdown(remainingSeconds)
-        }}</span>
+        <span v-else-if="remainingSeconds > 0" class="dialog-countdown">
+          {{ formatCountdown(remainingSeconds) }}
+        </span>
       </div>
     </template>
 
@@ -253,9 +254,7 @@ const confirmDisabled = computed(() => {
          无取消按钮——用户必须从选项中选一个答案；超时由后端兜底 -->
     <template v-if="visible" #footer>
       <div class="dialog-footer">
-        <el-button type="primary" :disabled="confirmDisabled" @click="submitDialog">
-          确定
-        </el-button>
+        <el-button type="primary" :disabled="confirmDisabled" @click="submitDialog">确定</el-button>
       </div>
     </template>
   </el-dialog>
@@ -276,6 +275,24 @@ const confirmDisabled = computed(() => {
   font-weight: 600;
   font-size: 15px;
   color: #303133;
+}
+
+.dialog-mode {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.dialog-mode.is-multiple {
+  color: #7e22ce;
+  background: #f3e8ff;
+}
+
+.dialog-mode.is-single {
+  color: #1d4ed8;
+  background: #dbeafe;
 }
 
 .dialog-sub-agent {
