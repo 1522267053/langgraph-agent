@@ -59,6 +59,24 @@ const reasoningEffort = defineModel<string | undefined>('reasoningEffort')
 const extraBody = defineModel<Record<string, unknown> | undefined>('extraBody')
 const streamUsage = defineModel<boolean | undefined>('streamUsage')
 
+/**
+ * 推理深度是否自动映射为 Anthropic thinking：按 /ai-provider/list 返回的
+ * adapter_type（协议适配器类型）判断，不能按 provider 名称匹配——自定义
+ * 连接名（如 minimax-cn-coding-plan）无规律，协议归属只体现在 adapter_type；
+ * 未命中（列表未就绪/供应商不存在）降级按 OpenAI 兼容处理
+ */
+const isAnthropicProvider = computed(
+  () =>
+    providerList.value.find(p => p.name === provider.value)?.adapter_type ===
+    'anthropic'
+)
+
+const reasoningEffortTip = computed(() =>
+  isAnthropicProvider.value
+    ? 'Anthropic 兼容模型自动映射为扩展思考：low=2048 / medium=4096 / high=8192 budget tokens（最新代模型 Opus 4.7+ / Sonnet 5 走 adaptive thinking）。注意：思考模式下 Anthropic 要求温度=1 且 max_tokens 大于思考预算，配置冲突时 API 会直接报错，请在本配置中调整后重试。深度需求可在下方附加参数填写 {"thinking": {"type": "enabled", "budget_tokens": N}} 完全自定义并覆盖自动映射'
+    : 'openai兼容的模型支持设置推理深度。若是anthropic兼容的模型，则可以在下方附加参数添加 {"thinking": {"type": "enabled", "budget_tokens": 2048}}'
+)
+
 // undefined 视为开启（默认 true 语义），未配置的老节点显示为开
 const streamUsageSwitch = computed({
   get: () => streamUsage.value !== false,
@@ -411,9 +429,7 @@ function handleExtraBodyBlur() {
     <el-form-item v-if="showReasoningEffort">
       <template #label>
         推理深度
-        <el-tooltip
-          content='openai兼容的模型支持设置推理深度。若是anthropic兼容的模型，则可以在下方附加参数添加 {"thinking": {"type": "enabled", "budget_tokens": 2048}}'
-        >
+        <el-tooltip :content="reasoningEffortTip">
           <el-icon class="context-tip-icon"><QuestionFilled /></el-icon>
         </el-tooltip>
       </template>
@@ -589,7 +605,13 @@ function handleExtraBodyBlur() {
         @change="onFieldChange"
       />
     </el-form-item>
-    <el-form-item v-if="showReasoningEffort" label="推理深度">
+    <el-form-item v-if="showReasoningEffort">
+      <template #label>
+        推理深度
+        <el-tooltip :content="reasoningEffortTip">
+          <el-icon class="context-tip-icon"><QuestionFilled /></el-icon>
+        </el-tooltip>
+      </template>
       <el-select
         v-model="reasoningEffort"
         placeholder="不设置（使用模型默认）"
