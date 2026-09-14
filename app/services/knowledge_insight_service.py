@@ -9,7 +9,7 @@ import logging
 import threading
 from typing import List, Optional
 
-from sqlalchemy import Select, and_, or_, select, update
+from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.knowledge_base import KnowledgeBase
@@ -365,6 +365,61 @@ class KnowledgeInsightService(
         for row in seg_result.all():
             result.setdefault(row.insight_id, []).append(row.segment_id)
         return result
+
+    # ---- 沉淀列表 ----
+
+    async def list_insights(
+        self,
+        db: AsyncSession,
+        knowledge_base_id: int,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> dict:
+        """分页列出知识沉淀（按保存时间倒序，最新在前），page_size 上限 10
+
+        Returns:
+            {"total": 总条数, "page": 页码, "page_size": 每页条数,
+             "items": [{id, question, answer, keywords,
+             source_segment_ids}, ...]}
+        """
+        page = max(1, page)
+        page_size = max(1, min(page_size, 10))
+
+        base_where = (
+            KnowledgeInsight.knowledge_base_id == knowledge_base_id,
+            KnowledgeInsight.is_delete == 0,
+        )
+        count_stmt = (
+            select(func.count()).select_from(KnowledgeInsight).where(*base_where)
+        )
+        total = (await db.execute(count_stmt)).scalar_one()
+
+        stmt = (
+            select(KnowledgeInsight)
+            .where(*base_where)
+            .order_by(KnowledgeInsight.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await db.execute(stmt)
+        insights = result.scalars().all()
+        if not insights:
+            return {"total": total, "page": page, "page_size": page_size, "items": []}
+
+        insight_ids = [i.id for i in insights]
+        insight_segments = await self._batch_segment_ids(db, insight_ids)
+
+        items = [
+            {
+                "id": insight.id,
+                "question": insight.question,
+                "answer": insight.answer,
+                "keywords": insight.keywords,
+                "source_segment_ids": insight_segments.get(insight.id, []),
+            }
+            for insight in insights
+        ]
+        return {"total": total, "page": page, "page_size": page_size, "items": items}
 
     # ---- 关联段落查询 ----
 

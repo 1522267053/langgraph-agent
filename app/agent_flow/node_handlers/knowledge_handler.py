@@ -102,7 +102,7 @@ class VectorSearchInput(BaseModel):
         ...,
         description="语义搜索文本，建议用完整的句子或描述（向量检索句子越长越精准）",
     )
-    top_k: int = Field(5, ge=1, le=50, description="返回结果数量，默认5")
+    top_k: Optional[int] = Field(default=5, ge=1, le=50, description="返回结果数量，默认5")
 
 
 class SaveInsightInput(BaseModel):
@@ -118,6 +118,13 @@ class SaveInsightInput(BaseModel):
 
 class DeleteInsightInput(BaseModel):
     ids: list[int] = Field(..., description="要删除的沉淀ID列表")
+
+
+class ListInsightInput(BaseModel):
+    """查询知识沉淀列表工具输入参数"""
+
+    page: Optional[int] = Field(default=1, ge=1, description="页码，从1开始，默认1")
+    page_size: Optional[int] = Field(default=10, ge=1, le=10, description="每页条数，默认10，最大10")
 
 
 class SaveDocumentInput(BaseModel):
@@ -141,13 +148,20 @@ class UpdateDocumentInput(BaseModel):
     content: str = Field(
         ..., description="更新后的完整 Markdown 内容（全量覆盖，不是追加）"
     )
-    title: Optional[str] = Field(None, description="新标题，不传则保持原标题")
+    title: Optional[str] = Field(default=None, description="新标题，不传则保持原标题")
 
 
 class DeleteDocumentInput(BaseModel):
     """删除文档工具输入参数"""
 
     document_id: int = Field(..., description="要删除的文档ID")
+
+
+class ListDocumentInput(BaseModel):
+    """分页查询文档列表工具输入参数"""
+
+    page: Optional[int] = Field(default=1, ge=1, description="页码，从1开始，默认1")
+    page_size: Optional[int] = Field(default=10, ge=1, le=50, description="每页条数，默认10，最大50")
 
 
 # AI 写入文档的字符数上限（content 列为 Text，MySQL 下约 64KB）
@@ -162,7 +176,7 @@ class KnowledgeNodeConfig(BaseNodeConfig):
         Optional[int], BeforeValidator(lambda v: None if not v else int(v))
     ] = None
     knowledge_base_name: str = ""
-    top_k: int = 5
+    top_k: Optional[int] = Field(default=5, ge=1, le=50)
     enable_document_edit: bool = True
 
 
@@ -319,6 +333,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                     "3. 重复回答同类问题时 — 首次整理后保存，后续搜索可命中\n"
                     "4. 发现跨文档的关联知识时 — 保存分析结论\n"
                     "\n不需要保存的情况：直接引用单个段落、临时性回答、不确定准确的信息\n"
+                    "保存前可用 knowledge_list_insight 查看已有沉淀，避免重复保存同类结论\n"
                 )
                 if cfg.enable_document_edit:
                     static_prefix += (
@@ -614,6 +629,41 @@ class KnowledgeNodeHandler(BaseNodeHandler):
 
                 return f"知识沉淀已保存，沉淀ID: {insight.id}{seg_info}"
 
+        async def list_insights(page: int = 1, page_size: int = 10) -> str:
+            async with AsyncSessionLocal() as db:
+                result = await knowledge_insight_service.list_insights(
+                    db, kb_id, page, page_size
+                )
+            items = result["items"]
+            total = result["total"]
+            if not items:
+                if total == 0:
+                    return "知识库中还没有知识沉淀"
+                return (
+                    f"第{result['page']}页没有数据，"
+                    f"共{total}条沉淀，请检查页码是否超出范围"
+                )
+            total_pages = max(1, -(-total // result["page_size"]))
+            header = (
+                f"共{total}条，第{result['page']}/{total_pages}页，"
+                f"每页{result['page_size']}条"
+            )
+            lines = [f"## 知识沉淀列表（{header}）"]
+            for item in items:
+                extra = ""
+                if item.get("keywords"):
+                    extra += f"\n- 关键词: {item['keywords']}"
+                if item.get("source_segment_ids"):
+                    seg_ids = ", ".join(
+                        f"[段落ID:{sid}]" for sid in item["source_segment_ids"]
+                    )
+                    extra += f"\n- 关联段落: {seg_ids}"
+                lines.append(
+                    f"### [沉淀ID:{item['id']}] {item['question']}\n"
+                    f"{item['answer']}{extra}"
+                )
+            return "\n\n".join(lines)
+
         async def delete_insight(ids: list[int]) -> str:
             if not ids:
                 return "未提供有效的沉淀ID"
@@ -689,6 +739,42 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 )
                 return f"文档（文档ID: {document_id}）及其分段、向量已删除"
 
+        async def list_documents(page: int = 1, page_size: int = 10) -> str:
+            status_names = {
+                0: "待处理",
+                1: "处理中",
+                2: "已完成",
+                3: "失败",
+                4: "向量化中",
+            }
+            async with AsyncSessionLocal() as db:
+                result = await knowledge_document_service.list_documents(
+                    db, kb_id, page, page_size
+                )
+            items = result["items"]
+            total = result["total"]
+            if not items:
+                if total == 0:
+                    return "知识库中还没有文档"
+                return (
+                    f"第{result['page']}页没有数据，"
+                    f"共{total}个文档，请检查页码是否超出范围"
+                )
+            total_pages = max(1, -(-total // result["page_size"]))
+            lines = [
+                f"## 文档列表（共{total}个，第{result['page']}/{total_pages}页，"
+                f"每页{result['page_size']}个）"
+            ]
+            for item in items:
+                status = status_names.get(
+                    item["processing_status"], str(item["processing_status"])
+                )
+                lines.append(
+                    f"- [文档ID:{item['id']}] {item['title']}（{item['file_type']}"
+                    f"，{item['word_count']}字，{item['segment_count']}段，{status}）"
+                )
+            return "\n".join(lines)
+
         tool_metadata = {
             "knowledge_tool": True,
             "knowledge_base_id": kb_id,
@@ -743,6 +829,14 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 metadata=tool_metadata,
             ),
             StructuredTool(
+                name=f"{tool_prefix}_list_insight",
+                description=f"分页查看知识库「{node_name}」中已保存的全部知识沉淀列表（按保存时间倒序，每页最多10条，page 翻页查看较早的沉淀），用于保存前检查是否已有同类沉淀、或获取沉淀ID以便删除",
+                func=None,
+                coroutine=list_insights,
+                args_schema=ListInsightInput,
+                metadata=tool_metadata,
+            ),
+            StructuredTool(
                 name=f"{tool_prefix}_delete_insight",
                 description=f"删除知识库「{node_name}」中不再需要的知识沉淀，传入逗号分隔的沉淀ID列表",
                 func=None,
@@ -792,6 +886,18 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                         args_schema=DeleteDocumentInput,
                         metadata=tool_metadata,
                     ),
+                    StructuredTool(
+                        name=f"{tool_prefix}_list_document",
+                        description=(
+                            f"分页查看知识库「{node_name}」中的文档列表"
+                            "（按保存时间倒序，每页最多50个，含字数/分段数/处理状态），"
+                            "用于保存前检查是否已有同类文档、或获取文档ID以便更新/删除"
+                        ),
+                        func=None,
+                        coroutine=list_documents,
+                        args_schema=ListDocumentInput,
+                        metadata=tool_metadata,
+                    ),
                 ]
             )
 
@@ -837,6 +943,10 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 "description": "查看段落所属的标题位置",
             },
             {"name": f"{tool_prefix}_save_insight", "description": "保存知识沉淀"},
+            {
+                "name": f"{tool_prefix}_list_insight",
+                "description": "分页查询知识沉淀列表（按时间倒序，每页最多10条）",
+            },
             {"name": f"{tool_prefix}_delete_insight", "description": "删除知识沉淀"},
         ]
         if bool((node.base_config or {}).get("enable_document_edit", True)):
@@ -853,6 +963,10 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                     {
                         "name": f"{tool_prefix}_delete_document",
                         "description": "删除指定文档及其分段与向量",
+                    },
+                    {
+                        "name": f"{tool_prefix}_list_document",
+                        "description": "分页查询文档列表（含处理状态，每页最多50个）",
                     },
                 ]
             )
