@@ -11,6 +11,9 @@
    - knowledge_title_lookup: 段落反向查找标题
    - knowledge_save_insight: 保存知识沉淀（供后续复用）
    - knowledge_delete_insight: 删除知识沉淀
+   - knowledge_save_document: 将 Markdown 内容保存为知识库文档（同名覆盖更新）
+   - knowledge_update_document: 全量覆盖更新文档内容并重建分段
+   - knowledge_delete_document: 删除文档及其分段与向量
 """
 
 import logging
@@ -33,6 +36,7 @@ from app.config.database import AsyncSessionLocal
 from app.services.knowledge_base_service import knowledge_base_service
 from app.services.knowledge_title_service import knowledge_title_service
 from app.services.knowledge_insight_service import knowledge_insight_service
+from app.services.knowledge_document_service import knowledge_document_service
 from app.utils.knowledge_reference import (
     build_knowledge_result,
     merge_knowledge_references,
@@ -116,6 +120,40 @@ class DeleteInsightInput(BaseModel):
     ids: list[int] = Field(..., description="要删除的沉淀ID列表")
 
 
+class SaveDocumentInput(BaseModel):
+    """保存 Markdown 文档工具输入参数"""
+
+    title: str = Field(
+        ..., description="文档标题（简短主题名，知识库内需唯一，重名保存会被拒绝）"
+    )
+    content: str = Field(
+        ...,
+        description="完整 Markdown 文档内容，用 # 层级标题组织结构（全量保存，非追加）",
+    )
+
+
+class UpdateDocumentInput(BaseModel):
+    """更新文档工具输入参数"""
+
+    document_id: int = Field(
+        ..., description="文档ID，通过 knowledge_title_search 获取"
+    )
+    content: str = Field(
+        ..., description="更新后的完整 Markdown 内容（全量覆盖，不是追加）"
+    )
+    title: Optional[str] = Field(None, description="新标题，不传则保持原标题")
+
+
+class DeleteDocumentInput(BaseModel):
+    """删除文档工具输入参数"""
+
+    document_id: int = Field(..., description="要删除的文档ID")
+
+
+# AI 写入文档的字符数上限（content 列为 Text，MySQL 下约 64KB）
+_MAX_DOCUMENT_CHARS = 20000
+
+
 class KnowledgeNodeConfig(BaseNodeConfig):
     output_variables: list[NodeVariable] = [
         NodeVariable(name="result"),
@@ -125,6 +163,7 @@ class KnowledgeNodeConfig(BaseNodeConfig):
     ] = None
     knowledge_base_name: str = ""
     top_k: int = 5
+    enable_document_edit: bool = True
 
 
 @NodeHandlerRegistry.register("knowledge")
@@ -281,6 +320,17 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                     "4. 发现跨文档的关联知识时 — 保存分析结论\n"
                     "\n不需要保存的情况：直接引用单个段落、临时性回答、不确定准确的信息\n"
                 )
+                if cfg.enable_document_edit:
+                    static_prefix += (
+                        "\n文档沉淀（knowledge_save_document / knowledge_update_document"
+                        " / knowledge_delete_document）：\n"
+                        "当用户要求把知识整理进知识库、或成体系的知识值得长期沉淀时，写成 Markdown 文档：\n"
+                        "1. 保存前先用 title_search 查看文档列表，同主题文档已存在则用 update_document"
+                        " 全量覆盖更新（不是追加）\n"
+                        "2. 内容用 # 层级标题组织，系统会按标题生成标题树并分段向量化\n"
+                        "3. 保存后约1分钟完成分段向量化，期间检索不到属正常现象，不要重复保存\n"
+                        "零散的单点结论仍优先用 knowledge_save_insight，成体系资料用文档沉淀\n"
+                    )
                 dynamic_suffix = f"\n知识库名称：{name}"
                 if description:
                     dynamic_suffix += f"\n简介：{description}"
@@ -576,11 +626,74 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                     f"删除完成: 请求{result['total']}条，实际删除{result['deleted']}条"
                 )
 
+        # ---- 文档编辑工具（AI 沉淀为 Markdown 文档） ----
+
+        async def save_document(title: str, content: str) -> str:
+            clean_title = title.strip()
+            if not clean_title:
+                return "保存失败：标题不能为空"
+            if len(content) > _MAX_DOCUMENT_CHARS:
+                return (
+                    f"保存失败：内容 {len(content)} 字超过上限 {_MAX_DOCUMENT_CHARS} 字，"
+                    "请精简内容或拆分为多个文档"
+                )
+            async with AsyncSessionLocal() as db:
+                existing = await knowledge_document_service.get_by_title(
+                    db, kb_id, clean_title
+                )
+                if existing:
+                    return (
+                        f"保存失败：知识库中已存在同名文档「{clean_title}」"
+                        f"（文档ID: {existing.id}）。"
+                        "请换一个标题重新保存；若目的是更新该文档内容，请改用 update_document"
+                    )
+                document = await knowledge_document_service.create_markdown_document(
+                    db, kb_id, clean_title, content
+                )
+                return (
+                    f"Markdown 文档已保存（文档ID: {document.id}），"
+                    "系统将在约1分钟内自动分段并向量化，完成后即可通过 search 检索到"
+                )
+
+        async def update_document(
+            document_id: int, content: str, title: Optional[str] = None
+        ) -> str:
+            if len(content) > _MAX_DOCUMENT_CHARS:
+                return (
+                    f"更新失败：内容 {len(content)} 字超过上限 {_MAX_DOCUMENT_CHARS} 字，"
+                    "请精简内容或拆分为多个文档"
+                )
+            async with AsyncSessionLocal() as db:
+                document = await knowledge_document_service.get_active_document(
+                    db, document_id
+                )
+                if not document or document.knowledge_base_id != kb_id:
+                    return f"当前知识库中未找到文档ID:{document_id}"
+                await knowledge_document_service.update_markdown_document(
+                    db, document, content, title
+                )
+                return (
+                    f"文档（文档ID: {document_id}）已更新，"
+                    "系统将在约1分钟内自动重新分段并向量化"
+                )
+
+        async def delete_document(document_id: int) -> str:
+            async with AsyncSessionLocal() as db:
+                document = await knowledge_document_service.get_active_document(
+                    db, document_id
+                )
+                if not document or document.knowledge_base_id != kb_id:
+                    return f"当前知识库中未找到文档ID:{document_id}"
+                await knowledge_document_service.delete_document_with_segments(
+                    db, document_id
+                )
+                return f"文档（文档ID: {document_id}）及其分段、向量已删除"
+
         tool_metadata = {
             "knowledge_tool": True,
             "knowledge_base_id": kb_id,
         }
-        return [
+        tools = [
             StructuredTool(
                 name=f"{tool_prefix}_search",
                 description=f"全局语义搜索知识库「{node_name}」中的段落内容（优先匹配AI沉淀的知识，未命中时检索原始文档），返回匹配的文件名、标题和段落。query越完整（句子/描述）越精准，短关键词精度较低。实现说明：已配置向量模型时向量检索优先、无结果自动SQL兜底；未配置向量模型时直接SQL模糊搜索",
@@ -639,6 +752,51 @@ class KnowledgeNodeHandler(BaseNodeHandler):
             ),
         ]
 
+        # ---- 文档编辑工具（按节点配置开关注册） ----
+        if cfg.enable_document_edit:
+            tools.extend(
+                [
+                    StructuredTool(
+                        name=f"{tool_prefix}_save_document",
+                        description=(
+                            f"将 Markdown 内容作为文档写入知识库「{node_name}」沉淀长期知识"
+                            f"（标题在知识库内需唯一，已存在同名文档时保存失败，需换标题；"
+                            "更新已有文档请用 update_document）。"
+                            "用 # 层级标题组织内容，系统会自动生成标题树并分段向量化。"
+                            "单次保存有字数上限，超长请拆分为多个文档"
+                        ),
+                        func=None,
+                        coroutine=save_document,
+                        args_schema=SaveDocumentInput,
+                        metadata=tool_metadata,
+                    ),
+                    StructuredTool(
+                        name=f"{tool_prefix}_update_document",
+                        description=(
+                            f"全量覆盖更新知识库「{node_name}」中指定文档的内容（不是追加），"
+                            "可选同时改标题，更新后自动重新分段并向量化"
+                        ),
+                        func=None,
+                        coroutine=update_document,
+                        args_schema=UpdateDocumentInput,
+                        metadata=tool_metadata,
+                    ),
+                    StructuredTool(
+                        name=f"{tool_prefix}_delete_document",
+                        description=(
+                            f"删除知识库「{node_name}」中指定的文档及其分段与向量数据，"
+                            "不可恢复，请谨慎使用"
+                        ),
+                        func=None,
+                        coroutine=delete_document,
+                        args_schema=DeleteDocumentInput,
+                        metadata=tool_metadata,
+                    ),
+                ]
+            )
+
+        return tools
+
     @classmethod
     def get_tool_config(cls, node: FlowNode, config: "LlmToolConfig") -> bool:
         """将Knowledge节点配置添加到工具配置"""
@@ -657,7 +815,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
     def get_tool_info(cls, node: FlowNode) -> list[dict]:
         node_key = node.node_key
         tool_prefix = f"knowledge_{node_key}"
-        return [
+        info = [
             {
                 "name": f"{tool_prefix}_search",
                 "description": "全局语义搜索知识库段落内容",
@@ -681,3 +839,21 @@ class KnowledgeNodeHandler(BaseNodeHandler):
             {"name": f"{tool_prefix}_save_insight", "description": "保存知识沉淀"},
             {"name": f"{tool_prefix}_delete_insight", "description": "删除知识沉淀"},
         ]
+        if bool((node.base_config or {}).get("enable_document_edit", True)):
+            info.extend(
+                [
+                    {
+                        "name": f"{tool_prefix}_save_document",
+                        "description": "将 Markdown 内容保存为知识库文档（重名拒绝，需换标题）",
+                    },
+                    {
+                        "name": f"{tool_prefix}_update_document",
+                        "description": "全量覆盖更新指定文档内容并重建分段",
+                    },
+                    {
+                        "name": f"{tool_prefix}_delete_document",
+                        "description": "删除指定文档及其分段与向量",
+                    },
+                ]
+            )
+        return info

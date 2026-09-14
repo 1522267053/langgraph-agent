@@ -214,6 +214,7 @@ export interface KnowledgeConfig {
   knowledge_base_id: number | null
   knowledge_base_name: string
   top_k: number
+  enable_document_edit: boolean
   input_variables: NodeVariable[]
   output_variables: NodeVariable[]
 }

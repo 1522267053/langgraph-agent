@@ -112,6 +112,13 @@ function updateConfigWithLabel(): void {
             <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
           </el-select>
         </el-form-item>
+        <!-- 文档编辑开关：控制是否向 LLM 注册 save/update/delete document 工具 -->
+        <el-form-item label="文档编辑">
+          <div class="switch-row">
+            <el-switch v-model="localConfig.enable_document_edit" @change="updateConfig" />
+            <span class="switch-label">允许 AI 保存/更新/删除 Markdown 文档</span>
+          </div>
+        </el-form-item>
       </el-form>
     </div>
 
@@ -153,6 +160,15 @@ function updateConfigWithLabel(): void {
   gap: 4px;
 }
 .output-var-type {
+  font-size: 12px;
+  color: #909399;
+}
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.switch-label {
   font-size: 12px;
   color: #909399;
 }

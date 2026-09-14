@@ -3,7 +3,8 @@
 """
 
 import logging
-from typing import Any, Dict, List
+import os
+from typing import Any, Dict, List, Optional
 
 from fastapi import UploadFile
 from sqlalchemy import select, update
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.knowledge_base import KnowledgeBase
 from app.models.knowledge_document import (
+    DocumentType,
     KnowledgeDocument,
     ProcessingStatus,
 )
@@ -144,6 +146,106 @@ class KnowledgeDocumentService(
         await db.commit()
         await db.refresh(document)
 
+        return document
+
+    # ---- Markdown 文档写入（AI 工具调用） ----
+
+    async def get_by_title(
+        self, db: AsyncSession, knowledge_base_id: int, title: str
+    ) -> KnowledgeDocument | None:
+        """获取知识库下指定标题的活动文档"""
+        stmt = select(KnowledgeDocument).where(
+            KnowledgeDocument.knowledge_base_id == knowledge_base_id,
+            KnowledgeDocument.title == title,
+            KnowledgeDocument.is_delete == 0,
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def create_markdown_document(
+        self, db: AsyncSession, knowledge_base_id: int, title: str, content: str
+    ) -> KnowledgeDocument:
+        """
+        将 Markdown 文本保存为知识库文档（AI 工具调用）
+
+        内容落盘为 .md 文件并置为待处理，由定时任务自动完成解析、分段、向量化。
+        """
+        file_path = await document_processor.save_bytes(
+            content.encode("utf-8"), f"{title}.md", knowledge_base_id
+        )
+        document = KnowledgeDocument(
+            knowledge_base_id=knowledge_base_id,
+            title=title,
+            content=content,
+            file_type=DocumentType.MD.value,
+            file_path=file_path,
+            word_count=len(content),
+            processing_status=ProcessingStatus.PENDING.value,
+        )
+        db.add(document)
+        await db.commit()
+        await db.refresh(document)
+        return document
+
+    async def update_markdown_document(
+        self,
+        db: AsyncSession,
+        document: KnowledgeDocument,
+        content: str,
+        title: Optional[str] = None,
+    ) -> KnowledgeDocument:
+        """
+        覆盖更新文档内容并重建分段（AI 工具调用）
+
+        清除旧向量、软删除旧分段与标题索引后，将新内容覆写为 Markdown 文件，
+        并重置为待处理，由定时任务重新解析、分段、向量化。
+        """
+        # 清除旧向量
+        try:
+            from app.services.vector_store_service import get_vector_store_service
+
+            vector_store = get_vector_store_service()
+            await vector_store.delete_by_document_id(document.id)
+        except Exception as e:
+            logger.warning(
+                f"更新文档时清除向量失败: document_id={document.id}, error={e}"
+            )
+
+        # 软删除旧分段与标题索引
+        await db.execute(
+            update(KnowledgeDocumentSegment)
+            .where(KnowledgeDocumentSegment.document_id == document.id)
+            .values(is_delete=1)
+        )
+        await knowledge_title_service.delete_titles_by_document_id(db, document.id)
+
+        # 覆写为 Markdown 文件，并清理旧原文件
+        new_file_path = await document_processor.save_bytes(
+            content.encode("utf-8"), f"{document.title}.md", document.knowledge_base_id
+        )
+        old_file_path = document.file_path
+        if (
+            old_file_path
+            and old_file_path != new_file_path
+            and os.path.exists(old_file_path)
+        ):
+            try:
+                os.remove(old_file_path)
+            except OSError as e:
+                logger.warning(f"清理旧文档文件失败: {old_file_path}, error={e}")
+        document.file_path = new_file_path
+        document.file_type = DocumentType.MD.value
+
+        # 更新字段并重置为待处理
+        if title is not None and title.strip() and title.strip() != document.title:
+            document.title = title.strip()
+        document.content = content
+        document.word_count = len(content)
+        document.segment_count = 0
+        document.processing_status = ProcessingStatus.PENDING.value
+        document.error_message = None
+        await db.commit()
+        await db.refresh(document)
         return document
 
     # ---- 文档处理（定时任务调用） ----
