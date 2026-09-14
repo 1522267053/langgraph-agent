@@ -559,7 +559,10 @@ async function initMermaid(): Promise<void> {
     startOnLoad: false,
     theme: 'default',
     securityLevel: 'strict',
-    fontFamily: 'inherit'
+    fontFamily: 'inherit',
+    // 强制使用 dagre-wrapper：mermaid 11 在某些带 subgraph 与中文标签的图上
+    // 会触发 elk 布局器 bug（"Could not find a suitable point for the given distance"）
+    flowchart: { defaultRenderer: 'dagre-wrapper' }
   })
   mermaidInitialized = true
 }
@@ -658,6 +661,8 @@ async function renderMermaidBlocks(): Promise<void> {
           badge.title = '原源码因节点标签含保留字符无法解析，已自动加引号处理'
           toolbar.appendChild(badge)
         } catch {
+          // 修复版仍失败（多为 mermaid elk/dagre 布局阶段问题，非源码语法问题）：
+          // 不动源码视图，告知用户可尝试手动给含特殊字符的标签加引号
           showRenderError(firstErr)
         }
       } else {
