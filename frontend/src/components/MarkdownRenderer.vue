@@ -532,6 +532,23 @@ async function loadHljs() {
   return hljsModule
 }
 
+/** Mermaid flowchart 节点标签里 @、&、| 等字符需要用双引号包住才能解析；这里对未加引号且命中危险字符的单层 [...] / (...) / {...} 标签自动加引号。
+ *  含 `<br/>` `<b>` 等 inline HTML 标签的不加（加引号会被原样输出）；嵌套括号（((..)) 等）不在处理范围。 */
+function quoteMermaidLabels(src: string): string {
+  const wrapIfNeeded = (id: string, label: string, open: string, close: string): string => {
+    if (/<\/?[a-zA-Z][^>]*>/.test(label)) return `${id}${open}${label}${close}`
+    if (/[(){}[\]|\\&@!~:;#]/.test(label)) {
+      const escaped = label.replace(/"/g, '#quot;')
+      return `${id}${open}"${escaped}"${close}`
+    }
+    return `${id}${open}${label}${close}`
+  }
+  return src
+    .replace(/(\b\w[\w-]*)\[([^]"\n]*?)\]/g, (_, id, label) => wrapIfNeeded(id, label, '[', ']'))
+    .replace(/(\b\w[\w-]*)\(([^)"\n]*?)\)(?!>)/g, (_, id, label) => wrapIfNeeded(id, label, '(', ')'))
+    .replace(/(\b\w[\w-]*)\{([^}"\n]*?)\}/g, (_, id, label) => wrapIfNeeded(id, label, '{', '}'))
+}
+
 async function initMermaid(): Promise<void> {
   if (mermaidInitialized) return
   const m = await loadMermaid()
@@ -585,9 +602,11 @@ async function renderMermaidBlocks(): Promise<void> {
     sourceWrapper.appendChild(copyBtn)
 
     const trimmedCode = code.trim()
+    // 复制内容：渲染失败后若自动修复成功，此处同步为修复版源码
+    let copyableCode = trimmedCode
     copyBtn.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(trimmedCode)
+        await navigator.clipboard.writeText(copyableCode)
         copyBtn.classList.add('copied')
         const spanEl = copyBtn.querySelector('span')
         if (spanEl) spanEl.textContent = '已复制'
@@ -609,20 +628,49 @@ async function renderMermaidBlocks(): Promise<void> {
     fullscreenBtn.textContent = '全屏'
     fullscreenBtn.title = '全屏预览'
 
-    try {
-      const { svg } = await m.render(id, code.trim(), renderContainer)
-      previewDiv.innerHTML = svg
-      // 仅渲染成功时提供全屏入口（失败态展示错误信息，无图可看）
-      fullscreenBtn.addEventListener('click', () => openMermaidFullscreen(svg))
-      toolbar.appendChild(fullscreenBtn)
-    } catch (e) {
-      const errMsg = e instanceof Error ? e.message : 'Mermaid 渲染失败'
+    const showRenderError = (err: unknown): void => {
+      const errMsg = err instanceof Error ? err.message : 'Mermaid 渲染失败'
       previewDiv.innerHTML = `<span class="mermaid-error-label">Mermaid 渲染失败</span><pre class="mermaid-error-msg">${errMsg.replace(/</g, '&lt;')}</pre>`
       previewDiv.className = 'mermaid-preview mermaid-error'
       sourceBtn.click()
-    } finally {
-      renderContainer.remove()
     }
+
+    let renderedSvg = ''
+    try {
+      const { svg } = await m.render(id, code.trim(), renderContainer)
+      renderedSvg = svg
+    } catch (firstErr) {
+      // 第一次解析失败：尝试自动给含保留字符的标签加引号后再渲染
+      const fixedCode = quoteMermaidLabels(code.trim())
+      if (fixedCode !== code.trim()) {
+        try {
+          const { svg } = await m.render(id, fixedCode, renderContainer)
+          renderedSvg = svg
+          // 修复成功：同步源码视图与复制按钮内容，并加"已修复"角标
+          sourceDiv.textContent = fixedCode
+          copyableCode = fixedCode
+          const badge = document.createElement('span')
+          badge.className = 'mermaid-fixed-badge'
+          badge.textContent = '已修复'
+          badge.title = '原源码因节点标签含保留字符无法解析，已自动加引号处理'
+          toolbar.appendChild(badge)
+        } catch {
+          showRenderError(firstErr)
+        }
+      } else {
+        showRenderError(firstErr)
+      }
+    }
+
+    if (renderedSvg) {
+      previewDiv.innerHTML = renderedSvg
+      // 仅渲染成功时提供全屏入口（失败态展示错误信息，无图可看）
+      const captured = renderedSvg
+      fullscreenBtn.addEventListener('click', () => openMermaidFullscreen(captured))
+      toolbar.appendChild(fullscreenBtn)
+    }
+
+    renderContainer.remove()
 
     toggleBtn.addEventListener('click', () => {
       toggleBtn.classList.add('active')
@@ -1192,6 +1240,18 @@ onUnmounted(() => {
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.markdown-body .mermaid-fixed-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: #15803d;
+  background: #dcfce7;
+  border-radius: 10px;
+  user-select: none;
 }
 
 /* ---------- Mermaid 全屏预览覆盖层 ---------- */
