@@ -563,7 +563,7 @@ function openDownloadUrl(): void {
 
         <el-tab-pane name="update">
           <template #label>
-            <el-badge :is-dot="hasUpdate" class="update-tab-badge">
+            <el-badge :is-dot="hasUpdate" class="update-tab-badge" :offset="[5,5]">
               <span>版本更新</span>
             </el-badge>
           </template>
@@ -785,10 +785,6 @@ function openDownloadUrl(): void {
 
 .settings-tabs :deep(.el-tabs__header) {
   margin-bottom: 20px;
-}
-
-.update-tab-badge :deep(.el-badge__content.is-dot) {
-  top: 8px;
 }
 
 .card-title {
