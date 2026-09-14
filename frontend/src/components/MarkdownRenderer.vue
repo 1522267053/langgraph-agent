@@ -533,10 +533,10 @@ async function loadHljs() {
 }
 
 /** Mermaid flowchart 节点标签里 @、&、| 等字符需要用双引号包住才能解析；这里对未加引号且命中危险字符的单层 [...] / (...) / {...} 标签自动加引号。
- *  含 `<br/>` `<b>` 等 inline HTML 标签的不加（加引号会被原样输出）；嵌套括号（((..)) 等）不在处理范围。 */
+ *  标签内若已含 <br/> 等 inline HTML 也允许加引号（Mermaid 文档明确引号内仍支持 inline HTML）；
+ *  标签文本排除形如 ([..]) / {(..)} 等嵌套结构字符，避免误吃 ((..)) 圆形节点与边的 (>..) 形态。 */
 function quoteMermaidLabels(src: string): string {
   const wrapIfNeeded = (id: string, label: string, open: string, close: string): string => {
-    if (/<\/?[a-zA-Z][^>]*>/.test(label)) return `${id}${open}${label}${close}`
     if (/[(){}[\]|\\&@!~:;#]/.test(label)) {
       const escaped = label.replace(/"/g, '#quot;')
       return `${id}${open}"${escaped}"${close}`
@@ -544,9 +544,12 @@ function quoteMermaidLabels(src: string): string {
     return `${id}${open}${label}${close}`
   }
   return src
-    .replace(/(\b\w[\w-]*)\[([^]"\n]*?)\]/g, (_, id, label) => wrapIfNeeded(id, label, '[', ']'))
-    .replace(/(\b\w[\w-]*)\(([^)"\n]*?)\)(?!>)/g, (_, id, label) => wrapIfNeeded(id, label, '(', ')'))
-    .replace(/(\b\w[\w-]*)\{([^}"\n]*?)\}/g, (_, id, label) => wrapIfNeeded(id, label, '{', '}'))
+    // [label]：标签内不能含 [ { ( —— 排除嵌套与边
+    .replace(/(\b\w[\w-]*)\[([^\]"{(\n]*?)\]/g, (_, id, label) => wrapIfNeeded(id, label, '[', ']'))
+    // (label)：排除嵌套 ((..))（前面不能是 (），标签内不能含 ( [ { —— 排除 (-x) 边与形如 ({..})
+    .replace(/(?<!\()(\b\w[\w-]*)\(([^)"{[\n]*?)\)(?!>)/g, (_, id, label) => wrapIfNeeded(id, label, '(', ')'))
+    // {label}：标签内不能含 { [ (
+    .replace(/(\b\w[\w-]*)\{([^}"[(\n]*?)\}/g, (_, id, label) => wrapIfNeeded(id, label, '{', '}'))
 }
 
 async function initMermaid(): Promise<void> {
