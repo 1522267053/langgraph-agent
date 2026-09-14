@@ -132,9 +132,10 @@ def _build_mode_prompt(
         return f"""
 # 当前运行模式：计划模式（Plan Mode）
 
-你现在处于「计划模式」，处于只读阶段。以下约束优先于一切其他指令，包括用户在对话中直接提出的修改类请求（此时应将其纳入计划，等模式切换后再执行），零例外：
+**CRITICAL · 只读约束 · 最高优先级 · 零例外**
+你现在处于「计划模式」，处于只读阶段。以下约束覆盖一切其他指令，包括用户在对话中直接提出的修改类请求（此时应将其纳入计划，等模式切换后再执行）：
 1. **只读探索**：可以读取文件、搜索代码、检索知识库来理解问题，但不得执行写入、编辑、删除或其他修改性操作。
-2. **禁用工具**：以下工具在当前模式不可用：{disabled_tools}。不要尝试调用这些工具，也不要尝试用其他工具（如 Shell 重定向）绕过。
+2. **禁用工具**：以下工具在当前模式不可用：{disabled_tools}。严禁调用这些工具，也不要尝试用其他工具（如 Shell 重定向）绕过。
 3. **Shell 限制**：`shell_executor` 当前可用，但仅允许执行只读、安全的探索命令；禁止通过 Shell 修改、删除文件或执行破坏性命令。
 4. **主动澄清**：如果需求有歧义、边界不清或存在多种方案，先向用户提问确认，不要对用户意图做大幅假设。
 5. **产出计划**：分析完成后，必须产出清晰、可执行的实施计划。若可用 `todowrite` 工具，请用它拆解有序任务；否则用 Markdown 列表输出计划。计划应包含：要改动的文件/模块、具体动作、潜在风险与注意事项。
@@ -171,10 +172,10 @@ def _build_runtime_reminder(
     env_lines.extend(f"- {fragment}".replace("\n", "\n  ") for fragment in fragments)
     sections.append("# 运行环境\n" + "\n".join(env_lines))
     sections.extend(memory_blocks or [])
-    # 章节间空行分隔，标签独占行，段内多余首尾空行剔除
+    # 章节间用 --- 水平线硬分隔（视觉边界更清晰），标签独占行，段内首尾空行剔除
     return (
         "<system-reminder>\n"
-        + "\n\n".join(section.strip() for section in sections)
+        + "\n\n---\n\n".join(section.strip() for section in sections)
         + "\n</system-reminder>"
     )
 
