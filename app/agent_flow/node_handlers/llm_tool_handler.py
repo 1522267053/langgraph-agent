@@ -57,6 +57,7 @@ from app.agent_flow.node_handlers.base_handler import (
     BaseNodeConfig,
     NodeVariable,
 )
+from app.agent_flow.node_handlers.knowledge_handler import KNOWLEDGE_CITATION_PROMPT
 from app.agent_flow.message_buffer import MessageBuffer
 from app.utils.message_utils import extract_token_usage
 from app.utils.knowledge_reference import (
@@ -93,13 +94,6 @@ logger = logging.getLogger(__name__)
 # 自动压缩阈值比例：已用 token 超过 context_length 的此比例时触发压缩
 COMPRESS_THRESHOLD_RATIO = 0.83
 _MAX_REACT_COMPRESSIONS = 3
-
-_KNOWLEDGE_CITATION_PROMPT = """
-
-# 知识库引用规则
-
-知识片段中的 `[段落ID:x]` 是可验证引用标记。回答使用某个片段的事实时，必须在对应句子末尾原样保留该标记。只能使用当前上下文或工具结果中实际出现的标记，不得自行编造；未使用知识库内容时不要添加引用。
-"""
 
 
 def _build_mode_prompt(
@@ -152,8 +146,7 @@ def _build_mode_prompt(
 
 你现在处于「执行模式」，可以根据用户需求执行任务并使用当前已提供的工具。
 - 如果此前处于计划模式，现已切换到执行模式：此前的只读限制不再适用，可以正常修改文件、执行命令。
-- 以下工具在计划模式下会被禁用，但在当前执行模式下可用：{disabled_tools}。
-请根据任务需要正常使用这些工具，并遵守各工具自身的安全限制。
+- 以下工具在计划模式下会被禁用，但在当前执行模式下可用：{disabled_tools}，请根据任务需要正常使用，并遵守各工具自身的安全限制。
 """
 
 
@@ -178,7 +171,12 @@ def _build_runtime_reminder(
     env_lines.extend(f"- {fragment}".replace("\n", "\n  ") for fragment in fragments)
     sections.append("# 运行环境\n" + "\n".join(env_lines))
     sections.extend(memory_blocks or [])
-    return "<system-reminder>" + "\n".join(sections) + "</system-reminder>"
+    # 章节间空行分隔，标签独占行，段内多余首尾空行剔除
+    return (
+        "<system-reminder>\n"
+        + "\n\n".join(section.strip() for section in sections)
+        + "\n</system-reminder>"
+    )
 
 
 def _tool_call_name(tool_call) -> str:
@@ -610,8 +608,12 @@ class LlmToolNodeHandler(BaseNodeHandler):
         # 追加工具节点的 system_prompt 提示
         for hint in prompt_hints:
             system_prompt = (system_prompt or "") + hint
+
+        # 知识引用规则走消息层 reminder（KNOWLEDGE_CITATION_PROMPT 来自 knowledge_handler）：
+        # 条件性内容拼进 system_prompt 会在出现/消失时打穿 system+历史的前缀缓存；
+        # 消息层注入只失效 reminder 之后的尾部缓存
         if preloaded_references:
-            system_prompt = (system_prompt or "") + _KNOWLEDGE_CITATION_PROMPT
+            runtime_reminders.append(KNOWLEDGE_CITATION_PROMPT.strip())
 
         # JSON 结构化输出引导：字段定义 + 必须调用 structured_output 的约束
         if json_output_tool is not None:

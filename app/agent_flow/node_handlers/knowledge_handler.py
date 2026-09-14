@@ -44,10 +44,12 @@ from app.utils.knowledge_reference import (
 
 logger = logging.getLogger(__name__)
 
-_CITATION_GUIDANCE = (
-    "\n\n引用规则：知识片段中的 [段落ID:x] 是可验证引用标记。"
+# 知识库引用规则（知识工具结果 / system_prompt hint / 消息层 reminder 共用）
+KNOWLEDGE_CITATION_PROMPT = (
+    "\n\n知识库片段引用规则：知识片段中的 [段落ID:x] 是可验证引用标记。"
     "回答使用某个片段的事实时，必须在对应句子末尾原样保留该标记；"
-    "只能使用工具结果中出现的标记，不得自行编造。"
+    "只能使用当前上下文或工具结果中实际出现的标记，不得自行编造；"
+    "未使用知识库内容时不要添加引用。"
 )
 
 if TYPE_CHECKING:
@@ -102,7 +104,9 @@ class VectorSearchInput(BaseModel):
         ...,
         description="语义搜索文本，建议用完整的句子或描述（向量检索句子越长越精准）",
     )
-    top_k: Optional[int] = Field(default=5, ge=1, le=50, description="返回结果数量，默认5")
+    top_k: Optional[int] = Field(
+        default=5, ge=1, le=50, description="返回结果数量，默认5"
+    )
 
 
 class SaveInsightInput(BaseModel):
@@ -124,7 +128,9 @@ class ListInsightInput(BaseModel):
     """查询知识沉淀列表工具输入参数"""
 
     page: Optional[int] = Field(default=1, ge=1, description="页码，从1开始，默认1")
-    page_size: Optional[int] = Field(default=10, ge=1, le=10, description="每页条数，默认10，最大10")
+    page_size: Optional[int] = Field(
+        default=10, ge=1, le=10, description="每页条数，默认10，最大10"
+    )
 
 
 class SaveDocumentInput(BaseModel):
@@ -161,7 +167,9 @@ class ListDocumentInput(BaseModel):
     """分页查询文档列表工具输入参数"""
 
     page: Optional[int] = Field(default=1, ge=1, description="页码，从1开始，默认1")
-    page_size: Optional[int] = Field(default=10, ge=1, le=50, description="每页条数，默认10，最大50")
+    page_size: Optional[int] = Field(
+        default=10, ge=1, le=50, description="每页条数，默认10，最大50"
+    )
 
 
 # AI 写入文档的字符数上限（content 列为 Text，MySQL 下约 64KB）
@@ -349,7 +357,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 dynamic_suffix = f"\n知识库名称：{name}"
                 if description:
                     dynamic_suffix += f"\n简介：{description}"
-                return static_prefix + _CITATION_GUIDANCE + dynamic_suffix
+                return static_prefix + KNOWLEDGE_CITATION_PROMPT + dynamic_suffix
         except Exception:
             return None
 
@@ -418,7 +426,9 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                     lines.append(
                         f"### 段落 [段落ID:{p.id}]（第{p.segment_index}段，{p.word_count}字）\n{p.content}"
                     )
-                content = _CITATION_GUIDANCE.strip() + "\n\n" + "\n\n".join(lines)
+                content = (
+                    KNOWLEDGE_CITATION_PROMPT.strip() + "\n\n" + "\n\n".join(lines)
+                )
                 return build_knowledge_result(content, references)
 
         async def adjacent(segment_id: int, direction: str = "both") -> str | dict:
@@ -451,7 +461,9 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                     )
                 if not parts:
                     return f"当前知识库中未找到段落ID:{segment_id}"
-                content = _CITATION_GUIDANCE.strip() + "\n\n" + "\n\n".join(parts)
+                content = (
+                    KNOWLEDGE_CITATION_PROMPT.strip() + "\n\n" + "\n\n".join(parts)
+                )
                 return build_knowledge_result(content, references)
 
         async def title_lookup(segment_id: int) -> str:
@@ -546,7 +558,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 # ② 沉淀结果足够好时直接返回
                 if insights and len(insights) >= 3 and insights[0]["score"] > 0.6:
                     content = (
-                        _CITATION_GUIDANCE.strip()
+                        KNOWLEDGE_CITATION_PROMPT.strip()
                         + "\n\n## 搜索结果（AI沉淀）\n\n"
                         + "\n\n".join(insight_lines)
                     )
@@ -596,7 +608,9 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                     return "未找到相关内容"
 
                 content = (
-                    _CITATION_GUIDANCE.strip() + "\n\n" + "\n\n---\n\n".join(parts)
+                    KNOWLEDGE_CITATION_PROMPT.strip()
+                    + "\n\n"
+                    + "\n\n---\n\n".join(parts)
                 )
                 references = merge_knowledge_references(
                     insight_references, doc_references
