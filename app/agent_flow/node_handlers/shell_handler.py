@@ -61,7 +61,8 @@ class ShellNodeConfig(BaseNodeConfig):
         "",
         description=(
             "默认工作目录（绝对路径，相对路径基于项目根目录解析）。"
-            "留空则使用 Agent 工作目录；每次调用 shell_executor 的 workdir 参数可临时覆盖此值"
+            "优先级：会话工作目录（聊天页配置）> 此配置 > Agent 工作目录；"
+            "每次调用 shell_executor 的 workdir 参数可临时覆盖此值"
         ),
     )
     output_variables: list[NodeVariable] = [
@@ -902,6 +903,8 @@ class ShellNodeHandler(BaseNodeHandler):
     ConfigClass = ShellNodeConfig
 
     _working_dir: Optional[Path] = None
+    # 会话级工作目录（llm_tool_executor 注入，用户在聊天页显式配置；未配置为 None）
+    _session_work_dir: Optional[Path] = None
     # file_read 可自动注入的媒体类型集合（由 llm_tool_executor 按模型能力×适配器注入；空则媒体文件按普通文件处理）
     _media_caps: set = set()
 
@@ -910,7 +913,7 @@ class ShellNodeHandler(BaseNodeHandler):
     # 本类继承即可直接调用。
 
     def _resolve_working_dir(self) -> Optional[Path]:
-        """解析当前 Shell 执行的工作目录
+        """解析默认层工作目录（未配置会话目录和节点 default_workdir 时的兜底）
 
         优先级：
         1. self._working_dir（由 llm_tool_executor 仅对 Agent 类型注入）
@@ -936,7 +939,7 @@ class ShellNodeHandler(BaseNodeHandler):
 
         Returns:
             (目录, 警告信息)。未配置返回 (None, None)；配置非法时返回 (None, 警告)，
-            由调用方回退默认目录，警告仅透出到 system_prompt。
+            由调用方回退默认目录，警告仅透出到运行时提醒。
         """
         raw = (getattr(cfg, "default_workdir", "") or "").strip()
         if not raw:
@@ -956,7 +959,9 @@ class ShellNodeHandler(BaseNodeHandler):
         return candidate, None
 
     def _effective_working_dir(self, cfg: BaseNodeConfig) -> Optional[Path]:
-        """按优先级解析工作目录：节点 default_workdir > Agent 注入 > ExecutionContext"""
+        """按优先级解析工作目录：会话级(前端配置) > 节点 default_workdir > Agent 注入/ExecutionContext"""
+        if self._session_work_dir is not None:
+            return self._session_work_dir
         configured_dir, _warn = self._configured_workdir(cfg)
         if configured_dir is not None:
             return configured_dir
@@ -1145,10 +1150,13 @@ class ShellNodeHandler(BaseNodeHandler):
         timeout = cfg.timeout
         async_wait = cfg.async_wait
 
-        # 节点级 default_workdir 优先于 Agent 工作目录，供所有工具闭包共用
+        # 工作目录优先级：会话级(前端配置) > 节点 default_workdir > Agent 工作目录，
+        # 供所有工具闭包共用
         configured_dir, configured_dir_warn = self._configured_workdir(cfg)
         base_working_dir = (
-            configured_dir
+            self._session_work_dir
+            if self._session_work_dir is not None
+            else configured_dir
             if configured_dir is not None
             else self._resolve_working_dir()
         )
@@ -2241,8 +2249,6 @@ class ShellNodeHandler(BaseNodeHandler):
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
         """返回临时文件目录说明和文件工具使用指南，追加到 LLM system_prompt"""
-        cfg = self._get_config(node)
-        configured_dir, configured_warn = self._configured_workdir(cfg)
         temp_dir = get_temp_dir()
         ps_compat_hint = (
             (
@@ -2327,33 +2333,44 @@ class ShellNodeHandler(BaseNodeHandler):
                 "用完无需手动删除"
             )
         ]
-        if configured_dir is not None:
-            lines.append(
-                f"默认工作目录: `{configured_dir}`（节点 default_workdir 配置，"
-                "优先于会话/Agent 工作目录），Shell 未传 workdir 时在此目录下执行"
-            )
-        if configured_warn:
-            lines.append(f"⚠️ {configured_warn}，已回退默认工作目录")
         return "\n".join(lines)
 
     async def get_runtime_reminder(self, node: FlowNode) -> Optional[str]:
         """返回运行时提醒，拼入消息层 <system-reminder>
 
         包含两部分：
-        - 会话/Agent 级动态目录（llm_tool_executor 注入的 _working_dir，
-          用户可在聊天页中途切换）；节点级 default_workdir 为设计期静态配置，
-          由 get_system_prompt_hint 静态说明
+        - 生效工作目录：会话级(聊天页配置) > 节点 default_workdir > Agent 默认目录，
+          default_workdir 配置非法时附回退警告
         - 文件回退规则（行为约束）：file_* 工具的变更可随消息回退恢复，
           shell 命令的文件操作不可回退
         """
-        resolved = self._resolve_working_dir()
-        if resolved is None:
+        cfg = self._get_config(node)
+        configured_dir, configured_warn = self._configured_workdir(cfg)
+        if self._session_work_dir is not None:
+            source = "会话级配置，优先于节点 default_workdir"
+            resolved = self._session_work_dir
+        elif configured_dir is not None:
+            source = "节点 default_workdir 配置，优先于 Agent 默认目录"
+            resolved = configured_dir
+        else:
+            source = None
+            resolved = self._resolve_working_dir()
+        if resolved is None and not configured_warn:
             return None
-        return (
-            f"默认工作目录: `{resolved}`，Shell 未传 workdir 参数时在此目录下执行，"
-            "文件操作优先使用此目录\n"
+
+        lines = []
+        if resolved is not None:
+            source_note = f"（{source}）" if source else ""
+            lines.append(
+                f"默认工作目录(项目路径): `{resolved}`{source_note}，"
+                "Shell 未传 workdir 参数时在此目录下执行，文件操作优先使用此目录"
+            )
+        if configured_warn:
+            lines.append(f"⚠️ {configured_warn}，已回退默认工作目录")
+        lines.append(
             "对话回退只能自动恢复通过 file_write / text_editor / file_delete 产生的"
             "文件变更（创建/修改/删除均可回退）；用 shell 命令创建、修改或删除的文件"
             "无法回退，用户可能需要回退的文件操作务必使用这三个工具，"
             "shell 写文件仅用于临时输出/日志"
         )
+        return "\n".join(lines)
