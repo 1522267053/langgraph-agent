@@ -215,7 +215,11 @@ class SubAgentProgressEvent(FlowEvent):
     sub_session_id: int = Field(default=0, description="子Agent会话ID")
     sub_agent_name: str = Field(default="", description="子Agent名称")
     content: str = Field(
-        default="", description="子Agent当前消息的累计快照（尾部截断）"
+        default="",
+        description=(
+            "子Agent当前消息的累计快照（尾部截断）；"
+            "tool_call_end 事件中为最近完成工具的输出预览，前端驻留至下一事件替换"
+        ),
     )
     status: str = Field(default="running", description="执行状态: running/done/error")
     tool_name: Optional[str] = Field(
