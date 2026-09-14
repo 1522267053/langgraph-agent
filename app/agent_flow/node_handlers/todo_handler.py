@@ -7,6 +7,7 @@
 提供的工具：
 1. todowrite - 写入/更新任务计划列表
 2. todoread - 读取当前任务计划列表
+3. update_todo - 按 id 更新单条任务（content/status/priority）
 """
 
 from typing import Optional, TYPE_CHECKING
@@ -91,6 +92,7 @@ class TodoNodeHandler(BaseNodeHandler):
             "- 完成任务后立即标记为 completed（不要批量更新）\n"
             "- 开始新任务时标记为 in_progress（同一时间仅一个 in_progress）\n"
             "- 取消无关任务时标记为 cancelled\n"
+            "- 需要修改单条任务的内容/状态/优先级时，使用 update_todo 按 id 更新（id 通过 todoread 获取）\n"
             "- 将复杂任务拆分为小步骤\n"
             "- 需要查看当前任务列表时使用 todoread\n"
             "- 简单任务（1-2步）或纯对话不需要使用任务列表"
@@ -164,6 +166,59 @@ class TodoNodeHandler(BaseNodeHandler):
             ]
             return {"todos": result, "total": len(result)}
 
+        async def update_todo(
+            todo_id: int, content: str, status: str, priority: str
+        ) -> dict:
+            """按 id 更新单条任务（content/status/priority）"""
+            ref_type, ref_id = handler._resolve_context()
+            if not ref_type or not ref_id:
+                return {"error": "无法获取上下文信息"}
+
+            item_content = (content or "").strip()
+            if not item_content:
+                return {"error": "任务描述不能为空"}
+
+            valid_statuses = {"pending", "in_progress", "completed", "cancelled"}
+            valid_priorities = {"high", "medium", "low"}
+            if status not in valid_statuses:
+                return {
+                    "error": f"无效的 status: {status}，可选值: pending/in_progress/completed/cancelled"
+                }
+            if priority not in valid_priorities:
+                return {
+                    "error": f"无效的 priority: {priority}，可选值: high/medium/low"
+                }
+
+            async with AsyncSessionLocal() as db:
+                item = await todo_service.update_todo_by_id(
+                    db,
+                    todo_id=todo_id,
+                    ref_type=ref_type,
+                    ref_id=ref_id,
+                    content=item_content,
+                    status=status,
+                    priority=priority,
+                )
+                await db.commit()
+
+            if not item:
+                return {"error": f"id 为 {todo_id} 的任务不存在或已删除"}
+
+            updated = {
+                "id": item.id,
+                "content": item.content,
+                "status": item.status,
+                "priority": item.priority,
+                "position": item.position,
+            }
+            # 更新 handler 缓存中的对应项，保持 todowrite 缓存与 DB 一致
+            if getattr(handler, "_last_todos", None):
+                handler._last_todos = [
+                    updated if t.get("id") == todo_id else t
+                    for t in handler._last_todos
+                ]
+            return {"success": True, "todo": updated}
+
         # 保存 handler 引用，用于 writer 回调
         self._write_todos_func = write_todos
         self._last_todos = []
@@ -201,6 +256,36 @@ class TodoNodeHandler(BaseNodeHandler):
                     pass
             return result_str
 
+        async def update_todo_with_event(
+            todo_id: int, content: str, status: str, priority: str
+        ) -> dict:
+            """更新单条任务并通过 SSE 推送更新事件
+
+            与 write/read 的推送策略一致：更新失败（校验错误/id 不存在）时
+            不推事件，仅返回 error 信息给 LLM
+            """
+            result = await update_todo(todo_id, content, status, priority)
+            if result.get("success") and self._writer:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        ref_type, ref_id = handler._resolve_context()
+                        if ref_type and ref_id:
+                            items = await todo_service.get_by_ref(db, ref_type, ref_id)
+                        todos = [
+                            {
+                                "id": item.id,
+                                "content": item.content,
+                                "status": item.status,
+                                "priority": item.priority,
+                                "position": item.position,
+                            }
+                            for item in items
+                        ]
+                        self._writer(TodoUpdateEvent(todos=todos))
+                except Exception:
+                    pass
+            return result
+
         # 重新绑定 writer 引用的方法
         self._write_todos_func = write_todos_with_event
 
@@ -225,6 +310,16 @@ class TodoNodeHandler(BaseNodeHandler):
                 coroutine=read_todos_with_event,
                 args_schema=TodoReadInput,
             ),
+            StructuredTool(
+                name="update_todo",
+                description=(
+                    "按 id 更新单条任务的内容/状态/优先级（content 必填，"
+                    "status 与 priority 全量覆盖）。任务 id 通过 todoread 获取。"
+                ),
+                func=None,
+                coroutine=update_todo_with_event,
+                args_schema=TodoUpdateInput,
+            ),
         ]
 
         return tools
@@ -234,6 +329,7 @@ class TodoNodeHandler(BaseNodeHandler):
         return [
             {"name": "todowrite", "description": "创建或更新任务列表"},
             {"name": "todoread", "description": "读取当前任务计划列表"},
+            {"name": "update_todo", "description": "按 id 更新单条任务"},
         ]
 
 
@@ -255,3 +351,12 @@ class TodoWriteInput(BaseModel):
 
 class TodoReadInput(BaseModel):
     pass
+
+
+class TodoUpdateInput(BaseModel):
+    todo_id: int = Field(..., description="任务项 id（通过 todoread 获取）")
+    content: str = Field(..., description="任务描述")
+    status: str = Field(
+        "pending", description="pending/in_progress/completed/cancelled"
+    )
+    priority: str = Field("medium", description="high/medium/low")
