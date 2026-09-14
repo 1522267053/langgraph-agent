@@ -7,7 +7,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import UploadFile
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.knowledge_base import KnowledgeBase
@@ -439,6 +439,55 @@ class KnowledgeDocumentService(
             await db.commit()
 
     # ---- 查询 ----
+
+    async def list_documents(
+        self,
+        db: AsyncSession,
+        knowledge_base_id: int,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> dict:
+        """分页列出知识库下的文档（按ID倒序，最新在前），page_size 上限 50
+
+        Returns:
+            {"total": 总数, "page": 页码, "page_size": 每页条数,
+             "items": [{id, title, file_type, word_count, segment_count,
+             processing_status, create_time}, ...]}
+        """
+        page = max(1, page)
+        page_size = max(1, min(page_size, 50))
+
+        base_where = (
+            KnowledgeDocument.knowledge_base_id == knowledge_base_id,
+            KnowledgeDocument.is_delete == 0,
+        )
+        count_stmt = (
+            select(func.count()).select_from(KnowledgeDocument).where(*base_where)
+        )
+        total = (await db.execute(count_stmt)).scalar_one()
+
+        stmt = (
+            select(KnowledgeDocument)
+            .where(*base_where)
+            .order_by(KnowledgeDocument.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await db.execute(stmt)
+        documents = result.scalars().all()
+        items = [
+            {
+                "id": doc.id,
+                "title": doc.title,
+                "file_type": doc.file_type,
+                "word_count": doc.word_count,
+                "segment_count": doc.segment_count,
+                "processing_status": doc.processing_status,
+                "create_time": str(doc.create_time) if doc.create_time else "",
+            }
+            for doc in documents
+        ]
+        return {"total": total, "page": page, "page_size": page_size, "items": items}
 
     async def get_segments_by_document_id(
         self, db: AsyncSession, document_id: int
