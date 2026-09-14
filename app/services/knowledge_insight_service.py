@@ -55,8 +55,6 @@ class KnowledgeInsightService(
         count_query: Optional[Select],
         condition: Optional[KnowledgeInsightCondition],
     ) -> tuple[Optional[Select], Optional[Select]]:
-        query, count_query = super()._apply_filters(query, count_query, condition)
-
         if not condition:
             return query, count_query
 
@@ -301,16 +299,29 @@ class KnowledgeInsightService(
         query: str,
         top_k: int = 5,
     ) -> List[dict]:
-        """LIKE 模糊搜索知识沉淀（向量搜索不可用时的回退方案）"""
+        """LIKE 模糊搜索知识沉淀（向量搜索不可用时的回退方案）
+
+        查询文本按空白切分为多个关键词，任一关键词命中 question 或 answer 即返回
+        """
+        terms = list(dict.fromkeys(query.split()))
+        if not terms:
+            return []
+
+        keyword_filter = or_(
+            *[
+                or_(
+                    KnowledgeInsight.question.like(f"%{term}%"),
+                    KnowledgeInsight.answer.like(f"%{term}%"),
+                )
+                for term in terms
+            ]
+        )
         stmt = (
             select(KnowledgeInsight)
             .where(
                 KnowledgeInsight.knowledge_base_id == knowledge_base_id,
                 KnowledgeInsight.is_delete == 0,
-                or_(
-                    KnowledgeInsight.question.like(f"%{query}%"),
-                    KnowledgeInsight.answer.like(f"%{query}%"),
-                ),
+                keyword_filter,
             )
             .limit(top_k)
         )

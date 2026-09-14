@@ -10,7 +10,7 @@
 
 from typing import Any, Dict, List
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.knowledge_base import KnowledgeBase
@@ -448,7 +448,17 @@ class KnowledgeTitleService:
     async def _like_search(
         self, db: AsyncSession, knowledge_base_id: int, query: str, top_k: int = 5
     ) -> List[Dict]:
-        """LIKE 模糊搜索知识库分段（向量搜索不可用时的回退方案）"""
+        """LIKE 模糊搜索知识库分段（向量搜索不可用时的回退方案）
+
+        查询文本按空白切分为多个关键词，任一关键词命中段落内容即返回
+        """
+        terms = list(dict.fromkeys(query.split()))
+        if not terms:
+            return []
+
+        keyword_filter = or_(
+            *[KnowledgeDocumentSegment.content.like(f"%{term}%") for term in terms]
+        )
         stmt = (
             select(KnowledgeDocumentSegment.id)
             .join(
@@ -464,7 +474,7 @@ class KnowledgeTitleService:
                 KnowledgeBase.is_delete == 0,
                 KnowledgeDocument.is_delete == 0,
                 KnowledgeDocumentSegment.is_delete == 0,
-                KnowledgeDocumentSegment.content.like(f"%{query}%"),
+                keyword_filter,
             )
             .limit(top_k)
         )

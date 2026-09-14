@@ -45,7 +45,15 @@ class KnowledgeDocumentService(
         应用查询条件
         支持标题模糊搜索
         """
-        query, count_query = super()._apply_filters(query, count_query, condition)
+        if condition and condition.knowledge_base_id:
+            if query is not None:
+                query = query.where(
+                    KnowledgeDocument.knowledge_base_id == condition.knowledge_base_id
+                )
+            if count_query is not None:
+                count_query = count_query.where(
+                    KnowledgeDocument.knowledge_base_id == condition.knowledge_base_id
+                )
 
         if condition and hasattr(condition, "title") and condition.title:
             keyword = f"%{condition.title}%"
