@@ -728,6 +728,10 @@ class ApiNodeHandler(BaseNodeHandler):
         request_body = None
         if method in ["POST", "PUT", "PATCH"] and body:
             request_body = body
+            # FastAPI 收到非 JSON Content-Type 时会把 body 当原始字节交给 Pydantic，
+            # 报 "Input should be a valid dictionary"；dict body 且未声明类型时按 JSON 发送
+            if not request_headers.get("Content-Type") and isinstance(body, dict):
+                request_headers.setdefault("Content-Type", "application/json")
 
         files = []
         if upload_fields:
