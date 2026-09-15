@@ -757,8 +757,12 @@ async function onMarkdownRendered(immediate = false): Promise<void> {
     if (langMatch && langMatch[1] === 'mermaid') {
       const pre = block.parentElement
       if (pre) {
+        // 仅打标（供 renderMermaidBlocks 定位、copy-btn 遍历排除），
+        // 不提前 display:none：隐藏会让块高瞬间塌到 0，而图表要等
+        // MERMAID_RENDER_DEBOUNCE + render 完成才挂载，期间出现
+        // 「高度骤降→SVG 挂载回升」的跳动；保持代码块可见直至
+        // renderMermaidBlocks 渲染完成后一次性 replaceWith，高度只切换一次
         pre.className = 'mermaid-block'
-        pre.style.display = 'none'
       }
     }
   }
