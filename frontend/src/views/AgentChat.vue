@@ -75,7 +75,20 @@ const isAtEnd = ref(true)
 const followPinned = ref(true)
 /** 贴底阈值系数：按钮派生的离底判定 = 视口高度 × 系数（借鉴 Nuxt UI
  * ChatMessages 的视口比例哨兵思路），固定像素在大屏上偏小 */
-const SCROLL_END_VIEWPORT_RATIO = 0.15
+const SCROLL_END_VIEWPORT_RATIO = 0.10
+/** 贴底阈值钳制：小视口下 15% 太小（回底按钮不显眼），大屏上 15% 过大
+ * （贴底判定过宽、按钮过早消失），钳到 [20, 40]px */
+const SCROLL_END_MIN_PX = 20
+const SCROLL_END_MAX_PX = 40
+
+/** 贴底阈值：视口高度 × 系数并钳制，isAtEnd 判定与库内 scrollEndThreshold
+ * 同口径共用 */
+function scrollEndThresholdPx(viewportHeight: number): number {
+  return Math.min(
+    SCROLL_END_MAX_PX,
+    Math.max(SCROLL_END_MIN_PX, viewportHeight * SCROLL_END_VIEWPORT_RATIO)
+  )
+}
 
 // 内容增长检测基线：跟随强制器只在内容真正变高时出手，用户键盘翻页等
 // 无手势的滚动路径不会被误拉回底部
@@ -90,7 +103,7 @@ function syncAtEnd(): void {
   // 底部，稳态 elDist≈0；虚拟距离（totalSize 口径）受估算先行/塌缩级联
   // 双向污染，曾在 elDist 232px 时假报贴底、误重锁跟随锁存把上滚拽回
   const elDist = Math.max(el.scrollHeight - el.scrollTop - el.clientHeight, 0)
-  isAtEnd.value = elDist <= el.clientHeight * SCROLL_END_VIEWPORT_RATIO
+  isAtEnd.value = elDist <= scrollEndThresholdPx(el.clientHeight)
   // 重锁存仅在真正贴底（≤2px）时发生：上滚第一格 elDist 即超过该阈值，
   // 杜绝滞后窗口中的假性重锁；用户手动滚回底部时正常重锁
   if (elDist <= 2) followPinned.value = true
@@ -222,9 +235,9 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   // 统一由 syncAtEnd 的强制器直写 scrollTop 接管
   anchorTo: 'end',
   followOnAppend: false,
-  // 库内 wasAtEnd 阈值同口径按视口比例（getter 保持响应式，挂载后取到实际高度）
+  // 库内 wasAtEnd 阈值同口径（视口比例 + 钳制，getter 保持响应式，挂载后取到实际高度）
   get scrollEndThreshold() {
-    return Math.round((messagesContainer.value?.clientHeight ?? 600) * SCROLL_END_VIEWPORT_RATIO)
+    return scrollEndThresholdPx(messagesContainer.value?.clientHeight ?? 600)
   }
 })
 
@@ -236,9 +249,13 @@ rowVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, 
   const first = !instance.itemSizeCache.has(item.key)
   if (delta !== 0) rememberRowSize(item.key, item.size + delta)
   const offset = (instance.scrollOffset ?? 0) + instance.scrollAdjustments
+  // backward（用户上滚）期间一律不补偿：首测补偿无方向排除时，上滚挂载
+  // 未测行的估值纠偏会把 scrollTop 往下拽（视口回退）；前插历史恢复方向为
+  // forward/null，不受影响
+  const backward = instance.scrollDirection === 'backward'
   return first
-    ? item.start < offset
-    : item.start + item.size <= offset && instance.scrollDirection !== 'backward'
+    ? item.start < offset && !backward
+    : item.start + item.size <= offset && !backward
 }
 
 const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
@@ -1700,7 +1717,7 @@ export default {
 
 .messages-container {
   flex-shrink: 0;
-  padding: 32px 24px;
+  padding: 32px 24px 0px 24px;
 }
 
 .empty-state {
@@ -1974,7 +1991,7 @@ export default {
 
 @media (max-width: 768px) {
   .messages-container {
-    padding: 20px 16px;
+    padding: 20px 16px 0px 16px;
   }
 
   .input-wrapper {
