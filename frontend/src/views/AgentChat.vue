@@ -257,19 +257,61 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   // 在「估算先行入账 / 实测滞后」交错窗口出现 prepend 后漂 12558px），已删除
   anchorTo: 'end',
   followOnAppend: true,
-  // 库内 wasAtEnd 阈值同口径（视口比例 + 钳制，getter 保持响应式，挂载后取到实际高度）。
-  // 用户上滚解除跟随锁存后阈值不归零——库内 followOnAppend 已根据 isAtEnd 判断
-  // 是否出手；我们仍需 followPinned 决定 UI 层（回底按钮显隐）的强制器条件
-  get scrollEndThreshold() {
-    return scrollEndThresholdPx(messagesContainer.value?.clientHeight ?? 600)
-  }
+  // 文档推荐静态值 80：scrollEndThreshold 是库内 wasAtEnd 判定窗口，
+  // 流式段级增长时 rowCount 不变，followOnAppend 不出手；resizeItem 只
+  // 保持视口位置稳定（不会主动滚到底）。用户上滚解锁 followPinned 后，
+  // 本地 isAtEnd + UI 层回底按钮显隐由 syncAtEnd 控制，不干预库内阈值。
+  // 实测：getter 返回 20-40px 太小，用户在距底 40-80px 区间被库内判为
+  // 「不在底部」，流式增长时不跟随 → 红框滚条停在中间
+  scrollEndThreshold: 80
 })
 
 const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
 
 // 贴底派生态随任意虚拟化变化（数据增删/测量更新/滚动）刷新——库内 followOnAppend
 // 已处理贴底，本地 syncAtEnd 仅刷新 isAtEnd / followPinned 状态，不再写 scrollTop
-watch(virtualRows, () => syncAtEnd(), { immediate: true })
+// 流式期间跟随中断补救：rAF 同帧去重 + 50ms 节流，避免高频 scrollToEnd
+let _rescuePending = false
+let _lastRescueAt = 0
+watch(virtualRows, () => {
+  syncAtEnd()
+
+  // 流式期间跟随中断补救：库内 resizeItem (virtual-core line 916-917) 取
+  // prevTotalSize 时已含新尺寸，导致 applyScrollAdjustment(getTotalSize - prevTotalSize)
+  // 的 delta=0、不补偿 scrollTop → scrollTop 落后 libMaxScroll → elDist 累积
+  // → 库内 isAtEnd 翻 false → 后续跟随中断。当 isStreaming + followPinned +
+  // 库内已不在底部时，主动 scrollToEnd 把视口贴回最新（走 elementScroll 路径
+  // 与库内一致，会触发 observer 同步 scrollOffset）。同帧去重 + 50ms 节流
+  // 防止极端流式（每帧 scrollHeight 都涨）下高频滚动主线程
+  const el = messagesContainer.value
+  if (
+    !_rescuePending &&
+    store.isStreaming &&
+    followPinned.value &&
+    el &&
+    !rowVirtualizer.value.isAtEnd(scrollEndThresholdPx(el.clientHeight))
+  ) {
+    _rescuePending = true
+    requestAnimationFrame(() => {
+      _rescuePending = false
+      // 二次检查：避免 rAF 期间用户上滚解锁 followPinned 或流式已结束
+      if (!store.isStreaming || !followPinned.value) return
+      const elNow = messagesContainer.value
+      if (!elNow) return
+      const distNow = Math.max(
+        elNow.scrollHeight - elNow.scrollTop - elNow.clientHeight,
+        0
+      )
+      // 再次确认 elDist > 80（rAF 期间可能库内已自动跟上）
+      if (distNow <= 80) return
+      // 50ms 节流，避免同一流式周期内频繁 scrollToEnd
+      const now = performance.now()
+      if (now - _lastRescueAt < 50) return
+      _lastRescueAt = now
+      rowVirtualizer.value.scrollToEnd()
+    })
+  }
+}, { immediate: true })
 
 // 展示开关改变行内内容高度：整体失效 virtualizer 尺寸缓存（行 key 不变，未挂载行
 // 的旧实测尺寸会残留导致滚动错位）；已挂载行由 ResizeObserver 重测，未挂载行回落
@@ -794,12 +836,21 @@ function convergeScrollToBottom(): void {
     wrap.removeEventListener('pointerdown', onUserInput, { capture: true })
   }
   const finish = () => {
-    // 强制贴底并锁存跟随：防止收敛期 scroll 事件的几何重算把贴底判定翻成
-    // false 残留，后续流式钉底由跟随强制器接管；直写 scrollTop 不武装
-    // 库内追底 reconcile 循环（理由见 syncAtEnd 注释）
+    // 同步 scrollOffset 流程：
+    // 1. reveal：触发元素可见 → 库内 _willUpdate 在下一微任务挂 observer
+    // 2. nextTick 后调 rowVirtualizer.scrollToEnd()：走 elementScroll → 触发
+    //    scroll 事件 → observeElementOffset 把 scrollOffset 同步到当前 scrollTop
+    //
+    // 关键时序：隐藏期逐帧直写的 scrollTop 不会被库内 scroll 事件感知
+    // （observer 在 reveal 后才挂上），若 finish 时仍直写 scrollTop，
+    // scrollOffset 会永远停在初始 0，isAtEnd 永远 false，followOnAppend
+    // 永不触发 → SSE 流式不自动滚动。库内 scrollToEnd 走相同 elementScroll
+    // 路径但保证 observer 同步 scrollOffset
     followPinned.value = true
-    wrap.scrollTop = wrap.scrollHeight
     messagesRevealed.value = true
+    nextTick(() => {
+      rowVirtualizer.value.scrollToEnd()
+    })
   }
   const tick = () => {
     if (aborted || generation !== convergeGeneration || !wrap.isConnected) {
