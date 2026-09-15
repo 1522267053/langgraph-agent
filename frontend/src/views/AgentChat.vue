@@ -72,22 +72,11 @@ let convergeGeneration = 0
 const autoScroll = ref(true)
 const isAtEnd = ref(true)
 const followPinned = ref(true)
-/** 贴底阈值系数：按钮派生的离底判定 = 视口高度 × 系数（借鉴 Nuxt UI
- * ChatMessages 的视口比例哨兵思路），固定像素在大屏上偏小 */
-const SCROLL_END_VIEWPORT_RATIO = 0.1
-/** 贴底阈值钳制：小视口下 10% 太小（回底按钮不显眼），大屏上 10% 过大
- * （贴底判定过宽、按钮过早消失），钳到 [20, 40]px */
-const SCROLL_END_MIN_PX = 20
-const SCROLL_END_MAX_PX = 40
-
-/** 贴底阈值：视口高度 × 系数并钳制，isAtEnd 判定与库内 scrollEndThreshold
- * 同口径共用 */
-function scrollEndThresholdPx(viewportHeight: number): number {
-  return Math.min(
-    SCROLL_END_MAX_PX,
-    Math.max(SCROLL_END_MIN_PX, viewportHeight * SCROLL_END_VIEWPORT_RATIO)
-  )
-}
+/** 贴底阈值（统一为 80px）：库内 scrollEndThreshold:80（useVirtualizer 配置）
+ * 与本地 isAtEnd / followPinned 重锁共用同一常数，消除"两套阈值不同步"导致的
+ * 跟随中断 / 回底按钮过早消失 / 重锁抑制窗错位。与库内 wasAtEnd 判定窗口同口径。
+ * 调整此项：同时改库内 scrollEndThreshold 配置（当前值见 useVirtualizer 调用点） */
+const SCROLL_END_PX = 80
 
 // 内容增长检测基线：跟随强制器只在内容真正变高时出手，用户键盘翻页等
 // 无手势的滚动路径不会被误拉回底部
@@ -122,7 +111,7 @@ function syncAtEnd(): void {
   // 真实底部，稳态 elDist≈0；虚拟距离（totalSize 口径）受估算先行/塌缩级联
   // 双向污染，曾在 elDist 232px 时假报贴底、误重锁跟随锁存把上滚拽回
   const elDist = Math.max(el.scrollHeight - el.scrollTop - el.clientHeight, 0)
-  isAtEnd.value = elDist <= scrollEndThresholdPx(el.clientHeight)
+  isAtEnd.value = elDist <= SCROLL_END_PX
   // 重锁仅在真正贴底（≤2px）且不在手势解除抑制窗内发生：上滚第一格 elDist
   // 即超过该阈值，杜绝滞后窗口中的假性重锁；用户手动滚回底部时正常重锁
   if (elDist <= 2 && performance.now() - pinUnlockAt > PIN_RELOCK_GRACE_MS) {
@@ -263,7 +252,7 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   // 本地 isAtEnd + UI 层回底按钮显隐由 syncAtEnd 控制，不干预库内阈值。
   // 实测：getter 返回 20-40px 太小，用户在距底 40-80px 区间被库内判为
   // 「不在底部」，流式增长时不跟随 → 红框滚条停在中间
-  scrollEndThreshold: 80
+  scrollEndThreshold: SCROLL_END_PX
 })
 
 const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
@@ -273,45 +262,48 @@ const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
 // 流式期间跟随中断补救：rAF 同帧去重 + 50ms 节流，避免高频 scrollToEnd
 let _rescuePending = false
 let _lastRescueAt = 0
-watch(virtualRows, () => {
-  syncAtEnd()
+watch(
+  virtualRows,
+  () => {
+    syncAtEnd()
 
-  // 流式期间跟随中断补救：库内 resizeItem (virtual-core line 916-917) 取
-  // prevTotalSize 时已含新尺寸，导致 applyScrollAdjustment(getTotalSize - prevTotalSize)
-  // 的 delta=0、不补偿 scrollTop → scrollTop 落后 libMaxScroll → elDist 累积
-  // → 库内 isAtEnd 翻 false → 后续跟随中断。当 isStreaming + followPinned +
-  // 库内已不在底部时，主动 scrollToEnd 把视口贴回最新（走 elementScroll 路径
-  // 与库内一致，会触发 observer 同步 scrollOffset）。同帧去重 + 50ms 节流
-  // 防止极端流式（每帧 scrollHeight 都涨）下高频滚动主线程
-  const el = messagesContainer.value
-  if (
-    !_rescuePending &&
-    store.isStreaming &&
-    followPinned.value &&
-    el &&
-    !rowVirtualizer.value.isAtEnd(scrollEndThresholdPx(el.clientHeight))
-  ) {
-    _rescuePending = true
-    requestAnimationFrame(() => {
-      _rescuePending = false
-      // 二次检查：避免 rAF 期间用户上滚解锁 followPinned 或流式已结束
-      if (!store.isStreaming || !followPinned.value) return
-      const elNow = messagesContainer.value
-      if (!elNow) return
-      const distNow = Math.max(
-        elNow.scrollHeight - elNow.scrollTop - elNow.clientHeight,
-        0
-      )
-      // 再次确认 elDist > 80（rAF 期间可能库内已自动跟上）
-      if (distNow <= 80) return
-      // 50ms 节流，避免同一流式周期内频繁 scrollToEnd
-      const now = performance.now()
-      if (now - _lastRescueAt < 50) return
-      _lastRescueAt = now
-      rowVirtualizer.value.scrollToEnd()
-    })
-  }
-}, { immediate: true })
+    // 流式期间跟随中断补救：库内 resizeItem (virtual-core line 916-917) 取
+    // prevTotalSize 时已含新尺寸，导致 applyScrollAdjustment(getTotalSize - prevTotalSize)
+    // 的 delta=0、不补偿 scrollTop → scrollTop 落后 libMaxScroll → elDist 累积
+    // → 库内 isAtEnd 翻 false → 后续跟随中断。当 isStreaming + followPinned +
+    // 库内已不在底部时，主动 scrollToEnd 把视口贴回最新（走 elementScroll 路径
+    // 与库内一致，会触发 observer 同步 scrollOffset）。同帧去重 + 50ms 节流
+    // 防止极端流式（每帧 scrollHeight 都涨）下高频滚动主线程
+    const el = messagesContainer.value
+    if (
+      !_rescuePending &&
+      store.isStreaming &&
+      followPinned.value &&
+      el &&
+      !rowVirtualizer.value.isAtEnd(SCROLL_END_PX)
+    ) {
+      _rescuePending = true
+      requestAnimationFrame(() => {
+        _rescuePending = false
+        // 二次检查：避免 rAF 期间用户上滚解锁 followPinned 或流式已结束
+        if (!store.isStreaming || !followPinned.value) {
+          return
+        }
+        const elNow = messagesContainer.value
+        if (!elNow) return
+        const distNow = Math.max(elNow.scrollHeight - elNow.scrollTop - elNow.clientHeight, 0)
+        // 再次确认 elDist > 80（rAF 期间可能库内已自动跟上）
+        if (distNow <= 80) return
+        // 50ms 节流，避免同一流式周期内频繁 scrollToEnd
+        const now = performance.now()
+        if (now - _lastRescueAt < 50) return
+        _lastRescueAt = now
+        rowVirtualizer.value.scrollToEnd()
+      })
+    }
+  },
+  { immediate: true }
+)
 
 // 展示开关改变行内内容高度：整体失效 virtualizer 尺寸缓存（行 key 不变，未挂载行
 // 的旧实测尺寸会残留导致滚动错位）；已挂载行由 ResizeObserver 重测，未挂载行回落
@@ -938,15 +930,47 @@ async function handleLoadMore() {
   // 历史前插：库内 anchorTo:'end' + keyed item 自动锚定原首行同一像素位置；
   // 我们仅解除跟随锁存（库内 followOnAppend 根据 isAtEnd 判断是否出手，跟随
   // 锁存对应 UI 层 followPinned，控制回底按钮显隐）
+  let anchorKey: string | null = null
+  const elEarly = messagesContainer.value
+  const beforeTop = elEarly?.scrollTop ?? 0
+  const beforeHeight = elEarly?.scrollHeight ?? 0
+  anchorKey = rowVirtualizer.value?.getVirtualItems()[0]?.key ?? null
   followPinned.value = false
   try {
-    await store.loadMoreMessages(agentId.value)
+    const loadedCount = await store.loadMoreMessages(agentId.value)
+    // [FIX-IMMEDIATE] 立即用 scrollHeight delta 补偿 scrollTop，避免库内 anchorTo
+    // 在 AFTER-NXT 阶段把视口拉到 prepend 新历史位置造成"一闪而过"。store 内部
+    // await nextTick 已结束，DOM 已同步更新，scrollHeight 已反映新高度。
+    const elAfter = messagesContainer.value
+    if (elAfter && loadedCount > 0) {
+      const afterHeight = elAfter.scrollHeight
+      const delta = afterHeight - beforeHeight
+      // 立即把 scrollTop 加上 delta，保持原首行像素位置
+      elAfter.scrollTop = beforeTop + delta
+    }
     await nextTick()
     // 等两帧 rAF：让新增行的 ResizeObserver 首测完成、虚拟列表重新排版。
     // 不再写 scrollTop——库内 anchorTo:'end' 已按 keyed item 自动维持视口
     await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
     await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
     syncAtEnd()
+    // [FIX] prepend 视口漂移兜底：方向 A 的 scrollToOffset 修复保留作为兜底，
+    // 防止库内 anchorTo 在 rAF 期间再次拉走视口；同时校正因"估值先行入账/实测
+    // 收缩"造成的 sub-pixel drift。
+    if (anchorKey && rowVirtualizer.value && messagesContainer.value) {
+      const el = messagesContainer.value
+      const anchorIdx = chatRows.value.findIndex(r => r.key === anchorKey)
+      if (anchorIdx >= 0) {
+        const postItems = rowVirtualizer.value.getVirtualItems()
+        const anchorVirt = postItems.find(v => v.key === anchorKey)
+        const targetStart = anchorVirt?.start
+        if (targetStart != null) {
+          rowVirtualizer.value.scrollToOffset(targetStart, { align: 'start' })
+        } else {
+          rowVirtualizer.value.scrollToIndex(anchorIdx, { align: 'start' })
+        }
+      }
+    }
   } finally {
     isLoadingMore.value = false
   }
