@@ -49,7 +49,9 @@ const emit = defineEmits<{
       <span>上下文摘要</span>
       <span v-if="row.msg.removedCount">已压缩 {{ row.msg.removedCount }} 条历史消息</span>
     </div>
-    <MarkdownRenderer class="compress-summary-content" :content="row.msg.content" />
+    <div class="compress-summary-content">
+      <MarkdownRenderer :content="row.msg.content" />
+    </div>
   </div>
   <MessageBubble
     v-else-if="row?.msg"
@@ -119,7 +121,11 @@ const emit = defineEmits<{
 .typing {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  margin-top: 16px;
+  margin-bottom: 16px;
+  padding-top: 12px;
+  min-height: 28px;
 }
 
 .typing .dot {
