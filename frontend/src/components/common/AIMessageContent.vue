@@ -173,15 +173,20 @@ async function handleCopy(text: string): Promise<void> {
 // nestedScrollConsumesGesture）处理，此处只负责块内部：不要加
 // overscroll-behavior，否则内层到边界后手势不再穿透主容器，会被误判为主动上滚
 
-/** thinking 内容元素（key = segmentKey），供跟随滚动 */
-const thinkingEls = new Map<string, HTMLElement>()
+/** thinking 块 wrap 元素（el-scrollbar 的滚动容器），供跟随滚动 */
+const thinkingWraps = new Map<string, HTMLElement>()
 
 /** 用户在块内手动滚动（上滚/触摸/按压）后停用该块的内部跟随 */
 const thinkingFollowOff = new Set<string>()
 
-function setThinkingRef(key: string, el: unknown): void {
-  if (el instanceof HTMLElement) thinkingEls.set(key, el)
-  else thinkingEls.delete(key)
+function setThinkingWrapRef(key: string, el: unknown): void {
+  // el-scrollbar :ref 回调拿到 ScrollbarInstance，wrapRef 是真正的滚动 wrap
+  const wrap =
+    el && typeof el === 'object' && 'wrapRef' in el
+      ? (el as { wrapRef?: unknown }).wrapRef
+      : undefined
+  if (wrap instanceof HTMLElement) thinkingWraps.set(key, wrap)
+  else thinkingWraps.delete(key)
 }
 
 function stopThinkingFollow(key: string): void {
@@ -194,17 +199,17 @@ function onThinkingWheel(key: string, event: WheelEvent): void {
 }
 
 /** 用户滚回块底部附近（与外层 useAutoScroll 同一距底阈值）→ 恢复内部跟随，
- * 与外层「上滚停止跟随、回到底部恢复」语义对齐。scroll 事件不冒泡，须挂在
- * 滚动元素（.thinking-content）本体上 */
-function onThinkingScroll(key: string, event: Event): void {
-  const el = event.target
-  if (!(el instanceof HTMLElement)) return
-  const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+ * 与外层「上滚停止跟随、回到底部恢复」语义对齐。el-scrollbar @scroll 的
+ * target 不一定指向 wrap（取决于事件冒泡路径），直接用 wrapRef 算距离 */
+function onThinkingScroll(key: string): void {
+  const wrap = thinkingWraps.get(key)
+  if (!wrap) return
+  const distance = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight
   if (distance <= AUTO_SCROLL_BOTTOM_THRESHOLD) thinkingFollowOff.delete(key)
 }
 
 /** thinking 流式增长时让封顶块内部贴底，用户手动滚动后停用。
- * 内容为纯 <pre> 文本，thinking 字符串变化是唯一增长源 */
+ * 滚动容器改为 el-scrollbar 的 wrap（封顶 + 内部滚动） */
 watch(
   () => props.segments.map(s => s.thinking),
   () => {
@@ -217,8 +222,8 @@ watch(
         return
       }
       if (thinkingFollowOff.has(key)) return
-      const el = thinkingEls.get(key)
-      if (el && el.scrollHeight > el.clientHeight) el.scrollTop = el.scrollHeight
+      const wrap = thinkingWraps.get(key)
+      if (wrap && wrap.scrollHeight > wrap.clientHeight) wrap.scrollTop = wrap.scrollHeight
     })
   },
   { flush: 'post' }
@@ -263,12 +268,14 @@ watch(
           </el-tooltip>
         </div>
       </div>
-      <pre
+      <el-scrollbar
         v-if="showThinking"
-        :ref="el => setThinkingRef(segmentKey(segment, idx), el)"
-        class="thinking-content"
-        @scroll="onThinkingScroll(segmentKey(segment, idx), $event)"
-        >{{ segment.thinking }}</pre>
+        :ref="el => setThinkingWrapRef(segmentKey(segment, idx), el)"
+        max-height="400px"
+        @scroll="onThinkingScroll(segmentKey(segment, idx))"
+      >
+        <pre class="thinking-content">{{ segment.thinking }}</pre>
+      </el-scrollbar>
     </div>
 
     <div v-else-if="segment.type === 'tool' && segment.tool" class="tool-block">
@@ -576,11 +583,7 @@ watch(
   color: #334155;
   white-space: pre-wrap;
   word-break: break-word;
-  /* 封顶 + 内部滚动（对齐 ThinkingBlock 400px 惯例）：思考内容无界增长时
-     行高有界，虚拟行不因长思考失控；overflow-y: auto 同时是 useAutoScroll
-     嵌套滚动归因的判定条件，块内滚动手势不会打断外层贴底跟随 */
-  max-height: 400px;
-  overflow-y: auto;
+  /* 封顶与滚动由外层 el-scrollbar 提供（max-height="400px"），此处不再设 */
 }
 
 .tool-content {

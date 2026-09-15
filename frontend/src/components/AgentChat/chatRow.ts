@@ -161,7 +161,7 @@ const THINKING_UNITS_PER_LINE = 45
 const THINKING_LINE_HEIGHT = 13 * 1.6
 /** thinking 正文上下 padding（14px × 2） */
 const THINKING_BODY_PADDING = 28
-/** thinking 正文封顶（.thinking-content max-height: 400px） */
+/** thinking 正文封顶（AIMessageContent 中 el-scrollbar max-height="400px"） */
 const THINKING_BODY_MAX = 400
 /** thinking 块外 chrome：头部 ~36 + 块外边距 12 */
 const THINKING_CHROME = 48
