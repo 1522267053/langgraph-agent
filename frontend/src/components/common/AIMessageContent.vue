@@ -176,8 +176,15 @@ async function handleCopy(text: string): Promise<void> {
 /** thinking 块 wrap 元素（el-scrollbar 的滚动容器），供跟随滚动 */
 const thinkingWraps = new Map<string, HTMLElement>()
 
-/** 用户在块内手动滚动（上滚/触摸/按压）后停用该块的内部跟随 */
-const thinkingFollowOff = new Set<string>()
+/** 重锁抑制窗（与最外层 PIN_RELOCK_GRACE_MS 对称）：wheel 解除锁存与实际
+ * scroll 事件之间有几帧延迟，期间 distance ≤ threshold 会立即误判「贴底」
+ * 恢复跟随并被流式增长拉回底部；解除后 300ms 内即使触底也不恢复 */
+const THINKING_RELOCK_GRACE_MS = 300
+
+/** 用户在块内手动滚动（上滚/触摸/按压）后停用该块的内部跟随。
+ * key 存在 = 脱离跟随中；value = 脱离时刻 performance.now()，单 Map 兼做
+ * 「状态 + 时间戳」避免双结构 */
+const thinkingUnlockAt = new Map<string, number>()
 
 function setThinkingWrapRef(key: string, el: unknown): void {
   // el-scrollbar :ref 回调拿到 ScrollbarInstance，wrapRef 是真正的滚动 wrap
@@ -190,7 +197,7 @@ function setThinkingWrapRef(key: string, el: unknown): void {
 }
 
 function stopThinkingFollow(key: string): void {
-  thinkingFollowOff.add(key)
+  thinkingUnlockAt.set(key, performance.now())
 }
 
 function onThinkingWheel(key: string, event: WheelEvent): void {
@@ -200,12 +207,18 @@ function onThinkingWheel(key: string, event: WheelEvent): void {
 
 /** 用户滚回块底部附近（与外层 useAutoScroll 同一距底阈值）→ 恢复内部跟随，
  * 与外层「上滚停止跟随、回到底部恢复」语义对齐。el-scrollbar @scroll 的
- * target 不一定指向 wrap（取决于事件冒泡路径），直接用 wrapRef 算距离 */
+ * target 不一定指向 wrap（取决于事件冒泡路径），直接用 wrapRef 算距离。
+ * 300ms 抑制窗内即使触底也不恢复，避免 wheel/scroll 交错窗口的误锁 */
 function onThinkingScroll(key: string): void {
   const wrap = thinkingWraps.get(key)
   if (!wrap) return
   const distance = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight
-  if (distance <= AUTO_SCROLL_BOTTOM_THRESHOLD) thinkingFollowOff.delete(key)
+  if (distance > AUTO_SCROLL_BOTTOM_THRESHOLD) return
+  const unlockedAt = thinkingUnlockAt.get(key)
+  if (unlockedAt === undefined) return
+  if (performance.now() - unlockedAt > THINKING_RELOCK_GRACE_MS) {
+    thinkingUnlockAt.delete(key)
+  }
 }
 
 /** thinking 流式增长时让封顶块内部贴底，用户手动滚动后停用。
@@ -218,10 +231,10 @@ watch(
       if (segment.type !== 'thinking') return
       const key = segmentKey(segment, idx)
       if (!isMsgThinkingLoading(idx)) {
-        thinkingFollowOff.delete(key)
+        thinkingUnlockAt.delete(key)
         return
       }
-      if (thinkingFollowOff.has(key)) return
+      if (thinkingUnlockAt.has(key)) return
       const wrap = thinkingWraps.get(key)
       if (wrap && wrap.scrollHeight > wrap.clientHeight) wrap.scrollTop = wrap.scrollHeight
     })
