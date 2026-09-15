@@ -1532,6 +1532,15 @@ class ShellNodeHandler(BaseNodeHandler):
             except Exception as e:
                 return {"error": f"文件读取失败: {e}", "success": False}
 
+            # [TOCTOU] 记录 read 时的 mtime，写入前再次 stat 校验：拦截并发修改
+            # 场景。同 LLM 在一条 message 内多次 text_editor 同一文件、或多人协作
+            # 编辑同一文件时，本地并发 read-modify-write 会导致最后一次写入覆盖
+            # 之前所有改动（前面的替换"看起来成功"但实际被覆盖丢失）。st_mtime 精度
+            # 在 Windows NTFS 上是 100ns、Linux ext4 是纳秒级，并发 stat 冲突概率
+            # 极低；为极端情况（mtime 巧合一致但文件已被覆盖）兜底，加大小校验。
+            mtime_before = path.stat().st_mtime
+            size_before = path.stat().st_size
+
             # 行尾感知：new_string 统一为文件主导行尾，避免引入混合行尾
             dominant = _detect_dominant_line_ending(raw)
             new_string = _normalize_line_endings(new_string, dominant)
@@ -1632,6 +1641,31 @@ class ShellNodeHandler(BaseNodeHandler):
                 new_raw, _ = tolerant_pattern.subn(
                     lambda _m: new_string, raw, count=max_replace
                 )
+
+            # [TOCTOU] 写入前校验 mtime / size：拦截并发修改，避免 read-modify-write
+            # 竞态导致本次写入覆盖之前未合并的修改。校验失败直接 abort，不写文件、
+            # 不创建备份（避免创建无用备份污染变更追踪记录）。
+            try:
+                current_stat = path.stat()
+                if (
+                    current_stat.st_mtime != mtime_before
+                    or current_stat.st_size != size_before
+                ):
+                    return {
+                        "error": (
+                            "文件已被并发修改（mtime/size 已变化），当前修改基于的旧版本"
+                            "可能已过期。请重新读取文件后再次发起替换，避免覆盖其他"
+                            "并发修改。"
+                        ),
+                        "success": False,
+                        "concurrent_modification": True,
+                        "mtime_before": mtime_before,
+                        "mtime_after": current_stat.st_mtime,
+                        "size_before": size_before,
+                        "size_after": current_stat.st_size,
+                    }
+            except FileNotFoundError:
+                return {"error": f"文件不存在: {file_path}", "success": False}
 
             # 文件变更追踪：写前备份原文件（回退消息时恢复），备份失败不阻断写入
             backup_path = await backup_tool_file(path)
