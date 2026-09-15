@@ -46,45 +46,6 @@ _TYPE_MAP = {
 # 进度预览截断长度（仅展示每轮回复前 N 字符，超出省略）
 _PROGRESS_PREVIEW_CHARS = 50
 
-# 工具输出预览截断长度（tool_call_end 后驻留展示，比内容预览大以便展开回看）
-_TOOL_OUTPUT_PREVIEW_CHARS = 200
-
-# 工具结果 dict 中可读字段的提取优先级（避免预览显示 JSON 样板）
-_TOOL_PREVIEW_FIELDS = ("error", "content", "output", "result", "diff", "message")
-
-
-def _tool_output_preview(result: Any) -> str:
-    """从工具结果中提取父Agent展示用的输出预览
-
-    dict 结果按 _TOOL_PREVIEW_FIELDS 优先提取可读字段（失败结果优先 error）；
-    其余类型 str() 兜底。截断到 _TOOL_OUTPUT_PREVIEW_CHARS，超出补省略号。
-    空结果返回空串（前端不刷新 liveOutput，保留上一个预览）。
-    """
-    if result is None:
-        return ""
-    text: str
-    if isinstance(result, dict):
-        if result.get("success") is False and result.get("error"):
-            text = str(result["error"])
-        else:
-            for field in _TOOL_PREVIEW_FIELDS:
-                value = result.get(field)
-                if isinstance(value, str) and value.strip():
-                    text = value
-                    break
-            else:
-                text = json.dumps(result, ensure_ascii=False, default=str)
-    elif isinstance(result, str):
-        text = result
-    else:
-        text = json.dumps(result, ensure_ascii=False, default=str)
-    text = text.strip()
-    if not text:
-        return ""
-    if len(text) > _TOOL_OUTPUT_PREVIEW_CHARS:
-        return text[:_TOOL_OUTPUT_PREVIEW_CHARS] + "..."
-    return text
-
 
 class SubAgentNodeConfig(BaseNodeConfig):
     """子Agent节点配置"""
@@ -324,14 +285,33 @@ class SubAgentNodeHandler(BaseNodeHandler):
 
                 # 每轮 LLM 回复完成后转发一次预览（content→tool_call→content 时逐次覆盖）
                 progress: dict[str, Any] = {"text": ""}
-                # 子Agent 正在执行的工具（call_id → 工具名），供父Agent展示
-                # 「正在调用xxx工具中」；并行调用以「、」连接
-                running_tools: dict[str, str] = {}
+                # 子Agent 本轮工具批次（call_id → 结局），供父Agent展示：
+                # - 「正在调用xxx工具中」= 未完结条目的工具名（实时收缩快照）
+                # - tool_call_end 驻留行 = 批次内全部条目的结局合并（逐个列出，
+                #   直至下一轮冲刷替换），避免连续工具调用互相覆盖丢失过程
+                # node_start(llm)/node_done 清空进入下一批次
+                batch_tools: dict[str, dict[str, Any]] = {}
+
+                def merged_tool_summary() -> str:
+                    """按调用顺序拼接批次内已完结工具的结局（调用成功/调用失败）
+
+                    未完结条目不进该行：「执行中」语义由 liveTool（正在调用xxx
+                    工具中）承载，避免同一工具在状态行里重复出现
+                    """
+                    parts: list[str] = []
+                    for info in batch_tools.values():
+                        if not info["done"]:
+                            continue
+                        if info["failed"]:
+                            parts.append(f"{info['name']} 调用失败")
+                        else:
+                            parts.append(f"{info['name']} 调用成功")
+                    return "、".join(parts)
 
                 def send_tool_status(content: str = "") -> None:
                     """转发当前工具调用状态（空串表示全部结束、前端清除状态行）
 
-                    content 非空时随状态一并携带（tool_call_end 的输出预览），
+                    content 非空时随状态一并携带（tool_call_end 的合并结局行），
                     前端在更新 liveTool 后落入 updateToolLiveOutput 驻留展示
                     """
                     if not _parent_writer:
@@ -342,7 +322,11 @@ class SubAgentNodeHandler(BaseNodeHandler):
                             sub_agent_id=_agent_id,
                             sub_session_id=session_id,
                             sub_agent_name=_agent_name,
-                            tool_name="、".join(running_tools.values()),
+                            tool_name="、".join(
+                                info["name"]
+                                for info in batch_tools.values()
+                                if not info["done"]
+                            ),
                             content=content,
                         )
                     )
@@ -381,13 +365,17 @@ class SubAgentNodeHandler(BaseNodeHandler):
                     if event_type == "tool_call_start":
                         # content 流结束、进入工具调用，发送该轮回复预览
                         send_progress_preview()
-                        # 记录并转发工具调用状态（父Agent展示「正在调用xxx工具中」）
+                        # 登记批次条目并转发状态（父Agent展示「正在调用xxx工具中」）
                         call_id = str(
                             event_data.get("tool_call_id")
                             or event_data.get("tool_name")
                             or ""
                         )
-                        running_tools[call_id] = str(event_data.get("tool_name") or "")
+                        batch_tools[call_id] = {
+                            "name": str(event_data.get("tool_name") or ""),
+                            "done": False,
+                            "failed": False,
+                        }
                         send_tool_status()
                         return
                     if event_type == "tool_call_end":
@@ -396,15 +384,27 @@ class SubAgentNodeHandler(BaseNodeHandler):
                             or event_data.get("tool_name")
                             or ""
                         )
-                        running_tools.pop(call_id, None)
-                        # 携带该工具的输出预览：前端驻留展示直到下一事件替换
-                        send_tool_status(
-                            content=_tool_output_preview(event_data.get("result"))
-                        )
+                        end_tool_name = str(event_data.get("tool_name") or "")
+                        failed = event_data.get("status") == "error"
+                        entry = batch_tools.get(call_id)
+                        if entry is None:
+                            # 兜底：无 start 对应的直接 end（reject_remaining_tools、
+                            # doom-loop 跳过等路径），补建已完结条目保证不漏显示
+                            batch_tools[call_id] = {
+                                "name": end_tool_name,
+                                "done": True,
+                                "failed": failed,
+                            }
+                        else:
+                            entry["done"] = True
+                            entry["failed"] = failed
+                        # 驻留展示批次内全部工具结局的合并行，
+                        # 直到下一次 tool_call_start/node_done 冲刷替换
+                        send_tool_status(content=merged_tool_summary())
                         return
                     if event_type == "node_done":
                         # 最后一轮回复（无工具调用）完成
-                        running_tools.clear()
+                        batch_tools.clear()
                         send_progress_preview(status="done")
                         return
                     if (
@@ -413,7 +413,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
                     ):
                         progress["text"] = ""
                         last_round["content"] = ""
-                        running_tools.clear()
+                        batch_tools.clear()
 
                 return await _run_sub_agent(
                     session_id,

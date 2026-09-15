@@ -218,7 +218,9 @@ class SubAgentProgressEvent(FlowEvent):
         default="",
         description=(
             "子Agent当前消息的累计快照（尾部截断）；"
-            "tool_call_end 事件中为最近完成工具的输出预览，前端驻留至下一事件替换"
+            "tool_call_end 事件中为本批次全部工具结局的合并行"
+            "（如「file_read 调用成功、todowrite 调用成功」），"
+            "前端驻留至下一事件替换"
         ),
     )
     status: str = Field(default="running", description="执行状态: running/done/error")
