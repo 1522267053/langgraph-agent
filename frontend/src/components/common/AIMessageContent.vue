@@ -251,7 +251,7 @@ watch(
     <div
       v-if="segment.type === 'thinking'"
       class="thinking-block"
-      @wheel="onThinkingWheel(segmentKey(segment, idx), $event)"
+      @wheel.passive="onThinkingWheel(segmentKey(segment, idx), $event)"
       @touchmove.passive="stopThinkingFollow(segmentKey(segment, idx))"
       @pointerdown="stopThinkingFollow(segmentKey(segment, idx))"
     >
