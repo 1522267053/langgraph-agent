@@ -93,40 +93,54 @@ class McpNodeHandler(BaseNodeHandler):
                 wrapped.append(base_tool)
                 continue
             tool_name = base_tool.name
-            original_coro = base_tool.coroutine
 
-            async def approval_wrapped_coro(*args, **kwargs):
-                # 把 args/kwargs 平铺进 kwargs 后做正则匹配（args_schema 通常是 kwargs 形式）
-                flat: dict = dict(kwargs)
-                for i, v in enumerate(args):
-                    flat.setdefault(f"_arg_{i}", v)
-                content = f"{tool_name} " + " ".join(
-                    str(v)[:200] for v in flat.values()
-                )
-                approval_result = await handler._check_and_request_approval(
-                    tool_name=tool_name,
-                    tool_args=flat,
-                    cfg=cfg,
-                    content_for_pattern=content,
-                    node_key=node.node_key,
-                )
-                if approval_result not in (None, "approved"):
-                    return {
-                        "error": (
-                            f"用户未批准执行MCP工具 {tool_name}（{approval_result}）。"
-                            "如需继续，请征得用户同意后重新调用。"
-                        ),
-                        "success": False,
-                        "error_type": "approval_rejected",
-                    }
-                return await original_coro(*args, **kwargs)
+            def _make_approval_wrapper(
+                tool_name: str, original_coro, handler, cfg, node_key: str
+            ):
+                """工厂函数：为单个工具生成审批 wrapper。
+
+                必须通过工厂隔离作用域——闭包是晚绑定的，若直接在 for 循环里定义
+                async def，所有 wrapper 的 tool_name/original_coro 都会引用循环结束
+                后的尾值（最后一个工具），导致全部工具实际执行同一个工具
+                （args_schema 同理被替换成尾值 schema）。
+                """
+
+                async def approval_wrapped_coro(*args, **kwargs):
+                    # 把 args/kwargs 平铺进 kwargs 后做正则匹配（args_schema 通常是 kwargs 形式）
+                    flat: dict = dict(kwargs)
+                    for i, v in enumerate(args):
+                        flat.setdefault(f"_arg_{i}", v)
+                    content = f"{tool_name} " + " ".join(
+                        str(v)[:200] for v in flat.values()
+                    )
+                    approval_result = await handler._check_and_request_approval(
+                        tool_name=tool_name,
+                        tool_args=flat,
+                        cfg=cfg,
+                        content_for_pattern=content,
+                        node_key=node_key,
+                    )
+                    if approval_result not in (None, "approved"):
+                        return {
+                            "error": (
+                                f"用户未批准执行MCP工具 {tool_name}（{approval_result}）。"
+                                "如需继续，请征得用户同意后重新调用。"
+                            ),
+                            "success": False,
+                            "error_type": "approval_rejected",
+                        }
+                    return await original_coro(*args, **kwargs)
+
+                return approval_wrapped_coro
 
             wrapped.append(
                 StructuredTool(
                     name=tool_name,
                     description=base_tool.description,
                     args_schema=base_tool.args_schema,
-                    coroutine=approval_wrapped_coro,
+                    coroutine=_make_approval_wrapper(
+                        tool_name, base_tool.coroutine, handler, cfg, node.node_key
+                    ),
                     response_format=base_tool.response_format,
                     metadata=base_tool.metadata,
                 )
