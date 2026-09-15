@@ -75,8 +75,8 @@ const isAtEnd = ref(true)
 const followPinned = ref(true)
 /** 贴底阈值系数：按钮派生的离底判定 = 视口高度 × 系数（借鉴 Nuxt UI
  * ChatMessages 的视口比例哨兵思路），固定像素在大屏上偏小 */
-const SCROLL_END_VIEWPORT_RATIO = 0.10
-/** 贴底阈值钳制：小视口下 15% 太小（回底按钮不显眼），大屏上 15% 过大
+const SCROLL_END_VIEWPORT_RATIO = 0.1
+/** 贴底阈值钳制：小视口下 10% 太小（回底按钮不显眼），大屏上 10% 过大
  * （贴底判定过宽、按钮过早消失），钳到 [20, 40]px */
 const SCROLL_END_MIN_PX = 20
 const SCROLL_END_MAX_PX = 40
@@ -94,6 +94,12 @@ function scrollEndThresholdPx(viewportHeight: number): number {
 // 无手势的滚动路径不会被误拉回底部
 let lastKnownScrollHeight = 0
 
+/** 重锁抑制窗：wheel 解除锁存与视口实际位移之间有几帧延迟，期间 elDist 仍
+ * ≤2px，立即重锁会与库内钉底互相强化形成「滚不动」循环（用户需连滚两次），
+ * 解除后 300ms 内禁止重锁 */
+const PIN_RELOCK_GRACE_MS = 300
+let pinUnlockAt = 0
+
 function syncAtEnd(): void {
   const el = messagesContainer.value
   if (!el) return
@@ -104,17 +110,27 @@ function syncAtEnd(): void {
   // 双向污染，曾在 elDist 232px 时假报贴底、误重锁跟随锁存把上滚拽回
   const elDist = Math.max(el.scrollHeight - el.scrollTop - el.clientHeight, 0)
   isAtEnd.value = elDist <= scrollEndThresholdPx(el.clientHeight)
-  // 重锁存仅在真正贴底（≤2px）时发生：上滚第一格 elDist 即超过该阈值，
-  // 杜绝滞后窗口中的假性重锁；用户手动滚回底部时正常重锁
-  if (elDist <= 2) followPinned.value = true
+  // 重锁仅在真正贴底（≤2px）且不在手势解除抑制窗内发生：上滚第一格 elDist
+  // 即超过该阈值，杜绝滞后窗口中的假性重锁；用户手动滚回底部时正常重锁
+  if (elDist <= 2 && performance.now() - pinUnlockAt > PIN_RELOCK_GRACE_MS) {
+    followPinned.value = true
+  }
   // [跟随强制器] 库内两套跟随门控在「估算先行入账、实测滞后补偿」的交错
   // 窗口会互相毒化：totalSize 先跳变推高虚拟距离 → wasAtEnd 放弃补偿；
   // 未测 DOM 抬高元素距离 → followOnAppend 拒绝触发，跟随就此中断。
   // 只要锁存未解除、内容确实变高且不在真实底部，直接写 scrollTop 回底。
   // 必须直写而非 scrollToEnd/scrollToOffset——库内全部滚动 API 都会武装
   // 5s 追底 reconcile rAF 循环，流式期间每帧把 scrollTop 写回（增长的）
-  // 底部，无视跟随锁存把用户上滚拽回（virtuoso followOutput 同款直写模式）
-  if (followPinned.value && autoScroll.value && grew && elDist > 4) {
+  // 底部，无视跟随锁存把用户上滚拽回（virtuoso followOutput 同款直写模式）。
+  // backward 防御：手势解除与位移的交错窗口内锁存被误锁时，用户正在上滚，
+  // 此时不允许强制器把视口拽回底部（正常跟随中不会出现 backward）
+  if (
+    followPinned.value &&
+    autoScroll.value &&
+    grew &&
+    elDist > 4 &&
+    rowVirtualizer.value.scrollDirection !== 'backward'
+  ) {
     el.scrollTop = el.scrollHeight
   }
 }
@@ -127,13 +143,19 @@ function scrollToLatest(): void {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-/** 用户上滚手势：解除跟随锁存（真实输入才解除，程序化位移不影响） */
-function onUserScrollUpIntent(): void {
+/** 用户上滚手势：解除跟随锁存（真实输入才解除，程序化位移不影响）。
+ * 不做嵌套边界穿透：聊天语境下用户在 thinking 块等嵌套容器内的 wheel
+ * 同样表达「滚聊天」的意图，外层 followPinned 应同步解除；thinking 块内
+ * 的自动贴底由 AIMessageContent 自己的 thinkingFollowOff 控制，与外层
+ * 独立——如果 short-circuit 外层，流式增长时外层 followPinned 仍为 1，
+ * 会把视口拽回底部（用户感知「往上滚不会定住」） */
+function onUserScrollUpIntent(source: string): void {
   followPinned.value = false
+  pinUnlockAt = performance.now()
 }
 
 function onWheel(event: WheelEvent): void {
-  if (event.deltaY < 0) onUserScrollUpIntent()
+  if (event.deltaY < 0) onUserScrollUpIntent(`wheel deltaY=${event.deltaY}`)
 }
 
 function handleScrollbarPointerDown(event: PointerEvent): void {
@@ -145,7 +167,9 @@ function handleScrollbarPointerDown(event: PointerEvent): void {
     target.closest('.el-scrollbar') === root &&
     target.closest('.el-scrollbar__bar')
   ) {
-    onUserScrollUpIntent()
+    // 滚动条拖动只在外层 .el-scrollbar__bar 上触发，目标已在外层，
+    // 不会被误判为嵌套块内滚动
+    onUserScrollUpIntent('scrollbar-drag')
   }
 }
 
@@ -235,8 +259,12 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   // 统一由 syncAtEnd 的强制器直写 scrollTop 接管
   anchorTo: 'end',
   followOnAppend: false,
-  // 库内 wasAtEnd 阈值同口径（视口比例 + 钳制，getter 保持响应式，挂载后取到实际高度）
+  // 库内 wasAtEnd 阈值同口径（视口比例 + 钳制，getter 保持响应式，挂载后取到实际高度）；
+  // 用户上滚解除跟随锁存后必须立即归零：wasAtEnd 以虚拟距离 ≤ threshold 判定，
+  // 小幅上滚（阈值内）时行高增长的钉底补偿会把视口拽回底部，且钉底把 elDist
+  // 拉回 ≤2px 触发重锁，与用户手势互相强化形成「滚不动」循环
   get scrollEndThreshold() {
+    if (!followPinned.value) return 0
     return scrollEndThresholdPx(messagesContainer.value?.clientHeight ?? 600)
   }
 })
@@ -1293,7 +1321,7 @@ function handleRejectTools() {
       @scroll="syncAtEnd"
       @end-reached="onEndReached"
       @wheel="onWheel"
-      @touchmove.passive="onUserScrollUpIntent"
+      @touchmove.passive="onUserScrollUpIntent('touchmove')"
       @pointerdown.capture="handleScrollbarPointerDown"
     >
       <div v-if="isWelcomeMode" class="welcome-wrapper">
