@@ -961,7 +961,11 @@ onUnmounted(() => {
   background: #1e1e1e;
   padding: 12px;
   border-radius: 6px;
-  overflow-x: auto;
+  /* 巨型代码块封顶（与 chatRow.ts CODE_BLOCK_BODY_MAX 估值口径对齐）：
+   * 无界行高（实测可达 3 万 px+）在 hljs 高亮前后高度漂移，虚拟滚动重挂载时
+   * 巨量塌缩 delta 导致下方内容整体上移 + scrollTop 越界被钳底（上滚跳末尾） */
+  max-height: 480px;
+  overflow: auto;
   margin: 0;
 }
 
@@ -1188,7 +1192,9 @@ onUnmounted(() => {
 .markdown-body .mermaid-preview {
   padding: 12px;
   background: #f9fafb;
-  overflow-x: auto;
+  /* 大图封顶内部滚动（全屏预览不受影响），防止超大 SVG 无限撑高虚拟行 */
+  max-height: 480px;
+  overflow: auto;
   text-align: center;
 }
 

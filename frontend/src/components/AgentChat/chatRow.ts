@@ -173,6 +173,11 @@ const CONTENT_MARKDOWN_FACTOR = 1.25
 /** content 行高保底：padding 40 + border 2 + margin 10（.message-content） */
 const CONTENT_MIN = 220
 const CONTENT_CHROME = 52
+/** 代码块封顶：与 MarkdownRenderer.vue 的 .markdown-body pre max-height: 480px
+ * 对齐。估值若不封顶，巨型代码块（数万字符）行会估出数万 px，「估值先行入账 →
+ * 挂载实测封顶塌缩」的巨量负 delta 让下方内容整体上跳 + scrollTop 越界被浏览器
+ * 钳到底部（上滚跳末尾问题） */
+const CODE_BLOCK_BODY_MAX = 480
 /** todo 块外 chrome：padding 40 + 头部徽标行 ~38 + 块外边距 12 */
 const TODO_CHROME = 90
 const TODO_ITEM_HEIGHT = 31
@@ -246,6 +251,23 @@ function estimateTextHeight(
   return lines * lineHeight
 }
 
+/**
+ * content 段测高（markdown 围栏感知）：``` 围栏内为代码块，渲染层
+ * .markdown-body pre 按 max-height 封顶，估值同步按 CODE_BLOCK_BODY_MAX 封顶；
+ * 围栏外文本正常测高。无围栏时等价于整体测高 × CONTENT_MARKDOWN_FACTOR
+ */
+function estimateContentHeight(content: string | undefined, units: number): number {
+  if (!content) return 0
+  // 围栏开/闭行都被切掉，奇数下标 = 围栏内代码，偶数下标 = 围栏外文本
+  const parts = content.split(/^```.*$/gm)
+  let height = 0
+  parts.forEach((part, index) => {
+    const raw = estimateTextHeight(part, units, CONTENT_LINE_HEIGHT) * CONTENT_MARKDOWN_FACTOR
+    height += index % 2 === 1 ? Math.min(raw, CODE_BLOCK_BODY_MAX) : raw
+  })
+  return height
+}
+
 /** 行高初值：优先取实测缓存；无缓存时按段类型 + 内容长度估值（thinking/todo
  * 受渲染层 CSS 封顶约束、content 无界按文本测高高估），头部/尾部行附加消息
  * chrome 高度，减少测量收敛迭代 */
@@ -279,13 +301,10 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
         case 'content':
           size = Math.max(
             CONTENT_MIN,
-            estimateTextHeight(
+            estimateContentHeight(
               row.segment.content,
-              unitsPerLine(prefs?.containerWidth, 15, CONTENT_UNITS_PER_LINE),
-              CONTENT_LINE_HEIGHT
-            ) *
-              CONTENT_MARKDOWN_FACTOR +
-              CONTENT_CHROME
+              unitsPerLine(prefs?.containerWidth, 15, CONTENT_UNITS_PER_LINE)
+            ) + CONTENT_CHROME
           )
           break
         case 'thinking':
