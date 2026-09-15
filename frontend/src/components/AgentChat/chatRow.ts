@@ -199,11 +199,17 @@ const SUMMARY_BODY_PADDING = 28
 /** 消息行 first chrome：header 行高 36 + margin-bottom 8 = 44 */
 const FIRST_CHROME = 44
 /**
- * 消息行 footer chrome：.footer-row 容器渲染高度 ≈ 28(min-height) + 12(padding-top)
- *  + 16(margin-top) + 1(border-top) = 57px，扣去 padding-top 与 min-height 内的
- *  line-height 净算约 42px。三个 footer 块（token-info / end-output-row /
- * streaming-indicator）共享此容器，估值统一收敛；流式中 footer-row 高度由
- * min-height 兜底，差异 <4px
+ * 消息行 footer chrome：MessageBubble.vue 的 .footer-row 实测 offsetHeight = 41px
+ * （padding-top 12 + min-height 28 + border-top ~1；margin-top 16 不计入，因为
+ * virtualizer 量的是 offsetHeight 不含 margin）。三个 footer 块（token-info /
+ * end-output-row / streaming-indicator）共享此容器，估值统一收敛。流式中
+ * border-top-color: transparent 但 layout 仍占 1px，高度不变。
+ *
+ * 取 42 而非 41：高估 1px 符合 TanStack Virtual 文档"estimate the largest possible
+ * size"原则（实测后 delta = -1px，sub-pixel 噪声，可忽略）。
+ *
+ * @todo 调整 .footer-row 的 font-size / min-height / padding-top / border-top 任意
+ * 一项后，必须重新实测 offsetHeight 并校准本常量。
  */
 const FOOTER_CHROME = 42
 
