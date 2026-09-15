@@ -35,7 +35,6 @@ import FlowPreviewCard from '@/components/common/FlowPreviewCard.vue'
 import {
   buildChatRows,
   estimateRowSize,
-  rememberRowSize,
   clearRowSizeCache,
   type ChatRow
 } from '@/components/AgentChat/chatRow'
@@ -100,13 +99,27 @@ let lastKnownScrollHeight = 0
 const PIN_RELOCK_GRACE_MS = 300
 let pinUnlockAt = 0
 
+/**
+ * 状态刷新器（替代旧版强制器）。
+ *
+ * 库内 anchorTo:'end' + followOnAppend:true 已统一接管：
+ *   - 贴底跟随（流式增长）
+ *   - prepend 视口稳定（keyed item + scrollAdjustments）
+ *   - 跟随强制（wasAtEnd 门控 + followOnAppend 5s 追底 rAF）
+ *
+ * 本函数仅负责本地派生 UI 状态：
+ *   - isAtEnd：贴底判定（用于回到底部按钮显隐）
+ *   - followPinned：跟随锁存（用户上滚解除 → 库内 followOnAppend 停跟）
+ *
+ * 不写 scrollTop。库内 handler 会处理。
+ */
 function syncAtEnd(): void {
   const el = messagesContainer.value
   if (!el) return
   const grew = el.scrollHeight > lastKnownScrollHeight + 1
   lastKnownScrollHeight = el.scrollHeight
-  // 贴底判定用元素距离（真实滚动空间口径）：跟随由下方强制器锚定在真实
-  // 底部，稳态 elDist≈0；虚拟距离（totalSize 口径）受估算先行/塌缩级联
+  // 贴底判定用元素距离（真实滚动空间口径）：跟随由库内 followOnAppend 锚定在
+  // 真实底部，稳态 elDist≈0；虚拟距离（totalSize 口径）受估算先行/塌缩级联
   // 双向污染，曾在 elDist 232px 时假报贴底、误重锁跟随锁存把上滚拽回
   const elDist = Math.max(el.scrollHeight - el.scrollTop - el.clientHeight, 0)
   isAtEnd.value = elDist <= scrollEndThresholdPx(el.clientHeight)
@@ -115,32 +128,14 @@ function syncAtEnd(): void {
   if (elDist <= 2 && performance.now() - pinUnlockAt > PIN_RELOCK_GRACE_MS) {
     followPinned.value = true
   }
-  // [跟随强制器] 库内两套跟随门控在「估算先行入账、实测滞后补偿」的交错
-  // 窗口会互相毒化：totalSize 先跳变推高虚拟距离 → wasAtEnd 放弃补偿；
-  // 未测 DOM 抬高元素距离 → followOnAppend 拒绝触发，跟随就此中断。
-  // 只要锁存未解除、内容确实变高且不在真实底部，直接写 scrollTop 回底。
-  // 必须直写而非 scrollToEnd/scrollToOffset——库内全部滚动 API 都会武装
-  // 5s 追底 reconcile rAF 循环，流式期间每帧把 scrollTop 写回（增长的）
-  // 底部，无视跟随锁存把用户上滚拽回（virtuoso followOutput 同款直写模式）。
-  // backward 防御：手势解除与位移的交错窗口内锁存被误锁时，用户正在上滚，
-  // 此时不允许强制器把视口拽回底部（正常跟随中不会出现 backward）
-  if (
-    followPinned.value &&
-    autoScroll.value &&
-    grew &&
-    elDist > 4 &&
-    rowVirtualizer.value.scrollDirection !== 'backward'
-  ) {
-    el.scrollTop = el.scrollHeight
-  }
 }
 
 function scrollToLatest(): void {
   followPinned.value = true
   isAtEnd.value = true
-  // 直写 scrollTop：理由同强制器注释，不走库内滚动 API
-  const el = messagesContainer.value
-  if (el) el.scrollTop = el.scrollHeight
+  // 用库内 scrollToEnd：库内有 5s 追底 reconcile rAF 与 isScrolling 状态机协调；
+  // 直写 scrollTop 会绕过 scrollEndThreshold 判定，触发"重锁抑制窗"竞态
+  rowVirtualizer.value.scrollToEnd()
 }
 
 /** 用户上滚手势：解除跟随锁存（真实输入才解除，程序化位移不影响）。
@@ -154,6 +149,10 @@ function onUserScrollUpIntent(source: string): void {
   pinUnlockAt = performance.now()
 }
 
+/** onWheel 仅读 event.deltaY，永不调 preventDefault()，因此模板上必须用
+ * @wheel.passive 修饰符（与 @touchmove.passive 同口径），否则浏览器在滚动
+ * 事件回调同步返回前不能滚动，Chrome DevTools 报 [Violation]
+ * "Added non-passive event listener to a scroll-blocking ... event" */
 function onWheel(event: WheelEvent): void {
   if (event.deltaY < 0) onUserScrollUpIntent(`wheel deltaY=${event.deltaY}`)
 }
@@ -161,12 +160,12 @@ function onWheel(event: WheelEvent): void {
 function handleScrollbarPointerDown(event: PointerEvent): void {
   const root = scrollbarRef.value?.$el as Element | undefined
   const target = event.target
-  if (
+  const hitScrollbar =
     root instanceof Element &&
     target instanceof Element &&
     target.closest('.el-scrollbar') === root &&
-    target.closest('.el-scrollbar__bar')
-  ) {
+    !!target.closest('.el-scrollbar__bar')
+  if (hitScrollbar) {
     // 滚动条拖动只在外层 .el-scrollbar__bar 上触发，目标已在外层，
     // 不会被误判为嵌套块内滚动
     onUserScrollUpIntent('scrollbar-drag')
@@ -252,43 +251,24 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
     }),
   overscan: 8,
   getItemKey: (index: number) => chatRows.value[index]?.key ?? String(index),
-  // 官方聊天模式（virtual-core 3.17+）：anchorTo:'end' 提供 prepend 历史的
-  // keyed 视口稳定。流式跟随不交给库内——wasAtEnd（虚拟距离门控）与
-  // followOnAppend（元素距离门控）在估算滞后窗口互相毒化，且 followOnAppend
-  // 内部走 scrollToEnd 会武装 5s 追底 reconcile 循环与用户上滚冲突，
-  // 统一由 syncAtEnd 的强制器直写 scrollTop 接管
+  // 官方 chat 模式（virtual-core 3.13+）：anchorTo:'end' + followOnAppend: true
+  // 由库内统一接管 prepend 视口稳定 + 流式贴底。手写补偿 + 自定义
+  // shouldAdjustScrollPositionOnItemSizeChange 与库内两套门控互相毒化（曾经
+  // 在「估算先行入账 / 实测滞后」交错窗口出现 prepend 后漂 12558px），已删除
   anchorTo: 'end',
-  followOnAppend: false,
-  // 库内 wasAtEnd 阈值同口径（视口比例 + 钳制，getter 保持响应式，挂载后取到实际高度）；
-  // 用户上滚解除跟随锁存后必须立即归零：wasAtEnd 以虚拟距离 ≤ threshold 判定，
-  // 小幅上滚（阈值内）时行高增长的钉底补偿会把视口拽回底部，且钉底把 elDist
-  // 拉回 ≤2px 触发重锁，与用户手势互相强化形成「滚不动」循环
+  followOnAppend: true,
+  // 库内 wasAtEnd 阈值同口径（视口比例 + 钳制，getter 保持响应式，挂载后取到实际高度）。
+  // 用户上滚解除跟随锁存后阈值不归零——库内 followOnAppend 已根据 isAtEnd 判断
+  // 是否出手；我们仍需 followPinned 决定 UI 层（回底按钮显隐）的强制器条件
   get scrollEndThreshold() {
-    if (!followPinned.value) return 0
     return scrollEndThresholdPx(messagesContainer.value?.clientHeight ?? 600)
   }
 })
 
-// 贴底补偿回调：保留行高实测缓存写入（未挂载行重挂的估值兜底），补偿规则
-// 与库内置默认一致——首测行顶越过滚动位即补偿；重测仅整体在滚动位上方且非
-// 后向滚动时补偿（防 #1218 级联）。贴底钉住（anchorTo:'end' 的 wasAtEnd
-// 分支）的尺寸补偿在库内独立处理，不经过本回调
-rowVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
-  const first = !instance.itemSizeCache.has(item.key)
-  if (delta !== 0) rememberRowSize(item.key, item.size + delta)
-  const offset = (instance.scrollOffset ?? 0) + instance.scrollAdjustments
-  // backward（用户上滚）期间一律不补偿：首测补偿无方向排除时，上滚挂载
-  // 未测行的估值纠偏会把 scrollTop 往下拽（视口回退）；前插历史恢复方向为
-  // forward/null，不受影响
-  const backward = instance.scrollDirection === 'backward'
-  return first
-    ? item.start < offset && !backward
-    : item.start + item.size <= offset && !backward
-}
-
 const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
 
-// 贴底派生态随任意虚拟化变化（数据增删/测量更新/滚动）刷新
+// 贴底派生态随任意虚拟化变化（数据增删/测量更新/滚动）刷新——库内 followOnAppend
+// 已处理贴底，本地 syncAtEnd 仅刷新 isAtEnd / followPinned 状态，不再写 scrollTop
 watch(virtualRows, () => syncAtEnd(), { immediate: true })
 
 // 展示开关改变行内内容高度：整体失效 virtualizer 尺寸缓存（行 key 不变，未挂载行
@@ -904,13 +884,17 @@ function onEndReached(direction: ScrollbarDirection) {
 async function handleLoadMore() {
   if (!agentId.value || isLoadingMore.value) return
   isLoadingMore.value = true
-  // 历史前插会推高 scrollHeight，显式解除跟随锁存，防止跟随强制器把视口
-  // 拉回底部
+  // 历史前插：库内 anchorTo:'end' + keyed item 自动锚定原首行同一像素位置；
+  // 我们仅解除跟随锁存（库内 followOnAppend 根据 isAtEnd 判断是否出手，跟随
+  // 锁存对应 UI 层 followPinned，控制回底按钮显隐）
   followPinned.value = false
   try {
-    // anchorTo:'end' 下前插历史按 keyed item 自动保持视口位置，无需手工锚行恢复
     await store.loadMoreMessages(agentId.value)
     await nextTick()
+    // 等两帧 rAF：让新增行的 ResizeObserver 首测完成、虚拟列表重新排版。
+    // 不再写 scrollTop——库内 anchorTo:'end' 已按 keyed item 自动维持视口
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
     syncAtEnd()
   } finally {
     isLoadingMore.value = false
@@ -1320,7 +1304,7 @@ function handleRejectTools() {
       wrap-style="overflow-anchor: none"
       @scroll="syncAtEnd"
       @end-reached="onEndReached"
-      @wheel="onWheel"
+      @wheel.passive="onWheel"
       @touchmove.passive="onUserScrollUpIntent('touchmove')"
       @pointerdown.capture="handleScrollbarPointerDown"
     >
