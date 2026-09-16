@@ -61,14 +61,13 @@ const messagesRevealed = ref(false)
 // 收敛循环代际号：新一轮加载开始后旧循环自动失效，防止过早 reveal
 let convergeGeneration = 0
 
-// ---- 贴底跟随（TanStack Virtual end-anchored + 本地跟随强制器）----
-// anchorTo:'end' 提供 prepend 历史视口稳定与基础钉底；但库内 wasAtEnd
-// （虚拟距离门控）与 followOnAppend（元素距离门控）在估算先行入账/实测
-// 滞后的交错窗口会互相毒化导致跟随中断，由 syncAtEnd 内的强制器兜底。
-// 本地派生态：
+// ---- 贴底跟随（TanStack Virtual end-anchored + 库内 followOnAppend 接管）----
+// 库内 anchorTo:'end' + followOnAppend:true 统一接管贴底跟随与 prepend 视口
+// 稳定；本地仅维护派生态：
 // - isAtEnd：元素距离贴底（回底按钮显隐）
-// - followPinned：跟随锁存（门控跟随强制器），用户上滚手势解除、真正贴底
-//   （≤2px）重新锁存——行高不反向耦合几何判定，杜绝振荡
+// - followPinned：跟随锁存（用户上滚手势解除、真正贴底 ≤2px 重锁——带
+//   PIN_RELOCK_GRACE_MS 抑制窗），喂给库内 scrollEndThreshold 联动
+// - rescue：流式中真实离底超阈值时主动 scrollToEnd 补救（见 virtualRows watch）
 const autoScroll = ref(true)
 const isAtEnd = ref(true)
 const followPinned = ref(true)
@@ -77,10 +76,6 @@ const followPinned = ref(true)
  * 跟随中断 / 回底按钮过早消失 / 重锁抑制窗错位。与库内 wasAtEnd 判定窗口同口径。
  * 调整此项：同时改库内 scrollEndThreshold 配置（当前值见 useVirtualizer 调用点） */
 const SCROLL_END_PX = 80
-
-// 内容增长检测基线：跟随强制器只在内容真正变高时出手，用户键盘翻页等
-// 无手势的滚动路径不会被误拉回底部
-let lastKnownScrollHeight = 0
 
 /** 重锁抑制窗：wheel 解除锁存与视口实际位移之间有几帧延迟，期间 elDist 仍
  * ≤2px，立即重锁会与库内钉底互相强化形成「滚不动」循环（用户需连滚两次），
@@ -105,8 +100,6 @@ let pinUnlockAt = 0
 function syncAtEnd(): void {
   const el = messagesContainer.value
   if (!el) return
-  const grew = el.scrollHeight > lastKnownScrollHeight + 1
-  lastKnownScrollHeight = el.scrollHeight
   // 贴底判定用元素距离（真实滚动空间口径）：跟随由库内 followOnAppend 锚定在
   // 真实底部，稳态 elDist≈0；虚拟距离（totalSize 口径）受估算先行/塌缩级联
   // 双向污染，曾在 elDist 232px 时假报贴底、误重锁跟随锁存把上滚拽回
@@ -133,7 +126,7 @@ function scrollToLatest(): void {
  * 的自动贴底由 AIMessageContent 自己的 thinkingFollowOff 控制，与外层
  * 独立——如果 short-circuit 外层，流式增长时外层 followPinned 仍为 1，
  * 会把视口拽回底部（用户感知「往上滚不会定住」） */
-function onUserScrollUpIntent(source: string): void {
+function onUserScrollUpIntent(): void {
   followPinned.value = false
   pinUnlockAt = performance.now()
 }
@@ -143,7 +136,7 @@ function onUserScrollUpIntent(source: string): void {
  * 事件回调同步返回前不能滚动，Chrome DevTools 报 [Violation]
  * "Added non-passive event listener to a scroll-blocking ... event" */
 function onWheel(event: WheelEvent): void {
-  if (event.deltaY < 0) onUserScrollUpIntent(`wheel deltaY=${event.deltaY}`)
+  if (event.deltaY < 0) onUserScrollUpIntent()
 }
 
 function handleScrollbarPointerDown(event: PointerEvent): void {
@@ -157,7 +150,7 @@ function handleScrollbarPointerDown(event: PointerEvent): void {
   if (hitScrollbar) {
     // 滚动条拖动只在外层 .el-scrollbar__bar 上触发，目标已在外层，
     // 不会被误判为嵌套块内滚动
-    onUserScrollUpIntent('scrollbar-drag')
+    onUserScrollUpIntent()
   }
 }
 
@@ -275,13 +268,15 @@ watch(
     // 与库内一致，会触发 observer 同步 scrollOffset）。同帧去重 + 50ms 节流
     // 防止极端流式（每帧 scrollHeight 都涨）下高频滚动主线程
     const el = messagesContainer.value
-    if (
-      !_rescuePending &&
-      store.isStreaming &&
-      followPinned.value &&
-      el &&
-      !rowVirtualizer.value.isAtEnd(SCROLL_END_PX)
-    ) {
+    // 判据用真实元素距离，不用 rowVirtualizer.isAtEnd（虚拟距离口径）：
+    // 第一段输出期间估算先行让 totalSize 偏小 → vDist 假小 → 库内假报贴底，
+    // scrollToEnd 单次锚定留下的基线偏差（~45px，恰好裁掉 footer 三点），
+    // 钉底补偿只跟随增量不回填基线，libAtEnd=1 让 rescue 全程静默直到
+    // 第二段出现 keyed 重锚才自愈
+    const realDist = el
+      ? Math.max(el.scrollHeight - el.scrollTop - el.clientHeight, 0)
+      : 0
+    if (!_rescuePending && store.isStreaming && followPinned.value && realDist > 8) {
       _rescuePending = true
       requestAnimationFrame(() => {
         _rescuePending = false
@@ -292,8 +287,8 @@ watch(
         const elNow = messagesContainer.value
         if (!elNow) return
         const distNow = Math.max(elNow.scrollHeight - elNow.scrollTop - elNow.clientHeight, 0)
-        // 再次确认 elDist > 80（rAF 期间可能库内已自动跟上）
-        if (distNow <= 80) return
+        // 再次确认真实离底（rAF 期间可能库内已自动跟上）
+        if (distNow <= 8) return
         // 50ms 节流，避免同一流式周期内频繁 scrollToEnd
         const now = performance.now()
         if (now - _lastRescueAt < 50) return
@@ -1380,7 +1375,7 @@ function handleRejectTools() {
       @scroll="syncAtEnd"
       @end-reached="onEndReached"
       @wheel.passive="onWheel"
-      @touchmove.passive="onUserScrollUpIntent('touchmove')"
+      @touchmove.passive="onUserScrollUpIntent"
       @pointerdown.capture="handleScrollbarPointerDown"
     >
       <div v-if="isWelcomeMode" class="welcome-wrapper">
