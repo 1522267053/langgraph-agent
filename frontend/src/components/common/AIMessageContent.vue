@@ -490,11 +490,7 @@ watch(
   background: rgba(60, 50, 35, 0.05);
 }
 
-/* 失败：整行浅红底 + 红字，保证扫视时可辨识 */
-.tool-line.tool-status-error {
-  background: #fdf0ee;
-}
-
+/* 失败行：不加底色，仅红圆点 + 红色工具名传达错误信号 */
 .tool-line.tool-status-error .tool-line-name {
   color: #dc2626;
 }
@@ -638,8 +634,6 @@ watch(
 }
 
 .tool-content-error {
-  border-top: 1px solid #f5c6c0;
-  background: #fdf6f5;
   color: #dc2626;
 }
 
