@@ -174,11 +174,19 @@ onUnmounted(() => {
 // 行模型为「段级」：AI 回合每个 segment 独占一行（见 AgentChat/chatRow.ts），
 // 消息级 UI（头像/头部/尾部）拆分到 first/last 行
 
-// 始终不插入独立 typing 行：阶段1 的等待三点由 MessageBubble 内部的
-// waiting-dots 接管（AI 消息已建但首段未到达时），阶段2（首段到达后）
-// 由正常流式输出接管。删除 typing 行后，scrollToLatest 在 send 后
-// nextTick 追底到 user 消息底部，不再被 typing 行干扰
-const showStandaloneTyping = computed(() => false)
+// 空窗期独立 typing 行：send 后 isStreaming=true 但 AI 消息对象尚未创建
+// （onFlowStart 的 startStreaming() 不带 forceNewMessage，首个 chunk flush 时
+// getOrCreateStreamingMessage() 才 push），此窗口 chatMessages 末条是 human，
+// 无行承载头像/三点 → 视口底部空白。typing 行（52px）补位该窗口，AI 消息
+// 创建后消失、由 MessageBubble 内 waiting-dots 接管。
+// 此前因「typing 行同步入表干扰 scrollToLatest 时序」被禁用；现 rescue loop
+// 持续钉真实底部（el.scrollTop = scrollHeight），52px 增删当帧追平，禁用理由消失
+const showStandaloneTyping = computed(
+  () =>
+    store.isStreaming &&
+    (store.chatMessages.length === 0 ||
+      store.chatMessages[store.chatMessages.length - 1]?.role !== 'ai')
+)
 
 // 工具行恒为折叠状态行、点击头部展开回看（业界模式）——chatRows 不依赖
 // followPinned 与流式状态，行高在流式期间保持稳定
@@ -250,11 +258,87 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
 
 const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
 
+// ---- 流式收敛追底循环（rescue loop）----
+// 职责：新行真实渲染落地（实测高度替换估算）引起的 scrollHeight 增量，在
+// followPinned 期间持续 scrollToEnd 追平，消除「半截工具卡片」空窗期。
+// 退出条件（任一满足即停）：
+//   - followPinned=false——用户上滚手势，立即让位（与库内语义一致）
+//   - document.hidden——后台标签页不滚动，恢复可见由 visibilitychange 处理
+//   - 流结束后：高度连续 RESCUE_STABLE_MS 不变且贴底（收敛完成），
+//     或超过 RESCUE_GRACE_MS 宽限期
+//   - messagesContainer 卸载（onUnmounted 兜底清理）
+// 流式期间【不】因「高度稳定」退出：SSE chunk 间歇常 >150ms，若间歇期退出，
+// 随后 tool 卡片挂载/实测落地（RO 回调晚于 chunk）无人追赶 → 半截块复现。
+// 流式中每帧只读 scrollHeight（静止帧零写入，不触发额外 reflow），常驻成本
+// 与首屏 converge 循环同级；写入频率仍被高度变化节拍天然限制。
+const RESCUE_STABLE_MS = 150
+const RESCUE_GRACE_MS = 2500
+const RESCUE_AT_END_PX = 8
+let rescueRafId = 0
+let rescueLastHeight = -1
+let rescueStableSince = 0
+let rescueDeadline = 0
+
+function stopRescueLoop(): void {
+  if (rescueRafId) {
+    cancelAnimationFrame(rescueRafId)
+    rescueRafId = 0
+  }
+}
+
+function startRescueLoop(): void {
+  // 幂等：循环已在跑则仅续期宽限窗口（新一轮内容仍在到达）
+  if (rescueRafId) {
+    rescueDeadline = performance.now() + RESCUE_GRACE_MS
+    return
+  }
+  const startAt = performance.now()
+  rescueDeadline = startAt + RESCUE_GRACE_MS
+  rescueLastHeight = -1
+  rescueStableSince = startAt
+  const tick = () => {
+    rescueRafId = 0
+    const el = messagesContainer.value
+    if (!el || !el.isConnected) {
+      return
+    }
+    const now = performance.now()
+    // 用户上滚 / 页面隐藏：立即退出，不写 scrollTop
+    if (!followPinned.value || document.hidden) {
+      return
+    }
+    const height = el.scrollHeight
+    const dist = Math.max(height - el.scrollTop - el.clientHeight, 0)
+    if (dist > RESCUE_AT_END_PX) {
+      // 关键：直写真实底部，不调用 rowVirtualizer.scrollToEnd——
+      // 日志实证：末行未实测时（measurementsCache 无此项）getOffsetForIndex
+      // 返回 undefined，scrollToEnd 回退到 getTotalSize()（虚拟估算总高），
+      // 估算短于真实 scrollHeight 时 scrollTop 落在虚拟底（dist 残余 ~85px
+      // 停滞到下一次行变化）→ 头像+三点被裁在视口外。
+      // 直写 el.scrollTop 触发原生 scroll 事件 → 库内 observeElementOffset
+      // 同步 scrollOffset，与首屏 convergeScrollToBottom 同一写入路径。
+      el.scrollTop = el.scrollHeight
+      rescueLastHeight = height
+      rescueStableSince = now
+    } else if (
+      !store.isStreaming &&
+      now - rescueStableSince >= RESCUE_STABLE_MS
+    ) {
+      // 流已结束、已贴底（dist ≤ 8）且高度稳定：收敛完成
+      return
+    }
+    // 流已结束：仅宽限期内继续追赶（最后一块渲染落地），超窗停
+    if (!store.isStreaming && now > rescueDeadline) {
+      return
+    }
+    rescueRafId = requestAnimationFrame(tick)
+  }
+  rescueRafId = requestAnimationFrame(tick)
+}
+
 // 贴底派生态随任意虚拟化变化（数据增删/测量更新/滚动）刷新——库内 followOnAppend
 // 已处理贴底，本地 syncAtEnd 仅刷新 isAtEnd / followPinned 状态，不再写 scrollTop
-// 流式期间跟随中断补救：rAF 同帧去重 + 50ms 节流，避免高频 scrollToEnd
-let _rescuePending = false
-let _lastRescueAt = 0
+// 流式期间跟随中断补救：持续收敛追底循环（见 startRescueLoop），watcher 仅负责点火
 watch(
   virtualRows,
   () => {
@@ -263,10 +347,17 @@ watch(
     // 流式期间跟随中断补救：库内 resizeItem (virtual-core line 916-917) 取
     // prevTotalSize 时已含新尺寸，导致 applyScrollAdjustment(getTotalSize - prevTotalSize)
     // 的 delta=0、不补偿 scrollTop → scrollTop 落后 libMaxScroll → elDist 累积
-    // → 库内 isAtEnd 翻 false → 后续跟随中断。当 isStreaming + followPinned +
-    // 库内已不在底部时，主动 scrollToEnd 把视口贴回最新（走 elementScroll 路径
-    // 与库内一致，会触发 observer 同步 scrollOffset）。同帧去重 + 50ms 节流
-    // 防止极端流式（每帧 scrollHeight 都涨）下高频滚动主线程
+    // → 库内 isAtEnd 翻 false → 后续跟随中断。
+    //
+    // 单发 rAF rescue 的缺口：新行（尤其 tool 卡片）按估算高度（30/58px 固定值）
+    // 首次锚定后，真实渲染落地（markdown/摘要常 >80px）在一帧内把 elDist 推超
+    // SCROLL_END_PX，而单发 rAF 早已跑完（当时实测未落地，distNow ≤ 8 提前退
+    // 出）——空窗期内无人接管，用户看到半截工具卡片（下一个 chunk 到来才自愈）。
+    //
+    // 改为持续收敛追底循环：跟随 scrollHeight 变化持续 scrollToEnd，直到高度
+    // 稳定且贴底 / 用户解锁 / 页面隐藏 / 宽限期截止。复用 convergeScrollToBottom
+    // 的「骑高度收敛」思路，但走库内 scrollToEnd 路径（与 observer 同步兼容），
+    // 且仅在高度变化帧出手，频率天然被渲染节拍限制。
     const el = messagesContainer.value
     // 判据用真实元素距离，不用 rowVirtualizer.isAtEnd（虚拟距离口径）：
     // 第一段输出期间估算先行让 totalSize 偏小 → vDist 假小 → 库内假报贴底，
@@ -276,25 +367,8 @@ watch(
     const realDist = el
       ? Math.max(el.scrollHeight - el.scrollTop - el.clientHeight, 0)
       : 0
-    if (!_rescuePending && store.isStreaming && followPinned.value && realDist > 8) {
-      _rescuePending = true
-      requestAnimationFrame(() => {
-        _rescuePending = false
-        // 二次检查：避免 rAF 期间用户上滚解锁 followPinned 或流式已结束
-        if (!store.isStreaming || !followPinned.value) {
-          return
-        }
-        const elNow = messagesContainer.value
-        if (!elNow) return
-        const distNow = Math.max(elNow.scrollHeight - elNow.scrollTop - elNow.clientHeight, 0)
-        // 再次确认真实离底（rAF 期间可能库内已自动跟上）
-        if (distNow <= 8) return
-        // 50ms 节流，避免同一流式周期内频繁 scrollToEnd
-        const now = performance.now()
-        if (now - _lastRescueAt < 50) return
-        _lastRescueAt = now
-        rowVirtualizer.value.scrollToEnd()
-      })
+    if (store.isStreaming && followPinned.value && realDist > 8) {
+      startRescueLoop()
     }
   },
   { immediate: true }
@@ -777,6 +851,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  stopRescueLoop()
   store.cancelStream()
   store.resetState()
   store.stopCompressPolling()
