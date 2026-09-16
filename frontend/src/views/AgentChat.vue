@@ -1812,7 +1812,7 @@ export default {
 
 .messages-container {
   flex-shrink: 0;
-  padding: 32px 24px 0px 24px;
+  padding: 36px 24px 0px 24px;
 }
 
 .empty-state {
@@ -1977,9 +1977,7 @@ export default {
 .input-wrapper {
   flex-shrink: 0;
   border-top: 1px solid var(--paper-line-soft);
-  background: rgba(250, 249, 246, 0.6);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: transparent;
   padding: 14px 24px 16px;
   position: relative;
   z-index: 40;

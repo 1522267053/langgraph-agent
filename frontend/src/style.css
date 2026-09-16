@@ -1,34 +1,35 @@
 /* ================================================================
    Paper Studio 主题 — 全局设计变量
    纸张底 + 暖墨文字 + 朱砂单点强调
+   （Soft 变体：整体降一档亮度/对比，缓解长时间阅读视觉疲劳）
    ================================================================ */
 :root {
-  /* 纸张 */
-  --paper: #faf9f6;
-  --paper-warm: #f4f1ea;
-  --paper-edge: #efebe0;
-  --paper-card: #ffffff;
+  /* 纸张（比初版深半档，降低整体亮度） */
+  --paper: #f5f2ec;
+  --paper-warm: #eeeae1;
+  --paper-edge: #e9e4d8;
+  --paper-card: #fdfcfa;
 
   /* 描边 */
-  --paper-line: #e8e3d8;
-  --paper-line-soft: #f0ece3;
-  --paper-line-strong: #d8d1c2;
+  --paper-line: #e2dccd;
+  --paper-line-soft: #ebe6da;
+  --paper-line-strong: #d3cbba;
 
-  /* 暖墨文字阶 */
-  --paper-ink: #1f1d1a;
-  --paper-ink-2: #3f3a35;
-  --paper-ink-3: #6b645b;
+  /* 暖墨文字阶（正文从近黑 #1f1d1a 软化为深墨 #32302b，降对比刺激） */
+  --paper-ink: #32302b;
+  --paper-ink-2: #4a463f;
+  --paper-ink-3: #6f675d;
   --paper-ink-4: #968d80;
-  --paper-ink-5: #b8b1a3;
+  --paper-ink-5: #b3ab9d;
 
   /* 朱砂（克制使用） */
   --vermilion: #c2410c;
   --vermilion-hover: #9a3409;
-  --vermilion-soft: #fef3eb;
-  --vermilion-line: #f4d8c2;
+  --vermilion-soft: #f9ede4;
+  --vermilion-line: #f0d6c1;
 
   /* 暖墨深色岛 */
-  --ink-island: #1f1d1a;
+  --ink-island: #262420;
 
   /* 字体 */
   --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
@@ -119,7 +120,8 @@ body {
 }
 
 .glass-blur {
-  background: rgba(250, 249, 246, 0.85);
+  background: var(--paper);
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--paper-line);

@@ -65,25 +65,27 @@ const emit = defineEmits<{
   width: 64px;
   height: 64px;
   border-radius: 16px;
-  background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
+  background: var(--paper-warm);
+  border: 1px solid var(--paper-line);
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 20px;
-  color: #4f46e5;
+  color: var(--vermilion);
 }
 
 .welcome-title {
+  font-family: var(--font-serif);
   font-size: 24px;
-  font-weight: 700;
-  color: #1e293b;
+  font-weight: 600;
+  color: var(--paper-ink);
   margin: 0 0 8px;
   letter-spacing: -0.02em;
 }
 
 .welcome-desc {
   font-size: 14px;
-  color: #64748b;
+  color: var(--paper-ink-3);
   margin: 0 0 32px;
   text-align: center;
   line-height: 1.6;
@@ -97,7 +99,7 @@ const emit = defineEmits<{
 .prompts-label {
   font-size: 12px;
   font-weight: 600;
-  color: #94a3b8;
+  color: var(--paper-ink-4);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   margin-bottom: 12px;
@@ -116,10 +118,10 @@ const emit = defineEmits<{
   align-items: center;
   gap: 6px;
   padding: 10px 16px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--paper-line);
   border-radius: 12px;
-  background: #fff;
-  color: #334155;
+  background: var(--paper-card);
+  color: var(--paper-ink-2);
   font-size: 13px;
   cursor: pointer;
   transition: all 0.15s;
@@ -129,23 +131,23 @@ const emit = defineEmits<{
 }
 
 .prompt-chip:hover {
-  border-color: #818cf8;
-  background: #eef2ff;
-  color: #4f46e5;
+  border-color: var(--vermilion-line);
+  background: var(--vermilion-soft);
+  color: var(--vermilion);
 }
 
 .prompt-icon {
   flex-shrink: 0;
-  color: #a5b4fc;
+  color: var(--paper-ink-5);
 }
 
 .prompt-chip:hover .prompt-icon {
-  color: #6366f1;
+  color: var(--vermilion);
 }
 
 .welcome-disclaimer {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--paper-ink-4);
   margin-top: 24px;
   flex-shrink: 0;
 }

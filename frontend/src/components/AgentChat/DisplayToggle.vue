@@ -41,7 +41,7 @@ const showEndOutput = defineModel<boolean>('showEndOutput', { default: false })
   height: 40px;
   background: none;
   border: none;
-  color: #64748b;
+  color: var(--paper-ink-3);
   cursor: pointer;
   border-radius: 8px;
   transition: all 0.2s;
@@ -50,8 +50,8 @@ const showEndOutput = defineModel<boolean>('showEndOutput', { default: false })
 }
 
 .header-action-btn:hover {
-  color: #2563eb;
-  background: #f8fafc;
+  color: var(--paper-ink);
+  background: rgba(60, 50, 35, 0.06);
 }
 
 .display-toggle-menu {
@@ -67,10 +67,10 @@ const showEndOutput = defineModel<boolean>('showEndOutput', { default: false })
   padding: 6px 0;
   cursor: pointer;
   font-size: 13px;
-  color: #334155;
+  color: var(--paper-ink-2);
 }
 
 .display-toggle-item:hover {
-  color: #2563eb;
+  color: var(--vermilion);
 }
 </style>
