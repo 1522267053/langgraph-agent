@@ -118,6 +118,12 @@ function scrollToLatest(): void {
   // 用库内 scrollToEnd：库内有 5s 追底 reconcile rAF 与 isScrolling 状态机协调；
   // 直写 scrollTop 会绕过 scrollEndThreshold 判定，触发"重锁抑制窗"竞态
   rowVirtualizer.value.scrollToEnd()
+  // SSE 结束路径（用户主动回底 / 发送后定位）复用 rescue 收敛循环：末行真实
+  // 高度由 ResizeObserver 实测落地晚于本次调用，单发 scrollToEnd 锚定的是
+  // 估算高度，实测落地后 dist 残余（实测常 >80px，恰好裁掉 footer/计划卡片
+  // 底部）无人追赶——「回到底部点了但没到底」即此缺口。循环有界（宽限
+  // RESCUE_GRACE_MS、贴底即退、用户上滚让位），覆盖该收敛窗口
+  if (autoScroll.value) startRescueLoop()
 }
 
 /** 用户上滚手势：解除跟随锁存（真实输入才解除，程序化位移不影响）。
@@ -372,6 +378,43 @@ watch(
     }
   },
   { immediate: true }
+)
+
+// ---- SSE 结束后的末程收敛（fix：流结束滚动条停在离底 ~85px）----
+// 根因：结束路径 onFlowDone → refreshStreamMessages 替换 chatMessages（含最后
+// 一块「实施计划」等卡片）→ stopStreaming() 翻 isStreaming=false；末行真实高度
+// 由 ResizeObserver 实测落地【晚于】isStreaming 翻 false，此时：
+//   - virtualRows watcher 的点火门控含 isStreaming，已不再触发 rescue
+//   - messageRefreshVersion watcher 仅 syncAtEnd() 刷新按钮态，不写 scrollTop
+// → 末行实测撑大 scrollHeight 后无人追赶，滚动条停在中途、最后一块卡片被裁。
+// 补救：isStreaming true→false 沿触发一次带宽限的收敛循环，追赶实测落地的
+// 高度增量；有界（宽限 RESCUE_GRACE_MS、贴底即退、用户上滚/页面隐藏让位），
+// 与流式中的 rescue 循环幂等复用同一实例
+watch(
+  () => store.isStreaming,
+  (streaming, wasStreaming) => {
+    if (wasStreaming && !streaming && autoScroll.value && followPinned.value) {
+      startRescueLoop()
+    }
+  }
+)
+
+// 结束刷新（refreshStreamMessages 在 onFlowDone/onError 中把 DB 权威行写入
+// chatMessages 并 bump messageRefreshVersion）可能整体改写行高（占位气泡 →
+// 完整渲染卡片），实测收敛同样晚于本 watcher；若仍贴底则点火有界收敛，
+// followPinned=false（用户上滚查看历史）时不打扰
+watch(
+  () => store.messageRefreshVersion,
+  async () => {
+    await nextTick()
+    const el = messagesContainer.value
+    const realDist = el
+      ? Math.max(el.scrollHeight - el.scrollTop - el.clientHeight, 0)
+      : 0
+    if (realDist > 8 && autoScroll.value && followPinned.value) {
+      startRescueLoop()
+    }
+  }
 )
 
 // 展示开关改变行内内容高度：整体失效 virtualizer 尺寸缓存（行 key 不变，未挂载行
