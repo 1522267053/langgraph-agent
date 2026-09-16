@@ -958,7 +958,7 @@ onUnmounted(() => {
 }
 
 .markdown-body pre {
-  background: #1e1e1e;
+  background: var(--ink-island);
   padding: 12px;
   border-radius: 6px;
   /* 巨型代码块封顶（与 chatRow.ts CODE_BLOCK_BODY_MAX 估值口径对齐）：
@@ -1016,21 +1016,21 @@ onUnmounted(() => {
 }
 
 .markdown-body code {
-  font-family: 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
 }
 
 .markdown-body pre code {
-  color: #d4d4d4;
+  color: #e8e3d8;
   background: transparent;
   padding: 0;
 }
 
 .markdown-body :not(pre) > code {
-  background: #f5f5f5;
+  background: var(--paper-warm);
   padding: 2px 6px;
   border-radius: 4px;
-  color: #e83e8c;
+  color: var(--vermilion);
 }
 
 .markdown-body p {
@@ -1052,10 +1052,10 @@ onUnmounted(() => {
 }
 
 .markdown-body blockquote {
-  border-left: 4px solid #ddd;
+  border-left: 4px solid var(--vermilion-line);
   padding-left: 12px;
   margin: 8px 0;
-  color: #666;
+  color: var(--paper-ink-3);
 }
 
 .markdown-body table {
@@ -1066,13 +1066,13 @@ onUnmounted(() => {
 
 .markdown-body th,
 .markdown-body td {
-  border: 1px solid #ddd;
+  border: 1px solid var(--paper-line);
   padding: 8px;
   text-align: left;
 }
 
 .markdown-body th {
-  background: #f5f5f5;
+  background: var(--paper-warm);
   font-weight: 600;
 }
 
@@ -1099,7 +1099,7 @@ onUnmounted(() => {
 }
 
 .markdown-body a {
-  color: #409eff;
+  color: var(--vermilion);
   text-decoration: none;
 }
 
@@ -1115,10 +1115,10 @@ onUnmounted(() => {
   height: 20px;
   margin: 0 2px;
   padding: 0 5px;
-  border: 1px solid #bfdbfe;
+  border: 1px solid var(--vermilion-line);
   border-radius: 6px;
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--vermilion-soft);
+  color: var(--vermilion);
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
@@ -1128,9 +1128,9 @@ onUnmounted(() => {
 }
 
 .markdown-body a.knowledge-citation-link:hover {
-  border-color: #60a5fa;
-  background: #dbeafe;
-  color: #1d4ed8;
+  border-color: var(--vermilion);
+  background: #fde8d8;
+  color: var(--vermilion-hover);
   text-decoration: none;
 }
 
@@ -1164,7 +1164,7 @@ onUnmounted(() => {
 
 .markdown-body .mermaid-container {
   margin: 8px 0;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--paper-line);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -1172,8 +1172,8 @@ onUnmounted(() => {
 .markdown-body .mermaid-toolbar {
   display: flex;
   gap: 0;
-  background: #f1f5f9;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--paper-warm);
+  border-bottom: 1px solid var(--paper-line);
   padding: 0;
 }
 
@@ -1181,7 +1181,7 @@ onUnmounted(() => {
   padding: 4px 14px;
   font-size: 12px;
   font-weight: 500;
-  color: #64748b;
+  color: var(--paper-ink-4);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -1191,18 +1191,18 @@ onUnmounted(() => {
 }
 
 .markdown-body .mermaid-toggle-btn:hover {
-  color: #334155;
+  color: var(--paper-ink);
 }
 
 .markdown-body .mermaid-toggle-btn.active {
-  color: #334155;
-  border-bottom-color: #409eff;
-  background: #fff;
+  color: var(--paper-ink);
+  border-bottom-color: var(--vermilion);
+  background: var(--paper-card);
 }
 
 .markdown-body .mermaid-preview {
   padding: 12px;
-  background: #f9fafb;
+  background: var(--paper);
   /* 大图封顶内部滚动（全屏预览不受影响），防止超大 SVG 无限撑高虚拟行 */
   max-height: 480px;
   overflow: auto;

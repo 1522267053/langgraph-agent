@@ -139,8 +139,8 @@ function handleBack(): void {
 .sidebar {
   width: 256px;
   flex-shrink: 0;
-  background: #fff;
-  border-right: 1px solid #e2e8f0;
+  background: var(--paper);
+  border-right: 1px solid var(--paper-line);
   display: flex;
   flex-direction: column;
 }
@@ -156,7 +156,7 @@ function handleBack(): void {
   display: flex;
   align-items: center;
   gap: 4px;
-  color: #64748b;
+  color: var(--paper-ink-3);
   text-decoration: none;
   font-size: 13px;
   font-weight: 500;
@@ -165,7 +165,7 @@ function handleBack(): void {
 }
 
 .back-link:hover {
-  color: #1e293b;
+  color: var(--paper-ink);
 }
 
 .back-icon {
@@ -175,7 +175,7 @@ function handleBack(): void {
 .header-divider {
   width: 1px;
   height: 16px;
-  background: #e2e8f0;
+  background: var(--paper-line);
 }
 
 .new-session-btn {
@@ -183,19 +183,19 @@ function handleBack(): void {
   align-items: center;
   gap: 4px;
   padding: 6px 12px;
-  background: #2563eb;
-  color: #fff;
+  background: var(--paper-ink);
+  color: var(--paper);
   border: none;
   border-radius: 6px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.3);
+  box-shadow: 0 1px 3px rgba(60, 50, 35, 0.15);
   transition: all 0.2s;
 }
 
 .new-session-btn:hover {
-  background: #1d4ed8;
+  background: var(--paper-ink-2);
 }
 
 .search-box {
@@ -208,29 +208,29 @@ function handleBack(): void {
   left: 24px;
   top: 50%;
   transform: translateY(-50%);
-  color: #94a3b8;
+  color: var(--paper-ink-4);
   font-size: 14px;
 }
 
 .search-input {
   width: 100%;
   padding: 8px 12px 8px 32px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--paper-card);
+  border: 1px solid var(--paper-line);
   border-radius: 8px;
   font-size: 12px;
-  color: #334155;
+  color: var(--paper-ink);
   outline: none;
   transition: all 0.2s;
 }
 
 .search-input::placeholder {
-  color: #94a3b8;
+  color: var(--paper-ink-5);
 }
 
 .search-input:focus {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+  border-color: var(--vermilion);
+  box-shadow: 0 0 0 2px rgba(194, 65, 12, 0.08);
 }
 
 .session-list {
@@ -241,7 +241,7 @@ function handleBack(): void {
 
 .session-pagination {
   padding: 8px;
-  border-top: 1px solid #f1f5f9;
+  border-top: 1px solid var(--paper-line-soft);
   display: flex;
   justify-content: center;
 }
@@ -257,27 +257,27 @@ function handleBack(): void {
 }
 
 .session-item:hover {
-  background: #f8fafc;
+  background: var(--paper-warm);
 }
 
 .session-item.active {
-  background: #f1f5f9;
-  border-left-color: #3b82f6;
+  background: var(--vermilion-soft);
+  border-left-color: var(--vermilion);
 }
 
 .session-icon {
   font-size: 18px;
-  color: #94a3b8;
+  color: var(--paper-ink-5);
   margin-top: 1px;
   flex-shrink: 0;
 }
 
 .session-item.active .session-icon {
-  color: #3b82f6;
+  color: var(--vermilion);
 }
 
 .session-item:hover .session-icon {
-  color: #3b82f6;
+  color: var(--vermilion);
 }
 
 .session-info {
@@ -289,7 +289,7 @@ function handleBack(): void {
 .session-title {
   font-size: 12px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--paper-ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -297,22 +297,23 @@ function handleBack(): void {
 
 .session-item:not(.active) .session-title {
   font-weight: 500;
-  color: #334155;
+  color: var(--paper-ink-3);
 }
 
 .session-time {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--paper-ink-5);
   margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .delete-btn {
   opacity: 0;
   transition: opacity 0.2s;
-  color: #94a3b8 !important;
+  color: var(--paper-ink-4) !important;
   flex-shrink: 0;
   margin-top: 1px;
 }

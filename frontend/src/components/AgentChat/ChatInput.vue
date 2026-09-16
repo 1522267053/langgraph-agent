@@ -612,19 +612,21 @@ export default {
 }
 
 .input-box {
-  background: #fff;
-  border: 2px solid #e2e8f0;
+  background: var(--paper-card);
+  border: 1px solid var(--paper-line);
   border-radius: 16px;
   overflow: hidden;
-  box-shadow: 0 4px 16px rgba(226, 232, 240, 0.3);
+  box-shadow: 0 4px 16px rgba(60, 50, 35, 0.06);
   transition:
     border-color 0.2s,
     box-shadow 0.2s;
 }
 
 .input-box:focus-within {
-  border-color: #2563eb;
-  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.12);
+  border-color: var(--vermilion);
+  box-shadow:
+    0 0 0 3px rgba(194, 65, 12, 0.07),
+    0 4px 16px rgba(60, 50, 35, 0.06);
 }
 
 .input-textarea {
@@ -655,8 +657,8 @@ export default {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  background: #f8fafc;
-  border-top: 1px solid #f1f5f9;
+  background: var(--paper-warm);
+  border-top: 1px solid var(--paper-line-soft);
 }
 
 .toolbar-left {
@@ -682,21 +684,21 @@ export default {
 
 .toolbar-icon-btn:hover,
 .toolbar-icon-btn.active {
-  color: #2563eb;
-  background: #fff;
+  color: var(--vermilion);
+  background: var(--paper-card);
 }
 
 .toolbar-icon-btn.active:hover {
-  background: #eff6ff;
+  background: var(--vermilion-soft);
 }
 
 .toolbar-icon-btn.plan-active {
-  color: #ea580c;
-  background: #fff;
+  color: var(--vermilion);
+  background: var(--paper-card);
 }
 
 .toolbar-icon-btn.plan-active:hover {
-  background: #fff7ed;
+  background: var(--vermilion-soft);
 }
 
 /* 工作目录按钮：选中时横向展示 目录名 + 清除按钮 */
@@ -735,9 +737,9 @@ export default {
   right: 4px;
   width: 8px;
   height: 8px;
-  background: #2563eb;
+  background: var(--vermilion);
   border-radius: 50%;
-  border: 1.5px solid #f8fafc;
+  border: 1.5px solid var(--paper-warm);
 }
 
 /* 模型下拉框：与工具栏图标按钮高度对齐 */
@@ -748,13 +750,13 @@ export default {
 .model-select :deep(.el-select__wrapper) {
   min-height: 32px;
   border-radius: 8px;
-  background: #fff;
-  box-shadow: 0 0 0 1px #e2e8f0 inset;
+  background: var(--paper-card);
+  box-shadow: 0 0 0 1px var(--paper-line) inset;
 }
 
 .model-select :deep(.el-select__wrapper.is-hovering),
 .model-select :deep(.el-select__wrapper.is-focused) {
-  box-shadow: 0 0 0 1px #2563eb inset;
+  box-shadow: 0 0 0 1px var(--vermilion) inset;
 }
 
 .model-select :deep(.el-select__placeholder) {
@@ -778,8 +780,8 @@ export default {
   flex-shrink: 0;
   font-size: 10px;
   line-height: 16px;
-  color: #2563eb;
-  background: #eff6ff;
+  color: var(--vermilion);
+  background: var(--vermilion-soft);
   border-radius: 4px;
   padding: 0 5px;
 }
@@ -831,19 +833,19 @@ export default {
   align-items: center;
   gap: 6px;
   padding: 8px 20px;
-  background: #2563eb;
-  color: #fff;
+  background: var(--paper-ink);
+  color: var(--paper);
   border: none;
   border-radius: 12px;
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+  box-shadow: 0 4px 12px rgba(60, 50, 35, 0.18);
   transition: all 0.2s;
 }
 
 .send-btn:hover:not(.disabled) {
-  background: #1d4ed8;
+  background: var(--paper-ink-2);
 }
 
 .send-btn:active:not(.disabled) {

@@ -28,7 +28,7 @@ const emit = defineEmits<{
 <template>
   <!-- 打字指示器状态行（仅空窗期：AI 消息尚未创建）：AI 头像 + 「AI」角色名 +
     角色名下方三点，与真实消息行（头像/角色名/内容）同构；AI 消息创建后本行
-    消失、由其 footer 三点接管（互斥，避免双头像） -->
+    消失（MessageBubble 内的 footer 三点已按需求移除，两者无冲突） -->
   <div v-if="row?.kind === 'typing'" class="typing-row">
     <div class="avatar avatar-ai">
       <el-icon :size="16"><ChatDotRound /></el-icon>
@@ -73,7 +73,7 @@ const emit = defineEmits<{
   font-weight: 600;
   font-size: 13px;
   margin: 0;
-  color: #334155;
+  color: var(--paper-ink);
 }
 /* AI 头像与 MessageBubble 的 .avatar 同款；右侧纵排「AI」角色名 + 三点
    （三点在角色名正下方），与真实消息行（头像/角色名/内容）同构 */
@@ -103,9 +103,9 @@ const emit = defineEmits<{
 }
 
 .avatar-ai {
-  background: linear-gradient(to top right, #1e293b, #475569);
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(30, 41, 59, 0.2);
+  background: linear-gradient(to top right, var(--paper-ink), #3d3833);
+  color: var(--paper);
+  box-shadow: 0 2px 8px rgba(31, 29, 26, 0.2);
 }
 .typing {
   /* 三点与「AI」角色名左对齐 */
@@ -113,12 +113,12 @@ const emit = defineEmits<{
   align-items: center;
   gap: 4px;
   padding-left: 1px;
-  margin-top: 20px;
+  margin: 10px 0px 20px 0px;
 }
 .typing-row .dot {
   width: 6px;
   height: 6px;
-  background: #94a3b8;
+  background: var(--paper-ink-4);
   border-radius: 50%;
   animation: typing 1.4s infinite both;
 }

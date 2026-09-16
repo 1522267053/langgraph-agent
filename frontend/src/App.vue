@@ -859,7 +859,7 @@ function handleSessionPageChange(page: number): void {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
-  background: #f1f5f9;
+  background: var(--paper);
 }
 
 .route-loading-bar {
@@ -923,8 +923,8 @@ function handleSessionPageChange(page: number): void {
 .app-sidebar {
   width: 260px;
   flex-shrink: 0;
-  background: #1a1a2e;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--paper);
+  border-right: 1px solid var(--paper-line);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -935,7 +935,7 @@ function handleSessionPageChange(page: number): void {
   align-items: center;
   gap: 10px;
   padding: 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--paper-line-soft);
   flex-shrink: 0;
 }
 
@@ -954,9 +954,10 @@ function handleSessionPageChange(page: number): void {
 }
 
 .logo-text {
+  font-family: var(--font-serif);
   font-size: 15px;
   font-weight: 700;
-  color: #e2e8f0;
+  color: var(--paper-ink);
   letter-spacing: -0.01em;
 }
 
@@ -971,23 +972,23 @@ function handleSessionPageChange(page: number): void {
 }
 
 .agent-select :deep(.el-input__wrapper) {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--paper-card);
   border-radius: 8px;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+  box-shadow: 0 0 0 1px var(--paper-line) inset;
 }
 
 .agent-select :deep(.el-input__inner) {
-  color: #cbd5e1;
+  color: var(--paper-ink-2);
 }
 
 .agent-select :deep(.el-input__wrapper:hover) {
-  box-shadow: 0 0 0 1px #60a5fa inset;
+  box-shadow: 0 0 0 1px var(--paper-line-strong) inset;
 }
 
 .agent-select :deep(.el-input__wrapper.is-focus) {
   box-shadow:
-    0 0 0 1px #60a5fa inset,
-    0 0 0 3px rgba(96, 165, 250, 0.12);
+    0 0 0 1px var(--vermilion) inset,
+    0 0 0 3px rgba(194, 65, 12, 0.1);
 }
 
 .agent-option {
@@ -1034,19 +1035,19 @@ function handleSessionPageChange(page: number): void {
   width: 100%;
   justify-content: center;
   padding: 7px 12px;
-  background: #3b82f6;
-  color: #fff;
+  background: var(--paper-ink);
+  color: var(--paper);
   border: none;
   border-radius: 6px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 1px 3px rgba(60, 50, 35, 0.15);
   transition: all 0.2s;
 }
 
 .new-session-btn:hover {
-  background: #2563eb;
+  background: var(--paper-ink-2);
 }
 
 .session-search {
@@ -1060,7 +1061,7 @@ function handleSessionPageChange(page: number): void {
   left: 24px;
   top: 50%;
   transform: translateY(-50%);
-  color: #64748b;
+  color: var(--paper-ink-4);
   font-size: 14px;
   pointer-events: none;
 }
@@ -1068,22 +1069,22 @@ function handleSessionPageChange(page: number): void {
 .search-input {
   width: 100%;
   padding: 8px 12px 8px 32px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--paper-card);
+  border: 1px solid var(--paper-line);
   border-radius: 8px;
   font-size: 12px;
-  color: #cbd5e1;
+  color: var(--paper-ink);
   outline: none;
   transition: all 0.2s;
 }
 
 .search-input::placeholder {
-  color: #64748b;
+  color: var(--paper-ink-5);
 }
 
 .search-input:focus {
-  border-color: #60a5fa;
-  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.1);
+  border-color: var(--vermilion);
+  box-shadow: 0 0 0 2px rgba(194, 65, 12, 0.08);
 }
 
 .session-list {
@@ -1105,27 +1106,27 @@ function handleSessionPageChange(page: number): void {
 }
 
 .session-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--paper-warm);
 }
 
 .session-item.active {
-  background: rgba(59, 130, 246, 0.1);
-  border-left-color: #3b82f6;
+  background: var(--vermilion-soft);
+  border-left-color: var(--vermilion);
 }
 
 .session-icon {
   font-size: 18px;
-  color: #64748b;
+  color: var(--paper-ink-5);
   margin-top: 1px;
   flex-shrink: 0;
 }
 
 .session-item.active .session-icon {
-  color: #60a5fa;
+  color: var(--vermilion);
 }
 
 .session-item:hover .session-icon {
-  color: #94a3b8;
+  color: var(--paper-ink-4);
 }
 
 .session-info {
@@ -1137,7 +1138,7 @@ function handleSessionPageChange(page: number): void {
 .session-title {
   font-size: 12px;
   font-weight: 600;
-  color: #e2e8f0;
+  color: var(--paper-ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1145,22 +1146,23 @@ function handleSessionPageChange(page: number): void {
 
 .session-item:not(.active) .session-title {
   font-weight: 500;
-  color: #94a3b8;
+  color: var(--paper-ink-3);
 }
 
 .session-time {
   font-size: 11px;
-  color: #64748b;
+  color: var(--paper-ink-5);
   margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .delete-btn {
   opacity: 0;
   transition: opacity 0.2s;
-  color: #64748b !important;
+  color: var(--paper-ink-4) !important;
   flex-shrink: 0;
   margin-top: 1px;
 }
@@ -1175,11 +1177,11 @@ function handleSessionPageChange(page: number): void {
   padding: 20px 12px;
   text-align: center;
   font-size: 12px;
-  color: #64748b;
+  color: var(--paper-ink-4);
 }
 
 .search-result-item {
-  border-left: 3px solid #22c55e;
+  border-left: 3px solid #16a34a;
 }
 
 .message-result-item {
@@ -1193,12 +1195,12 @@ function handleSessionPageChange(page: number): void {
 }
 
 .message-result-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--paper-warm);
 }
 
 .message-result-icon {
   font-size: 14px;
-  color: #64748b;
+  color: var(--paper-ink-4);
   margin-top: 2px;
   flex-shrink: 0;
 }
@@ -1211,7 +1213,7 @@ function handleSessionPageChange(page: number): void {
 .message-result-session {
   font-size: 11px;
   font-weight: 600;
-  color: #60a5fa;
+  color: var(--vermilion);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1219,7 +1221,7 @@ function handleSessionPageChange(page: number): void {
 
 .message-result-content {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--paper-ink-3);
   margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1230,7 +1232,7 @@ function handleSessionPageChange(page: number): void {
 
 .session-pagination {
   padding: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--paper-line-soft);
   display: flex;
   justify-content: center;
   flex-shrink: 0;
@@ -1240,17 +1242,17 @@ function handleSessionPageChange(page: number): void {
 .session-pagination :deep(.btn-prev),
 .session-pagination :deep(.btn-next) {
   background: transparent;
-  color: #94a3b8;
+  color: var(--paper-ink-3);
 }
 
 .session-pagination :deep(.el-pager li.is-active) {
-  background: #3b82f6;
-  color: #fff;
+  background: var(--paper-ink);
+  color: var(--paper);
 }
 
 .session-pagination :deep(.btn-prev:disabled),
 .session-pagination :deep(.btn-next:disabled) {
-  color: #475569;
+  color: var(--paper-ink-5);
 }
 
 /* ---- Nav ---- */
@@ -1259,12 +1261,12 @@ function handleSessionPageChange(page: number): void {
   min-height: 0;
   overflow-y: auto;
   padding: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--paper-line-soft);
 }
 
 .nav-divider {
   height: 1px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--paper-line-soft);
   margin: 0 8px 8px;
 }
 
@@ -1275,20 +1277,20 @@ function handleSessionPageChange(page: number): void {
   padding: 9px 12px;
   border-radius: 8px;
   cursor: pointer;
-  color: #94a3b8;
+  color: var(--paper-ink-3);
   font-size: 13px;
   font-weight: 500;
   transition: all 0.15s;
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #e2e8f0;
+  background: var(--paper-warm);
+  color: var(--paper-ink);
 }
 
 .nav-item.active {
-  background: rgba(59, 130, 246, 0.12);
-  color: #60a5fa;
+  background: var(--paper-ink);
+  color: var(--paper);
   font-weight: 600;
 }
 
@@ -1329,12 +1331,12 @@ function handleSessionPageChange(page: number): void {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #1a1a2e;
+  background: var(--paper);
 }
 
 :deep(.mobile-sidebar-drawer .el-drawer__header) {
-  background: #1a1a2e;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--paper);
+  border-bottom: 1px solid var(--paper-line-soft);
 }
 
 .mobile-drawer-logo {
@@ -1342,12 +1344,12 @@ function handleSessionPageChange(page: number): void {
   align-items: center;
   gap: 10px;
   padding: 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--paper-line-soft);
   flex-shrink: 0;
 }
 
 .mobile-drawer-logo .logo-text {
-  color: #e2e8f0;
+  color: var(--paper-ink);
 }
 
 .drawer-session-actions {
@@ -1384,24 +1386,24 @@ function handleSessionPageChange(page: number): void {
 }
 
 .drawer-session-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--paper-warm);
 }
 
 .drawer-session-item.active {
-  background: rgba(59, 130, 246, 0.1);
-  border-left-color: #3b82f6;
+  background: var(--vermilion-soft);
+  border-left-color: var(--vermilion);
 }
 
 .drawer-session-item .session-title {
-  color: #e2e8f0;
+  color: var(--paper-ink);
 }
 
 .drawer-session-item:not(.active) .session-title {
-  color: #94a3b8;
+  color: var(--paper-ink-3);
 }
 
 .drawer-session-item .session-time {
-  color: #64748b;
+  color: var(--paper-ink-5);
 }
 
 .drawer-session-item:hover .delete-btn {
@@ -1420,23 +1422,23 @@ function handleSessionPageChange(page: number): void {
 .drawer-session-pagination :deep(.btn-prev),
 .drawer-session-pagination :deep(.btn-next) {
   background: transparent;
-  color: #94a3b8;
+  color: var(--paper-ink-3);
 }
 
 .drawer-session-pagination :deep(.el-pager li.is-active) {
-  background: #3b82f6;
-  color: #fff;
+  background: var(--paper-ink);
+  color: var(--paper);
 }
 
 .drawer-session-pagination :deep(.btn-prev:disabled),
 .drawer-session-pagination :deep(.btn-next:disabled) {
-  color: #475569;
+  color: var(--paper-ink-5);
 }
 
 .drawer-nav {
   flex-shrink: 1;
   padding: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--paper-line-soft);
   overflow-y: auto;
   max-height: 40vh;
 }
@@ -1453,20 +1455,20 @@ function handleSessionPageChange(page: number): void {
   padding: 10px 12px;
   border-radius: 8px;
   cursor: pointer;
-  color: #94a3b8;
+  color: var(--paper-ink-3);
   font-size: 13px;
   font-weight: 500;
   transition: all 0.15s;
 }
 
 .drawer-nav-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #e2e8f0;
+  background: var(--paper-warm);
+  color: var(--paper-ink);
 }
 
 .drawer-nav-item.active {
-  background: rgba(59, 130, 246, 0.12);
-  color: #60a5fa;
+  background: var(--paper-ink);
+  color: var(--paper);
   font-weight: 600;
 }
 
@@ -1477,7 +1479,7 @@ function handleSessionPageChange(page: number): void {
   align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--paper-line-soft);
 }
 
 .user-info {
@@ -1488,13 +1490,13 @@ function handleSessionPageChange(page: number): void {
 }
 
 .user-avatar {
-  color: #60a5fa;
+  color: var(--paper-ink-3);
   flex-shrink: 0;
 }
 
 .user-name {
   font-size: 13px;
-  color: #cbd5e1;
+  color: var(--paper-ink-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1509,15 +1511,15 @@ function handleSessionPageChange(page: number): void {
   border: none;
   background: transparent;
   border-radius: 6px;
-  color: #64748b;
+  color: var(--paper-ink-4);
   cursor: pointer;
   transition: all 0.2s;
   flex-shrink: 0;
 }
 
 .logout-btn:hover {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.1);
+  color: var(--vermilion);
+  background: var(--vermilion-soft);
 }
 
 /* ---- Drawer User ---- */
@@ -1539,7 +1541,7 @@ function handleSessionPageChange(page: number): void {
 
 .drawer-user-name {
   font-size: 13px;
-  color: #cbd5e1;
+  color: var(--paper-ink-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1554,15 +1556,15 @@ function handleSessionPageChange(page: number): void {
   border: none;
   background: transparent;
   border-radius: 6px;
-  color: #64748b;
+  color: var(--paper-ink-4);
   cursor: pointer;
   transition: all 0.2s;
   flex-shrink: 0;
 }
 
 .drawer-logout-btn:hover {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.1);
+  color: var(--vermilion);
+  background: var(--vermilion-soft);
 }
 
 @media (max-width: 768px) {

@@ -5,7 +5,7 @@ import AIMessageContent from '@/components/common/AIMessageContent.vue'
 import FilePreviewer from '@/components/common/FilePreviewer.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
-import { formatChatTime, formatTokenCount } from '@/utils/format'
+import { formatChatTime } from '@/utils/format'
 import type { StreamingMessage } from '@/composables/useStreamingMessage'
 import type { Segment } from '@/types/segment'
 import type { ChatRowPart } from '@/components/AgentChat/chatRow'
@@ -142,29 +142,6 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
           :expand-key="expandKey"
           @revert="dbMsgId => emit('revert', dbMsgId)"
         />
-        <!-- footer 区：两个块共享 .footer-row 容器，统一高度 + 顶部分割线（流式无）。
-         流式指示器已独立成行（MessageItem 的 typing 行），footer 不再随段落
-         迁移——新段出现时行高零突变。chrome 估值见 chatRow.ts 的 FOOTER_CHROME -->
-        <div v-if="showFooter && msg.total_tokens && !streamingActive" class="footer-row">
-          <div class="token-info">
-            <span>
-              输入:
-              <span class="token-value">{{ formatTokenCount(msg.prompt_tokens) }}</span>
-              token
-            </span>
-            <span>
-              输出:
-              <span class="token-value">{{ formatTokenCount(msg.completion_tokens) }}</span>
-              token
-            </span>
-            <span>
-              总计:
-              <span class="token-total">{{ formatTokenCount(msg.total_tokens) }}</span>
-              token
-            </span>
-          </div>
-        </div>
-
         <!-- 结束节点输出：右上角"展示"下拉勾选后显示（该轮 AI 消息携带） -->
         <div
           v-if="showFooter && showEndOutput && msg.end_output && !streamingActive"
@@ -189,14 +166,6 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
         >
           <pre class="end-output-pre">{{ endOutputText }}</pre>
         </el-dialog>
-
-        <!-- 流式输出指示器：AI 消息存在期间的输出中信号（空窗期由 MessageItem
-         的 typing 行接管，两者互斥） -->
-        <div v-if="showFooter && streamingActive" class="footer-row streaming-indicator">
-          <span class="dot"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
-        </div>
       </template>
     </div>
   </div>
@@ -248,14 +217,15 @@ export default {
 }
 
 .avatar-user {
-  background: #2563eb;
-  color: #fff;
+  background: var(--vermilion-soft);
+  color: var(--vermilion);
+  border: 1px solid var(--vermilion-line);
 }
 
 .avatar-ai {
-  background: linear-gradient(to top right, #1e293b, #475569);
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(30, 41, 59, 0.2);
+  background: linear-gradient(to top right, var(--paper-ink), #3d3833);
+  color: var(--paper);
+  box-shadow: 0 2px 8px rgba(31, 29, 26, 0.2);
 }
 
 .message-body {
@@ -285,95 +255,50 @@ export default {
   font-weight: 600;
   font-size: 13px;
   margin: 0 8px;
-  color: #334155;
+  color: var(--paper-ink);
 }
 
 .message-time {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--paper-ink-5);
+  font-variant-numeric: tabular-nums;
 }
 
 .delete-msg-btn {
   margin-left: 8px;
-  color: #94a3b8;
+  color: var(--paper-ink-4);
   font-size: 14px;
 }
 
 .delete-msg-btn:hover {
-  color: #ef4444;
+  color: var(--vermilion);
 }
 
 .message.human .message-content {
   white-space: pre-wrap;
-  background: #2563eb;
-  color: #fff;
-  padding: 12px 18px;
-  border-radius: 16px 4px 16px 16px;
+  background: var(--paper-card);
+  color: var(--paper-ink-2);
+  border: 1px solid var(--paper-line);
+  padding: 9px 14px;
+  border-radius: 12px;
   display: inline-block;
   max-width: 100%;
   text-align: left;
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 14.5px;
+  line-height: 1.65;
   word-break: break-word;
   overflow-wrap: break-word;
 }
 
-/* footer 区统一容器：三个 footer 块（token-info / end-output-row / streaming-indicator）
-   共享同一高度锚点（min-height 28 + 顶部 1px 分割线 + 12px padding-top + 16px margin-top）
-   与 chatRow.ts 的 FOOTER_CHROME 估值对齐，避免虚拟滚动低估导致滚动条错位 */
+/* footer 区统一容器：结束输出按钮等共享（token 统计与流式三点已按需求移除） */
 .footer-row {
   margin-top: 16px;
   padding-top: 12px;
-  border-top: 1px solid #f1f5f9;
+  border-top: 1px solid var(--paper-line-soft);
   min-height: 28px;
   display: flex;
   align-items: center;
   font-size: 11px;
-}
-
-.footer-row.streaming-indicator {
-  /* 流式中无分割线，避免视觉跳动 */
-  border-top-color: transparent;
-}
-
-.token-info {
-  display: flex;
-  gap: 16px;
-  font-family: 'Courier New', monospace;
-  color: #94a3b8;
-}
-
-.token-value {
-  color: #475569;
-  font-variant-numeric: tabular-nums;
-}
-
-.token-total {
-  color: #2563eb;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.streaming-indicator {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.streaming-indicator .dot {
-  width: 6px;
-  height: 6px;
-  background: #94a3b8;
-  border-radius: 50%;
-  animation: typing 1.4s infinite both;
-}
-
-.streaming-indicator .dot:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.streaming-indicator .dot:nth-child(3) {
-  animation-delay: 0.4s;
 }
 
 .end-output-row {
@@ -384,11 +309,11 @@ export default {
   margin: 0;
   max-height: 60vh;
   overflow: auto;
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
-  color: #334155;
-  background: #f8fafc;
+  color: var(--paper-ink-2);
+  background: var(--paper-warm);
   border-radius: 6px;
   padding: 12px;
   white-space: pre-wrap;
@@ -412,8 +337,9 @@ export default {
 /* ---- 上下文摘要卡（isSummary 形态） ---- */
 
 .compress-summary {
-  background: #f8fafc;
-  border-left: 3px solid #d97706;
+  background: var(--paper-warm);
+  border: 1px solid var(--paper-line);
+  border-left: 3px solid var(--vermilion);
   border-radius: 8px;
   padding: 14px 18px;
   margin: 4px 0 8px;
@@ -425,13 +351,13 @@ export default {
   gap: 6px;
   font-size: 12px;
   font-weight: 600;
-  color: #d97706;
+  color: var(--vermilion);
   margin-bottom: 6px;
 }
 
 .compress-summary-content {
   font-size: 13px;
-  color: #475569;
+  color: var(--paper-ink-3);
   line-height: 1.6;
   /* 内容封顶：超出滚动查看；封顶值与 chatRow.ts 的 SUMMARY_BODY_MAX 对齐 */
   max-height: 400px;
