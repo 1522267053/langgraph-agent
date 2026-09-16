@@ -109,13 +109,13 @@ async function handleCancel(taskId: string) {
   justify-content: space-between;
   gap: 8px;
   padding: 10px 14px;
-  background: #f8fafc;
+  background: var(--paper-warm);
 }
 
 .task-cmd {
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
-  color: #334155;
+  color: var(--paper-ink-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -123,7 +123,7 @@ async function handleCancel(taskId: string) {
 }
 
 .task-prompt {
-  color: #10b981;
+  color: #16a34a;
   font-weight: 700;
   margin-right: 4px;
 }
@@ -139,11 +139,11 @@ async function handleCancel(taskId: string) {
   gap: 12px;
   padding: 4px 14px;
   font-size: 12px;
-  color: #64748b;
+  color: var(--paper-ink-3);
 }
 
 .task-output {
-  background: #1a1a2e;
+  background: var(--ink-island);
   max-height: 280px;
   overflow-y: auto;
 }
@@ -151,10 +151,10 @@ async function handleCancel(taskId: string) {
 .task-output pre {
   margin: 0;
   padding: 12px 14px;
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.5;
-  color: #e0e0e0;
+  color: #e0ddd6;
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -163,6 +163,6 @@ async function handleCancel(taskId: string) {
   display: flex;
   gap: 8px;
   padding: 8px 14px;
-  background: #f8fafc;
+  background: var(--paper-warm);
 }
 </style>

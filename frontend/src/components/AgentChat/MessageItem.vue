@@ -4,6 +4,7 @@ import MessageBubble from '@/components/AgentChat/MessageBubble.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import type { ChatRow } from '@/components/AgentChat/chatRow'
 import type { StreamingMessage } from '@/composables/useStreamingMessage'
+import { formatChatTime } from '@/utils/format'
 
 /**
  * 虚拟行分发层：流式指示器状态行 + ChatRow→MessageBubble 透传（视觉形态收敛
@@ -36,6 +37,7 @@ const emit = defineEmits<{
     <div class="typing-body">
       <div class="message-header">
         <span class="role-name">AI</span>
+        <span class="message-time">{{ formatChatTime(new Date()) }}</span>
       </div>
       <div class="typing">
         <span class="dot"></span>
@@ -66,6 +68,7 @@ const emit = defineEmits<{
 .message-header {
   display: flex;
   align-items: center;
+  gap: 8px;
   margin-bottom: 8px;
 }
 
@@ -74,6 +77,13 @@ const emit = defineEmits<{
   font-size: 13px;
   margin: 0;
   color: var(--paper-ink);
+}
+
+/* 时间戳与 MessageBubble 的 .message-time 同款 */
+.message-time {
+  font-size: 11px;
+  color: var(--paper-ink-5);
+  font-variant-numeric: tabular-nums;
 }
 /* AI 头像与 MessageBubble 的 .avatar 同款；右侧纵排「AI」角色名 + 三点
    （三点在角色名正下方），与真实消息行（头像/角色名/内容）同构 */
@@ -103,9 +113,9 @@ const emit = defineEmits<{
 }
 
 .avatar-ai {
-  background: linear-gradient(to top right, var(--paper-ink), #3d3833);
-  color: var(--paper);
-  box-shadow: 0 2px 8px rgba(31, 29, 26, 0.2);
+  background: linear-gradient(to top right, #3a3730, #55504a);
+  color: var(--paper-card);
+  box-shadow: 0 2px 8px rgba(60, 50, 35, 0.18);
 }
 .typing {
   /* 三点与「AI」角色名左对齐 */

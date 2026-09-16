@@ -54,7 +54,7 @@ onMounted(() => {
 })
 
 const tierOptions = [
-  { value: 'all', label: '全部', color: '#409eff' },
+  { value: 'all', label: '全部', color: 'var(--vermilion)' },
   { value: 'hot', label: '热', color: '#f56c6c' },
   { value: 'warm', label: '温', color: '#e6a23c' },
   { value: 'cold', label: '冷', color: '#909399' }
@@ -652,8 +652,8 @@ watch(
 
 .score-badge {
   font-size: 11px;
-  color: #409eff;
-  background: #ecf5ff;
+  color: var(--vermilion);
+  background: var(--vermilion-soft);
   padding: 1px 6px;
   border-radius: 10px;
   flex-shrink: 0;
@@ -726,14 +726,14 @@ watch(
 
 .expand-row {
   font-size: 12px;
-  color: #409eff;
+  color: var(--vermilion);
   cursor: pointer;
   user-select: none;
   margin-bottom: 6px;
 }
 
 .expand-row:hover {
-  color: #66b1ff;
+  color: var(--vermilion-hover);
 }
 
 .memory-meta {

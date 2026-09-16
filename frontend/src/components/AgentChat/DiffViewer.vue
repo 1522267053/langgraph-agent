@@ -224,7 +224,7 @@ onMounted(() => void render())
   align-items: center;
   gap: 12px;
   padding: 6px 12px;
-  background: #f8fafc;
+  background: var(--paper-warm);
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 

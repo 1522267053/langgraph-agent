@@ -142,6 +142,13 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
           :expand-key="expandKey"
           @revert="dbMsgId => emit('revert', dbMsgId)"
         />
+        <!-- 刷新重连场景：AI 消息已从 DB 恢复但段尚未到达（segment 为空且流式中），
+             显示三点等待指示，避免空消息行 -->
+        <div v-else-if="streamingActive" class="waiting-dots">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
         <!-- 结束节点输出：右上角"展示"下拉勾选后显示（该轮 AI 消息携带） -->
         <div
           v-if="showFooter && showEndOutput && msg.end_output && !streamingActive"
@@ -183,10 +190,10 @@ export default {
   display: flex;
 }
 
-/* 消息间距只挂在消息的最后一行，段行之间保持紧凑 */
+/* 消息间距只挂在消息的最后一行，段行之间保持紧凑（加大留白缓解视觉疲劳） */
 .message.part-last,
 .message.part-single {
-  margin-bottom: 32px;
+  margin-bottom: 40px;
 }
 
 .message.human {
@@ -223,14 +230,52 @@ export default {
 }
 
 .avatar-ai {
-  background: linear-gradient(to top right, var(--paper-ink), #3d3833);
-  color: var(--paper);
-  box-shadow: 0 2px 8px rgba(31, 29, 26, 0.2);
+  background: linear-gradient(to top right, #3a3730, #55504a);
+  color: var(--paper-card);
+  box-shadow: 0 2px 8px rgba(60, 50, 35, 0.18);
 }
 
 .message-body {
   flex: 1;
   min-width: 0;
+}
+
+/* 刷新重连等待：段未到达时的三点指示（流式中且本行无段才出现） */
+.waiting-dots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0 2px;
+}
+
+.waiting-dots .dot {
+  width: 6px;
+  height: 6px;
+  background: var(--paper-ink-4);
+  border-radius: 50%;
+  animation: typing 1.4s infinite both;
+}
+
+.waiting-dots .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.waiting-dots .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing {
+  0%,
+  80%,
+  100% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 .message.human .message-body {

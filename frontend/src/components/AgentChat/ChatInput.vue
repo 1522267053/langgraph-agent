@@ -508,20 +508,20 @@ export default {
 }
 
 .param-reset-btn {
-  color: #94a3b8;
+  color: var(--paper-ink-4);
   font-size: 12px;
   height: auto;
   padding: 2px 6px;
 }
 
 .param-reset-btn:hover {
-  color: #2563eb;
+  color: var(--vermilion);
 }
 
 .param-popover-title {
   font-size: 13px;
   font-weight: 600;
-  color: #334155;
+  color: var(--paper-ink-2);
 }
 
 .param-popover-body {
@@ -564,12 +564,12 @@ export default {
 
 .param-field-label {
   font-size: 13px;
-  color: #334155;
+  color: var(--paper-ink-2);
   font-weight: 400;
 }
 
 .param-hint-icon {
-  color: #909399;
+  color: var(--paper-ink-4);
   cursor: help;
   font-size: 14px;
   flex-shrink: 0;
@@ -582,8 +582,8 @@ export default {
 
 .param-field-name {
   font-size: 11px;
-  color: #94a3b8;
-  font-family: 'Courier New', monospace;
+  color: var(--paper-ink-4);
+  font-family: var(--font-mono);
 }
 
 .param-field-control {
@@ -638,18 +638,18 @@ export default {
   resize: none;
   font-size: 14px;
   line-height: 1.6;
-  color: #1e293b;
+  color: var(--paper-ink);
   background: transparent;
   font-family: inherit;
 }
 
 .input-textarea::placeholder {
-  color: #94a3b8;
+  color: var(--paper-ink-5);
 }
 
 .input-textarea:disabled {
-  background: #f8fafc;
-  color: #94a3b8;
+  background: var(--paper-warm);
+  color: var(--paper-ink-4);
 }
 
 .input-toolbar {
@@ -677,7 +677,7 @@ export default {
   border: none;
   background: transparent;
   border-radius: 8px;
-  color: #94a3b8;
+  color: var(--paper-ink-3);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -722,13 +722,13 @@ export default {
 .workdir-clear {
   display: flex;
   align-items: center;
-  color: #94a3b8;
+  color: var(--paper-ink-4);
   border-radius: 50%;
   transition: color 0.15s;
 }
 
 .workdir-clear:hover {
-  color: #ef4444;
+  color: var(--vermilion);
 }
 
 .param-dot {
@@ -802,15 +802,15 @@ export default {
 .token-label {
   font-size: 10px;
   font-weight: 500;
-  color: #94a3b8;
+  color: var(--paper-ink-5);
   margin-right: 2px;
 }
 
 .token-value {
   font-size: 11px;
   font-weight: 600;
-  color: #334155;
-  font-family: 'Courier New', monospace;
+  color: var(--paper-ink-2);
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   min-width: 3ch;
   text-align: right;
@@ -818,13 +818,13 @@ export default {
 
 .token-sep {
   font-size: 11px;
-  color: #cbd5e1;
+  color: var(--paper-ink-5);
   margin: 0 4px;
 }
 
 .token-unit {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--paper-ink-5);
   margin-left: 2px;
 }
 

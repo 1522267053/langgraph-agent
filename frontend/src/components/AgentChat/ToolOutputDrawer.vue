@@ -63,7 +63,7 @@ const tools = computed(() => store.toolList)
 
 .empty-state {
   text-align: center;
-  color: #94a3b8;
+  color: var(--paper-ink-4);
   padding: 40px 0;
   font-size: 14px;
 }

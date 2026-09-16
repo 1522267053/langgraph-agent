@@ -366,13 +366,15 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
           break
         }
         default:
-          size = 120
+          // AI 消息段缺失占位（流式重连：消息已建、段未到达，渲染三点等待行），
+          // 三点行 ~24px + 缓冲，命中后实测立即校正
+          size = 40
       }
       // 消息级 chrome：first 行带 header（行高 ~36 + margin-bottom 8）。footer-row
       // 仅在 showEndOutput 开启时渲染（token 统计与流式三点已移除，token 统计改在
       // 输入区工具栏展示）；按开关条件加成，默认 0，避免每条消息虚高 42px。
-      // 消息间距 margin-bottom 32 不被 virtualizer 测量，折进 last/single 行估值
-      const MESSAGE_GAP = 32
+      // 消息间距 margin-bottom 40 不被 virtualizer 测量，折进 last/single 行估值
+      const MESSAGE_GAP = 40
       if (row.part === 'first') size += FIRST_CHROME
       if (row.part === 'last' || row.part === 'single') size += MESSAGE_GAP
       if (
