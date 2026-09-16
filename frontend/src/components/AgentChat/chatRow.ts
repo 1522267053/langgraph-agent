@@ -218,6 +218,22 @@ const FOOTER_CHROME = 42
 /** 流式指示器行（typing）高度：头像 36 + 上下 padding 8×2 = 52，高估取 52 */
 const TYPING_ROW_HEIGHT = 52
 
+// ---- human 附件估值常量（与 FilePreviewer.vue 渲染 CSS 对齐，官方建议宁可高估）----
+/** 单图行高上估：.file-thumbnail max-height 200 + border 2 */
+const HUMAN_FILE_IMAGE_MAX = 210
+/** flex-wrap 项间距 gap: 8 */
+const HUMAN_FILE_GAP = 8
+/** 非图片文件链接行高：.file-link padding 6×2 + 13px 文本行高 ~19 + border 2 */
+const HUMAN_FILE_NONIMAGE = 34
+/** .file-previewer margin-top: 8 */
+const HUMAN_FILE_MARGIN_TOP = 8
+/** human 气泡正文最小高：单行起步 + 气泡 padding（与 message-content 区域对齐） */
+const HUMAN_BODY_MIN = 48
+/** human 正文行外 chrome：气泡上下 padding（.message-content 区域） */
+const HUMAN_BODY_CHROME = 14
+/** 旧固定值（仅注释留存）：无附件时旧逻辑拍脑袋 return 90，带图片时真实 300px+，
+ * 是「发送图片后头像/三点被裁在视口外」的首锚偏差主源之一 */
+
 /** CJK/全角字符（近似全角宽度），其余按半宽 0.5 单位 */
 const CJK_CHAR = /[\u2e80-\u9fff\uF900-\uFAFF\uFF00-\uFFEF\u3000-\u303F]/g
 
@@ -304,8 +320,30 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
       )
       return SUMMARY_CHROME + body
     }
-    case 'human':
-      return 90
+    case 'human': {
+      // 正文测高：14.5px 字号与 .message-content 对齐，折行单位数与 content 段
+      // 同口径（38，保守低值 → 高估行数，符合官方 estimate the largest possible）
+      let size = Math.max(
+        HUMAN_BODY_MIN,
+        estimateTextHeight(
+          row.msg?.content,
+          unitsPerLine(prefs?.containerWidth, 14.5, CONTENT_UNITS_PER_LINE),
+          CONTENT_LINE_HEIGHT
+        ) + HUMAN_BODY_CHROME
+      )
+      // 附件按 mime_type 分类累加：图片保守按「每图独占一行」高估（flex-wrap
+      // 实际可能两图并排，高估侧在实测后向上收缩、扰动小）；非图片走链接行
+      const files = row.msg?.files ?? []
+      if (files.length > 0) {
+        const images = files.filter(f => f.mime_type.startsWith('image/')).length
+        const others = files.length - images
+        size +=
+          HUMAN_FILE_MARGIN_TOP +
+          images * (HUMAN_FILE_IMAGE_MAX + HUMAN_FILE_GAP) +
+          others * (HUMAN_FILE_NONIMAGE + HUMAN_FILE_GAP)
+      }
+      return size
+    }
     case 'ai': {
       let size: number
       switch (row.segment?.type) {
@@ -334,12 +372,15 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
           break
         case 'tool': {
           // 默认折叠为纯文本状态行（● 工具名 + 可选单行结果摘要，暖纸容器一体）。
-          // 折叠态估值：行 padding 5×2 + 单行文本 ~19 ≈ 29；有单行摘要 = +摘要行
-          // （4+5 padding + ~18 文本 + 1px 分割线）≈ 57；错误行同高（浅红底不增行）。
+          // 折叠态估值：行 padding 5×2 + 单行文本 ~19 ≈ 30 → 上调至 46；有单行摘要
+          // 57 → 上调至 78：实测渲染（markdown 摘要折行/分割线/结果块底 padding）
+          // 常超旧估值 20-40px，一帧内把 elDist 推超 SCROLL_END_PX(80) 造成
+          // 「半截工具卡片」空窗（AgentChat.vue 的 rescue loop 兜底追平，此处
+          // 上调减少首次锚定偏差，两道防线互补）。错误行同高（浅红底不增行）。
           // 展开态：args 150 + 结果 300 等封顶组合，真实上限 ~470，仅作已挂载行
           // 手动展开的首帧占位（手动展开必有实测缓存接管）
           const override = getBlockExpandOverride(row.key)
-          size = override ? 470 : row.toolHasSummary === false ? 30 : 58
+          size = override ? 470 : row.toolHasSummary === false ? 46 : 78
           break
         }
         case 'todo': {
