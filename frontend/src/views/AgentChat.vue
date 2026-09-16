@@ -230,6 +230,7 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   estimateSize: (index: number) =>
     estimateRowSize(chatRows.value[index], {
       showThinking: showThinking.value,
+      showEndOutput: showEndOutput.value,
       containerWidth: contentWidth.value
     }),
   overscan: 8,
@@ -1644,11 +1645,11 @@ export default {
   min-height: 0;
   overflow: hidden;
   position: relative;
-  background: #fff;
+  background: var(--paper);
 }
 
 .chat-content.welcome-mode {
-  background: #fafbfc;
+  background: var(--paper);
 }
 
 .welcome-wrapper {
@@ -1693,9 +1694,10 @@ export default {
 .header-center h1 {
   margin: 0;
   min-width: 0;
+  font-family: var(--font-serif);
   font-size: 16px;
-  font-weight: 700;
-  color: #1e293b;
+  font-weight: 600;
+  color: var(--paper-ink);
   letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1706,7 +1708,7 @@ export default {
   min-width: 0;
   max-width: min(32vw, 320px);
   overflow: hidden;
-  color: #64748b;
+  color: var(--paper-ink-4);
   font-size: 12px;
   font-weight: 400;
   text-overflow: ellipsis;
@@ -1747,7 +1749,7 @@ export default {
   height: 40px;
   background: none;
   border: none;
-  color: #64748b;
+  color: var(--paper-ink-3);
   cursor: pointer;
   border-radius: 8px;
   transition: all 0.2s;
@@ -1756,13 +1758,13 @@ export default {
 }
 
 .header-action-btn:hover {
-  color: #2563eb;
-  background: #f8fafc;
+  color: var(--paper-ink);
+  background: var(--paper-warm);
 }
 
 .header-action-btn.active {
-  color: #2563eb;
-  background: #eff6ff;
+  color: var(--vermilion);
+  background: var(--vermilion-soft);
 }
 
 /* 下拉菜单条目：图标 + 文字 + 角标水平对齐 */
@@ -1826,8 +1828,8 @@ export default {
 }
 
 .scroll-to-bottom:hover {
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--vermilion-soft);
+  color: var(--vermilion);
 }
 
 .load-more-sentinel {
@@ -1893,7 +1895,7 @@ export default {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(250, 249, 246, 0.8);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -1905,13 +1907,14 @@ export default {
   align-items: center;
   gap: 10px;
   font-size: 15px;
-  color: #334155;
-  background: #fff;
+  color: var(--paper-ink-2);
+  background: var(--paper-card);
   padding: 16px 28px;
   border-radius: 12px;
+  border: 1px solid var(--paper-line);
   box-shadow:
-    0 2px 15px -3px rgba(0, 0, 0, 0.07),
-    0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    0 2px 15px -3px rgba(60, 50, 35, 0.08),
+    0 4px 6px -2px rgba(60, 50, 35, 0.05);
 }
 
 .human-input-overlay {
@@ -1945,13 +1948,13 @@ export default {
 }
 
 .human-input-context {
-  background: #f8fafc;
+  background: var(--paper-warm);
   padding: 12px;
   border-radius: 8px;
   margin-bottom: 16px;
   font-size: 14px;
   white-space: pre-wrap;
-  color: #475569;
+  color: var(--paper-ink-2);
   max-height: 200px;
   overflow-y: auto;
 }
@@ -1963,8 +1966,8 @@ export default {
 
 .input-wrapper {
   flex-shrink: 0;
-  border-top: 1px solid #f1f5f9;
-  background: rgba(255, 255, 255, 0.5);
+  border-top: 1px solid var(--paper-line-soft);
+  background: rgba(250, 249, 246, 0.6);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   padding: 14px 24px 16px;
@@ -1980,7 +1983,7 @@ export default {
   transform: translateX(-50%);
   width: 75%;
   height: 40px;
-  background: rgba(37, 99, 235, 0.06);
+  background: rgba(194, 65, 12, 0.04);
   filter: blur(40px);
   border-radius: 9999px;
   pointer-events: none;
@@ -2033,7 +2036,7 @@ export default {
 }
 
 .approval-tool-item {
-  background: #f8fafc;
+  background: var(--paper-warm);
   border-radius: 8px;
   padding: 12px;
 }
@@ -2048,9 +2051,8 @@ export default {
 
 .approval-tool-args {
   font-size: 12px;
-  color: #475569;
-  background: #1e293b;
-  color: #e2e8f0;
+  background: var(--ink-island);
+  color: #e8e3d8;
   padding: 10px 12px;
   border-radius: 6px;
   margin: 0;

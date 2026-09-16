@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, CopyDocument, RefreshLeft, SetUp } from '@element-plus/icons-vue'
+import { ArrowRight, CopyDocument, RefreshLeft } from '@element-plus/icons-vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import KnowledgeCitationList from '@/components/common/KnowledgeCitationList.vue'
 import TodoList from '@/components/common/TodoList.vue'
@@ -294,24 +294,15 @@ watch(
     <div v-else-if="segment.type === 'tool' && segment.tool" class="tool-block">
       <div
         :class="[
-          'code-block-header',
-          'tool-header-' + segment.tool.status,
+          'tool-line',
+          'tool-status-' + segment.tool.status,
           { 'tool-header-clickable': isToolInteractive }
         ]"
         @click="toggleToolBody"
       >
-        <el-icon class="tool-header-icon"><SetUp /></el-icon>
-        <span class="tool-header-name">{{ segment.tool.name }}</span>
-        <span :class="['tool-status-badge', segment.tool.status]">
-          <span v-if="segment.tool.status === 'running'" class="status-spinner"></span>
-          {{
-            segment.tool.status === 'running'
-              ? '执行中'
-              : segment.tool.status === 'error'
-                ? '失败'
-                : '完成'
-          }}
-        </span>
+        <span v-if="segment.tool.status === 'running'" class="status-spinner"></span>
+        <span v-else :class="['tool-line-dot', segment.tool.status]"></span>
+        <span class="tool-line-name">{{ segment.tool.name }}</span>
         <!-- 折叠交互：箭头指向提示可点击，展开时旋转 90° -->
         <el-icon
           v-if="isToolInteractive"
@@ -416,9 +407,9 @@ watch(
   justify-content: center;
   margin-bottom: 12px;
   padding: 8px 0;
-  border: 1px dashed #cbd5e1;
+  border: 1px dashed var(--paper-line-strong);
   border-radius: 8px;
-  color: #64748b;
+  color: var(--paper-ink-3);
   font-size: 13px;
   cursor: pointer;
   user-select: none;
@@ -426,62 +417,29 @@ watch(
 }
 
 .expand-earlier:hover {
-  color: #409eff;
-  border-color: #409eff;
-  background: #f8fafc;
+  color: var(--vermilion);
+  border-color: var(--vermilion-line);
+  background: var(--vermilion-soft);
 }
 
-.thinking-block,
-.tool-block {
-  border-radius: 12px;
+.thinking-block {
+  border-radius: 8px;
   overflow: hidden;
   margin-bottom: 12px;
-  border: 1px solid #e2e8f0;
-  box-shadow:
-    0 2px 15px -3px rgba(0, 0, 0, 0.07),
-    0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--paper-line);
+  background: var(--paper-warm);
+  box-shadow: none;
 }
 
+/* 思考块头部（tool 块已改纯文本行，仅 thinking 仍使用此头部）。
+   与正文同底色，仅一条浅内线分隔 */
 .code-block-header {
-  background: #0f172a;
-  padding: 8px 14px;
+  background: transparent;
+  border-bottom: 1px solid rgba(60, 50, 35, 0.08);
+  padding: 7px 12px;
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-
-.tool-header-success {
-  background: #059669;
-}
-
-.tool-header-error {
-  background: #dc2626;
-}
-
-.tool-header-running {
-  background: #0f172a;
-}
-
-.tool-header-clickable {
-  cursor: pointer;
-  user-select: none;
-}
-
-.tool-expand-arrow {
-  margin-left: 4px;
-  font-size: 14px;
-  color: rgba(255, 255, 255, 0.8);
-  transition: transform 0.2s;
-}
-
-.tool-expand-arrow.is-expanded {
-  transform: rotate(90deg);
-}
-
-.tool-header-icon {
-  font-size: 20px;
-  color: #fff;
-  opacity: 0.9;
+  gap: 8px;
 }
 
 .code-block-dots {
@@ -492,42 +450,110 @@ watch(
 .code-block-dots .dot-red,
 .code-block-dots .dot-amber,
 .code-block-dots .dot-green {
-  width: 10px;
-  height: 10px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .code-block-dots .dot-red {
-  background: rgba(239, 68, 68, 0.8);
+  background: rgba(194, 65, 12, 0.4);
 }
 
 .code-block-dots .dot-amber {
-  background: rgba(245, 158, 11, 0.8);
+  background: rgba(217, 119, 6, 0.35);
 }
 
 .code-block-dots .dot-green {
-  background: rgba(16, 185, 129, 0.8);
+  background: rgba(22, 163, 74, 0.35);
 }
 
-.tool-header-name {
-  font-size: 15px;
-  font-weight: 700;
-  color: #fff;
-  letter-spacing: 0.01em;
+/* 工具块：暖纸色圆角容器，把工具行与结果摘要包成一体 */
+.tool-block {
+  margin-bottom: 6px;
+  background: var(--paper-warm);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tool-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  transition: background 0.15s;
+}
+
+.tool-line.tool-header-clickable:hover {
+  background: rgba(60, 50, 35, 0.05);
+}
+
+/* 失败：整行浅红底 + 红字，保证扫视时可辨识 */
+.tool-line.tool-status-error {
+  background: #fdf0ee;
+}
+
+.tool-line.tool-status-error .tool-line-name {
+  color: #dc2626;
+}
+
+.tool-line-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--paper-ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态圆点：工具名前置，完成=绿 / 失败=红（Error 行自带浅红底） */
+.tool-line-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tool-line-dot.success {
+  background: #16a34a;
+}
+
+.tool-line-dot.error {
+  background: #dc2626;
+}
+
+/* 展开状态箭头：折叠时朝右、展开时旋转 90° 朝下 */
+.tool-expand-arrow {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--paper-ink-4);
+  transition: transform 0.2s;
+}
+
+.tool-expand-arrow.is-expanded {
+  transform: rotate(90deg);
+}
+
+.tool-header-clickable {
+  cursor: pointer;
+  user-select: none;
 }
 
 .thinking-label {
-  font-size: 14px;
-  font-weight: 600;
-  color: #cbd5e1;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--paper-ink-3);
   letter-spacing: 0.01em;
   text-transform: none;
 }
 
 .code-block-label {
   font-size: 10px;
-  font-family: 'Courier New', monospace;
-  color: #94a3b8;
+  font-family: var(--font-mono);
+  color: var(--paper-ink-4);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -544,38 +570,12 @@ watch(
   font-size: 12px;
 }
 
-.tool-status-badge {
-  margin-left: auto;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.tool-status-badge.running {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fbbf24;
-}
-
-.tool-status-badge.success {
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
-}
-
-.tool-status-badge.error {
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
-}
-
 .status-spinner {
   display: inline-block;
   width: 10px;
   height: 10px;
-  border: 2px solid rgba(251, 191, 36, 0.3);
-  border-top-color: #fbbf24;
+  border: 2px solid rgba(194, 65, 12, 0.25);
+  border-top-color: var(--vermilion);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -589,11 +589,11 @@ watch(
 .thinking-content {
   margin: 0;
   padding: 14px 16px;
-  background: rgba(248, 250, 252, 0.8);
-  font-family: 'Courier New', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #334155;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--paper-ink-2);
   white-space: pre-wrap;
   word-break: break-word;
   /* 封顶与滚动由外层 el-scrollbar 提供（max-height="400px"），此处不再设 */
@@ -601,12 +601,14 @@ watch(
 
 .tool-content {
   margin: 0;
-  padding: 12px 16px;
-  background: rgba(248, 250, 252, 0.8);
-  font-family: 'Courier New', monospace;
+  padding: 8px 12px;
+  background: var(--paper-warm);
+  border: none;
+  border-bottom: 1px solid rgba(60, 50, 35, 0.08);
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
-  color: #64748b;
+  color: var(--paper-ink-2);
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 150px;
@@ -614,7 +616,8 @@ watch(
 }
 
 .tool-content-args {
-  border-top: 1px solid #e2e8f0;
+  /* 融入 .tool-block 暖纸容器：无独立边框，仅底部浅内线与结果区分隔 */
+  margin-top: 0;
 }
 
 .tool-content-args-wrapper {
@@ -626,81 +629,92 @@ watch(
   top: 6px;
   right: 8px;
   font-size: 11px;
-  color: #64748b;
+  color: var(--paper-ink-3);
   z-index: 1;
 }
 
 .args-toggle-btn:hover {
-  color: #409eff;
+  color: var(--vermilion);
 }
 
 .tool-content-error {
-  border-top: 1px solid #fecaca;
-  background: rgba(254, 242, 242, 0.6);
+  border-top: 1px solid #f5c6c0;
+  background: #fdf6f5;
   color: #dc2626;
 }
 
 .revert-btn {
-  color: #64748b;
+  color: var(--paper-ink-4);
   font-size: 14px;
   transition: color 0.2s;
 }
 
 .revert-btn:hover {
-  color: #f87171;
+  color: var(--vermilion);
 }
 
 .message-content {
   word-break: break-word;
   line-height: 1.7;
-  background: #fff;
-  padding: 20px 22px;
-  border-radius: 4px 16px 16px 16px;
-  border: 1px solid #e2e8f0;
-  box-shadow:
-    0 2px 15px -3px rgba(0, 0, 0, 0.07),
-    0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  background: transparent;
+  padding: 2px 0;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
   margin-bottom: 10px;
   position: relative;
-  font-size: 15px;
+  font-size: 14.5px;
 }
 
 .content-actions {
   position: absolute;
-  top: 2px;
-  right: 14px;
+  top: 0;
+  right: 0;
   display: flex;
   align-items: center;
   gap: 2px;
+  /* 默认隐藏（半透明 + 不可交互），hover 正文块时浮现 */
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.message-content:hover .content-actions {
+  opacity: 0.55;
+  pointer-events: auto;
+}
+
+.message-content:hover .content-actions:hover {
+  opacity: 1;
 }
 
 .copy-btn {
-  color: #c0c4cc;
+  color: var(--paper-ink-3);
   font-size: 14px;
   transition: color 0.2s;
 }
 
 .copy-btn:hover {
-  color: #409eff;
+  color: var(--vermilion);
 }
 
 .content-revert-btn {
-  color: #c0c4cc;
+  color: var(--paper-ink-3);
   font-size: 14px;
   transition: color 0.2s;
 }
 
 .content-revert-btn:hover {
-  color: #f56c6c;
+  color: var(--vermilion);
 }
 
 .todo-block {
-  background: #f9fafb;
+  background: var(--paper-warm);
   padding: 20px;
   margin-bottom: 12px;
   border-radius: 16px;
-  border: 1px solid rgba(37, 99, 235, 0.08);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--paper-line);
+  box-shadow: 0 1px 3px rgba(60, 50, 35, 0.04);
 }
 
 /* 任务计划项数无上限，封顶后内部滚动，避免超长计划撑爆虚拟行高；
@@ -719,7 +733,7 @@ watch(
 
 .todo-badge {
   padding: 2px 8px;
-  background: #2563eb;
+  background: var(--vermilion);
   color: #fff;
   font-size: 10px;
   font-weight: 700;
@@ -731,6 +745,6 @@ watch(
 .todo-count {
   font-size: 14px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--paper-ink);
 }
 </style>

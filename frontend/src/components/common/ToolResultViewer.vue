@@ -448,7 +448,7 @@ watch(
 .tool-edit-result,
 .tool-media-result,
 .tool-fallback-result {
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid rgba(60, 50, 35, 0.08);
 }
 
 .tool-result-header {
@@ -456,8 +456,8 @@ watch(
   align-items: center;
   justify-content: space-between;
   padding: 8px 16px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--paper-warm);
+  border-bottom: 1px solid rgba(60, 50, 35, 0.08);
 }
 
 .tool-result-meta {
@@ -470,8 +470,8 @@ watch(
 .tool-result-path {
   font-size: 12px;
   font-weight: 600;
-  color: #334155;
-  font-family: 'Fira Code', 'Consolas', monospace;
+  color: var(--paper-ink-2);
+  font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -480,7 +480,7 @@ watch(
 
 .tool-result-info {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--paper-ink-4);
   white-space: nowrap;
 }
 
@@ -502,10 +502,10 @@ watch(
 
 .tool-code-viewer {
   /* 结果区统一封顶 300px（与 Diff/fallback/媒体预览一致）：内部滚动，
-     虚拟行高有界 */
+     虚拟行高有界。深色代码岛保留，圆角交由父级 .tool-block 裁切 */
   max-height: 300px;
   overflow: auto;
-  background: #1e1e1e;
+  background: var(--ink-island);
 }
 
 .code-table {
@@ -552,22 +552,22 @@ watch(
 .tool-edit-message {
   padding: 8px 16px;
   font-size: 12px;
-  color: #059669;
-  background: rgba(236, 253, 245, 0.6);
+  color: #15803d;
+  background: rgba(22, 163, 74, 0.06);
 }
 
 .tool-edit-warning {
   padding: 8px 16px;
   font-size: 12px;
   color: #b45309;
-  background: rgba(254, 243, 199, 0.6);
+  background: rgba(217, 119, 6, 0.07);
 }
 
 .tool-edit-note {
   padding: 8px 16px;
   font-size: 12px;
-  color: #1d4ed8;
-  background: rgba(219, 234, 254, 0.5);
+  color: var(--vermilion);
+  background: var(--vermilion-soft);
 }
 
 .tool-fallback-result {
@@ -581,12 +581,12 @@ watch(
 
 .tool-fallback-pre {
   margin: 0;
-  padding: 12px 16px;
-  background: rgba(248, 250, 252, 0.8);
-  font-family: 'Courier New', monospace;
+  padding: 8px 14px;
+  background: var(--paper-warm);
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
-  color: #64748b;
+  color: var(--paper-ink-2);
   white-space: pre-wrap;
   word-break: break-all;
   /* 结果区统一封顶 300px；裸字符串结果（shell 输出/子Agent 实时输出等）同口径 */
@@ -599,21 +599,22 @@ watch(
   top: 6px;
   right: 8px;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--paper-ink-4);
 }
 
 .tool-fallback-copy:hover {
-  color: #409eff;
+  color: var(--vermilion);
 }
 
-/* 折叠态单行结果摘要：替代富视图占位，行高稳定 */
+/* 折叠态单行结果摘要：替代富视图占位，行高稳定。
+   融入父级 .tool-block 暖纸容器：无独立边线/底色，仅一条浅内线分隔 */
 .tool-result-summary {
-  border-top: 1px solid #e2e8f0;
-  background: rgba(248, 250, 252, 0.8);
-  padding: 8px 16px;
+  border-top: 1px solid rgba(60, 50, 35, 0.08);
+  background: transparent;
+  padding: 4px 10px 5px;
   font-size: 12px;
-  font-family: 'Fira Code', 'Consolas', monospace;
-  color: #64748b;
+  font-family: var(--font-mono);
+  color: var(--paper-ink-2);
   display: flex;
   align-items: center;
   gap: 8px;

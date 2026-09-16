@@ -152,6 +152,8 @@ export function buildChatRows(
 /** 展示开关状态：影响行高估算（关闭时思考段只剩头部） */
 export interface RowSizePrefs {
   showThinking?: boolean
+  /** 结束节点输出开关：开启时 last/single 行渲染 footer-row（结束输出按钮） */
+  showEndOutput?: boolean
   /** 消息滚动容器宽度（px）：按实际宽度动态计算折行单位数，窄屏防低估；
    * 缺省回落桌面校准常数 */
   containerWidth?: number
@@ -159,23 +161,24 @@ export interface RowSizePrefs {
 
 // ---- 内容感知估值常量（与 AIMessageContent.vue 渲染 CSS 对齐，按官方建议偏保守高估）----
 
-/** thinking：13px 等宽全角宽约 13px，聊天区行宽 ~650px，取 45 即低估行宽 → 高估行数 */
+/** thinking：13.5px UI 字体全角宽约 13.5px，聊天区行宽 ~650px，取 45 即低估行宽 → 高估行数 */
 const THINKING_UNITS_PER_LINE = 45
-const THINKING_LINE_HEIGHT = 13 * 1.6
+const THINKING_LINE_HEIGHT = 13.5 * 1.7
 /** thinking 正文上下 padding（14px × 2） */
 const THINKING_BODY_PADDING = 28
 /** thinking 正文封顶（AIMessageContent 中 el-scrollbar max-height="400px"） */
 const THINKING_BODY_MAX = 400
-/** thinking 块外 chrome：头部 ~36 + 块外边距 12 */
-const THINKING_CHROME = 48
-/** content：15px 全角宽约 15px，行宽 ~600px，保守取 38 */
+/** thinking 块外 chrome：头部（7px padding×2 + 单行 ~19）+ 块外边距 12 */
+const THINKING_CHROME = 46
+/** content：14.5px 全角宽约 14.5px，行宽 ~600px，保守取 38 */
 const CONTENT_UNITS_PER_LINE = 38
-const CONTENT_LINE_HEIGHT = 15 * 1.7
+const CONTENT_LINE_HEIGHT = 14.5 * 1.7
 /** Markdown 块级元素（标题/列表/代码块）额外垂直留白系数 */
 const CONTENT_MARKDOWN_FACTOR = 1.25
-/** content 行高保底：padding 40 + border 2 + margin 10（.message-content） */
-const CONTENT_MIN = 220
-const CONTENT_CHROME = 52
+/** content 行高保底：正文区已去卡片（padding 2×2 + margin-bottom 10），单行起步 */
+const CONTENT_MIN = 48
+/** content 行外 chrome：padding 2×2 + margin-bottom 10（.message-content 已无卡片边框） */
+const CONTENT_CHROME = 14
 /** 代码块封顶：与 MarkdownRenderer.vue 的 .markdown-body pre max-height: 480px
  * 对齐。估值若不封顶，巨型代码块（数万字符）行会估出数万 px，「估值先行入账 →
  * 挂载实测封顶塌缩」的巨量负 delta 让下方内容整体上跳 + scrollTop 越界被浏览器
@@ -199,21 +202,14 @@ const SUMMARY_CHROME = 64
 /** compress-summary 内容内边距：与 .compress-summary 的 padding 14px × 2 一致 */
 const SUMMARY_BODY_PADDING = 28
 
-/** 消息行 first chrome：header 行高 36 + margin-bottom 8 = 44 */
+/** 消息行 first chrome：header 行高（头像 36 与文本行高取大者）+ margin-bottom 8 = 44 */
 const FIRST_CHROME = 44
 /**
- * 消息行 footer chrome：MessageBubble.vue 的 .footer-row 实测 offsetHeight = 41px
- * （padding-top 12 + min-height 28 + border-top ~1；margin-top 16 不计入，因为
- * virtualizer 量的是 offsetHeight 不含 margin）。两个 footer 块（token-info /
- * end-output-row）共享此容器，估值统一收敛；流式指示器已独立成行（typing 行），
- * 不再占用 footer。流式中 border-top-color: transparent 但 layout 仍占 1px，
- * 高度不变。
- *
- * 取 42 而非 41：高估 1px 符合 TanStack Virtual 文档"estimate the largest possible
- * size"原则（实测后 delta = -1px，sub-pixel 噪声，可忽略）。
- *
- * @todo 调整 .footer-row 的 font-size / min-height / padding-top / border-top 任意
- * 一项后，必须重新实测 offsetHeight 并校准本常量。
+ * 消息行 footer chrome：token 统计与流式三点已移除，footer-row 现仅承载
+ * 「结束输出」按钮（showEndOutput 开启且消息携带 end_output 时渲染）。
+ * 按钮行实测 offsetHeight ≈ 41px（padding-top 12 + min-height 28 + border-top ~1；
+ * margin-top 16 不计入，virtualizer 量的是 offsetHeight 不含 margin）。
+ * 默认（开关关闭）footer 不渲染，chrome = 0。
  */
 const FOOTER_CHROME = 42
 
@@ -335,14 +331,13 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
                 )
           break
         case 'tool': {
-          // 默认折叠为状态行（业界模式：工具过程是背景细节，点击展开回看）。
-          // 展开真实上限 ~455px（头部 40 + args 150 + 结果 300 等封顶组合，各部件
-          // 均有 max-height）；折叠态按是否有单行摘要行区分：有（结果摘要/子Agent
-          // 实时输出单行）= 头部 40 + 摘要行 ~28 + 边框/边距 ~17 ≈ 85；无（纯 JSON/
-          // 运行中无实时输出，摘要行 display:none）= 头部 40 + 边框/边距 ~14 ≈ 56。
-          // 手动展开只发生在已挂载行（必有实测缓存），455 仅作手动展开行首帧占位
+          // 默认折叠为纯文本状态行（● 工具名 + 可选单行结果摘要，暖纸容器一体）。
+          // 折叠态估值：行 padding 5×2 + 单行文本 ~19 ≈ 29；有单行摘要 = +摘要行
+          // （4+5 padding + ~18 文本 + 1px 分割线）≈ 57；错误行同高（浅红底不增行）。
+          // 展开态：args 150 + 结果 300 等封顶组合，真实上限 ~470，仅作已挂载行
+          // 手动展开的首帧占位（手动展开必有实测缓存接管）
           const override = getBlockExpandOverride(row.key)
-          size = override ? 455 : row.toolHasSummary === false ? 56 : 85
+          size = override ? 470 : row.toolHasSummary === false ? 30 : 58
           break
         }
         case 'todo': {
@@ -373,12 +368,20 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
         default:
           size = 120
       }
-      // 消息级 chrome：first 行带 header（36 + margin-bottom 8），last/single 行带
-      // footer-row 容器（与 MessageBubble.vue 的 .footer-row 对齐）。两个 footer 块
-      // （token-info / end-output-row）共享同一容器，渲染高度
-      // 统一收敛到 FOOTER_CHROME 附近，避免按各自分支估值的 ±8px 偏差导致滚动条错位
+      // 消息级 chrome：first 行带 header（行高 ~36 + margin-bottom 8）。footer-row
+      // 仅在 showEndOutput 开启时渲染（token 统计与流式三点已移除，token 统计改在
+      // 输入区工具栏展示）；按开关条件加成，默认 0，避免每条消息虚高 42px。
+      // 消息间距 margin-bottom 32 不被 virtualizer 测量，折进 last/single 行估值
+      const MESSAGE_GAP = 32
       if (row.part === 'first') size += FIRST_CHROME
-      if (row.part === 'last' || row.part === 'single') size += FOOTER_CHROME
+      if (row.part === 'last' || row.part === 'single') size += MESSAGE_GAP
+      if (
+        (row.part === 'last' || row.part === 'single') &&
+        prefs?.showEndOutput &&
+        row.msg?.end_output
+      ) {
+        size += FOOTER_CHROME
+      }
       return size
     }
   }
