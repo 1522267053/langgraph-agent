@@ -8,7 +8,7 @@ import type { StreamingMessage } from '@/composables/useStreamingMessage'
 import type { Segment, ToolCall } from '@/types/segment'
 import { getBlockExpandOverride } from '@/components/AgentChat/blockExpand'
 
-export type ChatRowKind = 'human' | 'summary' | 'ai'
+export type ChatRowKind = 'human' | 'summary' | 'typing' | 'ai'
 
 /** 行在消息内的位置：first=带头部 mid=中间段 last=带尾部 single=头尾同行 */
 export type ChatRowPart = 'first' | 'mid' | 'last' | 'single'
@@ -95,11 +95,11 @@ export function hasToolCollapsedSummary(tool: ToolCall): boolean {
 
 /**
  * 将消息列表拍平为虚拟行
- * @param showStandaloneTyping 流式中但最后一条不是 AI 消息时，追加独立输入指示器行
+ * @param showStreamingIndicator 流式输出期间，在列表末尾追加独立的流式指示器行
  */
 export function buildChatRows(
   chatMessages: StreamingMessage[],
-  showStandaloneTyping: boolean
+  showStreamingIndicator: boolean
 ): ChatRow[] {
   const rows: ChatRow[] = []
 
@@ -140,16 +140,11 @@ export function buildChatRows(
     })
   })
 
-  if (showStandaloneTyping) {
-    // 合成空 AI 消息占位行，复用 MessageBubble 的头像/header/footer
-    // streaming-indicator 渲染，与首个 chunk 到达后的气泡观感无缝衔接
-    rows.push({
-      key: 'typing',
-      kind: 'ai',
-      part: 'single',
-      msg: { id: 'typing', role: 'ai', content: '', segments: [], createdAt: new Date() },
-      isLast: true
-    })
+  if (showStreamingIndicator) {
+    // 流式指示器独立成行（稳定 key + 固定高度，恒在列表末尾）：不挂在最后一个
+    // 段行的 footer 上——挂段行时每来一个新段 footer 就从旧行迁移到新行（旧行
+    // -57px），视口内内容随之弹跳；独立行与段落增删完全解耦，杜绝结构性抖动
+    rows.push({ key: 'typing', kind: 'typing', part: 'single', msg: null, isLast: true })
   }
   return rows
 }
@@ -209,9 +204,10 @@ const FIRST_CHROME = 44
 /**
  * 消息行 footer chrome：MessageBubble.vue 的 .footer-row 实测 offsetHeight = 41px
  * （padding-top 12 + min-height 28 + border-top ~1；margin-top 16 不计入，因为
- * virtualizer 量的是 offsetHeight 不含 margin）。三个 footer 块（token-info /
- * end-output-row / streaming-indicator）共享此容器，估值统一收敛。流式中
- * border-top-color: transparent 但 layout 仍占 1px，高度不变。
+ * virtualizer 量的是 offsetHeight 不含 margin）。两个 footer 块（token-info /
+ * end-output-row）共享此容器，估值统一收敛；流式指示器已独立成行（typing 行），
+ * 不再占用 footer。流式中 border-top-color: transparent 但 layout 仍占 1px，
+ * 高度不变。
  *
  * 取 42 而非 41：高估 1px 符合 TanStack Virtual 文档"estimate the largest possible
  * size"原则（实测后 delta = -1px，sub-pixel 噪声，可忽略）。
@@ -220,6 +216,9 @@ const FIRST_CHROME = 44
  * 一项后，必须重新实测 offsetHeight 并校准本常量。
  */
 const FOOTER_CHROME = 42
+
+/** 流式指示器行（typing）高度：三点 6px + 上下 padding 16×2 ≈ 38，取 48 高估 */
+const TYPING_ROW_HEIGHT = 48
 
 /** CJK/全角字符（近似全角宽度），其余按半宽 0.5 单位 */
 const CJK_CHAR = /[\u2e80-\u9fff\uF900-\uFAFF\uFF00-\uFFEF\u3000-\u303F]/g
@@ -291,6 +290,8 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
   const measured = measuredSizes.get(row.key)
   if (measured) return measured
   switch (row.kind) {
+    case 'typing':
+      return TYPING_ROW_HEIGHT
     case 'summary': {
       // 摘要正文 13px / line-height 1.6，与 .compress-summary-content CSS 对齐；
       // 受渲染层 400px max-height 封顶：文本超长时走 SUMMARY_BODY_MAX 而非无限生长，
@@ -373,8 +374,8 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
           size = 120
       }
       // 消息级 chrome：first 行带 header（36 + margin-bottom 8），last/single 行带
-      // footer-row 容器（与 MessageBubble.vue 的 .footer-row 对齐）。三个 footer 块
-      // （token-info / end-output-row / streaming-indicator）共享同一容器，渲染高度
+      // footer-row 容器（与 MessageBubble.vue 的 .footer-row 对齐）。两个 footer 块
+      // （token-info / end-output-row）共享同一容器，渲染高度
       // 统一收敛到 FOOTER_CHROME 附近，避免按各自分支估值的 ±8px 偏差导致滚动条错位
       if (row.part === 'first') size += FIRST_CHROME
       if (row.part === 'last' || row.part === 'single') size += FOOTER_CHROME
