@@ -189,6 +189,14 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
         >
           <pre class="end-output-pre">{{ endOutputText }}</pre>
         </el-dialog>
+
+        <!-- 流式输出指示器：AI 消息存在期间的输出中信号（空窗期由 MessageItem
+         的 typing 行接管，两者互斥） -->
+        <div v-if="showFooter && streamingActive" class="footer-row streaming-indicator">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
       </template>
     </div>
   </div>
@@ -310,10 +318,9 @@ export default {
   overflow-wrap: break-word;
 }
 
-/* footer 区统一容器：两个 footer 块（token-info / end-output-row）
+/* footer 区统一容器：三个 footer 块（token-info / end-output-row / streaming-indicator）
    共享同一高度锚点（min-height 28 + 顶部 1px 分割线 + 12px padding-top + 16px margin-top）
-   与 chatRow.ts 的 FOOTER_CHROME 估值对齐，避免虚拟滚动低估导致滚动条错位。
-   流式指示器已独立成行（MessageItem 的 typing 行），不再占用 footer */
+   与 chatRow.ts 的 FOOTER_CHROME 估值对齐，避免虚拟滚动低估导致滚动条错位 */
 .footer-row {
   margin-top: 16px;
   padding-top: 12px;
@@ -322,6 +329,11 @@ export default {
   display: flex;
   align-items: center;
   font-size: 11px;
+}
+
+.footer-row.streaming-indicator {
+  /* 流式中无分割线，避免视觉跳动 */
+  border-top-color: transparent;
 }
 
 .token-info {
@@ -342,6 +354,28 @@ export default {
   font-variant-numeric: tabular-nums;
 }
 
+.streaming-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.streaming-indicator .dot {
+  width: 6px;
+  height: 6px;
+  background: #94a3b8;
+  border-radius: 50%;
+  animation: typing 1.4s infinite both;
+}
+
+.streaming-indicator .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.streaming-indicator .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
 .end-output-row {
   /* chrome 全部由 .footer-row 承载，此处仅作语义标记 */
 }
@@ -359,6 +393,20 @@ export default {
   padding: 12px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+@keyframes typing {
+  0%,
+  80%,
+  100% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 /* ---- 上下文摘要卡（isSummary 形态） ---- */

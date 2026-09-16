@@ -95,11 +95,12 @@ export function hasToolCollapsedSummary(tool: ToolCall): boolean {
 
 /**
  * 将消息列表拍平为虚拟行
- * @param showStreamingIndicator 流式输出期间，在列表末尾追加独立的流式指示器行
+ * @param showStandaloneTyping 流式中但最后一条不是 AI 消息（模型未产出首段）时，
+ * 追加打字指示器行；AI 消息存在后由其 footer 三点接管，两者互斥
  */
 export function buildChatRows(
   chatMessages: StreamingMessage[],
-  showStreamingIndicator: boolean
+  showStandaloneTyping: boolean
 ): ChatRow[] {
   const rows: ChatRow[] = []
 
@@ -140,10 +141,9 @@ export function buildChatRows(
     })
   })
 
-  if (showStreamingIndicator) {
-    // 流式指示器独立成行（稳定 key + 固定高度，恒在列表末尾）：不挂在最后一个
-    // 段行的 footer 上——挂段行时每来一个新段 footer 就从旧行迁移到新行（旧行
-    // -57px），视口内内容随之弹跳；独立行与段落增删完全解耦，杜绝结构性抖动
+  if (showStandaloneTyping) {
+    // 空窗期（AI 消息尚未创建）的打字指示器：AI 头像 + 三点轻量行（52px），
+    // AI 消息创建后本行消失、由其 footer 三点接管（互斥，避免双头像）
     rows.push({ key: 'typing', kind: 'typing', part: 'single', msg: null, isLast: true })
   }
   return rows
@@ -217,8 +217,8 @@ const FIRST_CHROME = 44
  */
 const FOOTER_CHROME = 42
 
-/** 流式指示器行（typing）高度：三点 6px + 上下 padding 16×2 ≈ 38，取 48 高估 */
-const TYPING_ROW_HEIGHT = 48
+/** 流式指示器行（typing）高度：头像 36 + 上下 padding 8×2 = 52，高估取 52 */
+const TYPING_ROW_HEIGHT = 52
 
 /** CJK/全角字符（近似全角宽度），其余按半宽 0.5 单位 */
 const CJK_CHAR = /[\u2e80-\u9fff\uF900-\uFAFF\uFF00-\uFFEF\u3000-\u303F]/g
