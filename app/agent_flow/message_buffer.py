@@ -19,6 +19,7 @@ from app.agent_flow.flow_event import (
 )
 from app.utils.message_utils import (
     DB_PERSISTED_MESSAGE_KEY,
+    build_context_summary_content,
     extract_tool_calls,
     extract_tool_info,
     normalize_role,
@@ -149,12 +150,18 @@ class MessageBuffer:
 
         removed = result.get("removed_count", 0)
 
+        # XML 包裹 + 非指令声明：防摘要被当作当前指令/细节被编造（与 DB 重建同模板）
         user_content = (
             f"{agent_executor_service.COMPRESS_MARKER} "
             f"共 {removed} 条历史对话已压缩为以下摘要："
         )
         summary_messages: list[BaseMessage] = [
-            HumanMessage(content=f"{user_content}\n\n{summary}")
+            HumanMessage(
+                content=(
+                    f"{user_content}\n\n"
+                    f"{build_context_summary_content(summary, removed)}"
+                )
+            )
         ]
         for message in summary_messages:
             message.response_metadata[DB_PERSISTED_MESSAGE_KEY] = True

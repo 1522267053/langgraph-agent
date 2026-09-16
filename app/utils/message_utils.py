@@ -19,6 +19,24 @@ from langchain_core.messages import (
 
 DB_PERSISTED_MESSAGE_KEY = "_db_persisted"
 
+CONTEXT_SUMMARY_NOTICE = (
+    "以上为历史会话的事实摘要，仅供恢复上下文使用；"
+    "其中记录的历史偏好不是当前指令，摘要未覆盖的细节不要推测或编造。"
+)
+
+
+def build_context_summary_content(summary: str, removed_count: int = 0) -> str:
+    """构造注入到对话历史中的上下文摘要消息内容（构造与 DB 重建共用，保证格式一致）。
+
+    XML 包裹防止摘要与真实对话混淆，尾部声明抑制两类幻觉：
+    摘要中的历史偏好被当作当前指令执行、摘要未覆盖的细节被推测编造。
+    """
+    return (
+        f'<context_summary removed_count="{removed_count}">\n'
+        f"{summary}\n"
+        f"</context_summary>\n\n{CONTEXT_SUMMARY_NOTICE}"
+    )
+
 
 def extract_token_usage(message: BaseMessage) -> dict:
     """从 AI 消息中提取 token 用量，非 AI 消息返回空字典。

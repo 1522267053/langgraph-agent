@@ -28,6 +28,7 @@ from app.utils.media_resolver import (
 )
 from app.utils.message_utils import (
     DB_PERSISTED_MESSAGE_KEY,
+    build_context_summary_content,
     extract_token_usage,
     extract_thinking,
     extract_tool_calls,
@@ -239,11 +240,9 @@ class AgentConversationService:
         elif msg.role == "human":
             content = msg.content or ""
             if msg.message_type == "context_summary":
+                # 与 message_buffer 构造处共用模板，保证运行时与 DB 重建格式一致
                 removed_count = (msg.input_data or {}).get("removed_count", 0)
-                content = (
-                    f"[上下文压缩] 共 {removed_count} 条历史对话已压缩为以下摘要："
-                    f"\n\n{content}"
-                )
+                content = build_context_summary_content(content, removed_count)
             # file_read 媒体注入消息：按 sources 重建媒体块（capabilities 为空时
             # 保持纯文本，压缩等内部路径不重放媒体）
             if msg.message_type == "media_injected" and capabilities:
