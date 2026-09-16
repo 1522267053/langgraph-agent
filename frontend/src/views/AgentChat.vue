@@ -174,14 +174,18 @@ onUnmounted(() => {
 // 行模型为「段级」：AI 回合每个 segment 独占一行（见 AgentChat/chatRow.ts），
 // 消息级 UI（头像/头部/尾部）拆分到 first/last 行
 
-// 流式输出期间在列表末尾追加独立的流式指示器行（稳定 key + 固定高度，不随
-// 段落增删迁移，规避 footer 挂段行的结构性抖动）
-const showStreamingIndicator = computed(() => store.isStreaming)
+// 流式中但最后一条不是 AI 消息（模型未产出首段）时，追加打字指示器行；
+// AI 消息存在后由其 footer 的三点接管——两者互斥，避免头像重复
+const showStandaloneTyping = computed(() => {
+  if (!store.isStreaming) return false
+  const last = store.chatMessages.at(-1)
+  return !last || last.role !== 'ai' || last.displayType === 'context-summary'
+})
 
 // 工具行恒为折叠状态行、点击头部展开回看（业界模式）——chatRows 不依赖
 // followPinned 与流式状态，行高在流式期间保持稳定
 const chatRows = computed<ChatRow[]>(() =>
-  buildChatRows(store.chatMessages, showStreamingIndicator.value)
+  buildChatRows(store.chatMessages, showStandaloneTyping.value)
 )
 
 // 展示开关：声明须在 rowVirtualizer 之前（estimateSize 闭包在 setup 期间同步求值）

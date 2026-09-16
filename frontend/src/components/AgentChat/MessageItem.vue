@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ChatDotRound } from '@element-plus/icons-vue'
 import MessageBubble from '@/components/AgentChat/MessageBubble.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import type { ChatRow } from '@/components/AgentChat/chatRow'
@@ -25,12 +26,23 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <!-- 流式指示器状态行：稳定 key + 固定高度，独立于段落行（避免 footer 随
-    新段出现迁移造成视口内内容弹跳）。左缩进与气泡内容区对齐 -->
+  <!-- 打字指示器状态行（仅空窗期：AI 消息尚未创建）：AI 头像 + 「AI」角色名 +
+    角色名下方三点，与真实消息行（头像/角色名/内容）同构；AI 消息创建后本行
+    消失、由其 footer 三点接管（互斥，避免双头像） -->
   <div v-if="row?.kind === 'typing'" class="typing-row">
-    <span class="dot"></span>
-    <span class="dot"></span>
-    <span class="dot"></span>
+    <div class="avatar avatar-ai">
+      <el-icon :size="16"><ChatDotRound /></el-icon>
+    </div>
+    <div class="typing-body">
+      <div class="message-header">
+        <span class="role-name">AI</span>
+      </div>
+      <div class="typing">
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
+      </div>
+    </div>
   </div>
   <MessageBubble
     v-else-if="row?.msg"
@@ -51,16 +63,58 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
-/* 与 MessageBubble 的 .footer-row 三点同款观感：6px 灰点、typing 动画；
-   左缩进 41px 对齐气泡内容区（头像 36 + 间距 5） */
-.typing-row {
+.message-header {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 16px 0;
-  padding-left: 41px;
+  margin-bottom: 8px;
 }
 
+.role-name {
+  font-weight: 600;
+  font-size: 13px;
+  margin: 0;
+  color: #334155;
+}
+/* AI 头像与 MessageBubble 的 .avatar 同款；右侧纵排「AI」角色名 + 三点
+   （三点在角色名正下方），与真实消息行（头像/角色名/内容）同构 */
+.typing-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 8px 0;
+}
+
+.typing-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.avatar-ai {
+  background: linear-gradient(to top right, #1e293b, #475569);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(30, 41, 59, 0.2);
+}
+.typing {
+  /* 三点与「AI」角色名左对齐 */
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 1px;
+  margin-top: 20px;
+}
 .typing-row .dot {
   width: 6px;
   height: 6px;
