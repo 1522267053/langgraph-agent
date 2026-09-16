@@ -143,7 +143,9 @@ export function buildChatRows(
 
   if (showStandaloneTyping) {
     // 空窗期（AI 消息尚未创建）的打字指示器：AI 头像 + 三点轻量行（52px），
-    // AI 消息创建后本行消失、由其 footer 三点接管（互斥，避免双头像）
+    // AI 消息创建后本行消失、由 MessageBubble 内的 waiting-dots 接管
+    // 当前上游 showStandaloneTyping 固定返回 false（避免 typing 行干扰
+    // scrollToLatest 时序），此处保留分支作为未来启用入口
     rows.push({ key: 'typing', kind: 'typing', part: 'single', msg: null, isLast: true })
   }
   return rows
