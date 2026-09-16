@@ -1151,6 +1151,17 @@ onUnmounted(() => {
   border-radius: 4px;
 }
 
+/* ---- 数学公式（KaTeX）横向溢出滚动 ----
+ * katex.min.css 的 .katex-display 无 overflow 处理，长公式（内部 nowrap）
+ * 在窄容器（手机端）会撑爆消息气泡宽度；钳制在容器宽内滚动查看 */
+.markdown-body .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* 公式与滚动条不贴边 */
+  padding: 4px 2px;
+}
+
 .markdown-body .mermaid-container {
   margin: 8px 0;
   border: 1px solid #e2e8f0;
