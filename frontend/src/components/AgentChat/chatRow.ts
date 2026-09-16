@@ -8,7 +8,7 @@ import type { StreamingMessage } from '@/composables/useStreamingMessage'
 import type { Segment, ToolCall } from '@/types/segment'
 import { getBlockExpandOverride } from '@/components/AgentChat/blockExpand'
 
-export type ChatRowKind = 'human' | 'summary' | 'typing' | 'ai'
+export type ChatRowKind = 'human' | 'summary' | 'ai'
 
 /** 行在消息内的位置：first=带头部 mid=中间段 last=带尾部 single=头尾同行 */
 export type ChatRowPart = 'first' | 'mid' | 'last' | 'single'
@@ -141,7 +141,15 @@ export function buildChatRows(
   })
 
   if (showStandaloneTyping) {
-    rows.push({ key: 'typing', kind: 'typing', part: 'single', msg: null, isLast: true })
+    // 合成空 AI 消息占位行，复用 MessageBubble 的头像/header/footer
+    // streaming-indicator 渲染，与首个 chunk 到达后的气泡观感无缝衔接
+    rows.push({
+      key: 'typing',
+      kind: 'ai',
+      part: 'single',
+      msg: { id: 'typing', role: 'ai', content: '', segments: [], createdAt: new Date() },
+      isLast: true
+    })
   }
   return rows
 }
@@ -283,8 +291,6 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
   const measured = measuredSizes.get(row.key)
   if (measured) return measured
   switch (row.kind) {
-    case 'typing':
-      return 56
     case 'summary': {
       // 摘要正文 13px / line-height 1.6，与 .compress-summary-content CSS 对齐；
       // 受渲染层 400px max-height 封顶：文本超长时走 SUMMARY_BODY_MAX 而非无限生长，

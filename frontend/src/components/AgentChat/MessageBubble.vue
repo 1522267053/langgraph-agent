@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RefreshLeft, Tickets } from '@element-plus/icons-vue'
+import { Operation, RefreshLeft, Tickets } from '@element-plus/icons-vue'
 import AIMessageContent from '@/components/common/AIMessageContent.vue'
 import FilePreviewer from '@/components/common/FilePreviewer.vue'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
 import { formatChatTime, formatTokenCount } from '@/utils/format'
 import type { StreamingMessage } from '@/composables/useStreamingMessage'
@@ -10,9 +11,10 @@ import type { Segment } from '@/types/segment'
 import type { ChatRowPart } from '@/components/AgentChat/chatRow'
 
 /**
- * 消息气泡（段级虚拟行渲染单元）
- * 一个 AI 回合被拆成多行时，first 行带头部（头像/角色名/时间）、last 行带尾部
- * （token 统计/流式指示器），mid 行仅渲染段本身；single 行头尾同框
+ * 消息行渲染器（段级虚拟行渲染单元，双形态）
+ * - 消息气泡：AI 回合拆成多行时 first 行带头部（头像/角色名/时间）、last 行带尾部
+ *   （token 统计/流式指示器），mid 行仅渲染段本身；single 行头尾同框
+ * - 上下文摘要卡：displayType === 'context-summary' 的消息渲染为独立摘要卡片
  */
 const props = defineProps<{
   msg: StreamingMessage
@@ -40,6 +42,9 @@ const emit = defineEmits<{
 const isHuman = computed(() => props.msg.role === 'human')
 const showHeader = computed(() => props.part === 'first' || props.part === 'single')
 const showFooter = computed(() => props.part === 'last' || props.part === 'single')
+
+/** 上下文摘要卡形态（压缩历史的 AI 消息） */
+const isSummary = computed(() => props.msg.displayType === 'context-summary')
 
 // ---- 结束节点输出（该轮 AI 消息携带，点击按钮查看） ----
 const endOutputVisible = ref(false)
@@ -76,7 +81,19 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
 </script>
 
 <template>
-  <div :class="['message', msg.role, `part-${part}`]">
+  <!-- 形态一：上下文摘要卡（压缩历史的 AI 消息） -->
+  <div v-if="isSummary" class="compress-summary">
+    <div class="compress-summary-label">
+      <el-icon :size="14"><Operation /></el-icon>
+      <span>上下文摘要</span>
+      <span v-if="msg.removedCount">已压缩 {{ msg.removedCount }} 条历史消息</span>
+    </div>
+    <div class="compress-summary-content">
+      <MarkdownRenderer :content="msg.content" />
+    </div>
+  </div>
+  <!-- 形态二：消息气泡 -->
+  <div v-else :class="['message', msg.role, `part-${part}`]">
     <!-- 头像列：仅 first/single 行渲染头像，mid/last 行渲染等宽占位保持左对齐 -->
     <div class="message-avatar">
       <template v-if="showHeader">
@@ -388,5 +405,34 @@ export default {
     transform: scale(1);
     opacity: 1;
   }
+}
+
+/* ---- 上下文摘要卡（isSummary 形态） ---- */
+
+.compress-summary {
+  background: #f8fafc;
+  border-left: 3px solid #d97706;
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin: 4px 0 8px;
+}
+
+.compress-summary-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #d97706;
+  margin-bottom: 6px;
+}
+
+.compress-summary-content {
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.6;
+  /* 内容封顶：超出滚动查看；封顶值与 chatRow.ts 的 SUMMARY_BODY_MAX 对齐 */
+  max-height: 400px;
+  overflow-y: auto;
 }
 </style>
