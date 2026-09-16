@@ -2289,21 +2289,21 @@ class AgentExecutorService(BaseExecutorService):
 
         removed_count = len(messages_to_compress)
 
-        # ReAct 中途压缩仅纳入最近的有限工具输出，避免摘要请求本身溢出。
-        recent_tool_contents: dict[int, str] = {}
-        recent_tool_calls: dict[int, str] = {}
-        if continue_react:
-            recent_tool_contents, recent_tool_calls = self._trim_recent_tool_payloads(
-                messages_to_compress
-            )
+        # 所有压缩路径均纳入最近有限工具负载：摘要是模型恢复上下文的唯一来源，
+        # 丢掉已执行的工具事实（调了什么、结果是什么）会直接导致后续编造。
+        # 预算由 _trim_recent_tool_payloads 控制，避免摘要请求本身溢出。
+        recent_tool_contents, recent_tool_calls = self._trim_recent_tool_payloads(
+            messages_to_compress
+        )
 
         conversation_lines = []
         for index, msg in enumerate(messages_to_compress):
+            # 带标记的角色行：降低压缩 LLM 对角色边界的混淆
             role_label = (
-                "上下文摘要"
+                "[CONTEXT_SUMMARY]"
                 if msg.message_type == self.CONTEXT_SUMMARY_TYPE
-                else {"human": "用户", "ai": "AI", "tool": "工具"}.get(
-                    msg.role, msg.role
+                else {"human": "[USER]", "ai": "[AI]", "tool": "[TOOL]"}.get(
+                    msg.role, f"[{msg.role.upper()}]"
                 )
             )
             if msg.role == "tool":
@@ -2347,13 +2347,16 @@ class AgentExecutorService(BaseExecutorService):
                 "3. 保留所有关键决策、结论和重要上下文\n"
                 "4. 保留用户明确的偏好和约束条件\n"
                 "5. 精确保留文件路径、函数名、配置项、变量名等技术标识符\n"
-                "6. 省略工具调用的中间过程和重复内容\n"
+                "6. 省略工具调用的中间过程，但必须保留已执行动作清单："
+                "调用了什么工具、关键参数、执行结果与结论——后续对话依赖这些事实，缺失会导致编造\n"
                 "7. 保留未完成的任务和待跟进的事项\n"
                 "8. 移除已过时或不再相关的信息，只保留对后续对话仍有价值的内容\n"
                 "9. 保持简洁紧凑，用最少的文字传达最多的有效信息\n"
                 "10. 直接输出摘要，不要添加前缀、标题或元说明（如「以下是摘要」等）\n"
                 "11. 使用与对话相同的语言输出\n"
-                "12. 不要回答对话本身的内容，只做压缩"
+                "12. 不要回答对话本身的内容，只做压缩\n"
+                "13. 摘要中只允许出现对话历史里明确出现过的事实，"
+                "不得补充、推断或美化任何细节"
             )
             # 自定义提示词追加到默认规则后作为补充要求
             if custom_prompt.strip():
