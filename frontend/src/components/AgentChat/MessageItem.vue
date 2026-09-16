@@ -80,6 +80,7 @@ const emit = defineEmits<{
   display: flex;
   align-items: center;
   gap: 4px;
+  margin: 0px 0px 0px 10px;
   height: 36px;
 }
 .typing-body .dot {
