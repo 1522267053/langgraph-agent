@@ -311,7 +311,11 @@ watch(
 <template>
   <!-- 折叠态：单行结果摘要，富节点（代码表/Diff/媒体）不挂载——聊天虚拟滚动
        场景下折叠行高稳定，流式期间结果到达不造成行高突变与位置漂移 -->
-  <div v-if="collapsed" class="tool-result-summary" :class="{ 'is-empty': !collapsedSummary }">
+  <div
+    v-if="collapsed"
+    class="tool-result-summary"
+    :class="{ 'is-empty': !collapsedSummary, 'is-error': status === 'error' }"
+  >
     <span class="tool-result-summary-text" :class="{ 'is-error': status === 'error' }">
       {{ collapsedSummary }}
     </span>

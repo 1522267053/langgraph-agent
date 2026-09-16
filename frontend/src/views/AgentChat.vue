@@ -1265,7 +1265,7 @@ function handleRejectTools() {
         <div class="header-title">
           <div class="agent-name-row">
             <h1>{{ store.currentAgent?.name || 'AI 助手' }}</h1>
-            <el-tag v-if="store.planMode" size="small" type="warning" effect="light" round>
+            <el-tag v-if="store.planMode" size="small" class="plan-mode-tag" effect="light" round>
               计划模式
             </el-tag>
           </div>
@@ -1702,6 +1702,16 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 计划模式 tag：替换 Element warning 淡黄，用朱砂实底强化模式信号 */
+.plan-mode-tag {
+  --el-tag-bg-color: var(--vermilion);
+  --el-tag-border-color: var(--vermilion);
+  --el-tag-text-color: #fff;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
 }
 
 .session-name {
