@@ -5,7 +5,7 @@
 采用增量更新策略：每次写入时删除旧数据，批量插入新数据。
 """
 
-from typing import List, Optional
+from typing import List
 from sqlalchemy import select, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -89,52 +89,6 @@ class TodoService(BaseService[TodoItem, TodoItemCreate, TodoItemUpdate]):
             }
             for item in items
         ]
-
-
-    async def update_todo_by_id(
-        self,
-        db: AsyncSession,
-        todo_id: int,
-        ref_type: str,
-        ref_id: int,
-        content: str,
-        status: str,
-        priority: str,
-    ) -> Optional[TodoItem]:
-        """按 id 更新单条任务（content/status/priority 全量覆盖）
-
-        归属校验：todo 必须属于 (ref_type, ref_id)，防止 LLM 传入其他
-        会话/执行的 id 跨域修改。不存在或不属于当前上下文返回 None。
-
-        Args:
-            db: 数据库异步会话
-            todo_id: 任务项主键 id
-            ref_type: 关联类型（agent/flow）
-            ref_id: 关联 ID（session_id / execution_id）
-            content: 任务内容（调用方保证非空，此处截断到 500）
-            status: 状态（调用方已校验白名单）
-            priority: 优先级（调用方已校验白名单）
-
-        Returns:
-            更新后的 TodoItem；id 不存在或不属于当前上下文时返回 None
-        """
-        query = select(TodoItem).where(
-            and_(
-                TodoItem.id == todo_id,
-                TodoItem.ref_type == ref_type,
-                TodoItem.ref_id == ref_id,
-                TodoItem.is_delete == 0,
-            )
-        )
-        result = await db.execute(query)
-        item = result.scalar_one_or_none()
-        if not item:
-            return None
-        item.content = (content or "").strip()[:500]
-        item.status = status
-        item.priority = priority
-        await db.flush()
-        return item
 
 
 todo_service = TodoService()
