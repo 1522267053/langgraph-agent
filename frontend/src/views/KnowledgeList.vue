@@ -15,6 +15,7 @@ import { knowledgeBaseApi, knowledgeDocumentApi, knowledgeInsightApi } from '@/a
 import { configApi } from '@/api/config'
 import { downloadKnowledgeDocument } from '@/utils/knowledgeDownload'
 import ActionColumn from '@/components/common/ActionColumn.vue'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 import type {
   KnowledgeBase,
@@ -84,6 +85,8 @@ const currentSegments = ref<KnowledgeDocumentSegment[]>([])
 const segmentDocTitle = ref('')
 const currentContent = ref('')
 const contentDocTitle = ref('')
+/** 原文弹窗展示模式：preview=Markdown 渲染，source=原始文本 */
+const contentViewMode = ref<'preview' | 'source'>('preview')
 const currentInsight = ref<KnowledgeInsight | null>(null)
 const searchQuery = ref('')
 const searchResults = ref<SegmentSearchResult[]>([])
@@ -329,6 +332,7 @@ function handleDownload(row: KnowledgeDocument) {
 
 async function viewContent(row: KnowledgeDocument) {
   contentDocTitle.value = row.title || ''
+  contentViewMode.value = 'preview'
   contentDialogVisible.value = true
   try {
     const res = await knowledgeDocumentApi.getContent(row.id!)
@@ -995,8 +999,17 @@ onMounted(() => {
     </el-dialog>
 
     <el-dialog v-model="contentDialogVisible" :title="`原文 - ${contentDocTitle}`" width="800px">
+      <div class="content-toolbar">
+        <el-radio-group v-model="contentViewMode" size="small">
+          <el-radio-button value="preview">预览</el-radio-button>
+          <el-radio-button value="source">源码</el-radio-button>
+        </el-radio-group>
+      </div>
       <div class="content-viewer">
-        <pre class="content-text">{{ currentContent }}</pre>
+        <!-- MarkdownRenderer 为多根组件（主容器 + 全屏 Teleport），class 无法自动继承，
+             预览样式通过下方 .content-viewer .markdown-body 选择器设置 -->
+        <MarkdownRenderer v-if="contentViewMode === 'preview'" :content="currentContent" />
+        <pre v-else class="content-text">{{ currentContent }}</pre>
       </div>
       <template #footer>
         <el-button @click="contentDialogVisible = false">关闭</el-button>
@@ -1257,11 +1270,24 @@ onMounted(() => {
 
 /* ---- 原文查看 ---- */
 
+.content-toolbar {
+  margin-bottom: 12px;
+}
+
 .content-viewer {
   max-height: 60vh;
   overflow-y: auto;
-  background: #f5f7fa;
   border-radius: 8px;
+  padding: 10px;
+}
+
+/* Markdown 预览模式：浅色衬底 + 白色渲染面板，与聊天内 Markdown 观感一致
+   （MarkdownRenderer 是多根组件，class 无法继承，用容器选择器命中其根 .markdown-body） */
+.content-viewer .markdown-body {
+  background: #fff;
+  border-radius: 8px;
+  padding: 4px 16px;
+  font-size: 13px;
 }
 
 .content-text {
@@ -1273,6 +1299,7 @@ onMounted(() => {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: inherit;
+  background: #f5f7fa;
 }
 
 /* ---- 知识沉淀详情 ---- */
