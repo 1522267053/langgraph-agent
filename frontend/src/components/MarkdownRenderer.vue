@@ -966,7 +966,11 @@ onUnmounted(() => {
    * 巨量塌缩 delta 导致下方内容整体上移 + scrollTop 越界被钳底（上滚跳末尾） */
   max-height: 480px;
   overflow: auto;
-  margin: 0;
+  /* 8px 间距挂在 pre 本身而非 .code-block-wrapper：流式中 post-processing 跳过
+   * attachCodeCopyBtns，pre 为裸元素；SSE 结束才包 wrapper（margin 8px 0），
+   * 若间距只在 wrapper 上，结束瞬间代码块 0 → 8px 净增（margin 折叠后恰 +8px）
+   * → 视口「往下沉」。间距上移到 pre 后两个状态盒模型一致，高度恒等不跳变 */
+  margin: 8px 0;
 }
 
 .markdown-body .code-block-wrapper {
