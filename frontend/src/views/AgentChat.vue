@@ -342,6 +342,47 @@ function startRescueLoop(): void {
   rescueRafId = requestAnimationFrame(tick)
 }
 
+// ---- SSE 结束哨兵：结束窗口内的贴底守卫 ----
+// isStreaming true→false 时启动 2.5s rAF 哨兵。背景：结束时的行高微调
+// （markdown 流式态→终态的后处理，hljs/复制按钮等引起 +8px 级 DOM 变化）
+// 不触发 virtualRows watcher（非虚拟行尺寸变化），rescue loop 无法被点火，
+// 视口会带着残余离底卡死（用户感知「结束下沉」）。
+// 哨兵每帧直检真实 dist，>1px 即直写真实底部（与 rescue loop 同一写入路径，
+// 阈值 1px：8px 微调曾恰卡 >8 边界）。2.5s 后彻底归零，常驻成本可忽略。
+let endSentinelRafId = 0
+function stopEndSentinel(): void {
+  if (endSentinelRafId) {
+    cancelAnimationFrame(endSentinelRafId)
+    endSentinelRafId = 0
+  }
+}
+function startEndSentinel(): void {
+  stopEndSentinel()
+  const startedAt = performance.now()
+  const tick = () => {
+    const now = performance.now()
+    const el = messagesContainer.value
+    if (!el || !el.isConnected || now - startedAt > 2500) {
+      endSentinelRafId = 0
+      return
+    }
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    // 贴底守卫：结束窗口内任何正离底都直写追平；用户上滚立即让位
+    if (followPinned.value && dist > 1) {
+      el.scrollTop = el.scrollHeight
+    }
+    endSentinelRafId = requestAnimationFrame(tick)
+  }
+  endSentinelRafId = requestAnimationFrame(tick)
+}
+watch(
+  () => store.isStreaming,
+  (now, was) => {
+    if (was && !now) startEndSentinel()
+  }
+)
+onUnmounted(stopEndSentinel)
+
 // 贴底派生态随任意虚拟化变化（数据增删/测量更新/滚动）刷新——库内 followOnAppend
 // 已处理贴底，本地 syncAtEnd 仅刷新 isAtEnd / followPinned 状态，不再写 scrollTop
 // 流式期间跟随中断补救：持续收敛追底循环（见 startRescueLoop），watcher 仅负责点火
@@ -373,7 +414,12 @@ watch(
     const realDist = el
       ? Math.max(el.scrollHeight - el.scrollTop - el.clientHeight, 0)
       : 0
-    if (store.isStreaming && followPinned.value && realDist > 8) {
+    // 注意：不设 isStreaming 前置——Phase 2 合并结束帧后，onFlowDone 在 rebuild
+    // 【之前】就翻转 isStreaming=false，结束时的行高微调（markdown 流式态→全量态
+    // +8px 级）发生在翻转后，若此处要求 isStreaming 则无人接管 → 底部下沉 8px
+    // 卡死（结束轨迹日志实证：scrollHeight +8 后 dist=9 恒静止）。
+    // 循环内部自有限流兜底：流结束宽限 2.5s、贴底(≤8px)即退、用户上滚立即让位
+    if (followPinned.value && realDist > 8) {
       startRescueLoop()
     }
   },
@@ -1283,6 +1329,11 @@ async function executeRevert(mode: RevertMode) {
       inputMessage.value = deleted.content
       restoreInputParams(deleted)
       // 回退后列表缩短，强制贴底（不受跟随锁存与用户位置限制）
+      // 行表骤减后 virtualizer 尺寸缓存（measuredSizes/内部 measurementsCache）
+      // 仍持旧行高，视口计算可能落在空区间 → 页面空白；nextTick 后强制整体
+      // 重测（行 key 不变，已挂载行由 RO 重测收敛），再贴底
+      await nextTick()
+      rowVirtualizer.value.measure()
       scrollToLatest()
       notifyFileRestore(deleted.reverted_files ?? [])
       // 批量回退在后端标记 is_reverted，重拉对齐 badge 与面板
