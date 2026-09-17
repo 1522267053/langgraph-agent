@@ -642,15 +642,26 @@ async function renderMermaidBlocks(): Promise<void> {
     }
 
     let renderedSvg = ''
+    // 离屏测量宿主：mermaid render 的两参数模式会把 d{id} 临时测量容器裸挂到 body
+    // （static 定位、无隐藏样式），瞬态参与文档流 → 撑出贯穿整窗的全局滚动条。
+    // 三参数模式让临时容器落在本组件的 absolute+hidden 宿主内，不再影响 body 布局。
+    let measureHost: HTMLDivElement | null = document.createElement('div')
+    measureHost.style.position = 'absolute'
+    measureHost.style.visibility = 'hidden'
+    measureHost.style.left = '-9999px'
+    measureHost.style.top = '0'
+    // 宽度对齐消息正文实际宽度，保证文本折行测量与真实展示一致
+    measureHost.style.width = `${containerRef.value.clientWidth}px`
+    document.body.appendChild(measureHost)
     try {
-      const { svg } = await m.render(id, code.trim())
+      const { svg } = await m.render(id, code.trim(), measureHost)
       renderedSvg = svg
     } catch (firstErr) {
       // 第一次解析失败：尝试自动给含保留字符的标签加引号后再渲染
       const fixedCode = quoteMermaidLabels(code.trim())
       if (fixedCode !== code.trim()) {
         try {
-          const { svg } = await m.render(id, fixedCode)
+          const { svg } = await m.render(id, fixedCode, measureHost)
           renderedSvg = svg
           // 修复成功：同步源码视图与复制按钮内容，并加"已修复"角标
           sourceDiv.textContent = fixedCode
@@ -668,6 +679,10 @@ async function renderMermaidBlocks(): Promise<void> {
       } else {
         showRenderError(firstErr)
       }
+    } finally {
+      // 测量宿主用完即弃（三参数模式下 mermaid 会清空 container 内容，但宿主 div 本身需自清理）
+      measureHost?.remove()
+      measureHost = null
     }
 
     if (renderedSvg) {

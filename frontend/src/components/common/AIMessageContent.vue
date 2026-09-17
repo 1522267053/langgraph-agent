@@ -353,7 +353,14 @@ watch(
 
     <div v-else-if="segment.type === 'content'" class="message-content">
       <div class="content-actions">
-        <el-tooltip v-if="!disableActions && segment.content" content="复制源文本" placement="top">
+        <!-- fixed 定位：absolute 浮层按文档坐标计算，虚拟滚动重排瞬间可能被定位到
+             文档很下方，瞬态撑大 body 产生贯穿整窗的全局滚动条；fixed 相对视口定位无此问题 -->
+        <el-tooltip
+          v-if="!disableActions && segment.content"
+          content="复制源文本"
+          placement="top"
+          :popper-options="{ strategy: 'fixed' }"
+        >
           <el-button
             :icon="CopyDocument"
             link
@@ -366,6 +373,7 @@ watch(
           v-if="!disableActions && segment.dbMsgId && !isMsgContentRevertHidden(idx)"
           content="删除此条及之后的内容"
           placement="top"
+          :popper-options="{ strategy: 'fixed' }"
         >
           <el-button
             :icon="RefreshLeft"
