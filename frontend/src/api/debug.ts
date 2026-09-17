@@ -2,7 +2,7 @@
  * 调试 API 封装
  * @description 提供节点/工具脚本的独立试运行能力，与流程中真实执行路径共享沙箱核心逻辑
  */
-import { post } from './index'
+import { get, post } from './index'
 import type { ApiResponse } from '@/types/common'
 
 /** Python 试运行请求体 */
@@ -59,5 +59,14 @@ export const debugApi = {
       ...req,
       debug_session_id: getOrCreateDebugSessionId()
     })
+  },
+
+  /**
+   * 获取 Python 沙箱允许导入的模块列表
+   * - 后端从 python_handler.ALLOWED_MODULES（单一事实源）读取
+   * - 供 Python 节点配置面板展示，让用户知道代码里可以 import 哪些模块
+   */
+  getAllowedModules(): Promise<ApiResponse<string[]>> {
+    return get<ApiResponse<string[]>>('/debug/python/allowed-modules')
   }
 }

@@ -63,6 +63,25 @@ class PythonNodeConfig(BaseNodeConfig):
     ]
 
 
+# =============================================================================
+# 可用模块白名单 —— 单一事实源（Single Source of Truth）
+# =============================================================================
+# 1. 用途：
+#    - 节点执行时的运行时白名单（_safe_import 拦截未授权的 import）
+#    - LLM 工具描述（description 字符串）通过 ", ".join(sorted(ALLOWED_MODULES)) 动态生成
+# 2. 维护原则：
+#    - **修改此集合时无需同步任何其他位置**（description 已自动跟随）
+#    - 添加新模块前请确认依赖已安装且不破坏 RestrictedPython 安全模型
+#    - 移除模块前请检查是否有节点代码依赖（无法做静态分析，按需谨慎）
+# 3. 设计权衡：
+#    - 包含 os/pathlib/csv/base64 是为了支持工作流节点的文件 IO 与编码转换
+#    - 包含 requests 是为了支持 HTTP 数据拉取（如外部 API 拉数据）
+#    - 不包含 subprocess/socket/ctypes 之类需要进程/系统级隔离的能力
+#      （如需使用请改用 shell_executor / ssh_executor 工具节点）
+# 4. 实测说明：
+#    - 列表中所有模块均经过 RestrictedPython 编译测试 + 运行时 import 测试
+#    - openpyxl 需要项目依赖已安装（pyproject.toml 已有）
+# =============================================================================
 ALLOWED_MODULES = frozenset(
     {
         "math",
@@ -545,7 +564,8 @@ class PythonNodeHandler(BaseNodeHandler):
                 description=f"main 函数参数值。参数列表:\n{param_list}",
             )
 
-        description = f"""在沙箱环境中执行Python代码进行数据处理或计算。
+        description = f"""在 Agent 主机上执行 Python 代码，进行数据处理、文件读写或流程中间计算。
+这是一个给后端补 Python 解释器能力的工具（不需要主机预装 Python），代码运行在后端 Python 环境，可读写本地文件系统，并非隔离沙箱。
 
 必须定义 main 函数，参数签名:
   def main({params_desc}):
@@ -553,8 +573,22 @@ class PythonNodeHandler(BaseNodeHandler):
 参数类型说明:
 {param_list}
 
-允许导入的模块: math, json, re, datetime, collections, itertools, functools, decimal, statistics, hashlib, uuid, copy, dataclasses 等。
-禁止导入危险模块（os, sys, subprocess, socket等），禁止访问 __dunder__ 属性。
+可用模块（实测可用，从 ALLOWED_MODULES 动态生成）: {", ".join(sorted(ALLOWED_MODULES))}。
+不适合此工具的能力: subprocess / socket / 网络请求等需要进程隔离的操作（如需请改用 shell_executor 或 ssh_executor）。
+
+文件 IO 约定:
+- 默认工作目录是后端进程目录（不是用户当前项目目录，也不是约定 temp 目录）；如需写入请用绝对路径，必要时可先用 os.chdir() 切换。
+- 工作流 Python 节点里读 CSV / JSON / 文本等本地文件是正常用法。
+- 一次性验证脚本推荐写到项目的 workspace/temp 目录（_check/_tmp 前缀），7 天自动清理。
+
+硬拦截（无法绕过）:
+- __dunder__ 属性（如 __name__/__import__ 等）在 AST 编译阶段直接报错，无法用 try/except 捕获。
+
+危险操作必须自律（工具不会主动阻止，但请勿执行）:
+- 不要 shutil.rmtree / os.remove 删项目源码或非自己创建的文件
+- 不要格式化磁盘 / 改注册表 / 操作系统目录
+- 远程服务器操作前必须与用户确认
+
 返回值将作为执行结果。
 
 ## 文件保存约定
@@ -699,5 +733,5 @@ class PythonNodeHandler(BaseNodeHandler):
             )
         else:
             tool_name = f"python_executor_{node_key}"
-            desc = "在沙箱环境中执行Python代码"
+            desc = "执行 Python 代码（可读写本地文件），用于数据处理和流程中间计算"
         return [{"name": tool_name, "description": desc}]

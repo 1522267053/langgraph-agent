@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import type { PythonConfig } from './types'
 import { fieldTypeOptions } from './types'
 import { ElMessage } from 'element-plus'
@@ -10,6 +10,7 @@ import CodeEditor from '@/components/CodeEditor.vue'
 import ApprovalConfigSection, { type ApprovalConfig } from './ApprovalConfigSection.vue'
 import { useFlowStore } from '@/stores/flowStore'
 import { flowApi } from '@/api/flow'
+import AllowedModulesBar from './AllowedModulesBar.vue'
 
 const props = defineProps<{
   config: PythonConfig
@@ -277,6 +278,8 @@ function onApprovalUpdate(val: ApprovalConfig): void {
           "mime_type": "image/png"} 可自动保存为文件并在聊天中预览
         </el-text>
       </div>
+      <!-- 允许导入的模块（后端 ALLOWED_MODULES 动态拉取，默认折叠） -->
+      <AllowedModulesBar />
     </div>
     <div class="config-section">
       <div class="section-title">工具模式</div>

@@ -16,6 +16,7 @@ import { CaretRight, Refresh } from '@element-plus/icons-vue'
 import { debugApi, type PythonDebugResult } from '@/api/debug'
 import { fieldTypeOptions } from './types'
 import type { PythonParam } from './types'
+import AllowedModulesBar from './AllowedModulesBar.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -300,6 +301,9 @@ function isImageMime(mime: string): boolean {
       </div>
       <pre class="result-pre">{{ formatJsonOutput(result) }}</pre>
     </div>
+
+    <!-- 允许导入的模块（编辑时可对照参考，默认折叠） -->
+    <AllowedModulesBar />
   </div>
 </template>
 
