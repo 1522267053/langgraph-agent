@@ -47,6 +47,7 @@ const tools = computed(() => store.toolList)
   gap: 12px;
   height: 100%;
   overflow-y: auto;
+  padding: 0 16px 16px;
 }
 
 .drawer-header {
