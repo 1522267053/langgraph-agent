@@ -342,6 +342,73 @@ function startRescueLoop(): void {
   rescueRafId = requestAnimationFrame(tick)
 }
 
+// ---- 微任务级钉底（MutationObserver，消除 rAF 一帧滞后的下沉感）----
+// 帧序取证（rAF 逐帧轨迹日志）证实：贴底模式下几乎每个内容增长帧都呈「h 先涨、
+// top 下一帧才追」形态——RO 回调驱动的高度更新发生在帧内 rAF 之后（帧序：
+// rAF → RO → layout → paint），rescue 的 rAF 追赶永远晚一帧，中间态（h 已涨、
+// top 未追）被绘制 → 每个增长帧可见一次下沉，SSE 结束最后一块落地时幅度最大。
+// MO 回调在 DOM 变更后的微任务同步执行，【早于】本帧 layout/paint——在中间态
+// 被绘制之前就把 scrollTop 钉到真实底部，下沉在结构上不可见。
+// 门控：followPinned（用户上滚让位）+ 真实离底 > 2px（静止时零写入）。
+// childList+subtree+attributes 覆盖行增删与行内容尺寸变化；仅读 scrollHeight/
+// 写 scrollTop，无 Vue 响应式介入，常驻成本可忽略。
+function pinToBottomIfPinned(): void {
+  const el = messagesContainer.value
+  if (!el || !el.isConnected) return
+  if (!followPinned.value || document.hidden) return
+  const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+  if (dist > 2) el.scrollTop = el.scrollHeight
+}
+
+const pinObserver =
+  typeof MutationObserver !== 'undefined' ? new MutationObserver(pinToBottomIfPinned) : null
+
+// messagesContentRef 容器在 welcome 模式下是 v-else 条件渲染——首屏 onMounted 时
+// 尚未挂载（此前 MO 的 observe 因此早退从未执行）。独立 rAF 轮询直到就绪：
+// 不能寄生在拦截器的 poll 里——wrapRef（滚动元素）通常先于 messagesContentRef
+// 就绪，拦截器直接安装后 poll 不再运行，MO 的重试就被跳过（已实证的漏洞）
+let moInstalled = false
+let moPollRaf = 0
+function tryInstallPinObserver(): void {
+  if (moInstalled || !pinObserver) return
+  const root = messagesContentRef.value
+  if (!root) {
+    if (moPollRaf) return
+    const deadline = performance.now() + 10000
+    const poll = () => {
+      moPollRaf = 0
+      if (moInstalled) return
+      const el = messagesContentRef.value
+      if (!el && performance.now() <= deadline) {
+        moPollRaf = requestAnimationFrame(poll)
+        return
+      }
+      tryInstallPinObserver()
+    }
+    moPollRaf = requestAnimationFrame(poll)
+    return
+  }
+  moInstalled = true
+  // messagesContentRef 是虚拟行挂载容器（.messages-container，el-scrollbar view 层），
+  // 观察其子树即覆盖全部行 DOM 增删与内容变化
+  pinObserver.observe(root, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    // characterData 必须开启：流式 chunk 更新 markdown 走文本节点变更，
+    // false 时 MO 全程静默（SINK-DEBUG 实证 dh/dtop 分离一帧的中间态被 paint）。
+    // MO 回调是微任务，先于本帧 paint——文本一变就同帧钉底，下沉不可见
+    characterData: true
+  })
+}
+onMounted(() => {
+  tryInstallPinObserver()
+})
+onUnmounted(() => {
+  if (moPollRaf) cancelAnimationFrame(moPollRaf)
+  pinObserver?.disconnect()
+})
+
 // 贴底派生态随任意虚拟化变化（数据增删/测量更新/滚动）刷新——库内 followOnAppend
 // 已处理贴底，本地 syncAtEnd 仅刷新 isAtEnd / followPinned 状态，不再写 scrollTop
 // 流式期间跟随中断补救：持续收敛追底循环（见 startRescueLoop），watcher 仅负责点火
@@ -453,16 +520,9 @@ const agentId = ref<number | null>(null)
 
 const isWelcomeMode = computed(() => !store.messagesLoading && store.chatMessages.length === 0)
 
-// 欢迎页无消息列表，无需收敛贴底：直接显示
-// （空会话/无会话时 selectSession 不被调用，messagesLoading 从不翻转，
-//  messagesRevealed 须在此解除，否则 loading 遮罩永不消失）
-watch(
-  isWelcomeMode,
-  welcome => {
-    if (welcome) messagesRevealed.value = true
-  },
-  { immediate: true }
-)
+// 欢迎页结构上已脱离 el-scrollbar（模板 v-if 分流），无 loading 遮罩依赖；
+// chatMessages 出现时 isWelcomeMode 翻 false → el-scrollbar 才挂载，
+// 此时 messagesRevealed 的初始 false 配合 converge 正常走收敛贴底流程
 
 function handleSuggestedPrompt(prompt: string) {
   inputMessage.value = prompt
@@ -1488,7 +1548,21 @@ function handleRejectTools() {
       </div>
     </header>
 
+    <!-- 欢迎页完全在 el-scrollbar 之外：滚动容器/加载遮罩的挂载与重测
+         均不波及 welcome 内容，从结构上消除进入时的「一下一上」抖动
+         （此前 welcome 在 el-scrollbar 内，loading 遮罩移除触发内部重测，
+         welcome-wrapper 自然高度与视口钳制高度两帧不一致 → 抖动） -->
+    <div v-if="isWelcomeMode" class="welcome-wrapper">
+      <WelcomePage
+        :agent-name="store.currentAgent?.name || 'AI 助手'"
+        :agent-description="store.currentAgent?.description"
+        :suggested-prompts="store.currentAgent?.suggested_prompts || []"
+        @select-prompt="handleSuggestedPrompt"
+      />
+    </div>
+
     <el-scrollbar
+      v-else
       ref="scrollbarRef"
       v-loading="store.messagesLoading || !messagesRevealed"
       element-loading-text="加载中..."
@@ -1501,16 +1575,7 @@ function handleRejectTools() {
       @touchmove.passive="onUserScrollUpIntent"
       @pointerdown.capture="handleScrollbarPointerDown"
     >
-      <div v-if="isWelcomeMode" class="welcome-wrapper">
-        <WelcomePage
-          :agent-name="store.currentAgent?.name || 'AI 助手'"
-          :agent-description="store.currentAgent?.description"
-          :suggested-prompts="store.currentAgent?.suggested_prompts || []"
-          @select-prompt="handleSuggestedPrompt"
-        />
-      </div>
       <div
-        v-else
         ref="messagesContentRef"
         class="messages-container"
         :style="{ visibility: messagesRevealed ? 'visible' : 'hidden' }"
@@ -1774,12 +1839,16 @@ export default {
 }
 
 .welcome-wrapper {
+  /* 欢迎页已脱离 el-scrollbar（模板 v-if 分流），作为 chat-content 的直接
+     子元素与 header 平级：flex:1 占满 header 以下空间，内部自身居中。
+     此前在 el-scrollbar 内时曾因「自然高度+padding 超出视口 14px +
+     loading 遮罩移除触发重测」产生「一下一上」，结构性消除 */
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding-bottom: 24px;
 }
 
 .chat-header {

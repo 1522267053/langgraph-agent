@@ -1030,6 +1030,15 @@ onUnmounted(() => {
   padding: 0;
 }
 
+/* 抵消 github.css 的 pre code.hljs { padding: 1em; display: block; background: #fff }：
+   流式中 post-processing 跳过 hljs，SSE 结束 finishStreamRender 高亮时 code 净增
+   ~2em 高度 + 闪白（SSE 结束视口下沉的根因）。padding/background 归零后高亮
+   只改变字色不改盒模型，pre 自身的 padding: 12px 与深底主题保持一致 */
+.markdown-body pre code.hljs {
+  padding: 0;
+  background: transparent;
+}
+
 .markdown-body :not(pre) > code {
   background: var(--paper-warm);
   padding: 2px 6px;
