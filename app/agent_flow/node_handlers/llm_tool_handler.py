@@ -942,6 +942,20 @@ class LlmToolNodeHandler(BaseNodeHandler):
                 self._emit(writer, ErrorEvent(node_key=node.node_key, message=error))
                 return False
 
+            # 压缩后注入继续指令（对标 opencode 的 compaction continue 消息）：
+            # 历史被摘要替换后，模型失去「任务进行到哪、接下来做什么」的行动锚点，
+            # 不注入会表现为停摆或答非所问。摘要模板已含「下一步」章节，
+            # 此指令把注意力锚定到它上。仅 ReAct 中途压缩注入——手动压缩后
+            # 无进行中任务，不需要。
+            msg_buf.append(
+                HumanMessage(
+                    content=(
+                        "[上下文已压缩] 以上摘要包含目标与工作状态。"
+                        "请继续执行未完成的任务：如「下一步」有明确动作请直接继续，"
+                        "不确定如何进行时停下来向用户澄清。"
+                    )
+                )
+            )
             state.set_conversation_messages(node.node_key, list(msg_buf.messages))
             return True
 

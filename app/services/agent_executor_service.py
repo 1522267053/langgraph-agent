@@ -876,6 +876,75 @@ class AgentExecutorService(BaseExecutorService):
         await db.refresh(session)
         return session
 
+    async def _apply_chat_model_override(
+        self,
+        db: AsyncSession,
+        flow: Flow,
+        model: str,
+        provider: str | None = None,
+    ) -> None:
+        """将临时模型覆盖应用到 flow 内存副本的全部 LLM 节点。
+
+        改的是本次从 DB 加载的内存副本，expunge 摘除 ORM 变更跟踪，
+        防止后续 commit 把覆盖值写回 flow_node 表；capabilities/context_length
+        按模型元数据联动，不回退全局默认。跨供应商（provider 与节点不同）时
+        从供应商连接解析 api_key/base_url。对话与压缩链路共用。
+        """
+        from app.services.ai_provider_connection_service import (
+            ai_provider_connection_service,
+        )
+        from app.utils.node_config_helper import derive_model_runtime_meta
+
+        # 同一供应商连接在本次请求内只解析一次
+        conn_cache: dict[str, Any] = {}
+
+        for node in flow.nodes or []:
+            if node.node_type != NodeType.LLM.value:
+                continue
+            cfg_provider = (node.base_config or {}).get("provider", "")
+            same_model = (node.base_config or {}).get("model") == model
+            same_provider = not provider or provider == cfg_provider
+            # 与节点已配置模型+供应商相同：视为未切换，跳过覆盖以保留手动定制
+            if same_model and same_provider:
+                continue
+            db.expunge(node)
+            cfg = dict(node.base_config or {})
+            target_provider = provider or cfg_provider
+            if provider and provider != cfg_provider:
+                if provider not in conn_cache:
+                    conn_cache[
+                        provider
+                    ] = await ai_provider_connection_service.get_by_provider_id(
+                        db, provider
+                    )
+                conn = conn_cache[provider]
+                if conn:
+                    cfg["api_key"] = conn.api_key
+                    if conn.base_url:
+                        cfg["base_url"] = conn.base_url
+                    else:
+                        from app.services.ai_provider_service import (
+                            ai_provider_service,
+                        )
+
+                        ai_provider = await ai_provider_service.get_by_provider_id(
+                            db, provider
+                        )
+                        cfg["base_url"] = (
+                            ai_provider.api_url
+                            if ai_provider and ai_provider.api_url
+                            else ""
+                        )
+            if provider:
+                cfg["provider"] = provider
+            cfg["model"] = model
+            meta = await derive_model_runtime_meta(db, target_provider, model)
+            if meta:
+                cfg["capabilities"] = meta["capabilities"]
+                if meta["context_length"]:
+                    cfg["context_length"] = meta["context_length"]
+            node.base_config = cfg
+
     async def get_or_create_sub_agent_session(
         self,
         db: AsyncSession,
@@ -1479,64 +1548,8 @@ class AgentExecutorService(BaseExecutorService):
             # 临时模型覆盖：改的是本次从 DB 加载的内存副本，
             # expunge 摘除 ORM 变更跟踪，防止后续 commit 把覆盖值写回 flow_node 表；
             # capabilities/context_length 按模型元数据联动，不回退全局默认。
-            # 跨供应商（provider 与节点不同）时从供应商连接解析 api_key/base_url
             if model:
-                from app.services.ai_provider_connection_service import (
-                    ai_provider_connection_service,
-                )
-                from app.utils.node_config_helper import derive_model_runtime_meta
-
-                # 同一供应商连接在本次请求内只解析一次
-                conn_cache: dict[str, Any] = {}
-
-                for node in flow.nodes or []:
-                    if node.node_type != NodeType.LLM.value:
-                        continue
-                    cfg_provider = (node.base_config or {}).get("provider", "")
-                    same_model = (node.base_config or {}).get("model") == model
-                    same_provider = not provider or provider == cfg_provider
-                    # 与节点已配置模型+供应商相同：视为未切换，跳过覆盖以保留手动定制
-                    if same_model and same_provider:
-                        continue
-                    db.expunge(node)
-                    cfg = dict(node.base_config or {})
-                    target_provider = provider or cfg_provider
-                    if provider and provider != cfg_provider:
-                        if provider not in conn_cache:
-                            conn_cache[
-                                provider
-                            ] = await ai_provider_connection_service.get_by_provider_id(
-                                db, provider
-                            )
-                        conn = conn_cache[provider]
-                        if conn:
-                            cfg["api_key"] = conn.api_key
-                            if conn.base_url:
-                                cfg["base_url"] = conn.base_url
-                            else:
-                                from app.services.ai_provider_service import (
-                                    ai_provider_service,
-                                )
-
-                                ai_provider = (
-                                    await ai_provider_service.get_by_provider_id(
-                                        db, provider
-                                    )
-                                )
-                                cfg["base_url"] = (
-                                    ai_provider.api_url
-                                    if ai_provider and ai_provider.api_url
-                                    else ""
-                                )
-                    if provider:
-                        cfg["provider"] = provider
-                    cfg["model"] = model
-                    meta = await derive_model_runtime_meta(db, target_provider, model)
-                    if meta:
-                        cfg["capabilities"] = meta["capabilities"]
-                        if meta["context_length"]:
-                            cfg["context_length"] = meta["context_length"]
-                    node.base_config = cfg
+                await self._apply_chat_model_override(db, flow, model, provider)
 
             # 检查是否首次对话（用于自动生成标题）
             existing_messages = await self._get_messages(db, session_id, 1)
@@ -2283,6 +2296,13 @@ class AgentExecutorService(BaseExecutorService):
         if not flow:
             return {"summary": None, "kept_count": total, "removed_count": 0}
 
+        # 会话临时模型优先：与对话链路同源覆盖，手动/自动压缩都跟随右上角
+        # 切换的临时模型（未切换时 session.chat_model 为空，用节点默认配置）
+        if session.chat_model:
+            await self._apply_chat_model_override(
+                db, flow, session.chat_model, session.chat_provider
+            )
+
         llm_config = self._extract_llm_config(flow)
         if not llm_config.get("model"):
             return {"summary": None, "kept_count": total, "removed_count": 0}
@@ -2340,24 +2360,51 @@ class AgentExecutorService(BaseExecutorService):
                 max_tokens=4096,
             )
             summary_prompt = (
-                "你是一个对话上下文压缩助手。请将以下对话历史压缩为结构化摘要。\n\n"
-                "要求：\n"
-                "1. 按主题分段，用「## 主题名」标记每个段落\n"
-                "2. 用简洁的要点列表（bullets）而非段落\n"
-                "3. 保留所有关键决策、结论和重要上下文\n"
-                "4. 保留用户明确的偏好和约束条件\n"
-                "5. 精确保留文件路径、函数名、配置项、变量名等技术标识符\n"
-                "6. 省略工具调用的中间过程，但必须保留已执行动作清单："
-                "调用了什么工具、关键参数、执行结果与结论——后续对话依赖这些事实，缺失会导致编造\n"
-                "7. 保留未完成的任务和待跟进的事项\n"
-                "8. 移除已过时或不再相关的信息，只保留对后续对话仍有价值的内容\n"
-                "9. 保持简洁紧凑，用最少的文字传达最多的有效信息\n"
-                "10. 直接输出摘要，不要添加前缀、标题或元说明（如「以下是摘要」等）\n"
-                "11. 使用与对话相同的语言输出\n"
-                "12. 不要回答对话本身的内容，只做压缩\n"
-                "13. 摘要中只允许出现对话历史里明确出现过的事实，"
-                "不得补充、推断或美化任何细节"
+                "你是对话上下文压缩助手。请将以下对话历史压缩为结构化摘要，"
+                "供另一个 AI 助手据此继续未完成的工作。\n\n"
+                "输出必须严格采用以下 Markdown 结构（章节顺序不变、空章节也必须保留并写「（无）」）：\n"
+                "## 目标\n"
+                "- 用户要完成什么（1-2 句）\n\n"
+                "## 重要细节\n"
+                "- 约束/偏好、已做决策及其原因、关键事实与假设、继续工作必需的上下文（无则写「（无）」）\n\n"
+                "## 工作状态\n"
+                "### 已完成\n"
+                "- 已完成的工作、已验证的事实、已做的变更（无则写「（无）」）\n\n"
+                "### 进行中\n"
+                "- 当前正在做的工作、未完成的变更、进行中的调查（无则写「（无）」）\n\n"
+                "### 受阻\n"
+                "- 阻塞项、失败的命令、未知的疑问点（无则写「（无）」）\n\n"
+                "## 下一步\n"
+                "1. 立即要执行的具体动作（无则写「（无）」）\n"
+                "2. 已知的后续动作（无则写「（无）」）\n\n"
+                "## 相关文件\n"
+                "- 文件/目录路径：它与任务的关系（无则写「（无）」）\n\n"
+                "规则：\n"
+                "1. 用简洁的要点列表而非段落，保留最多有效信息\n"
+                "2. 精确保留文件路径、函数名、配置项、变量名、命令、报错原文等技术标识符\n"
+                "3. 省略工具调用的中间过程，但必须保留已执行动作清单："
+                "调用了什么工具、关键参数、执行结果与结论——后续工作依赖这些事实，缺失会导致编造\n"
+                "4. 移除已过时或不再相关的信息，只保留对继续工作仍有价值的内容\n"
+                "5. 直接输出摘要，不要添加模板之外的说明（如「以下是摘要」等）\n"
+                "6. 使用与对话相同的语言输出（章节标题用上方给定的中文）\n"
+                "7. 不要回答对话本身的内容，只做压缩\n"
+                "8. 摘要中只允许出现对话历史里明确出现过的事实，不得补充、推断或美化任何细节\n"
+                "9. 不要提及压缩过程或上下文被压缩这件事本身"
             )
+            # 历史中存在旧摘要（[CONTEXT_SUMMARY] 标记行）时追加增量合并规则：
+            # 对标 opencode SUMMARY_UPDATE_INSTRUCTIONS——未完成目标必须向前携带
+            if "[CONTEXT_SUMMARY]" in conversation_text:
+                summary_prompt += (
+                    "\n\n## 增量合并规则\n"
+                    "对话历史中包含此前生成的摘要（[CONTEXT_SUMMARY] 标记行）。"
+                    "请将旧摘要与新对话合并为一份新摘要：\n"
+                    "- 旧摘要中的目标、约束、用户指令、决策和未完成事项必须携带进新摘要，"
+                    "即使新对话未提及；仅丢弃已完成且不再需要的内容\n"
+                    "- 新对话比旧摘要更新：两者冲突时以新对话为准，写出修正后的事实并丢弃旧说法\n"
+                    "- 把新对话中已完成的工作从「进行中」移入「已完成」\n"
+                    "- 若阻塞已解除，更新「受阻」章节，保留仍需的继续工作细节\n"
+                    "- 根据当前工作状态更新「目标」和「下一步」"
+                )
             # 自定义提示词追加到默认规则后作为补充要求
             if custom_prompt.strip():
                 summary_prompt += f"\n\n## 补充要求\n{custom_prompt.strip()}"
