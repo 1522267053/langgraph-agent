@@ -6,6 +6,7 @@
 
 当前端点：
 - POST /api/debug/python：Python 节点 / LLM tool_check_script 试运行
+- GET  /api/debug/python/allowed-modules：Python 沙箱允许导入的模块列表
 """
 
 import base64
@@ -16,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.agent_flow.node_handlers.python_handler import _run_python_in_sandbox
+from app.agent_flow.node_handlers.python_handler import ALLOWED_MODULES, _run_python_in_sandbox
 from app.schemas.base_schema import ApiResponse
 from app.utils.debug_file import save_debug_bytes
 
@@ -131,3 +132,14 @@ async def debug_python(req: PythonDebugRequest) -> ApiResponse[PythonDebugRespon
         success=result["success"],
     )
     return ApiResponse.success(data=response, msg="试运行完成")
+
+
+@router.get(
+    "/python/allowed-modules",
+    response_model=ApiResponse[list[str]],
+    summary="获取 Python 沙箱允许导入的模块列表",
+    description="从 python_handler.ALLOWED_MODULES（单一事实源）读取，运行时白名单与 LLM 工具描述共用此集合。",
+)
+async def get_python_allowed_modules() -> ApiResponse[list[str]]:
+    """返回排序后的允许模块列表，供前端配置面板展示"""
+    return ApiResponse.success(data=sorted(ALLOWED_MODULES), msg="获取成功")

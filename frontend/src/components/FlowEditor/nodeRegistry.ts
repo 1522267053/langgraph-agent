@@ -460,7 +460,7 @@ const registry: Record<string, NodeRegistryEntry> = {
 
   python: {
     label: 'Python 代码',
-    description: '在沙箱环境中执行Python代码',
+    description: '执行 Python 代码（可读写本地文件），用于数据处理和流程中间计算',
     category: 'tool',
     icon: Cpu,
     iconColor: '#f59e0b',
