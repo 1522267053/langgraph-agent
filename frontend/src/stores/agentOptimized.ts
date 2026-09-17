@@ -2005,30 +2005,11 @@ export const useAgentStore = defineStore('agent', () => {
         // user-/streaming- 占位行都是中断轮次的孤儿（对应 DB 行已被删或从未落库），
         // 保留会在尾部渲染幽灵 thinking/内容段（与 clearOrphanPlaceholders 同口径，
         // 但清理时机提前到撤回——下次 sendMessage 才清来不及）
-        const placeholdersBefore = chatMessages.value.filter(
-          m => m.dbMsgId == null && (m.id.startsWith('user-') || m.id.startsWith('streaming-'))
-        ).length
         chatMessages.value = chatMessages.value.filter(
           m => !(m.dbMsgId == null && (m.id.startsWith('user-') || m.id.startsWith('streaming-')))
         )
         messageTotal.value = Math.max(0, messageTotal.value - (beforeCount - messages.value.length))
-        // [REVERT-DEBUG] 临时取证日志：定位「撤回后全部消息不展示」——
-        // 确认 db 行数 / 渲染行数 / 清理的孤儿占位数是否一致
-        // eslint-disable-next-line no-console
-        console.log('[REVERT-DEBUG] after delete', {
-          deletedId: messageId,
-          dbRows: messages.value.length,
-          chatRows: chatMessages.value.length,
-          prunedPlaceholders: placeholdersBefore
-        })
         rebuildChatMessages()
-        // [REVERT-DEBUG] rebuild 后行数对照：若 rebuild 后 chatRows 异常为 0/骤减
-        // 而上方 dbRows 正常，则问题在 rebuildChatMessages 的对齐逻辑
-        // eslint-disable-next-line no-console
-        console.log('[REVERT-DEBUG] after rebuild', {
-          chatRows: chatMessages.value.length,
-          roles: chatMessages.value.map(m => m.role).join(',')
-        })
         return deleted
       }
       return null
