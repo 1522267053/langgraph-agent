@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { ChatDotRound, Refresh } from '@element-plus/icons-vue'
+import { ChatDotRound } from '@element-plus/icons-vue'
 
-const props = defineProps<{
+defineProps<{
   agentName: string
   agentDescription?: string
   suggestedPrompts: string[]
@@ -11,35 +10,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'selectPrompt', prompt: string): void
 }>()
-
-/**
- * 建议提示词最多同屏 8 个：welcome-wrapper 已钳制 height:100%（防进入抖动），
- * 提示词过多会撑破视口被裁切。超限时只随机展示一批，点「换一批」再随机换一组
- * （Fisher-Yates 局部洗牌，取前 8）。≤8 个全量展示不显示换一批。
- */
-const MAX_VISIBLE_PROMPTS = 8
-
-const visiblePrompts = computed(() => {
-  if (props.suggestedPrompts.length <= MAX_VISIBLE_PROMPTS) {
-    return props.suggestedPrompts
-  }
-  return shuffledPrompts.value
-})
-
-const shuffledPrompts = ref<string[]>([])
-const needsShuffle = computed(() => props.suggestedPrompts.length > MAX_VISIBLE_PROMPTS)
-
-function shufflePrompts(): void {
-  const pool = [...props.suggestedPrompts]
-  // Fisher-Yates：从尾部向前，每步与随机前位交换，取前 8 即随机一批
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[pool[i], pool[j]] = [pool[j], pool[i]]
-  }
-  shuffledPrompts.value = pool.slice(0, MAX_VISIBLE_PROMPTS)
-}
-
-if (needsShuffle.value) shufflePrompts()
 </script>
 
 <template>
@@ -53,11 +23,11 @@ if (needsShuffle.value) shufflePrompts()
       <h1 class="welcome-title">{{ agentName }}</h1>
       <p v-if="agentDescription" class="welcome-desc">{{ agentDescription }}</p>
 
-      <div v-if="visiblePrompts.length" class="prompts-section">
+      <div v-if="suggestedPrompts.length" class="prompts-section">
         <div class="prompts-label">试试这些</div>
         <div class="prompts-grid">
           <button
-            v-for="(prompt, i) in visiblePrompts"
+            v-for="prompt in suggestedPrompts"
             :key="prompt"
             class="prompt-chip"
             @click="emit('selectPrompt', prompt)"
@@ -66,17 +36,6 @@ if (needsShuffle.value) shufflePrompts()
               <el-icon :size="14"><ChatDotRound /></el-icon>
             </span>
             {{ prompt }}
-          </button>
-          <button
-            v-if="needsShuffle"
-            class="prompt-chip prompt-shuffle"
-            title="换一批建议"
-            @click="shufflePrompts"
-          >
-            <span class="prompt-icon">
-              <el-icon :size="14"><Refresh /></el-icon>
-            </span>
-            换一批
           </button>
         </div>
       </div>
@@ -98,13 +57,17 @@ if (needsShuffle.value) shufflePrompts()
   padding: 40px 24px 0;
 }
 
-/* 内容主体弹性撑满并自身居中，免责声明钉底 */
+/* 内容主体：内容少时弹性居中；内容多（建议提示词放开上限）时顶部对齐、
+   自然生长，由 .welcome-page 的 overflow-y:auto 内部滚动（welcome 已脱离
+   el-scrollbar，此滚动不引发进入抖动）。flex-shrink:0 保证内容不被压缩
+   （此前 flex:1 兄弟 disclaimer 挤压导致 chips 与免责声明重叠） */
 .welcome-content {
-  flex: 1;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  margin: auto 0;
   max-width: 640px;
   width: 100%;
   min-height: 0;
@@ -194,18 +157,6 @@ if (needsShuffle.value) shufflePrompts()
   color: var(--vermilion);
 }
 
-/* 「换一批」功能按钮：虚线边框与建议 chip 区分，弱化视觉权重 */
-.prompt-chip.prompt-shuffle {
-  border-style: dashed;
-  background: transparent;
-  color: var(--paper-ink-4);
-}
-.prompt-chip.prompt-shuffle:hover {
-  border-color: var(--vermilion-line);
-  background: var(--vermilion-soft);
-  color: var(--vermilion);
-}
-
 /* 移动端（与 AgentChat.vue 的 768px 断点同口径）：
    - 容器留白收窄（24px→16px，上 40→24）
    - 图标/标题降档（64→48 / 24→20）
@@ -253,9 +204,13 @@ if (needsShuffle.value) shufflePrompts()
 }
 
 .welcome-disclaimer {
+  /* 跟随内容流：不做钉底（滚动容器内 flex:1 的兄弟会被压缩导致重叠），
+     margin-top 保证与末行 chips 的最小间距；内容不足一屏时由
+     .welcome-content 的 margin:auto 0 居中，disclaimer 自然贴在其后 */
+  margin-top: 16px;
+  padding-bottom: 12px;
   font-size: 11px;
   color: var(--paper-ink-4);
-  margin-top: 24px;
   flex-shrink: 0;
 }
 </style>
