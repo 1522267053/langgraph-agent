@@ -1328,6 +1328,34 @@ export const useAgentStore = defineStore('agent', () => {
       },
       onFlowDone: async () => {
         if (!isCurrentStream(context)) return
+        // [结束帧合并修复] 日志实证 T2→T3 的网络往返（~100ms）期间
+        // 「isStreaming=false 的 UI 中间态」已被浏览器绘制（waiting-dots 卸载/
+        // 操作按钮出现/markdown 退出流式态 → 第一次重排「一下」），随后 rebuild
+        // 行高修正触发第二次反向重排「一上」→ 抖动。
+        // 修复：先发起 DB 拉取（DOM 保持流式末态不动），数据就绪后在同一微任务内
+        // 同步执行 flush+翻转+rebuild，浏览器只绘制一次合并后的终态。
+        //
+        // replace=true 以 DB 最新一页重置原始行与分页状态；preserveStreaming=true
+        // 走 rebuildChatMessages 就地 diff：占位气泡保留原 id 过继 dbMsgId，DOM 不重挂；
+        // incrementalOnly=true 增量拉取本轮新增，避免全量重置把未加载的更早历史
+        // 插入头部顶跑用户上滚查看的视口
+        const afterId = messages.value.at(-1)?.id ?? undefined
+        let fresh: { list: AgentMessage[]; total: number } | null = null
+        try {
+          const res = await agentApi.getMessages(
+            context.agentId,
+            context.sessionId,
+            undefined,
+            MESSAGE_REFRESH_LIMIT,
+            afterId
+          )
+          if (res.data.code === 1 && isCurrentStream(context)) {
+            fresh = { list: res.data.data?.list || [], total: res.data.data?.total || 0 }
+          }
+        } catch (e) {
+          console.error('[onFlowDone] 刷新消息失败', e)
+        }
+        // ---- 数据就绪：以下全部同步执行，中间不让出主线程（关键） ----
         stopStreaming()
         isCompressing.value = false
         if (isWaitingToolApproval.value) {
@@ -1345,17 +1373,12 @@ export const useAgentStore = defineStore('agent', () => {
         if (isResume) {
           isResume = false
         }
-        try {
-          // replace=true 以 DB 最新一页重置原始行与分页状态；preserveStreaming=true
-          // 走 rebuildChatMessages 就地 diff：占位气泡保留原 id 过继 dbMsgId，DOM 不重挂；
-          // incrementalOnly=true 增量拉取本轮新增，避免全量重置把未加载的更早历史
-          // 插入头部顶跑用户上滚查看的视口
-          await refreshStreamMessages(context, true, true, true)
-        } catch (e) {
-          console.error('[onFlowDone] 刷新消息失败', e)
+        if (fresh) {
+          applyLatestMessages(fresh.list, fresh.total, true, true)
+          messageRefreshVersion.value++
         }
         if (context.wasFirstMessage && isCurrentStream(context)) {
-          await loadSessions(context.agentId, sessionPage.value)
+          void loadSessions(context.agentId, sessionPage.value)
         }
       },
       onLlmRetry: createOnLlmRetryHandler(),
@@ -1978,6 +2001,13 @@ export const useAgentStore = defineStore('agent', () => {
         const deleted = res.data.data
         const beforeCount = messages.value.length
         messages.value = messages.value.filter(m => m.id < messageId)
+        // 撤回时流式必然已结束（上层 isStreaming 守卫），此刻所有 dbMsgId==null 的
+        // user-/streaming- 占位行都是中断轮次的孤儿（对应 DB 行已被删或从未落库），
+        // 保留会在尾部渲染幽灵 thinking/内容段（与 clearOrphanPlaceholders 同口径，
+        // 但清理时机提前到撤回——下次 sendMessage 才清来不及）
+        chatMessages.value = chatMessages.value.filter(
+          m => !(m.dbMsgId == null && (m.id.startsWith('user-') || m.id.startsWith('streaming-')))
+        )
         messageTotal.value = Math.max(0, messageTotal.value - (beforeCount - messages.value.length))
         rebuildChatMessages()
         return deleted
