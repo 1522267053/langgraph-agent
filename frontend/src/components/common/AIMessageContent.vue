@@ -10,6 +10,7 @@ import type { Segment } from '@/types/segment'
 import { useKnowledgeReferenceDrawer } from '@/composables/useKnowledgeReferenceDrawer'
 import { getBlockExpandOverride, toggleBlockExpand } from '@/components/AgentChat/blockExpand'
 import { formatToolArgs, formatToolArgsExpanded, hasStringifiedJson } from '@/utils/format'
+import { statFromTool, mediaTypeLabel } from '@/utils/fileOps'
 import { AUTO_SCROLL_BOTTOM_THRESHOLD } from '@/constants/timing'
 
 const props = withDefaults(
@@ -159,6 +160,16 @@ function isArgsExpanded(segment: Segment, idx: number): boolean {
   return expandedArgsSegments.value.has(segmentKey(segment, idx))
 }
 
+/**
+ * file_ 类工具（file_read/file_write/text_editor）的折叠行统计：
+ * 工具名右侧展示结果 pill（读取/写入行数、diff 增删）。
+ * 仅折叠态展示（展开后结果区自带完整 meta，避免重复）；成功且有有效数据才显示。
+ */
+function toolInlineStat(segment: Segment) {
+  if (!segment.tool || toolBodyVisible.value) return null
+  return statFromTool(segment.tool)
+}
+
 async function handleCopy(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
@@ -300,16 +311,42 @@ watch(
         ]"
         @click="toggleToolBody"
       >
-        <span v-if="segment.tool.status === 'running'" class="status-spinner"></span>
-        <span v-else :class="['tool-line-dot', segment.tool.status]"></span>
-        <span class="tool-line-name">{{ segment.tool.name }}</span>
-        <!-- 折叠交互：箭头指向提示可点击，展开时旋转 90° -->
-        <el-icon
-          v-if="isToolInteractive"
-          :class="['tool-expand-arrow', { 'is-expanded': toolBodyVisible }]"
-        >
-          <ArrowRight />
-        </el-icon>
+        <div class="tool-line-main">
+          <div class="tool-line-row">
+            <span v-if="segment.tool.status === 'running'" class="status-spinner"></span>
+            <span v-else :class="['tool-line-dot', segment.tool.status]"></span>
+            <span class="tool-line-name">{{ segment.tool.name }}</span>
+            <!-- file_ 类工具统计 pill：名称右侧（读取/写入行数、diff 增删），仅折叠态 -->
+            <span v-if="toolInlineStat(segment)" class="tool-inline-stats">
+              <template v-if="toolInlineStat(segment)!.kind === 'read'">
+                <span v-if="toolInlineStat(segment)!.isMedia" class="stat-pill stat-plain">
+                  查看{{ mediaTypeLabel(toolInlineStat(segment)!.isMedia) }}
+                </span>
+                <span v-else-if="toolInlineStat(segment)!.readStart != null" class="stat-pill stat-plain">
+                  {{ toolInlineStat(segment)!.readStart }}-{{ toolInlineStat(segment)!.readEnd }} 行
+                </span>
+                <span v-else class="stat-pill stat-plain">{{ toolInlineStat(segment)!.readLines }} 行</span>
+              </template>
+              <template v-else-if="toolInlineStat(segment)!.kind === 'write'">
+                <span class="stat-pill stat-plain">写入 {{ toolInlineStat(segment)!.writeLines }} 行</span>
+              </template>
+              <template v-else>
+                <span v-if="(toolInlineStat(segment)!.added ?? 0) > 0" class="stat-pill stat-add">+{{ toolInlineStat(segment)!.added }}</span>
+                <span v-if="(toolInlineStat(segment)!.removed ?? 0) > 0" class="stat-pill stat-del">−{{ toolInlineStat(segment)!.removed }}</span>
+              </template>
+            </span>
+            <!-- 折叠交互：箭头指向提示可点击，展开时旋转 90°；无统计 pill 时独占推右 -->
+            <el-icon
+              v-if="isToolInteractive"
+              :class="[
+                'tool-expand-arrow',
+                { 'is-expanded': toolBodyVisible, 'no-inline-stat': !toolInlineStat(segment) }
+              ]"
+            >
+              <ArrowRight />
+            </el-icon>
+          </div>
+        </div>
       </div>
       <!-- 入参 JSON：折叠态隐藏，点击头部展开后显示 -->
       <div
@@ -494,6 +531,54 @@ watch(
   transition: background 0.15s;
 }
 
+/* 双行结构容器：上行（圆点+名称+统计 pill+箭头）/ 下行（文件路径） */
+.tool-line-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-line-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* file_ 类工具统计 pill：名称右侧（读取/写入行数、diff 增删） */
+.tool-inline-stats {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-pill {
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.stat-pill.stat-plain {
+  color: var(--paper-ink-3);
+  background: rgba(60, 50, 35, 0.06);
+}
+
+.stat-pill.stat-add {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.1);
+  font-weight: 600;
+}
+
+.stat-pill.stat-del {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.08);
+  font-weight: 600;
+}
+
 .tool-line.tool-header-clickable:hover {
   background: rgba(60, 50, 35, 0.05);
 }
@@ -529,9 +614,10 @@ watch(
   background: #dc2626;
 }
 
-/* 展开状态箭头：折叠时朝右、展开时旋转 90° 朝下 */
+/* 展开状态箭头：折叠时朝右、展开时旋转 90° 朝下。
+   margin-left:auto 由统计 pill 承担（有 pill 时箭头紧随其后贴行尾），
+   此处不再设置，避免双 auto 平分剩余空间把 pill 挤到行中间 */
 .tool-expand-arrow {
-  margin-left: auto;
   font-size: 12px;
   color: var(--paper-ink-4);
   transition: transform 0.2s;
@@ -539,6 +625,11 @@ watch(
 
 .tool-expand-arrow.is-expanded {
   transform: rotate(90deg);
+}
+
+/* 无统计 pill 的工具行：箭头自身推到行尾（有 pill 时由 pill 的 auto 推进） */
+.tool-expand-arrow.no-inline-stat {
+  margin-left: auto;
 }
 
 .tool-header-clickable {
