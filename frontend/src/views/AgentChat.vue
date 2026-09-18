@@ -2,6 +2,8 @@
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useVirtualizer } from '@tanstack/vue-virtual'
+// 库内 elementScroll 拦截入口（实测口径贴底守卫，见下方 guardedElementScroll）
+import { elementScroll as libElementScroll } from '@tanstack/virtual-core'
 import { useAgentStore } from '@/stores'
 import { ElMessage, ElMessageBox, ElImageViewer } from 'element-plus'
 import type { ScrollbarDirection, ScrollbarInstance } from 'element-plus'
@@ -234,6 +236,36 @@ watch(
   { flush: 'post' }
 )
 
+// ---- 库内滚动写入守卫（实测口径贴底判定）----
+// 必须先于 useVirtualizer 声明：options.scrollToFn 引用本常量，置后会因
+// TDZ 崩溃（Cannot access before initialization）。
+//
+// 根因（SINK 日志实锤，2026-09-18）：TanStack Virtual resizeItem 的 wasAtEnd
+// 用【估算口径】（totalSize - clientHeight - scrollOffset）判定贴底，流式期间
+// 估算恒滞后实测（totalSize=1996 vs scrollH=2032）。用户上滚 100px 后：本地
+// 实测 elDist=100（回底按钮显示），库内 vDist≈62≤80 仍判「贴底」→ 每次行高
+// 增长执行 scrollTop += adjustments 补偿 → 视口被往下拽（表现为「内容整体
+// 上移、滚动条不动、回底按钮常驻」）。
+//
+// 守卫：followPinned=false（用户上滚）时，拦截 adjustments>0 的补偿写入，
+// 改为 adjustments=undefined 透传（拒绝位移）。库内账面（scrollOffset/
+// scrollAdjustments）经透传触发的原生 scroll 事件与真实 DOM 自动同步，
+// 无积累性漂移。pinned=true 的贴底跟随 / scrollToEnd / rescue 不受影响。
+const guardedElementScroll = (
+  offset: number,
+  {
+    adjustments,
+    behavior
+  }: { adjustments?: number | undefined; behavior?: string | undefined },
+  instance: never
+) => {
+  // 用户已上滚且这是「往下拽」的补偿写入：拒绝位移
+  if (!followPinned.value && (adjustments ?? 0) > 0) {
+    return libElementScroll(offset, { adjustments: undefined, behavior }, instance)
+  }
+  return libElementScroll(offset, { adjustments, behavior }, instance)
+}
+
 const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   get count() {
     return chatRows.value.length
@@ -251,6 +283,8 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
   // 由库内统一接管 prepend 视口稳定 + 流式贴底。手写补偿 + 自定义
   // shouldAdjustScrollPositionOnItemSizeChange 与库内两套门控互相毒化（曾经
   // 在「估算先行入账 / 实测滞后」交错窗口出现 prepend 后漂 12558px），已删除
+  // 实测口径贴底守卫：pinned=false 时拦截库内补偿写入（见 guardedElementScroll）
+  scrollToFn: guardedElementScroll as never,
   anchorTo: 'end',
   followOnAppend: true,
   // 文档推荐静态值 80：scrollEndThreshold 是库内 wasAtEnd 判定窗口，
@@ -393,7 +427,7 @@ function tryInstallPinObserver(): void {
     subtree: true,
     attributes: true,
     // characterData 必须开启：流式 chunk 更新 markdown 走文本节点变更，
-    // false 时 MO 全程静默（SINK-DEBUG 实证 dh/dtop 分离一帧的中间态被 paint）。
+    // false 时 MO 全程静默（逐帧轨迹日志实证 dh/dtop 分离一帧的中间态被 paint）。
     // MO 回调是微任务，先于本帧 paint——文本一变就同帧钉底，下沉不可见
     characterData: true
   })
@@ -409,6 +443,7 @@ onUnmounted(() => {
 // 贴底派生态随任意虚拟化变化（数据增删/测量更新/滚动）刷新——库内 followOnAppend
 // 已处理贴底，本地 syncAtEnd 仅刷新 isAtEnd / followPinned 状态，不再写 scrollTop
 // 流式期间跟随中断补救：持续收敛追底循环（见 startRescueLoop），watcher 仅负责点火
+
 watch(
   virtualRows,
   () => {
@@ -701,10 +736,15 @@ watch(selectedModel, model => {
   } catch {
     // ignore
   }
-  // 会话级落库（对标计划模式）：复合键拆回 provider/model，空串表示清除回退默认
+  // 会话级落库（对标计划模式）：复合键拆回 provider/model，空串表示清除回退默认；
+  // chat_model 只存裸模型 ID（压缩链路直接读库当模型名，带前缀会被供应商判为不存在）
   const parsed = model ? parseModelValue(model) : null
   // 切模型后深度随选择联动落库：清模型时 reasoning 一并清（后端同语义）
-  void store.updateSessionChatModel(model, parsed?.provider, selectedReasoning.value || null)
+  void store.updateSessionChatModel(
+    parsed?.model ?? model,
+    parsed?.provider,
+    selectedReasoning.value || null
+  )
 })
 
 // ---- 推理深度选项（当前选中模型的档位；无元数据/未选模型 → null 隐藏控件）----
@@ -765,7 +805,7 @@ watch(selectedReasoning, reasoning => {
   if (selectedModel.value) {
     const parsed = parseModelValue(selectedModel.value)
     void store.updateSessionChatModel(
-      selectedModel.value,
+      parsed?.model ?? selectedModel.value,
       parsed?.provider,
       reasoning || null
     )
@@ -1662,7 +1702,7 @@ function handleRejectTools() {
       v-loading="store.messagesLoading || !messagesRevealed"
       element-loading-text="加载中..."
       class="messages-scrollbar"
-      :distance="50"
+      :distance="SCROLL_END_PX"
       wrap-style="overflow-anchor: none"
       @scroll="syncAtEnd"
       @end-reached="onEndReached"
