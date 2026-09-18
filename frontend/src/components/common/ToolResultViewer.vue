@@ -316,7 +316,7 @@ watch(
     class="tool-result-summary"
     :class="{ 'is-empty': !collapsedSummary, 'is-error': status === 'error' }"
   >
-    <span class="tool-result-summary-text" :class="{ 'is-error': status === 'error' }">
+    <span class="tool-result-summary-text" :class="{ 'is-error': status === 'error' }" :title="collapsedSummary">
       {{ collapsedSummary }}
     </span>
     <!-- 生成媒体折叠态仅保留下载入口，预览展开后才渲染 -->
