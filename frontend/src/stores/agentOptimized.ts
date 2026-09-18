@@ -295,24 +295,27 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   /**
-   * 更新会话级临时模型（按会话独立存储，对标 togglePlanMode）
-   * @param model 模型 id，空串表示清除（回退 LLM 节点默认）
+   * 更新会话级临时模型与推理深度（按会话独立存储，对标 togglePlanMode）
+   * @param model 模型 id，空串表示清除（回退 LLM 节点默认，reasoning 同步清除）
    * @param provider 与 model 配套的供应商 ID
+   * @param reasoning 推理深度（off/none/minimal/low/medium/high/xhigh/max），空=跟随节点配置
    * @returns 是否成功写入（无会话或接口失败返回 false）
    */
   async function updateSessionChatModel(
     model: string,
-    provider?: string
+    provider?: string,
+    reasoning?: string | null
   ): Promise<boolean> {
     const sessionId = currentSession.value?.id
     const agentId = currentAgent.value?.id
     if (!agentId || !sessionId) return false
     try {
-      const res = await agentApi.updateChatModel(agentId, sessionId, model || null, provider)
+      const res = await agentApi.updateChatModel(agentId, sessionId, model || null, provider, reasoning)
       // await 期间用户可能已切换会话，只回写仍是目标会话的标志
       if (res.data.code === 1 && currentSession.value?.id === sessionId) {
         currentSession.value.chat_model = model || null
         currentSession.value.chat_provider = model ? provider || null : null
+        currentSession.value.chat_reasoning = model ? reasoning || null : null
       }
       return true
     } catch {
@@ -399,7 +402,8 @@ export const useAgentStore = defineStore('agent', () => {
     workDir?: string,
     planMode?: boolean,
     chatModel?: string,
-    chatProvider?: string
+    chatProvider?: string,
+    chatReasoning?: string | null
   ): Promise<AgentSession | null> {
     try {
       const res = await agentApi.createSession(
@@ -407,7 +411,8 @@ export const useAgentStore = defineStore('agent', () => {
         workDir,
         planMode,
         chatModel,
-        chatProvider
+        chatProvider,
+        chatReasoning
       )
       if (res.data.code === 1) {
         await loadSessions(agentId, 1)
@@ -1486,7 +1491,8 @@ export const useAgentStore = defineStore('agent', () => {
     params: Record<string, unknown> = {},
     files?: MessageFile[],
     model?: string,
-    provider?: string
+    provider?: string,
+    reasoning?: string
   ) {
     if (!currentAgent.value || !currentSession.value) return
 
@@ -1505,7 +1511,13 @@ export const useAgentStore = defineStore('agent', () => {
     streamAbort = agentApi.chat(
       context.agentId,
       context.sessionId,
-      { content, params: { ...params, __plan_mode__: planMode.value }, model, provider },
+      {
+        content,
+        params: { ...params, __plan_mode__: planMode.value },
+        model,
+        provider,
+        reasoning
+      },
       createStreamHandlers(context)
     )
   }

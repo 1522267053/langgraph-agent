@@ -88,12 +88,14 @@ async def derive_model_runtime_meta(
     """按模型元数据（ai_model 表）推导运行时覆盖所需的模型级配置
 
     供 Agent 聊天临时切换模型使用：capabilities（多模态开关）按 modalities.input
-    推导，context_length 取 limits，全部来自模型自身元数据，
+    推导，context_length 取 limits，推理能力（reasoning_enabled/reasoning_options）
+    供 override 判定推理深度档位合法性，全部来自模型自身元数据，
     不回退到全局默认配置。
 
     Returns:
         命中 ai_model 记录且 modalities.input 可解析时返回
-        {"capabilities": {...}, "context_length": int}
+        {"capabilities": {...}, "context_length": int,
+         "reasoning_enabled": bool, "reasoning_options": list}
         —— 即使推导结果全 False（纯文本模型）也返回，用于明确关闭媒体注入；
         记录不存在或 modalities 缺失/不可解析时返回 None
         （调用方仅切换 model，其余保留节点原值）。
@@ -131,9 +133,27 @@ async def derive_model_runtime_meta(
             context_length = int(limits.get("context") or 0)
         except (TypeError, ValueError):
             context_length = 0
+
+    # reasoning_options 在 DB 中是 JSON 字符串（models.dev 同步产物），兜错解析
+    import json as _json
+
+    reasoning_options: list = []
+    raw_options = ai_model.reasoning_options
+    if isinstance(raw_options, str) and raw_options:
+        try:
+            parsed = _json.loads(raw_options)
+            if isinstance(parsed, list):
+                reasoning_options = parsed
+        except (TypeError, ValueError):
+            reasoning_options = []
+    elif isinstance(raw_options, list):
+        reasoning_options = raw_options
+
     return {
         "capabilities": capabilities,
         "context_length": context_length,
+        "reasoning_enabled": bool(ai_model.reasoning),
+        "reasoning_options": reasoning_options,
     }
 
 

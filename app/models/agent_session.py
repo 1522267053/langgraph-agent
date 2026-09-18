@@ -63,6 +63,15 @@ class AgentSession(DbBaseModel):
         default=None,
         comment="与 chat_model 配套的供应商 ID；跨供应商时从供应商连接解析 api_key/base_url",
     )
+    chat_reasoning: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        default=None,
+        comment=(
+            "会话级推理深度覆盖（none/minimal/low/medium/high/xhigh/max/off），"
+            "空则跟随 LLM 节点配置；off 表示显式关闭思考"
+        ),
+    )
 
     def __repr__(self) -> str:
         return (

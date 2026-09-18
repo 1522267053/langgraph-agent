@@ -2,7 +2,7 @@
 
 import logging
 from functools import cached_property
-from typing import Any
+from typing import Any, Optional
 
 import anthropic
 import httpx
@@ -49,6 +49,26 @@ def _install_request_logger(llm) -> None:
 # 填 {"thinking": {"type": "enabled", "budget_tokens": N}} 覆盖）
 _EFFORT_BUDGET_MAP = {"low": 2048, "medium": 4096, "high": 8192}
 
+# budget_tokens 型档位的预算上限（对齐 opencode budgetVariants 钳制策略）
+_THINKING_BUDGET_CEILING = 31_999
+
+
+def _effort_budget(effort: str, max_tokens: Any) -> Optional[int]:
+    """推理深度档位 → thinking.budget_tokens 预算（不支持原生 effort 的模型用）
+
+    静态阶梯（low/medium/high）+ 动态 max 档：max → min(31999, max_tokens-1)，
+    满足 Anthropic budget_tokens < max_tokens 的 API 校验。
+    """
+    if effort != "max":
+        return _EFFORT_BUDGET_MAP.get(effort)
+    try:
+        mt = int(max_tokens) if max_tokens is not None else 0
+    except (TypeError, ValueError):
+        mt = 0
+    if mt > 1:
+        return min(_THINKING_BUDGET_CEILING, mt - 1)
+    return _THINKING_BUDGET_CEILING
+
 
 def _model_effort_levels(model: str) -> tuple[str, ...]:
     """查询模型在库 profile 中声明的 effort 档位（langchain-anthropic data/_profiles）。
@@ -72,6 +92,7 @@ def _resolve_thinking(
     model: str,
     effort: Any,
     user_thinking: Any,
+    max_tokens: Any = None,
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
     """决策 thinking 配置（纯函数，便于测试）。
 
@@ -112,8 +133,9 @@ def _resolve_thinking(
             return None, effort_str, None
         return None, None, effort_str
     # 不支持 effort（旧 Claude + 第三方兼容端点 + 未知模型名）：
-    # 三档映射为 enabled + budget_tokens；allow-create 自定义档位无对应概念，丢弃
-    budget = _EFFORT_BUDGET_MAP.get(effort_str)
+    # 档位映射为 enabled + budget_tokens（max 为动态档，按 max_tokens 钳制）；
+    # allow-create 自定义档位无对应概念，丢弃
+    budget = _effort_budget(effort_str, max_tokens)
     if budget is not None:
         return {"type": "enabled", "budget_tokens": budget}, None, None
     return None, None, effort_str
@@ -191,7 +213,7 @@ class AnthropicProvider(BaseAIProvider):
         # 走 adaptive thinking）。不映射直接透传会被 SDK 拒绝
         effort = kwargs.pop("reasoning_effort", None)
         thinking, native_effort, dropped_effort = _resolve_thinking(
-            model, effort, model_kwargs.get("thinking")
+            model, effort, model_kwargs.get("thinking"), kwargs.get("max_tokens")
         )
         if dropped_effort:
             logger.warning(

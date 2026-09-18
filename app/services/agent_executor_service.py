@@ -409,6 +409,7 @@ class AgentExecutorService(BaseExecutorService):
         *,
         model: str | None = None,
         provider: str | None = None,
+        reasoning: str | None = None,
         approval_callback: Callable[[dict[str, Any]], None] | None = None,
         event_callback: Callable[[dict[str, Any]], None] | None = None,
         question_callback: Callable[[dict[str, Any]], None] | None = None,
@@ -422,6 +423,7 @@ class AgentExecutorService(BaseExecutorService):
                 dict(params or {}),
                 model=model,
                 provider=provider,
+                reasoning=reasoning,
                 _managed_run=True,
             ),
             approval_callback=approval_callback,
@@ -811,6 +813,7 @@ class AgentExecutorService(BaseExecutorService):
         plan_mode: int = 0,
         chat_model: Optional[str] = None,
         chat_provider: Optional[str] = None,
+        chat_reasoning: Optional[str] = None,
     ) -> AgentSession:
         """创建新会话（公开方法）
 
@@ -820,6 +823,7 @@ class AgentExecutorService(BaseExecutorService):
             plan_mode: 可选，计划模式（1=开启只读探索）
             chat_model: 可选，会话级临时覆盖 LLM 模型 id
             chat_provider: 可选，与 chat_model 配套的供应商 ID
+            chat_reasoning: 可选，会话级推理深度覆盖（空=跟随节点配置）
         """
         return await self._create_session(
             db,
@@ -829,6 +833,7 @@ class AgentExecutorService(BaseExecutorService):
             plan_mode=plan_mode,
             chat_model=chat_model,
             chat_provider=chat_provider,
+            chat_reasoning=chat_reasoning,
         )
 
     async def update_work_dir(
@@ -861,17 +866,26 @@ class AgentExecutorService(BaseExecutorService):
         session_id: int,
         model: Optional[str],
         provider: Optional[str] = None,
+        reasoning: Optional[str] = None,
     ) -> Optional[AgentSession]:
-        """更新会话级临时模型（按会话独立存储）；model 为 None/空串时清除，回退节点默认"""
+        """更新会话级临时模型与推理深度（按会话独立存储）
+
+        model 为 None/空串时清除模型覆盖（回退节点默认），reasoning 同步清除；
+        reasoning 语义：None/空串=清除（跟随节点配置），"off"=显式关闭思考，
+        其余为模型档位（none/minimal/low/medium/high/xhigh/max）。
+        """
         session = await self._get_session(db, session_id)
         if not session:
             return None
         if model:
             session.chat_model = model
             session.chat_provider = provider or None
+            if reasoning:
+                session.chat_reasoning = reasoning
         else:
             session.chat_model = None
             session.chat_provider = None
+            session.chat_reasoning = None
         await db.commit()
         await db.refresh(session)
         return session
@@ -882,6 +896,7 @@ class AgentExecutorService(BaseExecutorService):
         flow: Flow,
         model: str,
         provider: str | None = None,
+        reasoning: str | None = None,
     ) -> None:
         """将临时模型覆盖应用到 flow 内存副本的全部 LLM 节点。
 
@@ -889,6 +904,17 @@ class AgentExecutorService(BaseExecutorService):
         防止后续 commit 把覆盖值写回 flow_node 表；capabilities/context_length
         按模型元数据联动，不回退全局默认。跨供应商（provider 与节点不同）时
         从供应商连接解析 api_key/base_url。对话与压缩链路共用。
+
+        推理深度按四级优先链落 cfg["reasoning_effort"]（推理深度是会话级独立
+        维度，即使模型未切换也照常应用——④不再整体跳过）：
+        ① reasoning 显式传入（"off"→None 关闭思考，其余原值）；
+        ② 未传入且模型元数据命中：模型不支持推理或无 effort/toggle 选项
+           → 清 None（脏值防御，防档位直透不支持的模型报错）；
+           节点旧值 ∈ 模型声明档位 → 继承；否则 → None；
+        ③ 元数据查不到（自定义模型名）→ 保留节点旧值（无法判定不妄动）；
+        ④ same_model+same_provider 时仅跳过【模型/供应商/api_key/base_url/
+           capabilities/context_length】的覆盖以保留节点手动定制，
+           推理深度按①②③照常应用（expunge 防覆盖值写回 flow_node 表）。
         """
         from app.services.ai_provider_connection_service import (
             ai_provider_connection_service,
@@ -904,45 +930,84 @@ class AgentExecutorService(BaseExecutorService):
             cfg_provider = (node.base_config or {}).get("provider", "")
             same_model = (node.base_config or {}).get("model") == model
             same_provider = not provider or provider == cfg_provider
-            # 与节点已配置模型+供应商相同：视为未切换，跳过覆盖以保留手动定制
-            if same_model and same_provider:
-                continue
+            model_unchanged = same_model and same_provider
             db.expunge(node)
             cfg = dict(node.base_config or {})
-            target_provider = provider or cfg_provider
-            if provider and provider != cfg_provider:
-                if provider not in conn_cache:
-                    conn_cache[
-                        provider
-                    ] = await ai_provider_connection_service.get_by_provider_id(
-                        db, provider
-                    )
-                conn = conn_cache[provider]
-                if conn:
-                    cfg["api_key"] = conn.api_key
-                    if conn.base_url:
-                        cfg["base_url"] = conn.base_url
-                    else:
-                        from app.services.ai_provider_service import (
-                            ai_provider_service,
-                        )
-
-                        ai_provider = await ai_provider_service.get_by_provider_id(
+            if not model_unchanged:
+                # ---- 模型/供应商覆盖（未切换时整体跳过，保留手动定制） ----
+                target_provider = provider or cfg_provider
+                if provider and provider != cfg_provider:
+                    if provider not in conn_cache:
+                        conn_cache[
+                            provider
+                        ] = await ai_provider_connection_service.get_by_provider_id(
                             db, provider
                         )
-                        cfg["base_url"] = (
-                            ai_provider.api_url
-                            if ai_provider and ai_provider.api_url
-                            else ""
-                        )
-            if provider:
-                cfg["provider"] = provider
-            cfg["model"] = model
-            meta = await derive_model_runtime_meta(db, target_provider, model)
-            if meta:
-                cfg["capabilities"] = meta["capabilities"]
-                if meta["context_length"]:
-                    cfg["context_length"] = meta["context_length"]
+                    conn = conn_cache[provider]
+                    if conn:
+                        cfg["api_key"] = conn.api_key
+                        if conn.base_url:
+                            cfg["base_url"] = conn.base_url
+                        else:
+                            from app.services.ai_provider_service import (
+                                ai_provider_service,
+                            )
+
+                            ai_provider = await ai_provider_service.get_by_provider_id(
+                                db, provider
+                            )
+                            cfg["base_url"] = (
+                                ai_provider.api_url
+                                if ai_provider and ai_provider.api_url
+                                else ""
+                            )
+                if provider:
+                    cfg["provider"] = provider
+                cfg["model"] = model
+                meta = await derive_model_runtime_meta(db, target_provider, model)
+                if meta:
+                    cfg["capabilities"] = meta["capabilities"]
+                    if meta["context_length"]:
+                        cfg["context_length"] = meta["context_length"]
+            else:
+                # 模型未切换：仅深度②校验需要元数据；①显式传入时无需查询
+                meta = (
+                    None
+                    if reasoning
+                    else await derive_model_runtime_meta(db, cfg_provider, model)
+                )
+            # ---- 推理深度四级优先链（推理深度是会话级维度，任何模型状态都应用） ----
+            if reasoning:
+                # ① 显式传入："off"=显式关闭思考，其余原值覆盖
+                cfg["reasoning_effort"] = None if reasoning == "off" else reasoning
+            else:
+                old_effort = cfg.get("reasoning_effort")
+                if meta:
+                    # ② 元数据命中：按模型能力校验旧值合法性
+                    options = meta.get("reasoning_options") or []
+                    effort_values: set[str] = set()
+                    has_toggle = False
+                    for opt in options:
+                        if not isinstance(opt, dict):
+                            continue
+                        if opt.get("type") == "effort":
+                            for v in opt.get("values") or []:
+                                if isinstance(v, str):
+                                    effort_values.add(v)
+                                elif v is None:
+                                    # models.dev values 数组可含 null，语义=不思考
+                                    effort_values.add("none")
+                        elif opt.get("type") == "toggle":
+                            has_toggle = True
+                    supported = effort_values or ({"high"} if has_toggle else set())
+                    if (
+                        not meta.get("reasoning_enabled")
+                        or not supported
+                        or (old_effort is not None and old_effort not in supported)
+                    ):
+                        cfg["reasoning_effort"] = None
+                    # 旧值 ∈ supported → 继承（cfg 保持原值，不动）
+                # ③ meta 为 None（自定义模型名）→ 保留节点旧值
             node.base_config = cfg
 
     async def get_or_create_sub_agent_session(
@@ -1266,6 +1331,7 @@ class AgentExecutorService(BaseExecutorService):
         plan_mode: int = 0,
         chat_model: Optional[str] = None,
         chat_provider: Optional[str] = None,
+        chat_reasoning: Optional[str] = None,
     ) -> AgentSession:
         """创建新会话"""
         session = AgentSession(
@@ -1279,6 +1345,7 @@ class AgentExecutorService(BaseExecutorService):
             plan_mode=plan_mode,
             chat_model=chat_model,
             chat_provider=chat_provider,
+            chat_reasoning=chat_reasoning,
         )
         db.add(session)
         await db.commit()
@@ -1493,6 +1560,7 @@ class AgentExecutorService(BaseExecutorService):
         *,
         model: str | None = None,
         provider: str | None = None,
+        reasoning: str | None = None,
         _managed_run: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
@@ -1505,6 +1573,7 @@ class AgentExecutorService(BaseExecutorService):
             model: 临时覆盖 LLM 模型（capabilities 等按模型元数据联动）
             provider: 与 model 配套的临时覆盖供应商；跨供应商时从
                 供应商连接解析 api_key/base_url，为空则沿用节点配置
+            reasoning: 临时覆盖推理深度（空=跟随节点/会话配置）
 
         Yields:
             SSE事件字典
@@ -1574,8 +1643,15 @@ class AgentExecutorService(BaseExecutorService):
             # 临时模型覆盖：改的是本次从 DB 加载的内存副本，
             # expunge 摘除 ORM 变更跟踪，防止后续 commit 把覆盖值写回 flow_node 表；
             # capabilities/context_length 按模型元数据联动，不回退全局默认。
+            # 请求级 reasoning 优先；未传时回退会话字段 chat_reasoning
+            # （历史会话选中过深度但本次请求未携带的场景，两入口语义一致）
             if model:
-                await self._apply_chat_model_override(db, flow, model, provider)
+                effective_reasoning = reasoning
+                if effective_reasoning is None and session.chat_reasoning:
+                    effective_reasoning = session.chat_reasoning
+                await self._apply_chat_model_override(
+                    db, flow, model, provider, effective_reasoning
+                )
 
             # 检查是否首次对话（用于自动生成标题）
             existing_messages = await self._get_messages(db, session_id, 1)
@@ -2329,10 +2405,15 @@ class AgentExecutorService(BaseExecutorService):
             return {"summary": None, "kept_count": total, "removed_count": 0}
 
         # 会话临时模型优先：与对话链路同源覆盖，手动/自动压缩都跟随右上角
-        # 切换的临时模型（未切换时 session.chat_model 为空，用节点默认配置）
+        # 切换的临时模型（未切换时 session.chat_model 为空，用节点默认配置）；
+        # 推理深度同样跟随会话选择（chat_reasoning），深度独立于模型是否切换
         if session.chat_model:
             await self._apply_chat_model_override(
-                db, flow, session.chat_model, session.chat_provider
+                db,
+                flow,
+                session.chat_model,
+                session.chat_provider,
+                session.chat_reasoning,
             )
 
         llm_config = self._extract_llm_config(flow)

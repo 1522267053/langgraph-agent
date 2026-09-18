@@ -41,6 +41,13 @@ class AgentSessionCreateRequest(BaseModel):
     chat_provider: Optional[str] = Field(
         default=None, description="与 chat_model 配套的供应商 ID（可选）"
     )
+    chat_reasoning: Optional[str] = Field(
+        default=None,
+        description=(
+            "会话级推理深度覆盖（none/minimal/low/medium/high/xhigh/max/off，可选）；"
+            "空=跟随 LLM 节点配置"
+        ),
+    )
 
 
 class AgentSessionWorkDirRequest(BaseModel):
@@ -74,6 +81,13 @@ class AgentSessionChatModelRequest(BaseModel):
             "为空则沿用 LLM 节点已配置供应商"
         ),
     )
+    reasoning: Optional[str] = Field(
+        default=None,
+        description=(
+            "会话级推理深度覆盖（none/minimal/low/medium/high/xhigh/max/off）；"
+            "None/空串表示清除，跟随 LLM 节点配置"
+        ),
+    )
 
 
 class AgentSessionResponse(AgentSessionBase):
@@ -93,6 +107,10 @@ class AgentSessionResponse(AgentSessionBase):
     )
     chat_provider: Optional[str] = Field(
         default=None, description="与 chat_model 配套的供应商 ID"
+    )
+    chat_reasoning: Optional[str] = Field(
+        default=None,
+        description="会话级推理深度覆盖，空=跟随 LLM 节点配置",
     )
     created_at: Optional[ChinaDateTime] = Field(
         default=None,
@@ -171,6 +189,13 @@ class AgentChatRequest(BaseModel):
         description=(
             "与 model 配套的临时覆盖供应商；跨供应商时从供应商连接解析 api_key/base_url，"
             "为空则沿用 LLM 节点已配置供应商"
+        ),
+    )
+    reasoning: Optional[str] = Field(
+        default=None,
+        description=(
+            "会话级推理深度覆盖（none/minimal/low/medium/high/xhigh/max/off）；"
+            "为空跟随 LLM 节点配置"
         ),
     )
 

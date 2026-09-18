@@ -10,9 +10,12 @@ import {
   FolderOpened,
   CircleClose,
   QuestionFilled,
-  List
+  List,
+  Lightning,
+  Cpu
 } from '@element-plus/icons-vue'
 import FilePickerDialog from '@/components/common/FilePickerDialog.vue'
+import type { ReasoningMeta } from '@/api/ai_provider'
 
 const props = defineProps<{
   fields: FlowIOField[]
@@ -32,6 +35,8 @@ const props = defineProps<{
   }>
   /** Agent 配置的默认模型名（仅展示用） */
   defaultModelLabel?: string
+  /** 当前选中模型的推理深度档位（null=无元数据/未选模型，隐藏选择器） */
+  reasoningOptions?: ReasoningMeta | null
 }>()
 
 const emit = defineEmits<{
@@ -51,9 +56,44 @@ const emit = defineEmits<{
 const inputMessage = defineModel<string>('inputMessage', { default: '' })
 /** 临时模型覆盖（空串/未选表示使用 Agent 默认模型） */
 const selectedModel = defineModel<string>('selectedModel', { default: '' })
+/** 临时推理深度覆盖（空串=跟随节点配置；仅选中模型后可操作） */
+const selectedReasoning = defineModel<string>('selectedReasoning', { default: '' })
 const sendMessageDisabled = computed(() => !inputMessage.value.trim())
 
 const showModelSelect = computed(() => props.modelGroups?.some(g => g.options.length > 0) ?? false)
+
+/** 推理深度选择器：仅当前模型带声明档位（effort/toggle/budget 预设）时显示 */
+const showReasoningSelect = computed(() => !!props.reasoningOptions && !!selectedModel.value)
+
+// ---- 推理深度：图标按钮 + popover 菜单形态（省工具栏横向空间） ----
+const reasoningPopoverVisible = ref(false)
+
+/** 按钮上的档位徽标：off 显示「关闭」，其余显示档位原文，空=纯图标 */
+const reasoningBtnLabel = computed(() => {
+  if (!selectedReasoning.value) return ''
+  return selectedReasoning.value === 'off' ? '关闭' : selectedReasoning.value
+})
+
+function selectReasoning(value: string) {
+  selectedReasoning.value = value
+  reasoningPopoverVisible.value = false
+}
+
+// ---- 模型切换：图标按钮 + popover 分组菜单形态（与推理深度同款交互） ----
+const modelPopoverVisible = ref(false)
+
+/** 按钮上的模型徽标：临时模型显示模型名，未选显示「默认」 */
+const modelBtnLabel = computed(() => {
+  if (selectedModel.value) {
+    return selectedModel.value.split('::')[1] || selectedModel.value
+  }
+  return ''
+})
+
+function selectModel(value: string) {
+  selectedModel.value = value
+  modelPopoverVisible.value = false
+}
 
 /** 工作路径缩略显示：取末段目录名 */
 const workDirName = computed(() => {
@@ -439,45 +479,100 @@ function handleStop() {
                 </span>
               </button>
             </el-tooltip>
-            <!-- 模型切换：跨供应商分组展示，清空即回退 Agent 默认模型 -->
-            <el-tooltip
+            <!-- 模型切换：图标按钮 + 分组弹出菜单（与推理深度同款交互）；
+                 reference 插槽内必须是原生元素（挂运行时指令），不能包 el-tooltip 组件。
+                 清空回退 Agent 默认模型；仅当前临时模型与默认不同时清除项才显示 -->
+            <el-popover
               v-if="showModelSelect"
-              :content="
-                selectedModel
-                  ? `临时模型：${selectedModel.split('::')[1] || selectedModel}（清除后回退默认）`
-                  : `默认模型：${defaultModelLabel || 'Agent 配置'}`
-              "
-              placement="top"
+              v-model:visible="modelPopoverVisible"
+              placement="top-start"
+              :width="230"
+              trigger="click"
             >
-              <el-select
-                v-model="selectedModel"
-                class="model-select"
-                size="small"
-                filterable
-                clearable
-                :disabled="isStreaming || isWaitingHuman"
-                :placeholder="'默认模型：' + (defaultModelLabel || 'Agent 配置')"
-                no-data-text="暂无可用模型"
-              >
-                <el-option-group
-                  v-for="group in modelGroups"
-                  :key="group.label"
-                  :label="group.label"
+              <template #reference>
+                <button
+                  class="toolbar-icon-btn model-btn"
+                  :class="{ active: !!selectedModel }"
+                  :disabled="isStreaming || isWaitingHuman"
                 >
-                  <el-option
+                  <el-icon :size="18"><Cpu /></el-icon>
+                  <span v-if="modelBtnLabel" class="model-btn-label">{{ modelBtnLabel }}</span>
+                </button>
+              </template>
+              <div class="model-menu">
+                <div class="model-menu-title">
+                  模型
+                  <span class="model-menu-title-sub">
+                    {{ selectedModel ? '临时覆盖' : `默认：${defaultModelLabel || 'Agent 配置'}` }}
+                  </span>
+                </div>
+                <div
+                  v-if="selectedModel"
+                  class="model-menu-item model-menu-clear"
+                  @click="selectModel('')"
+                >
+                  <el-icon :size="13"><CircleClose /></el-icon>
+                  清除（回退默认模型）
+                </div>
+                <template v-for="group in modelGroups" :key="group.label">
+                  <div class="model-menu-group-label">{{ group.label }}</div>
+                  <div
                     v-for="opt in group.options"
                     :key="opt.value"
-                    :label="opt.label"
-                    :value="opt.value"
+                    class="model-menu-item"
+                    :class="{ selected: selectedModel === opt.value }"
+                    @click="selectModel(opt.value)"
                   >
-                    <div class="model-option">
-                      <span class="model-option-name">{{ opt.label }}</span>
-                      <span v-if="opt.multimodal" class="model-option-badge">多模态</span>
-                    </div>
-                  </el-option>
-                </el-option-group>
-              </el-select>
-            </el-tooltip>
+                    <span class="model-menu-name">{{ opt.label }}</span>
+                    <span v-if="opt.multimodal" class="model-menu-badge">多模态</span>
+                  </div>
+                </template>
+              </div>
+            </el-popover>
+            <!-- 推理深度：图标按钮 + 弹出菜单；仅当前模型带声明档位时显示，空=跟随节点。
+                 reference 插槽内必须是原生元素（挂运行时指令），不能包 el-tooltip 组件 -->
+            <el-popover
+              v-if="showReasoningSelect"
+              v-model:visible="reasoningPopoverVisible"
+              placement="top-start"
+              :width="190"
+              trigger="click"
+            >
+              <template #reference>
+                <button
+                  class="toolbar-icon-btn reasoning-btn"
+                  :class="{ active: !!selectedReasoning }"
+                >
+                  <el-icon :size="18"><Lightning /></el-icon>
+                  <span v-if="reasoningBtnLabel" class="reasoning-btn-label">{{
+                    reasoningBtnLabel
+                  }}</span>
+                </button>
+              </template>
+              <div class="reasoning-menu">
+                <div class="reasoning-menu-title">
+                  推理深度
+                  <span class="reasoning-menu-title-sub">空=跟随节点配置</span>
+                </div>
+                <div
+                  class="reasoning-menu-item"
+                  :class="{ selected: !selectedReasoning }"
+                  @click="selectReasoning('')"
+                >
+                  跟随节点
+                </div>
+                <div class="reasoning-menu-divider" />
+                <div
+                  v-for="v in reasoningOptions!.values"
+                  :key="v"
+                  class="reasoning-menu-item"
+                  :class="{ selected: selectedReasoning === v }"
+                  @click="selectReasoning(v)"
+                >
+                  {{ v === 'off' ? '关闭' : v }}
+                </div>
+              </div>
+            </el-popover>
           </div>
           <div class="toolbar-right">
             <div v-if="totalTokens" class="token-count">
@@ -721,6 +816,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 10px 14px;
   background: var(--paper-warm);
   border-top: 1px solid var(--paper-line-soft);
@@ -730,6 +826,10 @@ export default {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 空间不足时左侧整体可裁剪（内部各可收缩项先吸收），
+     严禁挤压右侧发送按钮 */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .toolbar-icon-btn {
@@ -745,6 +845,8 @@ export default {
   color: var(--paper-ink-3);
   cursor: pointer;
   transition: all 0.2s;
+  /* 图标按钮是功能入口，任何宽度下保持完整 */
+  flex-shrink: 0;
 }
 
 .toolbar-icon-btn:hover,
@@ -766,13 +868,15 @@ export default {
   background: var(--vermilion-soft);
 }
 
-/* 工作目录按钮：选中时横向展示 目录名 + 清除按钮 */
+/* 工作目录按钮：选中时横向展示 目录名 + 清除按钮；空间不足时优先收缩 */
 .workdir-btn {
   width: auto;
   min-width: 32px;
   max-width: 220px;
   padding: 0 8px;
   gap: 4px;
+  flex-shrink: 1;
+  overflow: hidden;
 }
 
 .workdir-name {
@@ -807,54 +911,192 @@ export default {
   border: 1.5px solid var(--paper-warm);
 }
 
-/* 模型下拉框：与工具栏图标按钮高度对齐 */
-.model-select {
-  width: 130px;
+/* 模型按钮：与推理深度按钮同形态，[图标+模型名] 徽标 */
+.model-btn {
+  width: auto;
+  min-width: 32px;
+  max-width: 150px;
+  padding: 0 8px;
+  gap: 4px;
+  flex-shrink: 1;
+  overflow: hidden;
+  cursor: pointer;
 }
 
-.model-select :deep(.el-select__wrapper) {
-  min-height: 32px;
-  border-radius: 8px;
-  background: var(--paper-card);
-  box-shadow: 0 0 0 1px var(--paper-line) inset;
+.model-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
-.model-select :deep(.el-select__wrapper.is-hovering),
-.model-select :deep(.el-select__wrapper.is-focused) {
-  box-shadow: 0 0 0 1px var(--vermilion) inset;
-}
-
-.model-select :deep(.el-select__placeholder) {
+.model-btn-label {
+  max-width: 110px;
+  overflow: hidden;
+  color: inherit;
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.model-option {
+/* 模型弹出菜单：标题行 + 清除项 + 分组列表 */
+.model-menu {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.model-menu-title {
+  display: flex;
+  align-items: baseline;
   justify-content: space-between;
   gap: 8px;
+  padding: 2px 10px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--paper-ink);
 }
 
-.model-option-name {
+.model-menu-title-sub {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--paper-ink-4);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.model-option-badge {
+.model-menu-group-label {
+  padding: 6px 10px 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--paper-ink-4);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.model-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--paper-ink-2);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.model-menu-item:hover {
+  background: var(--paper-warm);
+  color: var(--paper-ink);
+}
+
+.model-menu-item.selected {
+  background: var(--vermilion-soft);
+  color: var(--vermilion);
+  font-weight: 600;
+}
+
+.model-menu-clear {
+  color: var(--paper-ink-3);
+  font-size: 12px;
+}
+
+.model-menu-clear:hover {
+  color: var(--vermilion);
+}
+
+.model-menu-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-menu-badge {
   flex-shrink: 0;
   font-size: 10px;
-  line-height: 16px;
   color: var(--vermilion);
   background: var(--vermilion-soft);
   border-radius: 4px;
   padding: 0 5px;
 }
 
+/* 推理深度按钮：对标 workdir-btn 的 [图标+文字] 形态，未选档位时纯图标 */
+.reasoning-btn {
+  width: auto;
+  min-width: 32px;
+  max-width: 96px;
+  padding: 0 8px;
+  gap: 4px;
+  flex-shrink: 1;
+  overflow: hidden;
+}
+
+.reasoning-btn-label {
+  max-width: 56px;
+  overflow: hidden;
+  color: inherit;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 弹出菜单：标题行 + 跟随节点/关闭/档位列表，当前项朱砂高亮 */
+.reasoning-menu {
+  display: flex;
+  flex-direction: column;
+}
+
+.reasoning-menu-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 10px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--paper-ink);
+}
+
+.reasoning-menu-title-sub {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--paper-ink-4);
+}
+
+.reasoning-menu-item {
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--paper-ink-2);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.reasoning-menu-item:hover {
+  background: var(--paper-warm);
+  color: var(--paper-ink);
+}
+
+.reasoning-menu-item.selected {
+  background: var(--vermilion-soft);
+  color: var(--vermilion);
+  font-weight: 600;
+}
+
+.reasoning-menu-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--paper-line-soft);
+}
+
 .toolbar-right {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* 发送/停止按钮与 token 计数绝不因左侧过宽而被挤压竖排 */
+  flex-shrink: 0;
 }
 
 .token-count {
@@ -907,6 +1149,9 @@ export default {
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(60, 50, 35, 0.18);
   transition: all 0.2s;
+  /* CJK 逐字断行是按钮被挤成竖排的根因，任何断点下都不允许 */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .send-btn:hover:not(.disabled) {
@@ -947,6 +1192,16 @@ export default {
     display: none;
   }
 
+  /* 推理深度按钮收成纯图标（档位经弹出菜单仍可选，当前档位见菜单高亮项） */
+  .reasoning-btn {
+    max-width: 32px;
+    padding: 0;
+  }
+
+  .reasoning-btn-label {
+    display: none;
+  }
+
   .send-btn,
   .stop-btn {
     padding: 8px 12px;
@@ -974,9 +1229,9 @@ export default {
     display: none;
   }
 
-  /* 模型下拉收窄，placeholder 超宽自动省略 */
-  .model-select {
-    width: 100px;
+  /* 模型按钮徽标隐藏收成纯图标（tooltip 层面已有标题说明当前模型） */
+  .model-btn-label {
+    display: none;
   }
 }
 </style>

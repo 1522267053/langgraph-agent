@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import { QuestionFilled, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { aiProviderApi, type ProviderInfo, type ModelInfo } from '@/api/ai_provider'
+import { aiProviderApi, type ProviderInfo, type ModelInfo, type ReasoningMeta, parseReasoningOptions } from '@/api/ai_provider'
 import type { ModelCapabilities } from '@/components/FlowEditor/config/types'
 import { CONTEXT_LENGTH_PRESETS, parseContextLength } from '@/components/FlowEditor/config/types'
 
@@ -94,8 +94,45 @@ const modelList = ref<
     capabilities?: ModelCapabilities
     context_length?: number
     max_tokens?: number
+    reasoning_meta?: ReasoningMeta | null
   }[]
 >([])
+
+/**
+ * 当前模型的推理深度元数据：命中 → 按声明档位动态渲染；
+ * null（未选模型/自定义模型名/无元数据）→ 回退静态档位。
+ */
+const reasoningMeta = computed<ReasoningMeta | null>(() => {
+  const opt = modelList.value.find(m => m.value === model.value)
+  return opt?.reasoning_meta ?? null
+})
+
+/** 推理深度下拉档位：模型声明档位优先，未命中回退静态三档（Anthropic 附加 xhigh/max） */
+const reasoningEffortOptions = computed<string[]>(() => {
+  if (reasoningMeta.value) {
+    return reasoningMeta.value.mode === 'toggle' ? ['off', 'high'] : reasoningMeta.value.values
+  }
+  return isAnthropicProvider.value
+    ? ['low', 'medium', 'high', 'xhigh', 'max']
+    : ['low', 'medium', 'high']
+})
+
+/**
+ * 模型切换后校验当前档位：不在新模型支持列表内自动清空，
+ * 防止为旧模型配置的深度直透新模型（OpenAI 兼容端点可能报错）。
+ * 自定义输入的模型名（reasoningMeta 为 null）不做校验——无法判定合法性。
+ */
+watch(reasoningMeta, (meta, prev) => {
+  if (!prev || !reasoningEffort.value) return
+  const supported = meta
+    ? meta.values
+    : isAnthropicProvider.value
+      ? ['low', 'medium', 'high', 'xhigh', 'max']
+      : ['low', 'medium', 'high']
+  if (!supported.includes(reasoningEffort.value)) {
+    reasoningEffort.value = undefined
+  }
+})
 
 function getProviderBaseUrl(name: string): string {
   return providerList.value.find(p => p.name === name)?.default_base_url || ''
@@ -173,7 +210,8 @@ async function loadModels(providerId: string) {
           pdf: inputModalities.includes('pdf')
         },
         context_length: m.limits?.context,
-        max_tokens: m.limits?.output
+        max_tokens: m.limits?.output,
+        reasoning_meta: parseReasoningOptions(m.reasoning_options)
       }
     })
   } catch {
@@ -433,6 +471,7 @@ function handleExtraBodyBlur() {
           <el-icon class="context-tip-icon"><QuestionFilled /></el-icon>
         </el-tooltip>
       </template>
+      <!-- 档位动态渲染：模型声明档位优先（reasoningMeta 命中），未命中回退静态三档 -->
       <el-select
         v-model="reasoningEffort"
         placeholder="不设置（使用模型默认）"
@@ -444,13 +483,7 @@ function handleExtraBodyBlur() {
         :disabled="disabled"
         @change="onFieldChange"
       >
-        <el-option label="low" value="low" />
-        <el-option label="medium" value="medium" />
-        <el-option label="high" value="high" />
-        <template v-if="isAnthropicProvider">
-          <el-option label="xhigh" value="xhigh" />
-          <el-option label="max" value="max" />
-        </template>
+        <el-option v-for="v in reasoningEffortOptions" :key="v" :label="v" :value="v" />
       </el-select>
     </el-form-item>
     <el-form-item v-if="showStreamUsage">
@@ -627,13 +660,7 @@ function handleExtraBodyBlur() {
         :disabled="disabled"
         @change="onFieldChange"
       >
-        <el-option label="low" value="low" />
-        <el-option label="medium" value="medium" />
-        <el-option label="high" value="high" />
-        <template v-if="isAnthropicProvider">
-          <el-option label="xhigh" value="xhigh" />
-          <el-option label="max" value="max" />
-        </template>
+        <el-option v-for="v in reasoningEffortOptions" :key="v" :label="v" :value="v" />
       </el-select>
     </el-form-item>
     <el-form-item v-if="showStreamUsage" label="流式用量">
