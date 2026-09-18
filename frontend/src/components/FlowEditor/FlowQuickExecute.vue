@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onUnmounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { flowApi } from '@/api/flow'
 import type { FlowIOField } from '@/types/flow'
 import { Bottom } from '@element-plus/icons-vue'
@@ -79,6 +80,12 @@ watch(
 // ---- 表单提交 ----
 function confirmExecute(): void {
   if (!props.flowId || !inputFormRef.value) return
+  // 必填校验：与 ExecuteFlowDialog / ScheduledTaskList 一致，先 validate 再 collect
+  const error = inputFormRef.value.validate()
+  if (error) {
+    ElMessage.warning({ message: error, duration: 5000 })
+    return
+  }
   try {
     const { input, attachedFiles } = inputFormRef.value.collect()
     startStream(props.flowId, input, attachedFiles)

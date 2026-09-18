@@ -87,6 +87,9 @@ function removeFile(fieldName: string, fileId: number): void {
 function validate(): string | null {
   for (const field of props.fields) {
     if (!field.required) continue
+    // boolean 不校验：required 的开关默认 false，若拦截则关闭状态永远无法提交
+    // （与 ChatInput.vue 必填校验口径一致）
+    if (field.type === 'boolean') continue
     const val = formData[field.name]
     if (field.type === 'file_list') {
       const fileVal = val as FileInfo[] | number[] | undefined
