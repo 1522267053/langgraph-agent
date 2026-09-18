@@ -188,6 +188,7 @@ class AgentApi:
                 plan_mode=int(req.plan_mode) if req and req.plan_mode else 0,
                 chat_model=(req.chat_model or None) if req else None,
                 chat_provider=(req.chat_provider or None) if req else None,
+                chat_reasoning=(req.chat_reasoning or None) if req else None,
             )
             return ApiResponse.success(
                 data=AgentSessionResponse.model_validate(session), msg="创建成功"
@@ -249,9 +250,9 @@ class AgentApi:
             req: AgentSessionChatModelRequest,
             db: AsyncSession = Depends(get_db),
         ):
-            """切换会话级临时模型（按会话独立存储）；model 为空表示清除，回退节点默认"""
+            """切换会话级临时模型与推理深度（按会话独立存储）；model 为空表示清除，回退节点默认"""
             session = await agent_executor_service.update_chat_model(
-                db, session_id, req.model, req.provider
+                db, session_id, req.model, req.provider, req.reasoning
             )
             if not session:
                 return ApiResponse.error(msg="会话不存在")
@@ -389,6 +390,7 @@ class AgentApi:
                     request.params,
                     model=request.model,
                     provider=request.provider,
+                    reasoning=request.reasoning,
                 )
             except ValueError as exc:
                 return ApiResponse.error(msg=str(exc))

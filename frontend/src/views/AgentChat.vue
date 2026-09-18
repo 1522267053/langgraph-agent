@@ -16,7 +16,7 @@ import {
 } from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
 import { flowApi } from '@/api/flow'
-import { aiProviderApi } from '@/api/ai_provider'
+import { aiProviderApi, type ReasoningMeta, parseReasoningOptions } from '@/api/ai_provider'
 import { providerConnectionApi } from '@/api/aiProviderConnection'
 import type { FlowIOField } from '@/types/flow'
 import type { AgentFileChangeInfo } from '@/types/agent'
@@ -281,7 +281,6 @@ const RESCUE_STABLE_MS = 150
 const RESCUE_GRACE_MS = 2500
 const RESCUE_AT_END_PX = 8
 let rescueRafId = 0
-let rescueLastHeight = -1
 let rescueStableSince = 0
 let rescueDeadline = 0
 
@@ -300,7 +299,6 @@ function startRescueLoop(): void {
   }
   const startAt = performance.now()
   rescueDeadline = startAt + RESCUE_GRACE_MS
-  rescueLastHeight = -1
   rescueStableSince = startAt
   const tick = () => {
     rescueRafId = 0
@@ -324,7 +322,6 @@ function startRescueLoop(): void {
       // 直写 el.scrollTop 触发原生 scroll 事件 → 库内 observeElementOffset
       // 同步 scrollOffset，与首屏 convergeScrollToBottom 同一写入路径。
       el.scrollTop = el.scrollHeight
-      rescueLastHeight = height
       rescueStableSince = now
     } else if (
       !store.isStreaming &&
@@ -653,6 +650,8 @@ interface ChatModelOption {
   multimodal: boolean
   provider: string
   providerLabel: string
+  /** 归一化推理深度档位（null=无元数据，UI 隐藏深度选择） */
+  reasoningOptions?: ReasoningMeta | null
 }
 
 /** 复合键分隔符：provider_id 不含冒号，安全 */
@@ -669,10 +668,13 @@ function parseModelValue(value: string): { provider: string; model: string } | n
 }
 
 const MODEL_PREF_KEY = 'agent-chat-model'
+const REASONING_PREF_KEY = 'agent-chat-reasoning'
 
 const modelOptions = ref<ChatModelOption[]>([])
 const defaultModelLabel = ref('')
 const selectedModel = ref('')
+/** 会话级推理深度覆盖（空=跟随节点配置；对标 selectedModel 的双写持久化） */
+const selectedReasoning = ref('')
 /** 恢复 localStorage 偏好期间挂起持久化 watcher，防止切 Agent 时误删新 Agent 的偏好 */
 let restoringModelPref = false
 
@@ -701,7 +703,81 @@ watch(selectedModel, model => {
   }
   // 会话级落库（对标计划模式）：复合键拆回 provider/model，空串表示清除回退默认
   const parsed = model ? parseModelValue(model) : null
-  void store.updateSessionChatModel(model, parsed?.provider)
+  // 切模型后深度随选择联动落库：清模型时 reasoning 一并清（后端同语义）
+  void store.updateSessionChatModel(model, parsed?.provider, selectedReasoning.value || null)
+})
+
+// ---- 推理深度选项（当前选中模型的档位；无元数据/未选模型 → null 隐藏控件）----
+const currentReasoningOptions = computed<ReasoningMeta | null>(() => {
+  if (!selectedModel.value) return null
+  const opt = modelOptions.value.find(o => o.value === selectedModel.value)
+  return opt?.reasoningOptions ?? null
+})
+
+function loadStoredReasoning(id: number): string {
+  try {
+    const raw = localStorage.getItem(REASONING_PREF_KEY)
+    if (!raw) return ''
+    const map = JSON.parse(raw) as Record<string, string>
+    return typeof map[id] === 'string' ? map[id] : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 恢复推理深度（切会话/切模型/选项加载后调用）：
+ * 会话 chat_reasoning 优先（有会话时字段权威），空则回退 Agent 维度记忆值；
+ * 恢复值不在当前模型档位内时清空（档位失效防御，与 watch 校验同语义）
+ */
+function syncSelectedReasoning() {
+  const session = store.currentSession
+  let target = ''
+  if (session?.chat_reasoning) {
+    target = session.chat_reasoning
+  } else if (agentId.value) {
+    target = loadStoredReasoning(agentId.value)
+  }
+  const meta = currentReasoningOptions.value
+  if (target && meta && !meta.values.includes(target)) target = ''
+  if (target && !meta) target = ''
+  restoringModelPref = true
+  selectedReasoning.value = target
+  void nextTick(() => {
+    restoringModelPref = false
+  })
+}
+
+// Agent 维度记忆 + 会话级落库（空串=清除，跟随节点配置）
+watch(selectedReasoning, reasoning => {
+  if (restoringModelPref || !agentId.value) return
+  try {
+    const raw = localStorage.getItem(REASONING_PREF_KEY)
+    const map = raw ? (JSON.parse(raw) as Record<string, string>) : {}
+    if (reasoning) map[agentId.value] = reasoning
+    else delete map[agentId.value]
+    localStorage.setItem(REASONING_PREF_KEY, JSON.stringify(map))
+  } catch {
+    // ignore
+  }
+  // 仅在有临时模型时随模型一起落库；无模型覆盖时深度只做 Agent 记忆，
+  // 发送时经 handleChatSend 透传（避免仅深度变化触发 chat-model 端点误清模型）
+  if (selectedModel.value) {
+    const parsed = parseModelValue(selectedModel.value)
+    void store.updateSessionChatModel(
+      selectedModel.value,
+      parsed?.provider,
+      reasoning || null
+    )
+  }
+})
+
+// 切模型后校验深度档位：不在新模型支持列表内自动清空（前端双保险，后端规则②兜底）
+watch(currentReasoningOptions, meta => {
+  if (restoringModelPref || !selectedReasoning.value) return
+  if (!meta || !meta.values.includes(selectedReasoning.value)) {
+    selectedReasoning.value = ''
+  }
 })
 
 /**
@@ -728,6 +804,8 @@ function syncSelectedModelFromSession() {
   void nextTick(() => {
     restoringModelPref = false
   })
+  // 模型确定后联动恢复深度（会话 chat_reasoning 优先，记忆回退，档位失效清空）
+  syncSelectedReasoning()
 }
 
 // 切换会话时按会话字段恢复临时模型（有会话时字段为权威，空则回退记忆值）
@@ -791,7 +869,8 @@ async function loadModelSelection(id: number) {
               ['image', 'video', 'audio', 'pdf'].includes(t)
             ),
             provider: group.provider_id,
-            providerLabel: group.provider_label
+            providerLabel: group.provider_label,
+            reasoningOptions: parseReasoningOptions(m.reasoning_options)
           })
         }
       }
@@ -820,7 +899,8 @@ async function loadModelSelection(id: number) {
               ['image', 'video', 'audio', 'pdf'].includes(t)
             ),
             provider: nodeProvider,
-            providerLabel: nodeProvider
+            providerLabel: nodeProvider,
+            reasoningOptions: parseReasoningOptions(m.reasoning_options)
           })
         }
       } catch {
@@ -1162,6 +1242,9 @@ async function handleChatSend(
   // 计划模式同理：新建会话继承 Agent 维度记忆（欢迎页预开的开关已随 toggle 写入记忆）
   const planModeForNew = loadPlanModeForAgent(agentId.value)
   const override = resolveSelectedModel()
+  // 推理深度仅在选中临时模型时随请求透传（未选模型=跟随节点配置，
+  // 后端 override 也只对切换后的模型生效）；无会话新建时随 createSession 落库
+  const reasoningOverride = override && selectedReasoning.value ? selectedReasoning.value : undefined
 
   if (!store.currentSession) {
     // 场景 1：完全没有 session（如首次进入页面、刷新后无历史 session）
@@ -1171,7 +1254,8 @@ async function handleChatSend(
       workDirForNew || undefined,
       planModeForNew || undefined,
       override?.model,
-      override?.provider
+      override?.provider,
+      reasoningOverride
     )
     if (!session) return
     await store.selectSession(agentId.value!, session)
@@ -1194,9 +1278,20 @@ async function handleChatSend(
   // 场景 3：已有会话 chat_model 为空但当前选中了临时模型——发送前静默回填落库
   // （历史会话未落库时恢复阶段回退记忆值，此处让展示与 DB 保持一致）
   if (store.currentSession && !store.currentSession.chat_model && override) {
-    await store.updateSessionChatModel(override.model, override.provider)
+    await store.updateSessionChatModel(
+      override.model,
+      override.provider,
+      reasoningOverride || null
+    )
   }
-  store.sendMessage(message, params, attachedFiles, override?.model, override?.provider)
+  store.sendMessage(
+    message,
+    params,
+    attachedFiles,
+    override?.model,
+    override?.provider,
+    reasoningOverride
+  )
   await nextTick()
   scrollToLatest()
 }
@@ -1717,6 +1812,7 @@ function handleRejectTools() {
         ref="chatInputRef"
         v-model:input-message="inputMessage"
         v-model:selected-model="selectedModel"
+        v-model:selected-reasoning="selectedReasoning"
         :fields="dynamicFields"
         :is-streaming="store.isStreaming"
         :is-stopping="store.isStopping"
@@ -1727,6 +1823,7 @@ function handleRejectTools() {
         :restore-params="restoreParamsSignal"
         :model-groups="modelGroups"
         :default-model-label="defaultModelLabel"
+        :reasoning-options="currentReasoningOptions"
         :work-dir="currentWorkDir"
         @send="handleChatSend"
         @stop="handleStop"

@@ -47,6 +47,8 @@ export interface AgentSession extends BaseEntity {
   chat_model?: string | null
   /** 与 chat_model 配套的供应商 ID */
   chat_provider?: string | null
+  /** 会话级推理深度覆盖（空=跟随 LLM 节点配置） */
+  chat_reasoning?: string | null
   /** 创建时间 */
   created_at?: string
   /** 更新时间 */
@@ -159,6 +161,8 @@ export interface AgentChatRequest {
   model?: string
   /** 与 model 配套的覆盖供应商；跨供应商时后端从供应商连接解析 api_key/base_url */
   provider?: string
+  /** 临时覆盖推理深度（off/none/minimal/low/medium/high/xhigh/max）；空=跟随节点/会话配置 */
+  reasoning?: string
 }
 
 /** Agent恢复请求（人工交互后继续） */
