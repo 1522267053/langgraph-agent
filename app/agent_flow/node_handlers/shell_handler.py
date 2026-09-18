@@ -42,6 +42,7 @@ from app.agent_flow.tools.common import (
     analyze_line_endings as _analyze_line_endings,
     detect_and_read as _detect_and_read,
     detect_dominant_line_ending as _detect_dominant_line_ending,
+    get_file_write_lock,
     normalize_line_endings as _normalize_line_endings,
     validate_file_path as _validate_file_path,
     validate_writable_path as _validate_writable_path,
@@ -1527,178 +1528,182 @@ class ShellNodeHandler(BaseNodeHandler):
                     "success": False,
                 }
 
-            try:
-                raw, encoding = _detect_and_read(path)
-            except Exception as e:
-                return {"error": f"文件读取失败: {e}", "success": False}
+            # [per-file 锁] read → 匹配 → 校验 → backup → 写入全程互斥：
+            # asyncio.gather 并行下两个 text_editor 可先后通过下方 mtime/size
+            # TOCTOU 校验（各自的 stat 恰落在彼此写入之间），后写者整体覆写先写
+            # 者的编辑且双双报成功。锁保证同文件编辑串行；mtime/size 校验保留，
+            # 作为跨进程 / 用户在外部编辑器直接改文件的兜底防线。
+            async with await get_file_write_lock(str(path)):
+                try:
+                    raw, encoding = _detect_and_read(path)
+                except Exception as e:
+                    return {"error": f"文件读取失败: {e}", "success": False}
 
-            # [TOCTOU] 记录 read 时的 mtime，写入前再次 stat 校验：拦截并发修改
-            # 场景。同 LLM 在一条 message 内多次 text_editor 同一文件、或多人协作
-            # 编辑同一文件时，本地并发 read-modify-write 会导致最后一次写入覆盖
-            # 之前所有改动（前面的替换"看起来成功"但实际被覆盖丢失）。st_mtime 精度
-            # 在 Windows NTFS 上是 100ns、Linux ext4 是纳秒级，并发 stat 冲突概率
-            # 极低；为极端情况（mtime 巧合一致但文件已被覆盖）兜底，加大小校验。
-            mtime_before = path.stat().st_mtime
-            size_before = path.stat().st_size
+                # [TOCTOU] 记录 read 时的 mtime，写入前再次 stat 校验：拦截并发修改
+                # 场景。同 LLM 在一条 message 内多次 text_editor 同一文件、或多人协作
+                # 编辑同一文件时，本地并发 read-modify-write 会导致最后一次写入覆盖
+                # 之前所有改动（前面的替换"看起来成功"但实际被覆盖丢失）。st_mtime 精度
+                # 在 Windows NTFS 上是 100ns、Linux ext4 是纳秒级，并发 stat 冲突概率
+                # 极低；为极端情况（mtime 巧合一致但文件已被覆盖）兜底，加大小校验。
+                mtime_before = path.stat().st_mtime
+                size_before = path.stat().st_size
 
-            # 行尾感知：new_string 统一为文件主导行尾，避免引入混合行尾
-            dominant = _detect_dominant_line_ending(raw)
-            new_string = _normalize_line_endings(new_string, dominant)
-            crlf_count, lf_count = _analyze_line_endings(raw)
-            if crlf_count and lf_count:
-                ending_note = f"文件混用行尾（CRLF×{crlf_count}/LF×{lf_count}）"
-            elif crlf_count:
-                ending_note = "文件为 CRLF 行尾"
-            else:
-                ending_note = ""
-
-            match_mode = "exact"
-            match_starts: list[int] = [
-                m.start() for m in re.finditer(re.escape(old_string), raw)
-            ]
-            count = len(match_starts)
-            tolerant_pattern: Optional[re.Pattern] = None
-
-            if count == 0:
-                # 行尾容错匹配：old_string 统一为 \n 后，将换行翻译为 \r?\n 再匹配
-                old_norm = _normalize_line_endings(old_string, "\n")
-                tolerant_pattern = re.compile(
-                    r"\r?\n".join(re.escape(part) for part in old_norm.split("\n"))
-                )
-                tolerant_matches = list(tolerant_pattern.finditer(raw))
-                if tolerant_matches:
-                    match_starts = [m.start() for m in tolerant_matches]
-                    count = len(match_starts)
-                    match_mode = "line_ending_tolerant"
+                # 行尾感知：new_string 统一为文件主导行尾，避免引入混合行尾
+                dominant = _detect_dominant_line_ending(raw)
+                new_string = _normalize_line_endings(new_string, dominant)
+                crlf_count, lf_count = _analyze_line_endings(raw)
+                if crlf_count and lf_count:
+                    ending_note = f"文件混用行尾（CRLF×{crlf_count}/LF×{lf_count}）"
+                elif crlf_count:
+                    ending_note = "文件为 CRLF 行尾"
                 else:
-                    # 末尾换行差异诊断：old_string 尾部换行在文件中不存在
-                    stripped = old_norm.rstrip("\n")
-                    if stripped != old_norm and stripped in raw:
-                        return {
-                            "error": (
-                                "找到 0 处匹配：old_string 末尾含换行符，但文件中对应文本"
-                                "末尾无换行（可能是文件末行）。请去掉 old_string 末尾的"
-                                f"换行后重试。{ending_note}"
-                            ),
-                            "success": False,
-                            "match_count": 0,
-                        }
-                    diag = "找到 0 处匹配：未找到要替换的原始文本（old_string），请检查是否与文件内容完全一致（包括缩进和换行）"
-                    if ending_note:
-                        diag += (
-                            f"。{ending_note}，old_string 的换行风格可能与文件不一致"
+                    ending_note = ""
+
+                match_mode = "exact"
+                match_starts: list[int] = [
+                    m.start() for m in re.finditer(re.escape(old_string), raw)
+                ]
+                count = len(match_starts)
+                tolerant_pattern: Optional[re.Pattern] = None
+
+                if count == 0:
+                    # 行尾容错匹配：old_string 统一为 \n 后，将换行翻译为 \r?\n 再匹配
+                    old_norm = _normalize_line_endings(old_string, "\n")
+                    tolerant_pattern = re.compile(
+                        r"\r?\n".join(re.escape(part) for part in old_norm.split("\n"))
+                    )
+                    tolerant_matches = list(tolerant_pattern.finditer(raw))
+                    if tolerant_matches:
+                        match_starts = [m.start() for m in tolerant_matches]
+                        count = len(match_starts)
+                        match_mode = "line_ending_tolerant"
+                    else:
+                        # 末尾换行差异诊断：old_string 尾部换行在文件中不存在
+                        stripped = old_norm.rstrip("\n")
+                        if stripped != old_norm and stripped in raw:
+                            return {
+                                "error": (
+                                    "找到 0 处匹配：old_string 末尾含换行符，但文件中对应文本"
+                                    "末尾无换行（可能是文件末行）。请去掉 old_string 末尾的"
+                                    f"换行后重试。{ending_note}"
+                                ),
+                                "success": False,
+                                "match_count": 0,
+                            }
+                        diag = "找到 0 处匹配：未找到要替换的原始文本（old_string），请检查是否与文件内容完全一致（包括缩进和换行）"
+                        if ending_note:
+                            diag += f"。{ending_note}，old_string 的换行风格可能与文件不一致"
+                        return {"error": diag, "success": False, "match_count": 0}
+
+                match_lines = _collect_match_lines(raw, match_starts)
+
+                if dry_run:
+                    result = {
+                        "success": True,
+                        "dry_run": True,
+                        "file_path": str(path),
+                        "match_count": count,
+                        "match_mode": match_mode,
+                        "match_lines": match_lines,
+                        "message": (
+                            f"预览模式：找到 {count} 处匹配，未写入文件。"
+                            "diff 为替换后将产生的变化；确认无误后去掉 dry_run 参数执行替换"
+                        ),
+                        "diff": _diff_preview(old_string, new_string),
+                    }
+                    if count > 1 and not replace_all:
+                        result["warning"] = (
+                            "当前匹配多处且未设置 replace_all，实际执行会报错；"
+                            "请缩小 old_string 范围或设置 replace_all=True"
                         )
-                    return {"error": diag, "success": False, "match_count": 0}
+                    if match_mode == "line_ending_tolerant":
+                        result["note"] = (
+                            "old_string 与文件行尾不一致，将按行尾容错匹配完成替换"
+                            + (f"；{ending_note}" if ending_note else "")
+                            + "。new_string 会统一为文件主导行尾"
+                        )
+                    return result
 
-            match_lines = _collect_match_lines(raw, match_starts)
-
-            if dry_run:
-                result = {
-                    "success": True,
-                    "dry_run": True,
-                    "file_path": str(path),
-                    "match_count": count,
-                    "match_mode": match_mode,
-                    "match_lines": match_lines,
-                    "message": (
-                        f"预览模式：找到 {count} 处匹配，未写入文件。"
-                        "diff 为替换后将产生的变化；确认无误后去掉 dry_run 参数执行替换"
-                    ),
-                    "diff": _diff_preview(old_string, new_string),
-                }
                 if count > 1 and not replace_all:
-                    result["warning"] = (
-                        "当前匹配多处且未设置 replace_all，实际执行会报错；"
-                        "请缩小 old_string 范围或设置 replace_all=True"
-                    )
-                if match_mode == "line_ending_tolerant":
-                    result["note"] = (
-                        "old_string 与文件行尾不一致，将按行尾容错匹配完成替换"
-                        + (f"；{ending_note}" if ending_note else "")
-                        + "。new_string 会统一为文件主导行尾"
-                    )
-                return result
-
-            if count > 1 and not replace_all:
-                suffix = f"（{ending_note}）" if ending_note else ""
-                return {
-                    "error": (
-                        f"找到 {count} 处匹配（未执行替换），请缩小 old_string 范围使其唯一匹配，"
-                        f"或设置 replace_all=True 替换所有匹配{suffix}"
-                    ),
-                    "success": False,
-                    "match_count": count,
-                    "match_lines": match_lines,
-                }
-
-            if match_mode == "exact":
-                if replace_all:
-                    new_raw = raw.replace(old_string, new_string)
-                else:
-                    new_raw = raw.replace(old_string, new_string, 1)
-            else:
-                max_replace = 0 if replace_all else 1
-                new_raw, _ = tolerant_pattern.subn(
-                    lambda _m: new_string, raw, count=max_replace
-                )
-
-            # [TOCTOU] 写入前校验 mtime / size：拦截并发修改，避免 read-modify-write
-            # 竞态导致本次写入覆盖之前未合并的修改。校验失败直接 abort，不写文件、
-            # 不创建备份（避免创建无用备份污染变更追踪记录）。
-            try:
-                current_stat = path.stat()
-                if (
-                    current_stat.st_mtime != mtime_before
-                    or current_stat.st_size != size_before
-                ):
+                    suffix = f"（{ending_note}）" if ending_note else ""
                     return {
                         "error": (
-                            "文件已被并发修改（mtime/size 已变化），当前修改基于的旧版本"
-                            "可能已过期。请重新读取文件后再次发起替换，避免覆盖其他"
-                            "并发修改。"
+                            f"找到 {count} 处匹配（未执行替换），请缩小 old_string 范围使其唯一匹配，"
+                            f"或设置 replace_all=True 替换所有匹配{suffix}"
                         ),
                         "success": False,
-                        "concurrent_modification": True,
-                        "mtime_before": mtime_before,
-                        "mtime_after": current_stat.st_mtime,
-                        "size_before": size_before,
-                        "size_after": current_stat.st_size,
+                        "match_count": count,
+                        "match_lines": match_lines,
                     }
-            except FileNotFoundError:
-                return {"error": f"文件不存在: {file_path}", "success": False}
 
-            # 文件变更追踪：写前备份原文件（回退消息时恢复），备份失败不阻断写入
-            backup_path = await backup_tool_file(path)
-            try:
-                _atomic_write(path, new_raw, encoding=encoding)
-            except Exception as e:
-                await agent_file_change_service.discard_backup(backup_path)
-                return {"error": f"文件写入失败: {e}", "success": False}
+                if match_mode == "exact":
+                    if replace_all:
+                        new_raw = raw.replace(old_string, new_string)
+                    else:
+                        new_raw = raw.replace(old_string, new_string, 1)
+                else:
+                    max_replace = 0 if replace_all else 1
+                    new_raw, _ = tolerant_pattern.subn(
+                        lambda _m: new_string, raw, count=max_replace
+                    )
 
-            await record_tool_file_change(
-                tool_name="text_editor",
-                file_path=str(path),
-                change_type="modify",
-                backup_path=backup_path,
-            )
+                # [TOCTOU] 写入前校验 mtime / size：拦截并发修改，避免 read-modify-write
+                # 竞态导致本次写入覆盖之前未合并的修改。校验失败直接 abort，不写文件、
+                # 不创建备份（避免创建无用备份污染变更追踪记录）。
+                try:
+                    current_stat = path.stat()
+                    if (
+                        current_stat.st_mtime != mtime_before
+                        or current_stat.st_size != size_before
+                    ):
+                        return {
+                            "error": (
+                                "文件已被并发修改（mtime/size 已变化），当前修改基于的旧版本"
+                                "可能已过期。请重新读取文件后再次发起替换，避免覆盖其他"
+                                "并发修改。"
+                            ),
+                            "success": False,
+                            "concurrent_modification": True,
+                            "mtime_before": mtime_before,
+                            "mtime_after": current_stat.st_mtime,
+                            "size_before": size_before,
+                            "size_after": current_stat.st_size,
+                        }
+                except FileNotFoundError:
+                    return {"error": f"文件不存在: {file_path}", "success": False}
 
-            replaced_count = count if replace_all else 1
-            diff = _diff_preview(old_string, new_string)
-            result = {
-                "success": True,
-                "file_path": str(path),
-                "replaced_count": replaced_count,
-                "match_mode": match_mode,
-                "message": f"成功替换 {replaced_count} 处文本",
-                "diff": diff,
-            }
-            if match_mode == "line_ending_tolerant":
-                result["note"] = (
-                    "old_string 与文件行尾不一致，已按行尾容错匹配完成替换"
-                    + (f"；{ending_note}" if ending_note else "")
-                    + "。new_string 已统一为文件主导行尾"
+                # 文件变更追踪：写前备份原文件（回退消息时恢复），备份失败不阻断写入
+                backup_path = await backup_tool_file(path)
+                try:
+                    _atomic_write(path, new_raw, encoding=encoding)
+                except Exception as e:
+                    await agent_file_change_service.discard_backup(backup_path)
+                    return {"error": f"文件写入失败: {e}", "success": False}
+
+                await record_tool_file_change(
+                    tool_name="text_editor",
+                    file_path=str(path),
+                    change_type="modify",
+                    backup_path=backup_path,
                 )
-            return result
+
+                replaced_count = count if replace_all else 1
+                diff = _diff_preview(old_string, new_string)
+                result = {
+                    "success": True,
+                    "file_path": str(path),
+                    "replaced_count": replaced_count,
+                    "match_mode": match_mode,
+                    "message": f"成功替换 {replaced_count} 处文本",
+                    "diff": diff,
+                }
+                if match_mode == "line_ending_tolerant":
+                    result["note"] = (
+                        "old_string 与文件行尾不一致，已按行尾容错匹配完成替换"
+                        + (f"；{ending_note}" if ending_note else "")
+                        + "。new_string 已统一为文件主导行尾"
+                    )
+                return result
 
         text_editor_tool = StructuredTool(
             name="text_editor",
@@ -1730,49 +1735,56 @@ class ShellNodeHandler(BaseNodeHandler):
                 return f"路径校验失败: {error_msg}"
 
             path = Path(file_path).resolve()
-            existed = path.exists()
 
-            # 行尾处理：auto 时已有文件跟随其主导行尾，新建文件用 LF
-            if line_ending == "crlf":
-                target_ending = "\r\n"
-            elif line_ending == "lf":
-                target_ending = "\n"
-            elif existed:
+            # [per-file 锁] existed 判断 → 行尾探测 → backup → 写入全程互斥：
+            # file_write 是盲写覆盖，与并行 text_editor 交错时会整体冲掉对方
+            # 刚落盘的编辑（file_write 自身无 mtime 校验，锁是唯一防线）。
+            async with await get_file_write_lock(str(path)):
+                existed = path.exists()
+
+                # 行尾处理：auto 时已有文件跟随其主导行尾，新建文件用 LF
+                if line_ending == "crlf":
+                    target_ending = "\r\n"
+                elif line_ending == "lf":
+                    target_ending = "\n"
+                elif existed:
+                    try:
+                        existing_raw, _enc = _detect_and_read(path)
+                    except Exception:
+                        existing_raw = ""
+                    target_ending = (
+                        _detect_dominant_line_ending(existing_raw)
+                        if existing_raw
+                        else "\n"
+                    )
+                else:
+                    target_ending = "\n"
+
+                content = _normalize_line_endings(content, target_ending)
+
+                content_size = len(content.encode("utf-8"))
+                if content_size > MAX_CONTENT_SIZE:
+                    return f"写入内容过大（{content_size} 字节），最大支持 {MAX_CONTENT_SIZE} 字节"
+
+                # 文件变更追踪：写前备份原文件（新建文件无需备份），备份失败不阻断写入
+                backup_path = await backup_tool_file(path) if existed else None
                 try:
-                    existing_raw, _enc = _detect_and_read(path)
-                except Exception:
-                    existing_raw = ""
-                target_ending = (
-                    _detect_dominant_line_ending(existing_raw) if existing_raw else "\n"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    _atomic_write(path, content, encoding="utf-8")
+                except Exception as e:
+                    await agent_file_change_service.discard_backup(backup_path)
+                    return f"文件写入失败: {e}"
+
+                await record_tool_file_change(
+                    tool_name="file_write",
+                    file_path=str(path),
+                    change_type="modify" if existed else "create",
+                    backup_path=backup_path,
                 )
-            else:
-                target_ending = "\n"
 
-            content = _normalize_line_endings(content, target_ending)
-
-            content_size = len(content.encode("utf-8"))
-            if content_size > MAX_CONTENT_SIZE:
-                return f"写入内容过大（{content_size} 字节），最大支持 {MAX_CONTENT_SIZE} 字节"
-
-            # 文件变更追踪：写前备份原文件（新建文件无需备份），备份失败不阻断写入
-            backup_path = await backup_tool_file(path) if existed else None
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                _atomic_write(path, content, encoding="utf-8")
-            except Exception as e:
-                await agent_file_change_service.discard_backup(backup_path)
-                return f"文件写入失败: {e}"
-
-            await record_tool_file_change(
-                tool_name="file_write",
-                file_path=str(path),
-                change_type="modify" if existed else "create",
-                backup_path=backup_path,
-            )
-
-            action = "覆盖" if existed else "新建"
-            ending_label = "CRLF" if target_ending == "\r\n" else "LF"
-            return f"文件{action}成功: {path}（行尾 {ending_label}）"
+                action = "覆盖" if existed else "新建"
+                ending_label = "CRLF" if target_ending == "\r\n" else "LF"
+                return f"文件{action}成功: {path}（行尾 {ending_label}）"
 
         file_write_tool = StructuredTool(
             name="file_write",
@@ -1796,29 +1808,33 @@ class ShellNodeHandler(BaseNodeHandler):
                 return f"路径校验失败: {error_msg}"
 
             path = Path(file_path).resolve()
-            if not path.exists():
-                return f"文件不存在: {file_path}"
-            if path.is_dir():
-                return (
-                    f"不支持删除目录: {file_path}（仅支持文件）。"
-                    "如需删除目录，请改用 shell 命令（注意：shell 删除的文件无法随对话回退恢复）"
+
+            # [per-file 锁] 与并行 text_editor/file_write 互斥，避免「边删边写」
+            # 时写回已删除路径或删掉刚写入的内容。
+            async with await get_file_write_lock(str(path)):
+                if not path.exists():
+                    return f"文件不存在: {file_path}"
+                if path.is_dir():
+                    return (
+                        f"不支持删除目录: {file_path}（仅支持文件）。"
+                        "如需删除目录，请改用 shell 命令（注意：shell 删除的文件无法随对话回退恢复）"
+                    )
+
+                # 删除前备份原文件（回退消息时还原），备份失败不阻断删除
+                backup_path = await backup_tool_file(path)
+                try:
+                    await asyncio.to_thread(os.remove, path)
+                except Exception as e:
+                    await agent_file_change_service.discard_backup(backup_path)
+                    return f"文件删除失败: {e}"
+
+                await record_tool_file_change(
+                    tool_name="file_delete",
+                    file_path=str(path),
+                    change_type="delete",
+                    backup_path=backup_path,
                 )
-
-            # 删除前备份原文件（回退消息时还原），备份失败不阻断删除
-            backup_path = await backup_tool_file(path)
-            try:
-                await asyncio.to_thread(os.remove, path)
-            except Exception as e:
-                await agent_file_change_service.discard_backup(backup_path)
-                return f"文件删除失败: {e}"
-
-            await record_tool_file_change(
-                tool_name="file_delete",
-                file_path=str(path),
-                change_type="delete",
-                backup_path=backup_path,
-            )
-            return f"文件删除成功（已备份，对话回退时可恢复）: {path}"
+                return f"文件删除成功（已备份，对话回退时可恢复）: {path}"
 
         file_delete_tool = StructuredTool(
             name="file_delete",

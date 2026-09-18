@@ -1,16 +1,42 @@
 """
 文件类 LLM 工具共享原语
 
-从 shell_handler.py 迁出的公共部分：路径安全校验、编码探测读取、大小上限。
+从 shell_handler.py 迁出的公共部分：路径安全校验、编码探测读取、大小上限、
+写文件工具的 per-file 并发锁。
 消费方：tools/file_read.py 及 shell_handler 内的 text_editor/file_write/file_search。
 """
 
+import asyncio
 import re
 from pathlib import Path
 
 from app.config.build_utils import BASE_DIR
 
 MAX_FILE_SIZE = 50 * 1024 * 1024
+
+
+# ---- per-file 写锁：消除 text_editor/file_write/file_delete 并行覆盖竞态 ----
+# 同一文件的 read-modify-write 必须全程互斥：此前 LLM 一条 message 内多个
+# text_editor 并行（asyncio.gather）时，后落盘者基于旧快照整体覆写，先落盘的
+# 编辑静默丢失（实锤 3 次）。锁按 resolve 后的绝对路径区分，不同文件仍并行；
+# 纯只读工具（file_read/file_search/dry_run）不加锁。
+_FILE_WRITE_LOCKS: dict[str, asyncio.Lock] = {}
+_FILE_WRITE_LOCKS_GUARD = asyncio.Lock()
+
+
+async def get_file_write_lock(path_str: str) -> asyncio.Lock:
+    """获取指定路径的 per-file 写锁（不存在则创建）
+
+    用法：path resolve 后取 str(path) 作 key，在工具实现层用
+    ``async with await get_file_write_lock(str(path))`` 包住 read → 校验 →
+    backup → 写入整段。锁内含 await 是安全的（协程锁，只阻塞同文件操作）。
+    """
+    async with _FILE_WRITE_LOCKS_GUARD:
+        lock = _FILE_WRITE_LOCKS.get(path_str)
+        if lock is None:
+            lock = _FILE_WRITE_LOCKS[path_str] = asyncio.Lock()
+        return lock
+
 
 FORBIDDEN_PATH_PATTERNS = [
     # Windows 系统关键路径
