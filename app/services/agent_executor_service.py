@@ -1354,6 +1354,32 @@ class AgentExecutorService(BaseExecutorService):
         await db.refresh(message)
         return message
 
+    @staticmethod
+    def _collect_missing_required(params: dict, input_schema: dict) -> list[str]:
+        """收集未填的必填字段名（Agent 链路兜底校验，与前端 isFieldFilled 口径一致）
+
+        空值判定：'' / None / [] / {} 视为未填；number=0 视为未填（与前端
+        「未改默认值」口径一致）；boolean 不参与校验（required 的 boolean
+        默认 False 若拦截会死锁无法发送）。
+        """
+        missing: list[str] = []
+        for field in (input_schema or {}).get("fields", []):
+            name = field.get("name")
+            if not name or not field.get("required", False):
+                continue
+            if name == "message":
+                continue
+            if field.get("type") == "boolean":
+                continue
+            value = params.get(name)
+            if isinstance(value, str):
+                if not value.strip():
+                    missing.append(name)
+                continue
+            if value is None or value == [] or value == {} or value == 0:
+                missing.append(name)
+        return missing
+
     async def _resolve_input_params(
         self,
         db: AsyncSession,
@@ -1584,6 +1610,12 @@ class AgentExecutorService(BaseExecutorService):
             if flow.input_schema:
                 all_params = dict(params) if params else {}
                 all_params["message"] = user_message
+                # 必填兜底校验：前端漏传/绕过 UI 直调 API 时拦截，避免必填
+                # 参数静默放行导致 Agent 空参执行
+                missing = self._collect_missing_required(all_params, flow.input_schema)
+                if missing:
+                    yield FlowEventFactory.error(f"缺少必填参数: {', '.join(missing)}")
+                    return
                 await self._resolve_input_params(
                     db, all_params, flow.input_schema, input_data
                 )

@@ -126,6 +126,29 @@ function isFieldFilled(field: FlowIOField): boolean {
 const filledCount = computed(() => props.fields.filter(f => isFieldFilled(f)).length)
 const hasFilledParams = computed(() => filledCount.value > 0)
 
+// ---- 必填校验：发送时拦截未填的 required 字段 ----
+const paramPopoverVisible = ref(false)
+const errorFieldNames = ref(new Set<string>())
+
+/** 单个字段修正后即时清除其错误态（避免已填字段残留红框） */
+watch(
+  () => props.fields.map(f => isFieldFilled(f)).join(','),
+  () => {
+    if (errorFieldNames.value.size === 0) return
+    const next = new Set<string>()
+    for (const name of errorFieldNames.value) {
+      const field = props.fields.find(f => f.name === name)
+      if (field && !isFieldFilled(field)) next.add(name)
+    }
+    errorFieldNames.value = next
+  }
+)
+
+/** 必填校验：返回未填的 required 字段列表 */
+function validateRequiredFields(): FlowIOField[] {
+  return props.fields.filter(f => f.required && !isFieldFilled(f))
+}
+
 function openFilePicker(fieldName: string): void {
   currentFileField.value = fieldName
   filePickerVisible.value = true
@@ -158,6 +181,19 @@ watch(
 
 function handleSend() {
   if (sendMessageDisabled.value || props.isStreaming) return
+
+  // 必填校验：未填则弹出「参数设置」popover 并红框标记，不发送
+  const missing = validateRequiredFields()
+  if (missing.length > 0) {
+    errorFieldNames.value = new Set(missing.map(f => f.name))
+    paramPopoverVisible.value = true
+    ElMessage.warning({
+      message: `请填写必填参数：${missing.map(f => f.description || f.name).join('、')}`,
+      duration: 5000
+    })
+    return
+  }
+  errorFieldNames.value = new Set()
 
   const params: Record<string, unknown> = {}
   const attachedFiles: Array<{ id: number; original_name: string; mime_type: string }> = []
@@ -238,7 +274,13 @@ function handleStop() {
         ></textarea>
         <div class="input-toolbar">
           <div class="toolbar-left">
-            <el-popover v-if="fields.length > 0" placement="top-start" :width="380" trigger="click">
+            <el-popover
+              v-if="fields.length > 0"
+              v-model:visible="paramPopoverVisible"
+              placement="top-start"
+              :width="380"
+              trigger="click"
+            >
               <template #reference>
                 <button class="toolbar-icon-btn" :class="{ active: hasFilledParams }">
                   <el-icon :size="18"><SetUp /></el-icon>
@@ -262,7 +304,12 @@ function handleStop() {
                   </el-button>
                 </div>
                 <div class="param-popover-body">
-                  <div v-for="field in fields" :key="field.name" class="param-field">
+                  <div
+                    v-for="field in fields"
+                    :key="field.name"
+                    class="param-field"
+                    :class="{ 'is-error': errorFieldNames.has(field.name) }"
+                  >
                     <div
                       class="param-field-header"
                       :class="{ 'is-inline': field.type === 'boolean' }"
@@ -588,6 +635,24 @@ export default {
 
 .param-field-control {
   width: 100%;
+}
+
+/* 必填校验错误态：label 红 + 输入控件红边框 */
+.param-field.is-error .param-field-label {
+  color: #ef4444;
+  font-weight: 500;
+}
+
+.param-field.is-error :deep(.el-input__wrapper),
+.param-field.is-error :deep(.el-textarea__inner) {
+  box-shadow: 0 0 0 1px #ef4444 inset;
+}
+
+.param-field.is-error :deep(.el-input__wrapper.is-focus),
+.param-field.is-error :deep(.el-textarea__inner:focus) {
+  box-shadow:
+    0 0 0 1px #ef4444 inset,
+    0 0 0 3px rgba(239, 68, 68, 0.15);
 }
 
 .file-field {
