@@ -878,6 +878,7 @@ class AgentExecutorService(BaseExecutorService):
         if not session:
             return None
         if model:
+            model, provider = self._split_composite_chat_model(model, provider)
             session.chat_model = model
             session.chat_provider = provider or None
             if reasoning:
@@ -889,6 +890,23 @@ class AgentExecutorService(BaseExecutorService):
         await db.commit()
         await db.refresh(session)
         return session
+
+    @staticmethod
+    def _split_composite_chat_model(
+        model: Optional[str], provider: Optional[str]
+    ) -> tuple[Optional[str], Optional[str]]:
+        """拆解前端复合键 provider::model，返回 (裸模型 ID, 供应商 ID)。
+
+        前端模型选择器用 "provider_id::model_id" 复合键区分跨供应商同名模型
+        （AgentChat.vue MODEL_VALUE_SEP），历史版本落库时未拆解导致 chat_model
+        带 "minimax-cn-coding-plan::MiniMax-M3" 这类前缀：压缩链路直接读
+        session.chat_model 当模型名发给供应商，被识别为不存在的模型（智谱 1211）。
+        写入口统一拆解防新脏数据，压缩读取点兜底存量脏行。
+        """
+        if model and "::" in model:
+            prefix, _, bare = model.partition("::")
+            return bare, (prefix or provider)
+        return model, provider
 
     async def _apply_chat_model_override(
         self,
@@ -1334,6 +1352,9 @@ class AgentExecutorService(BaseExecutorService):
         chat_reasoning: Optional[str] = None,
     ) -> AgentSession:
         """创建新会话"""
+        chat_model, chat_provider = self._split_composite_chat_model(
+            chat_model, chat_provider
+        )
         session = AgentSession(
             flow_id=flow_id,
             title="新对话",
@@ -2406,13 +2427,17 @@ class AgentExecutorService(BaseExecutorService):
 
         # 会话临时模型优先：与对话链路同源覆盖，手动/自动压缩都跟随右上角
         # 切换的临时模型（未切换时 session.chat_model 为空，用节点默认配置）；
-        # 推理深度同样跟随会话选择（chat_reasoning），深度独立于模型是否切换
+        # 推理深度同样跟随会话选择（chat_reasoning），深度独立于模型是否切换。
+        # 兜底拆解 provider::model 复合键（历史版本落库未拆，见 helper docstring）
         if session.chat_model:
+            override_model, override_provider = self._split_composite_chat_model(
+                session.chat_model, session.chat_provider
+            )
             await self._apply_chat_model_override(
                 db,
                 flow,
-                session.chat_model,
-                session.chat_provider,
+                override_model,
+                override_provider,
                 session.chat_reasoning,
             )
 
