@@ -1055,8 +1055,14 @@ class AgentExecutorService(BaseExecutorService):
         flow_id: int,
         parent_session_id: int,
         parent_node_key: str,
+        work_dir: Optional[str] = None,
+        plan_mode: int = 0,
     ) -> AgentSession:
-        """获取同一父会话与节点对应的子Agent会话，不存在时创建。"""
+        """获取同一父会话与节点对应的子Agent会话，不存在时创建。
+
+        work_dir/plan_mode 用于首次创建；resume 命中已有会话时的配置覆盖
+        由调用方（call_sub_agent 闭包）统一处理（显式传参才覆盖）。
+        """
         query = (
             select(AgentSession)
             .where(
@@ -1078,6 +1084,8 @@ class AgentExecutorService(BaseExecutorService):
             flow_id,
             parent_session_id=parent_session_id,
             parent_node_key=parent_node_key,
+            work_dir=work_dir,
+            plan_mode=plan_mode,
         )
         return session
 
@@ -1721,8 +1729,13 @@ class AgentExecutorService(BaseExecutorService):
             # 初始化上下文
             input_data: dict = {}
 
-            # 计划模式标志（前端通过 params 传入，独立于 input_schema）
-            plan_mode = bool((params or {}).pop("__plan_mode__", False))
+            # 计划模式标志：显式 __plan_mode__ 优先（主会话前端每次都传）；
+            # 未传时回退 DB 会话字段——子 Agent 委派落库的 session.plan_mode
+            # 由此生效（否则落库值从不被读，子会话拦截/模式提示全部失效）
+            if params and "__plan_mode__" in params:
+                plan_mode = bool(params.pop("__plan_mode__"))
+            else:
+                plan_mode = bool(getattr(session, "plan_mode", 0))
 
             # 统一通过 input_schema 解析所有参数（包括 message）
             if flow.input_schema:
