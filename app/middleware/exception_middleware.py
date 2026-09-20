@@ -22,17 +22,15 @@ from app.agent_flow.exceptions import (
     ToolExecutionException,
 )
 from app.config.settings import settings
+from app.middleware.rate_limit import get_client_ip, record_404_request
 from app.schemas.base_schema import ApiResponse
 
 logger = logging.getLogger(__name__)
 
 
 def _get_client_ip(request: Request) -> str:
-    """获取客户端IP"""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """获取客户端IP（实现统一由 rate_limit 提供）"""
+    return get_client_ip(request)
 
 
 def _log_exception(request: Request, exc: Exception, level: str = "error") -> None:
@@ -80,6 +78,8 @@ async def http_exception_handler(
         )
 
     if exc.status_code == 404:
+        # 全站 404 唯一计数点（/api/* 的 404 会被包装为 HTTP 200，必须在包装前计数）
+        record_404_request(request)
         path = request.url.path
         if not path.startswith("/api/"):
             return JSONResponse(status_code=404, content={"detail": "Not Found"})

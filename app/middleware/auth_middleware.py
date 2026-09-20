@@ -4,6 +4,7 @@
 基于 session cookie 的简单密码认证。
 密码来源优先级：global_config（DB）> .env 环境变量。
 无密码配置时放行所有请求。
+包含 404 速率限制封禁（实现见 rate_limit.py）：同 IP 窗口内 404 过多临时封禁。
 """
 
 import logging
@@ -15,51 +16,19 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.config.database import AsyncSessionLocal
-from app.constants.timing import RATE_LIMIT_BLOCK_SECONDS
+from app.middleware.rate_limit import (
+    _LOOPBACK_ADDRS,
+    api_path_exists,
+    get_client_ip,
+    is_404_blocked,
+    record_404_request,
+)
 from app.services.global_config_service import global_config_service
 
 logger = logging.getLogger(__name__)
 
-# 本机回环地址集合（内部服务调用放行）
-_LOOPBACK_ADDRS = {"127.0.0.1", "::1", "localhost"}
-
 COOKIE_NAME = "auth_session"
 COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # 7 天
-
-# ---- 404 速率限制（IP 维度，内存存储） ----
-_404_rate_limit: dict[str, dict] = {}
-_RATE_WINDOW = 60  # 1 分钟窗口
-_RATE_THRESHOLD = 10  # 10 个 404 触发封禁
-
-# 不计入 404 速率限制的路径前缀
-_IGNORED_404_PREFIXES = (
-    "/favicon.ico",
-    "/robots.txt",
-    "/sitemap.xml",
-    "/assets/",
-    "/ws/",
-)
-
-
-def _is_404_blocked(ip: str) -> bool:
-    """检查 IP 是否因 404 过多被临时封禁"""
-    info = _404_rate_limit.get(ip)
-    if not info:
-        return False
-    return info.get("blocked_until", 0) > time.time()
-
-
-def _record_404(ip: str) -> None:
-    """记录一次 404，超限则封禁"""
-    now = time.time()
-    info = _404_rate_limit.get(ip)
-    if not info or now - info["window_start"] > _RATE_WINDOW:
-        _404_rate_limit[ip] = {"count": 1, "window_start": now, "blocked_until": 0}
-        return
-    info["count"] += 1
-    if info["count"] > _RATE_THRESHOLD:
-        info["blocked_until"] = now + RATE_LIMIT_BLOCK_SECONDS
-        logger.warning("IP %s 因 404 过多被封禁 %d 秒", ip, RATE_LIMIT_BLOCK_SECONDS)
 
 
 # 豁免路径（不需要登录即可访问）
@@ -170,22 +139,13 @@ def _is_protected_static(path: str) -> bool:
     return False
 
 
-def _get_client_ip(request: Request) -> str:
-    """获取客户端真实 IP（兼容 Nginx 反向代理）"""
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip.strip()
-
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-
-    return request.client.host if request.client else ""
+# 客户端 IP 与回环判断统一由 rate_limit 提供（历史调用方沿用旧名）
+_get_client_ip = get_client_ip
 
 
 def _is_loopback(request: Request) -> bool:
     """判断请求是否来自本机（内部服务调用，如 AI 的 api_call_tool / shell_executor）"""
-    return _get_client_ip(request) in _LOOPBACK_ADDRS
+    return get_client_ip(request) in _LOOPBACK_ADDRS
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -194,24 +154,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable):
         path = request.url.path
 
+        # 封禁期内直接短路，不进入业务逻辑（404 计数由异常处理器统一负责）
+        if is_404_blocked(get_client_ip(request)):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too Many Requests"},
+            )
+
         # 非 API 且非受保护静态路径
         if not path.startswith("/api/") and not _is_protected_static(path):
-            client_ip = _get_client_ip(request)
-            if _is_404_blocked(client_ip):
-                return JSONResponse(
-                    status_code=429,
-                    content={"detail": "Too Many Requests"},
-                )
-            response = await call_next(request)
-            if (
-                response.status_code == 404
-                and not any(
-                    path == p or path.startswith(p) for p in _IGNORED_404_PREFIXES
-                )
-                and client_ip not in _LOOPBACK_ADDRS
-            ):
-                _record_404(client_ip)
-            return response
+            return await call_next(request)
 
         # 仅初始化阶段豁免的路径：未初始化时放行，已初始化需登录
         if _is_init_only_exempt(path):
@@ -229,6 +181,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not password_hash:
             # 未配置密码，放行所有请求
             return await call_next(request)
+
+        # 未认证前先判路径存在性：不存在的 API 路径计入 404 限流并返回 404，
+        # 避免扫描器借 401 探测 API 面、也绕过 404 限流
+        if not api_path_exists(request.app, path):
+            record_404_request(request)
+            return JSONResponse(
+                status_code=404,
+                content={"code": 404, "msg": "Not Found", "data": None},
+            )
 
         # 检查 session cookie
         session_token = request.cookies.get(COOKIE_NAME)
