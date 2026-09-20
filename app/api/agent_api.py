@@ -159,12 +159,11 @@ class AgentApi:
             running_ids = agent_executor_service.get_running_session_ids(
                 [s.id for s in sessions]
             )
-            session_list = [
-                AgentSessionResponse.model_validate(
-                    s, update={"running": s.id in running_ids}
-                )
-                for s in sessions
-            ]
+            session_list = []
+            for s in sessions:
+                item = AgentSessionResponse.model_validate(s)
+                item.running = s.id in running_ids
+                session_list.append(item)
             return ApiResponse.success(
                 data=AgentSessionListResponse(total=total, list=session_list),
                 msg="查询成功",
