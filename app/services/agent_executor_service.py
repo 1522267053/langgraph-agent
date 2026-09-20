@@ -2516,7 +2516,7 @@ class AgentExecutorService(BaseExecutorService):
             llm = provider.create_chat_model(
                 model=llm_config.get("model", ""),
                 temperature=0.3,
-                max_tokens=4096,
+                max_tokens=llm_config.get("max_tokens") or 8192,
             )
             summary_prompt = (
                 "你是对话上下文压缩助手。请将以下对话历史压缩为结构化摘要，"
@@ -2725,7 +2725,7 @@ class AgentExecutorService(BaseExecutorService):
 
     @staticmethod
     def _extract_llm_config(flow: Flow) -> dict[str, Any]:
-        """从 Flow 节点中提取 LLM 配置（model/api_key/base_url/context_length）"""
+        """从 Flow 节点中提取 LLM 配置（model/api_key/base_url/context_length/max_tokens）"""
         from app.models.flow_node import NodeType
 
         for node in flow.nodes:
@@ -2737,6 +2737,9 @@ class AgentExecutorService(BaseExecutorService):
                     "api_key": config.get("api_key", ""),
                     "base_url": config.get("base_url", ""),
                     "context_length": config.get("context_length", 0) or 0,
+                    # 与对话链路同源（llm_factory：node_config.get("max_tokens", 8192)）；
+                    # 0/None 视为未配置回退默认
+                    "max_tokens": config.get("max_tokens", 8192) or 8192,
                 }
         return {}
 
