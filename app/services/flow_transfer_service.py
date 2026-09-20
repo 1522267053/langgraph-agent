@@ -6,6 +6,7 @@
 导入按依赖顺序：Skills → KnowledgeBases → MCPServers → Flows（拓扑序）→ Memories。
 """
 
+import asyncio
 import io
 import json
 import logging
@@ -42,6 +43,39 @@ from app.services.skill_service import skill_service
 from app.utils.document_processor import document_processor
 
 logger = logging.getLogger(__name__)
+
+
+# ---- 同步文件原语（仅供 asyncio.to_thread 在工作线程调用，禁止触碰 DB/事件循环）----
+
+
+def _read_package_manifest(zip_bytes: bytes) -> dict:
+    """从 .lga 包中读取并解析 manifest.json"""
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+            try:
+                manifest_raw = zf.read("manifest.json")
+            except KeyError:
+                raise ValueError(".lga 文件中缺少 manifest.json")
+            return json.loads(manifest_raw)
+    except zipfile.BadZipFile:
+        raise ValueError("无效的 .lga 文件（无法解压）")
+
+
+def _extract_package(zip_bytes: bytes, dest_dir: Path) -> None:
+    """解压 .lga 包到目标目录（同步阻塞，必须在线程中调用）"""
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+        zf.extractall(dest_dir)
+
+
+def _copy_tree(src_dir: Path, dest_dir: Path) -> None:
+    """递归复制目录下所有文件（同步阻塞，必须在线程中调用）"""
+    for p in src_dir.rglob("*"):
+        if p.is_file():
+            rel = p.relative_to(src_dir)
+            dest = dest_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(p), str(dest))
+
 
 EXPORT_VERSION = "1.0"
 PACKAGE_VERSION = "2.0"
@@ -743,21 +777,18 @@ class FlowTransferService:
     async def import_package(
         self, db: AsyncSession, zip_bytes: bytes
     ) -> tuple[list[dict], list[str]]:
-        """从 .lga 打包文件（zip）导入：解压后调用 import_flows 还原文件"""
-        try:
-            with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
-                try:
-                    manifest_raw = zf.read("manifest.json")
-                except KeyError:
-                    raise ValueError(".lga 文件中缺少 manifest.json")
-                manifest = json.loads(manifest_raw)
-        except zipfile.BadZipFile:
-            raise ValueError("无效的 .lga 文件（无法解压）")
+        """从 .lga 打包文件（zip）导入：解压后调用 import_flows 还原文件
+
+        [事件循环保护] manifest 解析与 extractall 是 CPU+磁盘密集的同步操作，
+        .lga 含完整知识库文档/技能文件（可达几十上百 MB），直接在协程里执行会
+        冻结整个事件循环（SSE 心跳停摆、全部 API 排队、其他会话 Agent 卡死），
+        统一移入工作线程；线程内只做纯文件/字节操作，绝不触碰 AsyncSession。
+        """
+        manifest = await asyncio.to_thread(_read_package_manifest, zip_bytes)
 
         tmpdir = tempfile.mkdtemp(prefix="lga_import_")
         try:
-            with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
-                zf.extractall(tmpdir)
+            await asyncio.to_thread(_extract_package, zip_bytes, Path(tmpdir))
             return await self.import_flows(db, manifest, file_root=Path(tmpdir))
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -785,14 +816,10 @@ class FlowTransferService:
 
                 if file_root is not None:
                     # 2.0：从解压目录复制整个技能目录（含 scripts/assets 等）
+                    # [事件循环保护] 逐文件同步复制会阻塞事件循环，整体移入工作线程
                     src_dir = Path(file_root) / "skills" / original_name
                     if src_dir.exists() and src_dir.is_dir():
-                        for p in src_dir.rglob("*"):
-                            if p.is_file():
-                                rel = p.relative_to(src_dir)
-                                dest = skill_dir / rel
-                                dest.parent.mkdir(parents=True, exist_ok=True)
-                                shutil.copy2(str(p), str(dest))
+                        await asyncio.to_thread(_copy_tree, src_dir, skill_dir)
                     # SKILL.md 兜底：目录复制后若缺失则用 skill_content 补写
                     if not (skill_dir / "SKILL.md").exists():
                         content = s.get("skill_content") or (

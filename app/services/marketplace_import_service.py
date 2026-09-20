@@ -4,6 +4,7 @@
 将市场下载的资源文件导入到本地
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -18,6 +19,30 @@ from app.config.settings import settings
 from app.models.skill import Skill
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_skill(file_bytes: bytes, skill_dir: Path) -> str:
+    """解压 Skill ZIP 并定位 SKILL.md，返回其路径
+
+    [事件循环保护] extractall / os.walk / read_text 是同步 CPU+磁盘操作，
+    Skill 包含大量 assets 时会冻结事件循环（SSE 停摆、全部 API 排队），
+    必须经 asyncio.to_thread 在工作线程调用；本函数只做纯文件操作。
+    """
+    try:
+        with zipfile.ZipFile(BytesIO(file_bytes), "r") as zf:
+            zf.extractall(skill_dir)
+    except zipfile.BadZipFile:
+        raise ValueError("无效的 ZIP 文件")
+
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.exists():
+        for root, _dirs, files in os.walk(skill_dir):
+            if "SKILL.md" in files:
+                skill_md = Path(root) / "SKILL.md"
+                break
+    if not skill_md.exists():
+        raise ValueError("ZIP 中未找到 SKILL.md 文件")
+    return str(skill_md)
 
 
 class MarketplaceImportService:
@@ -68,22 +93,8 @@ class MarketplaceImportService:
             shutil.rmtree(skill_dir, ignore_errors=True)
         skill_dir.mkdir(parents=True, exist_ok=True)
 
-        try:
-            with zipfile.ZipFile(BytesIO(file_bytes), "r") as zf:
-                zf.extractall(skill_dir)
-        except zipfile.BadZipFile:
-            raise ValueError("无效的 ZIP 文件")
-
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            for root, _dirs, files in os.walk(skill_dir):
-                if "SKILL.md" in files:
-                    skill_md = Path(root) / "SKILL.md"
-                    break
-        if not skill_md.exists():
-            raise ValueError("ZIP 中未找到 SKILL.md 文件")
-
-        skill_md.read_text(encoding="utf-8")
+        # [事件循环保护] 解压+目录遍历移入工作线程，避免大包冻结事件循环
+        await asyncio.to_thread(_extract_skill, file_bytes, skill_dir)
         description = resource_info.get("description", "")
 
         skill_path = f"{settings.upload_dir}/skills/{skill_name}/SKILL.md"
