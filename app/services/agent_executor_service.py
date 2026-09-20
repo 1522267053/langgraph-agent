@@ -250,6 +250,11 @@ class AgentExecutorService(BaseExecutorService):
         if run.terminal_event_type == "waiting_human":
             self._waiting_sessions.add(run.session_id)
             self._waiting_events[run.session_id] = terminal_event
+        else:
+            # 卫生兜底：正常终结（flow_done/error）不应残留 waiting 态
+            # （等待人工输入只能以 waiting_human 终态进入/维持）
+            self._waiting_sessions.discard(run.session_id)
+            self._waiting_events.pop(run.session_id, None)
         try:
             self._publish_agent_run_event(run, terminal_event)
         finally:

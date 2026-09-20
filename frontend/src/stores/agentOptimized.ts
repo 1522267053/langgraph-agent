@@ -264,6 +264,12 @@ export const useAgentStore = defineStore('agent', () => {
   let runningPollTimer: ReturnType<typeof setTimeout> | null = null
   let runningPollVersion = 0
 
+  // ========== 会话列表「对话中」图标轮询（批量接口，2s 自适应） ==========
+  // 仅当列表存在 running 会话时轮询，全部结束自动停表；refresh 周期 2s
+  let sessionStatusPollTimer: ReturnType<typeof setTimeout> | null = null
+  let sessionStatusPollVersion = 0
+  const SESSION_STATUS_POLL_INTERVAL = 2000
+
   // ========== 计划模式（只读探索，不执行修改），按会话独立存储 ==========
   // 有会话时以 currentSession.plan_mode（DB 字段）为权威；无会话时暂存到
   // pendingPlanMode，首次创建会话时随 createSession 传入。
@@ -384,10 +390,81 @@ export const useAgentStore = defineStore('agent', () => {
       if (res.data.code === 1) {
         sessions.value = res.data.data?.list || []
         sessionTotal.value = res.data.data?.total || 0
+        // 列表含运行中会话 → 启动 2s 批量状态轮询（全结束自动停表）
+        syncSessionStatusPolling(agentId)
       }
     } finally {
       sessionsLoading.value = false
     }
+  }
+
+  /**
+   * 「对话中」图标轮询编排：列表有 running 会话则确保轮询存活，否则停表。
+   * 轮询体走批量内存接口（runningStatusBatch）本地 mutate running，
+   * 不重拉 page 接口、不置 sessionsLoading（避免 v-loading 闪烁）。
+   */
+  function syncSessionStatusPolling(agentId: number) {
+    if (sessions.value.some(s => s.running)) {
+      startSessionStatusPolling(agentId)
+    } else {
+      stopSessionStatusPolling()
+    }
+  }
+
+  function startSessionStatusPolling(agentId: number) {
+    stopSessionStatusPolling()
+    const pollVersion = ++sessionStatusPollVersion
+    sessionStatusPollTimer = setTimeout(poll, SESSION_STATUS_POLL_INTERVAL)
+
+    async function poll() {
+      if (pollVersion !== sessionStatusPollVersion) return
+      // 当前 Agent 已切换或列表被清空（resetState）：本表作废
+      if (currentAgent.value?.id !== agentId || sessions.value.length === 0) {
+        stopSessionStatusPolling()
+        return
+      }
+      try {
+        const res = await agentApi.runningStatusBatch(
+          agentId,
+          sessions.value.map(s => s.id)
+        )
+        if (pollVersion !== sessionStatusPollVersion) return
+        if (res.data.code === 1) {
+          const runningIds = new Set(res.data.data?.running_ids || [])
+          for (const s of sessions.value) {
+            s.running = runningIds.has(s.id)
+          }
+          if (runningIds.size > 0) {
+            sessionStatusPollTimer = setTimeout(poll, SESSION_STATUS_POLL_INTERVAL)
+            return
+          }
+        }
+        // 请求失败或已无运行会话：停表（下次 loadSessions 重新评估）
+      } catch {
+        // 批量状态查询失败不影响列表使用；停表待下次 loadSessions 重启
+      }
+      stopSessionStatusPolling()
+    }
+  }
+
+  function stopSessionStatusPolling() {
+    sessionStatusPollVersion++
+    if (sessionStatusPollTimer) {
+      clearTimeout(sessionStatusPollTimer)
+      sessionStatusPollTimer = null
+    }
+  }
+
+  /** 本地立即设置某会话 running 并同步轮询起停（发消息/流结束的即时反馈） */
+  function setSessionRunningLocal(
+    agentId: number,
+    sessionId: number,
+    running: boolean
+  ) {
+    if (currentAgent.value?.id !== agentId) return
+    const target = sessions.value.find(s => s.id === sessionId)
+    if (target) target.running = running
+    syncSessionStatusPolling(agentId)
   }
 
   /**
@@ -1382,6 +1459,8 @@ export const useAgentStore = defineStore('agent', () => {
           applyLatestMessages(fresh.list, fresh.total, true, true)
           messageRefreshVersion.value++
         }
+        // 流正常结束：立即熄灭列表图标并同步轮询（有其他运行中会话则续表）
+        setSessionRunningLocal(context.agentId, context.sessionId, false)
         if (context.wasFirstMessage && isCurrentStream(context)) {
           void loadSessions(context.agentId, sessionPage.value)
         }
@@ -1391,6 +1470,8 @@ export const useAgentStore = defineStore('agent', () => {
         if (!isCurrentStream(context)) return
         stopStreaming()
         isCompressing.value = false
+        // 流异常结束：立即熄灭列表图标（waiting_human 除外——等待人工输入仍算对话中）
+        setSessionRunningLocal(context.agentId, context.sessionId, false)
         if (isWaitingToolApproval.value) {
           pendingApprovals.clear()
           currentApprovalId.value = null
@@ -1412,6 +1493,8 @@ export const useAgentStore = defineStore('agent', () => {
             status.data.data?.waiting_human &&
             isCurrentStream(context)
           ) {
+            // 错误实为等待人工输入（interrupt）：会话仍在对话中，图标保持点亮
+            setSessionRunningLocal(context.agentId, context.sessionId, true)
             applyWaitingHuman(
               status.data.data.waiting_event || {
                 type: 'waiting_human',
@@ -1507,6 +1590,8 @@ export const useAgentStore = defineStore('agent', () => {
     clearOrphanPlaceholders()
     addUserMessage(content, files)
     startStreaming()
+    // 立即点亮列表图标并启动轮询（不等 loadSessions）
+    setSessionRunningLocal(context.agentId, context.sessionId, true)
 
     streamAbort = agentApi.chat(
       context.agentId,
@@ -1540,6 +1625,8 @@ export const useAgentStore = defineStore('agent', () => {
     isWaitingHuman.value = false
     currentWaitData.value = null
     startStreaming()
+    // 立即点亮列表图标并启动轮询（不等 loadSessions）
+    setSessionRunningLocal(context.agentId, context.sessionId, true)
 
     streamAbort = agentApi.resume(
       context.agentId,
@@ -1970,6 +2057,8 @@ export const useAgentStore = defineStore('agent', () => {
           stopRunningPolling()
           isStreaming.value = false
           refreshMessages(agentId, sessionId, expectedGeneration)
+          // 后台会话结束：同步熄灭列表图标（有其他运行中会话则续表）
+          setSessionRunningLocal(agentId, sessionId, false)
         }
       } catch {
         if (!isCurrentPoll()) return
@@ -2051,6 +2140,7 @@ export const useAgentStore = defineStore('agent', () => {
     cancelStream()
     stopCompressPolling()
     stopRunningPolling()
+    stopSessionStatusPolling()
     // 文件变更 Diff：彻底清空（序号自增使在途回包失效）
     fileChanges.value = []
     fileChangesReqSeq++

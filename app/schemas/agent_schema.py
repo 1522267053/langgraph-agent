@@ -217,6 +217,14 @@ class AgentSessionPageRequest(BaseModel):
     page_size: int = Field(default=20, ge=1, le=100, description="每页条数")
 
 
+class AgentSessionRunningStatusRequest(BaseModel):
+    """会话运行状态批量查询请求（会话列表「对话中」图标轮询数据源）"""
+
+    session_ids: List[int] = Field(
+        ..., min_length=1, max_length=100, description="会话ID列表（当前页全部）"
+    )
+
+
 class AgentMessagePageRequest(BaseModel):
     """消息列表分页请求"""
 

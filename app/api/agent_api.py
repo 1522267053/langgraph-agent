@@ -27,6 +27,7 @@ from app.schemas.agent_schema import (
     AgentSessionResponse,
     AgentSessionListResponse,
     AgentSessionPageRequest,
+    AgentSessionRunningStatusRequest,
     AgentSessionCreateRequest,
     AgentSessionWorkDirRequest,
     AgentSessionPlanModeRequest,
@@ -168,6 +169,24 @@ class AgentApi:
                 data=AgentSessionListResponse(total=total, list=session_list),
                 msg="查询成功",
             )
+
+        @self.router.post(
+            "/{id}/sessions/running-status",
+            response_model=ApiResponse,
+            summary="批量查询会话运行状态",
+        )
+        async def get_running_status_batch(
+            id: int,
+            req: AgentSessionRunningStatusRequest,
+        ):
+            """按 session id 列表批量返回正在对话中的会话（列表页图标 2s 轮询）。
+
+            纯内存查询无 DB 成本；须注册在 {session_id} 通配子路由之前。
+            """
+            running_ids = agent_executor_service.get_running_session_ids(
+                req.session_ids
+            )
+            return ApiResponse.success(data={"running_ids": sorted(running_ids)})
 
         @self.router.post(
             "/{id}/sessions",
