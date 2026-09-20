@@ -235,6 +235,19 @@ export const agentApi = {
   },
 
   /**
+   * 批量查询会话运行状态（列表「对话中」图标轮询数据源，纯内存接口）
+   * @param sessionIds 会话ID列表（当前页全部）
+   * @returns running_ids：正在对话中的会话 id 子集
+   */
+  runningStatusBatch(agentId: number, sessionIds: number[]) {
+    return post<{ running_ids: number[] }>(
+      `/agent/${agentId}/sessions/running-status`,
+      { session_ids: sessionIds },
+      { showError: false }
+    )
+  },
+
+  /**
    * 创建会话
    * @param agentId Agent ID
    * @param workDir 可选，项目工作路径
