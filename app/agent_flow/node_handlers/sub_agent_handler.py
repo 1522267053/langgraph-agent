@@ -72,6 +72,27 @@ def _build_sub_agent_tool_schema(
                 description="会话模式：resume首次创建后复用，new每次创建新会话",
             ),
         ),
+        # 以下两参数每次委派均生效（resume 复用已有会话时覆盖原配置）
+        "plan_mode": (
+            Optional[bool],
+            Field(
+                default=None,
+                description=(
+                    "计划模式（可选）：true=只读探索（禁用写操作工具），"
+                    "false=正常执行；不传=不改变（保持子会话现有配置）"
+                ),
+            ),
+        ),
+        "work_dir": (
+            Optional[str],
+            Field(
+                default=None,
+                description=(
+                    "项目工作路径（可选）：必须是已存在的目录绝对路径；"
+                    "不传=不改变（保持子会话现有工作路径）"
+                ),
+            ),
+        ),
     }
 
     file_list_fields: set[str] = set()
@@ -85,7 +106,7 @@ def _build_sub_agent_tool_schema(
             description = sf.get("description", "")
             required = sf.get("required", False)
 
-            if not name or name == "message":
+            if not name or name in {"message", "plan_mode", "work_dir"}:
                 continue
 
             if field_type == "file_list":
@@ -203,7 +224,10 @@ class SubAgentNodeHandler(BaseNodeHandler):
             f"{description}\n\n"
             f"调用后阻塞等待子Agent完成并返回结果。\n"
             "session_mode=resume 时首次创建后复用同一会话，适合连续任务；"
-            "session_mode=new 时每次创建独立会话，适合互不依赖的并行任务。"
+            "session_mode=new 时每次创建独立会话，适合互不依赖的并行任务。\n"
+            "可选 plan_mode（计划模式：true=只读探索）与 work_dir（项目工作路径，"
+            "须为已存在目录），每次委派均生效——resume 复用会话时覆盖原配置，"
+            "不传则保持子会话现有配置。"
         )
 
         _agent_id = agent_id
@@ -213,20 +237,38 @@ class SubAgentNodeHandler(BaseNodeHandler):
         _parent_writer = self._writer
 
         async def call_sub_agent(**kwargs) -> dict | str:
-            from app.services.agent_executor_service import agent_executor_service
+            from app.services.agent_executor_service import (
+                agent_executor_service,
+                normalize_work_dir,
+            )
 
             task = kwargs.get("task", "")
             session_mode = kwargs.get("session_mode", "resume")
+            # 会话级可选参数：不进 extra_params（避免污染子Agent input_variables）
+            plan_mode_opt: Optional[bool] = kwargs.get("plan_mode")
+            work_dir_opt: Optional[str] = kwargs.get("work_dir")
             extra_params: dict = {
                 k: v
                 for k, v in kwargs.items()
-                if k not in {"task", "session_mode"} and v is not None
+                if k not in {"task", "session_mode", "plan_mode", "work_dir"}
+                and v is not None
             }
             # 最后一轮回复的完整内容（不截断），子Agent报错时随错误结果返回给父Agent；
             # 在 try 外初始化，保证任意阶段异常时 except 分支都可安全读取
             last_round: dict[str, str] = {"content": ""}
 
             try:
+                # 工作路径校验（路径不存在/不是目录时返回可读错误，不炸调用）
+                try:
+                    work_dir = normalize_work_dir(work_dir_opt)
+                except ValueError as exc:
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "error": f"work_dir 无效: {exc}",
+                    }
+                plan_mode = 1 if plan_mode_opt else 0
+
                 # 创建子Agent session（标题标记来源）
                 async with AsyncSessionLocal() as db:
                     if session_mode == "resume" and _parent_session_id:
@@ -235,12 +277,28 @@ class SubAgentNodeHandler(BaseNodeHandler):
                             _agent_id,
                             _parent_session_id,
                             node.node_key,
+                            work_dir=work_dir,
+                            plan_mode=plan_mode,
                         )
                     else:
                         session = await agent_executor_service.create_session(
-                            db, _agent_id
+                            db,
+                            _agent_id,
+                            work_dir=work_dir,
+                            plan_mode=plan_mode,
                         )
                     session_id = session.id
+                    # 覆盖语义：显式传参才覆盖（None=不指定，不清空已有配置）；
+                    # resume 复用已有会话同样生效（new 模式创建时已带新值，此处理不变）
+                    overridden = False
+                    if work_dir is not None and session.work_dir != work_dir:
+                        session.work_dir = work_dir
+                        overridden = True
+                    if plan_mode_opt is not None and session.plan_mode != plan_mode:
+                        session.plan_mode = plan_mode
+                        overridden = True
+                    if overridden:
+                        await db.commit()
                     if session.title == "新对话":
                         title = f"[子Agent调用] {task[:40]}"
                         if len(task) > 40:
