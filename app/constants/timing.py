@@ -6,6 +6,12 @@ USER_RESPONSE_TIMEOUT_SECONDS = 3600
 # 登录失败锁定时长（IP 维度，锁定期间拒绝登录尝试）
 LOGIN_LOCK_SECONDS = 300
 
+# 404 速率限制统计窗口（IP 维度，窗口内 404 次数累计）
+RATE_WINDOW_SECONDS = 60
+
+# 404 速率限制触发阈值（窗口内超过该次数的 404 触发封禁）
+RATE_THRESHOLD = 10
+
 # 404 速率限制封禁时长（IP 维度，触发阈值后封禁，超时自动解封）
 RATE_LIMIT_BLOCK_SECONDS = 300
 
