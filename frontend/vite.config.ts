@@ -18,6 +18,15 @@ export default defineConfig({
       '@': resolve(__dirname, 'src')
     }
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // 末尾固定后缀防止哈希随机撞广告拦截规则（如 *_ad.js$ 把 _aD.js 结尾的 chunk 全拦）
+        chunkFileNames: 'assets/[name]-[hash].chunk.js',
+        entryFileNames: 'assets/[name]-[hash].entry.js'
+      }
+    }
+  },
   server: {
     host: '0.0.0.0',
     port: 3001,
