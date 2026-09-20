@@ -23,6 +23,11 @@ def _write_bytes(path, content: bytes) -> None:
         f.write(content)
 
 
+def _hash_bytes(content: bytes) -> str:
+    """计算内容 MD5 前 8 位（同步 CPU 密集，大文件必须在线程中调用）"""
+    return hashlib.md5(content).hexdigest()[:8]
+
+
 class DocumentProcessor:
     """
     文档处理器
@@ -1020,7 +1025,8 @@ class DocumentProcessor:
         """
         ext = self._get_file_extension(filename)
 
-        content_hash = hashlib.md5(content).hexdigest()[:8]
+        # [事件循环保护] md5 对大文档是 CPU 密集同步计算，与写文件一并移入线程
+        content_hash = await asyncio.to_thread(_hash_bytes, content)
         safe_filename = f"{knowledge_base_id}_{content_hash}.{ext}"
 
         dir_path = self._upload_dir / str(knowledge_base_id)
