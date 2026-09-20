@@ -1,7 +1,7 @@
 /**
  * 工具折叠行统计（工具行内嵌展示）
  * @description 从单个工具段的 args/result 中提取统计与文件路径：
- * - file_read → 读取行数（total_lines 优先，媒体注入显示「查看」）
+ * - file_read → 读取范围（offset+limit；旧数据/字符模式回退 content 行数，媒体注入显示「查看」）
  * - file_write → 写入行数（行数取 args.content，结果为字符串成功消息）
  * - text_editor → +A −R（从 result.diff 的 -/+ 行数统计）
  * 展示位置：工具行右侧统计 pill、工具名下方文件路径（AIMessageContent 工具行内嵌）。
@@ -45,9 +45,17 @@ function parseToolResult(result: unknown): Record<string, unknown> | null {
   return null
 }
 
-function countLines(text: string): number {
+/**
+ * 行数统计（单一事实源，pill 与 ToolResultViewer 共用）：
+ * split('\n') 后剔除末尾单个空元素——它是末尾换行符的伪影
+ * （"a\nb\n" 实际 2 行，split 却得 3）；段内空行是真实行，照常计数。
+ * 与后端 splitlines 语义对齐（file_read/file_write 行数口径）。
+ */
+export function countLines(text: string): number {
   if (!text) return 0
-  return text.split('\n').length
+  const lines = text.split('\n')
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+  return lines.length
 }
 
 /** 从单个工具调用提取统计；非 file_ 类工具/失败/无有效数据返回 null */
