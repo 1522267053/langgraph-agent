@@ -53,7 +53,7 @@ class Memory(DbBaseModel):
         comment="分类：decision/preference/lesson/relation/event/task/other",
     )
     title: Mapped[str] = mapped_column(
-        String(50), nullable=False, comment="记忆标题/摘要"
+        String(70), nullable=False, comment="记忆标题/摘要"
     )
     content: Mapped[str] = mapped_column(
         String(600), nullable=False, comment="记忆内容"

@@ -68,7 +68,7 @@ class MemoryCreate(BaseView):
     agent_id: int = Field(..., description="所属Agent ID")
     memory_type: str = Field(default="cold", description="记忆层级：hot/warm/cold")
     category: str = Field(default="other", description="分类")
-    title: str = Field(..., max_length=50, description="标题")
+    title: str = Field(..., max_length=70, description="标题")
     content: str = Field(..., max_length=600, description="内容")
     keywords: Optional[str] = Field(default=None, description="关键词")
     metadata_: Optional[dict] = Field(
@@ -82,7 +82,7 @@ class MemoryUpdate(BaseView):
     id: int = Field(..., description="ID")
     memory_type: Optional[str] = Field(default=None, description="记忆层级")
     category: Optional[str] = Field(default=None, description="分类")
-    title: Optional[str] = Field(default=None, max_length=50, description="标题")
+    title: Optional[str] = Field(default=None, max_length=70, description="标题")
     content: Optional[str] = Field(default=None, max_length=600, description="内容")
     keywords: Optional[str] = Field(default=None, description="关键词")
     metadata_: Optional[dict] = Field(
