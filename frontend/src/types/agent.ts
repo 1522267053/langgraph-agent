@@ -39,6 +39,8 @@ export interface AgentSession extends BaseEntity {
   title: string
   /** 会话状态 */
   status: number
+  /** 是否正在对话中（后端内存运行态，会话列表页区分执行中的会话） */
+  running?: boolean
   /** 项目工作路径（空则使用 Agent 默认工作目录） */
   work_dir?: string | null
   /** 计划模式：1=开启（只读探索），0/空=关闭 */

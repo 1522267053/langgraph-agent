@@ -643,6 +643,22 @@ class AgentExecutorService(BaseExecutorService):
         """检查会话是否停在 LangGraph 人工输入中断点。"""
         return session_id in self._waiting_sessions
 
+    def get_running_session_ids(self, session_ids: List[int]) -> set[int]:
+        """批量返回正在对话中的会话 ID 集合（会话列表页「对话中」图标数据源）。
+
+        纯内存查询，无 IO 成本。范围 = 执行中 + 等待人工输入（审批/反问期间
+        用户视角会话仍在进行）；注意与 get_run_status["running"] 口径的刻意
+        差异：后者不含 waiting（前端刷新恢复依赖 running/waiting_human 分支互斥）。
+        """
+        self._prune_agent_runs()
+        return {
+            sid
+            for sid in session_ids
+            if sid in self._running_sessions
+            or sid in self._waiting_sessions
+            or ((run := self._agent_runs.get(sid)) is not None and not run.done)
+        }
+
     def start_compress_background(
         self, session_id: int, custom_prompt: str = ""
     ) -> None:

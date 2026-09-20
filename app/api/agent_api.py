@@ -155,7 +155,16 @@ class AgentApi:
             sessions, total = await agent_executor_service.get_sessions(
                 db, id, req.page, req.page_size
             )
-            session_list = [AgentSessionResponse.model_validate(s) for s in sessions]
+            # 「对话中」标记：批量填充内存运行态（与 /running 单查接口同口径）
+            running_ids = agent_executor_service.get_running_session_ids(
+                [s.id for s in sessions]
+            )
+            session_list = [
+                AgentSessionResponse.model_validate(
+                    s, update={"running": s.id in running_ids}
+                )
+                for s in sessions
+            ]
             return ApiResponse.success(
                 data=AgentSessionListResponse(total=total, list=session_list),
                 msg="查询成功",

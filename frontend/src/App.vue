@@ -22,7 +22,8 @@ import {
   User,
   TrendCharts,
   ChatLineSquare,
-  Calendar
+  Calendar,
+  Loading
 } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage, ElNotification, ElButton } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
@@ -644,8 +645,11 @@ function handleSessionPageChange(page: number): void {
                     :class="['session-item', { active: store.currentSession?.id === session.id }]"
                     @click="handleSelectSession(session)"
                   >
-                    <el-icon class="session-icon">
-                      <ChatDotRound />
+                    <el-icon
+                      :class="['session-icon', { 'session-icon-running': session.running }]"
+                    >
+                      <Loading v-if="session.running" class="icon-spin" />
+                      <ChatDotRound v-else />
                     </el-icon>
                     <div class="session-info">
                       <div class="session-title">{{ session.title || '新会话' }}</div>
@@ -783,8 +787,11 @@ function handleSessionPageChange(page: number): void {
                     ]"
                     @click="handleSelectSession(session)"
                   >
-                    <el-icon class="session-icon">
-                      <ChatDotRound />
+                    <el-icon
+                      :class="['session-icon', { 'session-icon-running': session.running }]"
+                    >
+                      <Loading v-if="session.running" class="icon-spin" />
+                      <ChatDotRound v-else />
                     </el-icon>
                     <div class="session-info">
                       <div class="session-title">{{ session.title || '新会话' }}</div>
@@ -1119,6 +1126,24 @@ function handleSessionPageChange(page: number): void {
   color: var(--paper-ink-5);
   margin-top: 1px;
   flex-shrink: 0;
+}
+
+/* 对话中会话：旋转加载图标（桌面侧栏 + 移动抽屉列表共用） */
+.session-icon-running {
+  color: var(--vermilion);
+}
+
+.icon-spin {
+  animation: session-icon-rotate 1.2s linear infinite;
+}
+
+@keyframes session-icon-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .session-item.active .session-icon {

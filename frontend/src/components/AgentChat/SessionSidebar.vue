@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, Plus, ChatDotRound, Delete, Search } from '@element-plus/icons-vue'
+import { ArrowLeft, Plus, ChatDotRound, Delete, Search, Loading } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { useAgentStore } from '@/stores'
 import { loadWorkDirForAgent } from '@/utils/workdir'
@@ -105,8 +105,9 @@ function handleBack(): void {
         :class="['session-item', { active: store.currentSession?.id === session.id }]"
         @click="handleSelectSession(session)"
       >
-        <el-icon class="session-icon">
-          <ChatDotRound />
+        <el-icon :class="['session-icon', { 'session-icon-running': session.running }]">
+          <Loading v-if="session.running" class="icon-spin" />
+          <ChatDotRound v-else />
         </el-icon>
         <div class="session-info">
           <div class="session-title">{{ session.title || '新会话' }}</div>
@@ -270,6 +271,24 @@ function handleBack(): void {
   color: var(--paper-ink-5);
   margin-top: 1px;
   flex-shrink: 0;
+}
+
+/* 对话中会话：旋转加载图标 */
+.session-icon-running {
+  color: var(--vermilion);
+}
+
+.icon-spin {
+  animation: session-icon-rotate 1.2s linear infinite;
+}
+
+@keyframes session-icon-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .session-item.active .session-icon {
