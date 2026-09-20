@@ -294,7 +294,7 @@ class MemoryNodeHandler(BaseNodeHandler):
                 "你是一个记忆管理系统。以下是一个 Agent 的所有热记忆，请进行整理。\n\n"
                 "## 整理规则\n"
                 "1. 合并重复或相似的记忆\n"
-                "2. 压缩冗长的描述为简洁摘要（标题不超过50字，内容不超过200字）\n"
+                "2. 压缩冗长的描述为简洁摘要（标题不超过70字，内容不超过200字）\n"
                 "3. 优先保留高重要性的记忆，尤其是用户的明确偏好和关键决策\n"
                 "4. 删除过时、矛盾或不再相关的信息\n"
                 "5. 每条记忆必须包含 title(标题) 和 content(内容)\n"
@@ -521,7 +521,7 @@ class MemoryNodeHandler(BaseNodeHandler):
                 if not results:
                     response_data["error"] = (
                         f"所有 {len(items)} 条记忆均缺少必填字段 title，"
-                        f"请为每条记忆提供 title（简短标题，≤50字符）"
+                        f"请为每条记忆提供 title（简短标题，≤70字符）"
                     )
 
             if need_consolidate:
@@ -738,7 +738,7 @@ class MemoryNodeHandler(BaseNodeHandler):
 
 class MemoryItem(BaseModel):
     model_config = {"extra": "ignore"}
-    title: str = Field(..., description="记忆标题（必填,50字以内）")
+    title: str = Field(..., description="记忆标题（必填,70字以内）")
     content: str = Field(..., description="记忆内容（必填，建议500字左右，上限600字）")
     category: Optional[str] = Field(default=None, description="分类")
     importance: int = Field(default=3, description="重要程度1-5")
