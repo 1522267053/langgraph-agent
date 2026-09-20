@@ -4,6 +4,7 @@ import { CopyDocument, Download, View } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import DiffViewer from '@/components/AgentChat/DiffViewer.vue'
 import { detectFileLanguage } from '@/utils/format'
+import { countLines } from '@/utils/fileOps'
 
 const props = withDefaults(
   defineProps<{
@@ -128,9 +129,10 @@ const fileReadMeta = computed(() => {
   const lastLine = fileReadCodeLines.value[fileReadCodeLines.value.length - 1]
   const actualEnd = lastLine ? lastLine.lineNumber : offset + limit - 1
   const total = r.total_lines
-  return total
-    ? `第 ${offset}-${actualEnd} 行 / 共 ${total} 行`
-    : `${fileReadCodeLines.value.length} 行`
+  if (total) return `第 ${offset}-${actualEnd} 行 / 共 ${total} 行`
+  // 无 total_lines（字符模式分段）：与 pill 共用 countLines（剔除末尾换行伪影），
+  // 避免此前「非空行计数」把真实空行丢掉，与统计 pill 相差段内空行数
+  return `${countLines(r.content)} 行`
 })
 
 /**
