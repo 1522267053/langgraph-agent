@@ -77,6 +77,22 @@ const reasoningEffortTip = computed(() =>
     : 'openai兼容的模型支持设置推理深度。若是anthropic兼容的模型，则可以在下方附加参数添加 {"thinking": {"type": "enabled", "budget_tokens": 2048}}'
 )
 
+/**
+ * Max Tokens 防呆告警：推理模型（已选推理深度，或附加参数带 thinking）+
+ * 未配置/默认 8192 时，思考会与正文共享该预算，长思考导致输出安静截断。
+ * 只提示不改值（对齐「附加参数冲突不静默改写」约定）。
+ */
+const maxTokensWarn = computed(() => {
+  const thinkingEnabled =
+    !!reasoningEffort.value ||
+    !!(extraBody.value && 'thinking' in extraBody.value)
+  if (!thinkingEnabled) return ''
+  if (maxTokens.value !== undefined && maxTokens.value !== null && maxTokens.value > 8192) {
+    return ''
+  }
+  return '已开启推理：思考 token 与正文共享 Max Tokens 预算，默认 8192 易被长思考耗尽导致输出截断，建议 ≥16384'
+})
+
 // undefined 视为开启（默认 true 语义），未配置的老节点显示为开
 const streamUsageSwitch = computed({
   get: () => streamUsage.value !== false,
@@ -451,6 +467,7 @@ function handleExtraBodyBlur() {
         :disabled="disabled"
         @change="onFieldChange"
       />
+      <div v-if="maxTokensWarn" class="max-tokens-warn">{{ maxTokensWarn }}</div>
     </el-form-item>
     <el-form-item v-if="showTemperature" label="温度">
       <el-input-number
@@ -629,6 +646,7 @@ function handleExtraBodyBlur() {
         :disabled="disabled"
         @change="onFieldChange"
       />
+      <div v-if="maxTokensWarn" class="max-tokens-warn">{{ maxTokensWarn }}</div>
     </el-form-item>
     <el-form-item v-if="showTemperature" label="温度">
       <el-input-number
@@ -701,5 +719,12 @@ function handleExtraBodyBlur() {
   margin-left: 4px;
   cursor: help;
   color: #909399;
+}
+.max-tokens-warn {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #b45309;
 }
 </style>
