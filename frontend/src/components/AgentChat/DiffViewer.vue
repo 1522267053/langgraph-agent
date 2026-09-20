@@ -65,11 +65,15 @@ interface Props {
   defaultViewMode?: 'side-by-side' | 'line-by-line'
   /** 是否显示工具栏（视图切换 + 完整文件开关） */
   showToolbar?: boolean
+  /** 是否启用 d2h 官方暗色主题（行号/标签/placeholder 全套 d2h 暗色变量）；
+   *  默认 false 兼容 FileChangePanel 弹窗（白底），text_editor 内联场景传 true */
+  isDark?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   defaultViewMode: 'side-by-side',
-  showToolbar: true
+  showToolbar: true,
+  isDark: false
 })
 
 const containerRef = ref<HTMLElement | null>(null)
@@ -136,6 +140,11 @@ async function render(): Promise<void> {
       stats.value = null
       return
     }
+
+    // [d2h 官方暗色主题] 给容器加 .d2h-dark-color-scheme 类，d2h 自带暗色 CSS 规则
+    // 会接管行号/标签/placeholder 等 50+ 元素的 --d2h-* 变量；
+    // 比逐元素 :deep() 覆写更可靠（v1 自定义 CSS 变量桥接失败的根本原因）。
+    el.classList.toggle('d2h-dark-color-scheme', props.isDark)
 
     const ui = new Diff2HtmlUI(el, patch, {
       drawFileList: false,
@@ -247,9 +256,10 @@ onMounted(() => void render())
 }
 
 .d2h-mount {
-  // 底色/代码色走 CSS 变量（默认白底）：弹窗场景保持白底不变；
-  // 工具块内联场景由 ToolResultViewer 覆写为 file_read 同款暗色代码岛
-  background: var(--d2h-mount-bg, #fff);
+  // [v2 暗色策略] 改走 d2h 官方暗色类 .d2h-dark-color-scheme（render() 中按
+  // isDark prop 切换），d2h 自带 CSS 接管 50+ 个 --d2h-* 变量的暗色版本；
+  // 比 v1 自定义 CSS 变量桥接可靠。底色/代码色保留 d2h 默认 --d2h-bg-color
+  // 等变量，浅色场景即原 d2h 浅色（弹窗白底），暗色场景即 d2h 暗色。
   tab-size: 4;
 
   // 弹窗标题已展示文件名与变更类型，隐藏 d2h 自带文件头
@@ -271,11 +281,12 @@ onMounted(() => void render())
     line-height: 1.55;
   }
 
-  // 语法高亮容器：白底场景强制透明底+深色文字（vs2015 token 色在白底可读）；
-  // 暗色场景由 --d2h-code-color 覆写文字色（vs2015 token 色本就是暗底配色）
+  // 语法高亮：vs2015 主题本身是暗底配色（文字 #cccccc）。
+  // 弹窗白底场景下文字偏暗但可读（属于历史行为，不在本任务范围）；
+  // 暗色场景下 vs2015 文字色与 d2h-dark-color-scheme 暗色系天然契合，
+  // 暗色主题的 hljs 仍走 vs2015 默认，无需 d2h 额外托管
   :deep(.hljs) {
     background: transparent !important;
-    color: var(--d2h-code-color, #24292e);
   }
 }
 </style>

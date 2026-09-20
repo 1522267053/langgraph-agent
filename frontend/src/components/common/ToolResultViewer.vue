@@ -379,6 +379,7 @@ watch(
       change-type="modify"
       default-view-mode="line-by-line"
       :show-toolbar="false"
+      :is-dark="true"
     />
     <!-- dry_run 多匹配警告：实际执行会因多处匹配被拒 -->
     <div v-if="isDryRun && parsedResult?.warning" class="tool-edit-warning">
@@ -551,61 +552,6 @@ watch(
 .tool-diff-viewer {
   max-height: 300px;
   overflow-y: auto;
-}
-
-/* text_editor 内联 diff：与 file_read 暗色代码岛同风格（--ink-island 底、
-   #d4d4d4 正文、#6e7681 行号/#30363d 分隔线），diff2html 默认白底样式经
-   CSS 变量 + :deep 覆写为暗色；FileChangePanel 弹窗不经此作用域，仍为白底 */
-.tool-edit-result {
-  --d2h-mount-bg: var(--ink-island);
-  --d2h-code-color: #d4d4d4;
-  /* DiffViewer 自带 border，在暗岛上改为无框融入 */
-}
-
-.tool-edit-result :deep(.diff-viewer) {
-  border-color: #30363d;
-}
-
-.tool-edit-result :deep(.d2h-file-wrapper),
-.tool-edit-result :deep(.d2h-diff-table),
-.tool-edit-result :deep(.d2h-code-line),
-.tool-edit-result :deep(.d2h-code-side-line),
-.tool-edit-result :deep(.d2h-file-header) {
-  background: transparent;
-}
-
-/* 增删行：GitHub Dark 同款半透明底，文字色继承 --d2h-code-color */
-.tool-edit-result :deep(.d2h-ins) {
-  background: rgba(46, 160, 67, 0.18);
-}
-
-.tool-edit-result :deep(.d2h-del) {
-  background: rgba(248, 81, 73, 0.18);
-}
-
-/* d2h 行内 ins/del 内层也带白底类，强制透明只留行级半透明底 */
-.tool-edit-result :deep(.d2h-ins.d2h-code-line),
-.tool-edit-result :deep(.d2h-del.d2h-code-line),
-.tool-edit-result :deep(.d2h-ins .d2h-code-line),
-.tool-edit-result :deep(.d2h-del .d2h-code-line),
-.tool-edit-result :deep(.d2h-ins .d2h-code-line-inside),
-.tool-edit-result :deep(.d2h-ins .d2h-del),
-.tool-edit-result :deep(.d2h-del .d2h-ins) {
-  background: transparent;
-}
-
-/* 行号列：与 file_read 的 .line-number 完全同色 */
-.tool-edit-result :deep(.d2h-code-linenumber),
-.tool-edit-result :deep(.d2h-code-side-linenumber) {
-  background: transparent;
-  color: #6e7681;
-  border-color: #30363d;
-}
-
-/* 空白占位列（d2h 用于对齐）去除白底 */
-.tool-edit-result :deep(.d2h-code-empty-space),
-.tool-edit-result :deep(.d2h-side-by-side-empty) {
-  background: transparent;
 }
 
 .tool-edit-message {
