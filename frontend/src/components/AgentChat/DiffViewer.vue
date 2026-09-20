@@ -247,8 +247,9 @@ onMounted(() => void render())
 }
 
 .d2h-mount {
-  // 弹窗内 diff 区域恒为白底，防止任何样式缺失时页面内容透出
-  background: #fff;
+  // 底色/代码色走 CSS 变量（默认白底）：弹窗场景保持白底不变；
+  // 工具块内联场景由 ToolResultViewer 覆写为 file_read 同款暗色代码岛
+  background: var(--d2h-mount-bg, #fff);
   tab-size: 4;
 
   // 弹窗标题已展示文件名与变更类型，隐藏 d2h 自带文件头
@@ -270,11 +271,11 @@ onMounted(() => void render())
     line-height: 1.55;
   }
 
-  // 语法高亮容器适配浅色 diff：vs2015 主题的暗色底与本弹窗冲突，
-  // token 颜色（蓝/橙/绿）在白底上仍可读
+  // 语法高亮容器：白底场景强制透明底+深色文字（vs2015 token 色在白底可读）；
+  // 暗色场景由 --d2h-code-color 覆写文字色（vs2015 token 色本就是暗底配色）
   :deep(.hljs) {
     background: transparent !important;
-    color: #24292e;
+    color: var(--d2h-code-color, #24292e);
   }
 }
 </style>
