@@ -98,6 +98,10 @@ class AgentSessionResponse(AgentSessionBase):
     id: int = Field(..., description="会话ID")
     flow_id: int = Field(..., description="关联的Agent Flow ID")
     status: int = Field(..., description="状态：1=活跃，0=已归档")
+    running: bool = Field(
+        default=False,
+        description="是否正在对话中（后端内存态，列表页区分执行中的会话）",
+    )
     work_dir: Optional[str] = Field(default=None, description="项目工作路径")
     plan_mode: Optional[int] = Field(
         default=0, description="计划模式：1=开启（只读探索），0/空=关闭"
