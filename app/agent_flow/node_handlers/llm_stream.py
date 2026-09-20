@@ -109,6 +109,24 @@ async def stream_llm_response(
 
                 response = response + chunk if response else chunk
 
+            # [length 截断显性化] finish_reason=length 表示 max_tokens 预算耗尽：
+            # 推理模型的 thinking 与正文共享该预算，长思考会把预算吃光导致输出
+            # 安静截断（半截正文/空正文且无任何报错），用户误以为系统故障。
+            # 此处追加一条可见提示，把「静默中断」变成可诊断信息。
+            finish_reason = (
+                (response.response_metadata or {}).get("finish_reason", "")
+                if response
+                else ""
+            )
+            if finish_reason == "length":
+                hint = (
+                    "\n\n---\n⚠️ 输出已达 max_tokens 上限被截断（reasoning 思考与正文"
+                    "共享该预算，思考越久剩余越少）。请调大 LLM 节点的 Max Tokens。"
+                )
+                current_content += hint
+                if writer:
+                    writer(NodeContentEvent(node_key=node_key, content=hint))
+
             break
         except _RETRYABLE_ERRORS as e:
             retry_count += 1
