@@ -28,6 +28,7 @@ from app.models.flow import Flow, FlowType
 from app.models.flow_node import NodeType
 from app.models.agent_session import AgentSession
 from app.models.agent_message import AgentMessage
+from app.models.token_usage import TokenUsage
 from app.agent_flow.file_change_context import (
     reset_file_change_context,
     set_file_change_context,
@@ -1398,6 +1399,20 @@ class AgentExecutorService(BaseExecutorService):
         messages = await self._get_messages(db, session_id, limit, before_id, after_id)
         total = await self._get_messages_count(db, session_id)
         return messages, total
+
+    async def get_session_total_tokens(self, db: AsyncSession, session_id: int) -> int:
+        """会话累计 token（token_usage 全量聚合，含压缩调用）
+
+        注意：这是该会话全部 LLM 调用的用量总和，与消息分页无关；
+        前端"累计 token"展示必须以此为准，而非当前分页消息的 total_tokens 求和。
+        """
+        query = select(func.coalesce(func.sum(TokenUsage.total_tokens), 0)).where(
+            TokenUsage.source_type == "agent",
+            TokenUsage.source_id == session_id,
+            TokenUsage.is_delete == 0,
+        )
+        result = await db.execute(query)
+        return int(result.scalar() or 0)
 
     async def _create_session(
         self,

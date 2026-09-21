@@ -392,6 +392,24 @@ class AgentApi:
                 return ApiResponse.error(msg="会话不存在")
             return ApiResponse.success(msg="清除成功")
 
+        @self.router.get(
+            "/{id}/sessions/{session_id}/totalTokens",
+            response_model=ApiResponse,
+            summary="获取会话累计token",
+        )
+        async def get_session_total_tokens(
+            id: int,
+            session_id: int,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """会话全部 LLM 调用的 token 总量（token_usage 全量聚合，含压缩调用，与消息分页无关）"""
+            total_tokens = await agent_executor_service.get_session_total_tokens(
+                db, session_id
+            )
+            return ApiResponse.success(
+                data={"total_tokens": total_tokens}, msg="查询成功"
+            )
+
         @self.router.post(
             "/{id}/sessions/{session_id}/messages/page",
             response_model=ApiResponse[AgentMessageListResponse],
