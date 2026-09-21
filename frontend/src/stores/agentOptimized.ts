@@ -709,13 +709,18 @@ export const useAgentStore = defineStore('agent', () => {
 
   /**
    * 加载更多历史消息（向上翻页）
+   *
+   * 流式中也允许：用户上滚后 followPinned=false，rescue 循环与
+   * guardedElementScroll 补偿写入均已让位，前插不会与贴底跟随打架；
+   * onFlowDone 的 replace 全量刷新与增量 applyLatestMessages 均按 dbMsgId
+   * 保留前插的历史行，不会丢失。前插必须以 preserveStreaming 保留流式状态，
+   * 否则 rebuildChatMessages 会把 isStreaming 翻 false 断掉流式 UI。
    */
   async function loadMoreMessages(agentId: number) {
     if (
       !currentSession.value ||
       loadingMoreMessages.value ||
-      !hasMoreMessages.value ||
-      isStreaming.value
+      !hasMoreMessages.value
     )
       return 0
     const sessionId = currentSession.value.id
@@ -738,7 +743,8 @@ export const useAgentStore = defineStore('agent', () => {
         if (olderMessages.length > 0) {
           messageTotal.value = res.data.data?.total || messageTotal.value
           messages.value = [...olderMessages, ...messages.value]
-          rebuildChatMessages()
+          // 流式中前插：保留流式状态（rebuildChatMessages 默认会翻 isStreaming=false）
+          rebuildChatMessages(isStreaming.value)
           await nextTick()
           return olderMessages.length
         }
