@@ -155,7 +155,7 @@ class FlowExecutorService(BaseExecutorService):
     async def get_node_executions(
         self, db: AsyncSession, flow_execution_id: int
     ) -> List[NodeExecution]:
-        """获取节点执行记录"""
+        """获取节点执行记录（按创建顺序，与流程执行顺序一致）"""
         query = (
             select(NodeExecution)
             .where(NodeExecution.flow_execution_id == flow_execution_id)
@@ -658,12 +658,10 @@ class FlowExecutorService(BaseExecutorService):
 
         try:
             input_content = self._get_node_input_content(node, context.state)
-            await self._update_node_execution_status(
-                execution_id,
-                node.node_key,
-                NodeExecutionStatus.RUNNING.value,
-                input_content,
-            )
+            # 注：RUNNING 状态已由 GraphBuilder._mark_node_running 在节点开始执行时
+            # 写入（该处才能覆盖真实执行时间窗）。此处不再重复写入——本函数由
+            # updates 流事件触发，此刻节点已执行完毕，写 RUNNING 会瞬间被下面的
+            # SUCCESS/FAILED 覆盖，形成无意义的"死状态"。
             yield FlowEventFactory.node_start(
                 node_key=node.node_key,
                 node_type=node.node_type,

@@ -3,12 +3,15 @@ LangGraph 图构建器
 将流程定义转换为 StateGraph
 """
 
+import logging
+from datetime import datetime
 from typing import Callable, Optional, Protocol
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import StreamWriter
 from langchain_core.runnables import RunnableConfig
+from sqlalchemy import select
 
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.edge_router import wire_edges
@@ -16,6 +19,8 @@ from app.models.flow_node import FlowNode, NodeType
 from app.models.flow_edge import FlowEdge
 
 from app.agent_flow.node_handlers.base_handler import BaseNodeHandler
+
+logger = logging.getLogger(__name__)
 
 
 class FlowLike(Protocol):
@@ -62,6 +67,69 @@ class GraphBuilder:
         """注册节点处理器"""
         self._node_handlers[node_type] = handler
 
+    @staticmethod
+    async def _mark_node_running(node_key: str) -> None:
+        """节点开始执行时立即标记 NodeExecution 为 RUNNING
+
+        [为什么在此处] 执行器原先只在 `updates` 流事件里写 RUNNING，而 LangGraph
+        的 updates 模式**仅在节点执行完成后**产出事件——RUNNING 与 SUCCESS 被连着
+        写入（同一 tick，无真实等待），DB 中 RUNNING 存活时间≈0，执行期间节点恒为
+        Pending，前端看不到「执行中」标记。node_func 是 LangGraph 调用每个节点的
+        唯一收口点，在此写入才能覆盖「节点正在执行」的真实时间窗。
+        子图路径（subgraph_runner）已按自定义事件正确实现，本方法使主路径对齐。
+
+        [取消竞态防护] 写入前检查中断标志：若执行已被取消（_cancel_running_nodes
+        已将 Pending/Running 置为 CANCELLED），本次写入会「复活」已取消的记录，
+        故直接跳过。检查与写入之间的窗口极小（内存标志 + 单条 UPDATE），
+        且即使越过，后续 _process_node_update 会用 CANCELLED 覆盖，风险可接受。
+
+        [容错] 任何失败仅 warning，绝不阻断节点执行（对齐 _update_node_execution_status）
+        """
+        from app.agent_flow.execution_context import get_execution_context
+
+        try:
+            ctx = get_execution_context()
+            execution_id = ctx.execution_id if ctx else 0
+            # Agent 模式 / 无执行记录场景（execution_id<=0）直接跳过
+            if execution_id <= 0:
+                return
+
+            from app.services.interrupt_service import interrupt_service
+
+            if interrupt_service.is_flow_interrupted(execution_id):
+                logger.debug(
+                    f"执行已取消，跳过 RUNNING 标记: execution_id={execution_id}, "
+                    f"node_key={node_key}"
+                )
+                return
+
+            from app.config.database import AsyncSessionLocal
+            from app.models.node_execution import NodeExecution, NodeExecutionStatus
+
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(NodeExecution)
+                    .where(
+                        NodeExecution.flow_execution_id == execution_id,
+                        NodeExecution.node_key == node_key,
+                    )
+                    .order_by(NodeExecution.id.desc())
+                )
+                ne = result.scalars().first()
+                if ne and ne.status in (
+                    NodeExecutionStatus.CANCELLED.value,
+                    NodeExecutionStatus.SUCCESS.value,
+                    NodeExecutionStatus.FAILED.value,
+                ):
+                    # 已处于终态（取消/已完成）时不回退为 RUNNING
+                    return
+                if ne:
+                    ne.status = NodeExecutionStatus.RUNNING.value
+                    ne.start_time = datetime.now()
+                    await db.commit()
+        except Exception as e:
+            logger.warning(f"标记节点 RUNNING 失败（不影响执行）: {node_key} - {e}")
+
     def _create_node_function(self, node: FlowNode) -> Callable:
         """
         创建节点执行函数
@@ -80,6 +148,9 @@ class GraphBuilder:
         ) -> dict:
             if not handler:
                 return {"visited_nodes": [node_key]}
+
+            # 节点开始执行即标记 RUNNING（执行期间前端可见「执行中」）
+            await GraphBuilder._mark_node_running(node_key)
 
             result = await handler.execute(node, state, config=config, writer=writer)
             if not isinstance(result, FlowState):

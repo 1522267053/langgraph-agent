@@ -79,6 +79,8 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
         streamingSegmentOffsets[nodeKey] = streamingContent.value[nodeKey]?.segments.length || 0
         const existingIndex = nodeExecutions.value.findIndex(n => n.node_key === nodeKey)
         if (existingIndex === -1) {
+          // 与后端 get_node_executions（id ASC）保持一致：新节点追加到末尾，
+          // 列表顺序与流程执行顺序一致
           nodeExecutions.value = [
             ...nodeExecutions.value,
             {
@@ -275,6 +277,7 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
           currentExecution.value.id = event.data.execution_id
         }
         ElMessage.error({ message: event.data.message || '执行失败', duration: 5000 })
+        // 列表按执行顺序（追加末尾），最后执行的节点在数组末尾
         const lastIndex = nodeExecutions.value.length - 1
         if (lastIndex >= 0) {
           const node = nodeExecutions.value[lastIndex]

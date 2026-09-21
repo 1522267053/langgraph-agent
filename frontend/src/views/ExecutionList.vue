@@ -161,6 +161,43 @@ function getStatusType(
   return types[status] ?? 'info'
 }
 
+/** 详情轮询定时器：仅弹窗打开且执行未到终态时运行 */
+let detailPollTimer: ReturnType<typeof setInterval> | null = null
+
+/** 未到终态（执行中/等待输入）才需要轮询刷新节点状态 */
+function isActiveStatus(status: number | undefined): boolean {
+  return status === ExecutionStatus.Running || status === ExecutionStatus.WaitingInput
+}
+
+function stopDetailPoll(): void {
+  if (detailPollTimer) {
+    clearInterval(detailPollTimer)
+    detailPollTimer = null
+  }
+}
+
+/**
+ * 启动详情轮询：执行中时每 2s 拉一次执行 + 节点状态。
+ * 后端在节点开始执行时即写 RUNNING，轮询才能看到「执行中」标记；
+ * 到达终态自动停止，避免无谓请求。
+ */
+function startDetailPoll(id: number): void {
+  stopDetailPoll()
+  if (!isActiveStatus(currentExecution.value?.status)) return
+  detailPollTimer = setInterval(async () => {
+    if (!showDetailDialog.value) {
+      stopDetailPoll()
+      return
+    }
+    await loadExecutionDetail(id)
+    if (!isActiveStatus(currentExecution.value?.status)) {
+      stopDetailPoll()
+      // 终态后刷新列表行状态，保证弹窗关闭后列表数据一致
+      loadData()
+    }
+  }, 2000)
+}
+
 async function handleView(row: FlowExecution) {
   await handleViewById(row.id!)
 }
@@ -171,6 +208,7 @@ async function handleViewById(id: number) {
   resetState()
   try {
     await loadExecutionDetail(id)
+    startDetailPoll(id)
   } finally {
     detailLoading.value = false
   }
@@ -184,12 +222,14 @@ async function handleResume(row: FlowExecution) {
   try {
     currentExecution.value = row
     await resumeFromHistory(row)
+    startDetailPoll(row.id)
   } finally {
     detailLoading.value = false
   }
 }
 
 function handleDetailClose() {
+  stopDetailPoll()
   showDetailDialog.value = false
   resetState()
 }
@@ -203,6 +243,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  stopDetailPoll()
   resetState()
 })
 </script>
