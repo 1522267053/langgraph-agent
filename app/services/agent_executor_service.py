@@ -825,6 +825,38 @@ class AgentExecutorService(BaseExecutorService):
 
         return sessions, total
 
+    async def mark_session_finish_unread(
+        self, db: AsyncSession, session_id: int
+    ) -> None:
+        """执行完成未读标记：置 1（会话列表红点）。调用方负责异常兜底"""
+        result = await db.execute(
+            select(AgentSession).where(
+                AgentSession.id == session_id, AgentSession.is_delete == 0
+            )
+        )
+        session = result.scalars().first()
+        if session is None:
+            return
+        session.finish_unread = 1
+        await db.commit()
+
+    async def clear_session_finish_unread(
+        self, db: AsyncSession, session_id: int
+    ) -> bool:
+        """清除执行完成未读标记（用户打开会话）。返回会话是否存在"""
+        result = await db.execute(
+            select(AgentSession).where(
+                AgentSession.id == session_id, AgentSession.is_delete == 0
+            )
+        )
+        session = result.scalars().first()
+        if session is None:
+            return False
+        if session.finish_unread:
+            session.finish_unread = 0
+            await db.commit()
+        return True
+
     async def create_session(
         self,
         db: AsyncSession,
@@ -1866,6 +1898,17 @@ class AgentExecutorService(BaseExecutorService):
                     else self._filter_end_output(context.state.output_data)
                 )
                 await self._save_end_output_to_message(db, session_id, end_output)
+                # 执行完成未读标记：置 1 供会话列表红点展示（用户打开会话后清除）。
+                # 失败不阻断主流程（红点属辅助提示，丢一次标记无实质影响）
+                if not is_interrupted:
+                    try:
+                        await self.mark_session_finish_unread(db, session_id)
+                    except Exception as mark_err:
+                        logger.warning(
+                            "标记会话完成未读失败 session_id=%s: %s",
+                            session_id,
+                            mark_err,
+                        )
                 # ---- WebSocket 广播（chat 完成通知）----
                 try:
                     from app.services.ws_manager import ws_manager
@@ -2193,6 +2236,17 @@ class AgentExecutorService(BaseExecutorService):
                     {} if is_interrupted else self._filter_end_output(resume_end_output)
                 )
                 await self._save_end_output_to_message(db, session_id, end_output)
+                # 执行完成未读标记：置 1 供会话列表红点展示（用户打开会话后清除）。
+                # 失败不阻断主流程（红点属辅助提示，丢一次标记无实质影响）
+                if not is_interrupted:
+                    try:
+                        await self.mark_session_finish_unread(db, session_id)
+                    except Exception as mark_err:
+                        logger.warning(
+                            "标记会话完成未读失败 session_id=%s: %s",
+                            session_id,
+                            mark_err,
+                        )
                 # ---- WebSocket 广播（resume 完成通知）----
                 try:
                     from app.services.ws_manager import ws_manager

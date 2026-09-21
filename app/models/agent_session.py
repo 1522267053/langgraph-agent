@@ -72,6 +72,15 @@ class AgentSession(DbBaseModel):
             "空则跟随 LLM 节点配置；off 表示显式关闭思考"
         ),
     )
+    finish_unread: Mapped[Optional[int]] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        default=0,
+        comment=(
+            "执行完成未读标记：1=本轮执行完毕且用户尚未打开该会话（会话列表红点），"
+            "打开会话后置 0；仅用户主动发起的会话生效（子 Agent 会话不在列表展示）"
+        ),
+    )
 
     def __repr__(self) -> str:
         return (

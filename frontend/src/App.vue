@@ -651,6 +651,8 @@ function handleSessionPageChange(page: number): void {
                       <Loading v-if="session.running" class="icon-spin" />
                       <ChatDotRound v-else />
                     </el-icon>
+                    <!-- 执行完成未读红点：finish_unread=1 点亮，打开会话后熄灭 -->
+                    <span v-if="session.justFinished && !session.running" class="finish-dot" />
                     <div class="session-info">
                       <div class="session-title">{{ session.title || '新会话' }}</div>
                       <div class="session-time">{{ session.create_time || '' }}</div>
@@ -793,6 +795,8 @@ function handleSessionPageChange(page: number): void {
                       <Loading v-if="session.running" class="icon-spin" />
                       <ChatDotRound v-else />
                     </el-icon>
+                    <!-- 执行完成未读红点：finish_unread=1 点亮，打开会话后熄灭 -->
+                    <span v-if="session.justFinished && !session.running" class="finish-dot" />
                     <div class="session-info">
                       <div class="session-title">{{ session.title || '新会话' }}</div>
                       <div class="session-time">{{ session.create_time || '' }}</div>
@@ -1102,6 +1106,7 @@ function handleSessionPageChange(page: number): void {
 }
 
 .session-item {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -1131,6 +1136,20 @@ function handleSessionPageChange(page: number): void {
 /* 对话中会话：旋转加载图标（桌面侧栏 + 移动抽屉列表共用） */
 .session-icon-running {
   color: var(--vermilion);
+}
+
+/* 执行完成未读红点：图标右上角徽标（finish_unread=1 点亮，打开会话后熄灭）；
+   桌面侧栏 .session-item 与移动抽屉 .drawer-session-item 均已 position:relative */
+.finish-dot {
+  position: absolute;
+  top: 10px;
+  left: 28px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vermilion);
+  box-shadow: 0 0 0 2px var(--paper, #fff);
+  pointer-events: none;
 }
 
 .icon-spin {
@@ -1400,6 +1419,7 @@ function handleSessionPageChange(page: number): void {
 }
 
 .drawer-session-item {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 10px;

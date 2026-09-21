@@ -3,10 +3,12 @@
  * @description 从单个工具段的 args/result 中提取统计与文件路径：
  * - file_read → 读取范围（offset+limit；旧数据/字符模式回退 content 行数，媒体注入显示「查看」）
  * - file_write → 写入行数（行数取 args.content，结果为字符串成功消息）
- * - text_editor → +A −R（从 result.diff 的 -/+ 行数统计）
+ * - text_editor → +A −R（新格式从 diff.old_string/new_string 行级对比统计；
+ *   旧格式为 -/+ 伪 diff 字符串，行前缀即增删统计）
  * 展示位置：工具行右侧统计 pill、工具名下方文件路径（AIMessageContent 工具行内嵌）。
  */
 
+import { diffLines } from 'diff'
 import type { ToolCall } from '@/types/segment'
 
 export type FileOpKind = 'read' | 'write' | 'edit'
@@ -117,9 +119,26 @@ export function statFromTool(tool: ToolCall): FileOpStat | null {
     if (!r || r.success !== true || r.dry_run === true) return null
     const path =
       typeof r.file_path === 'string' ? r.file_path : String(args.file_path ?? '')
-    const diff = typeof r.diff === 'string' ? r.diff : ''
-    if (!path || !diff) return null
-    // diff 为 -旧行/+新行 格式（_diff_preview 生成），行前缀即增删统计
+    if (!path) return null
+
+    // 新格式：diff 为结构化对象 {old_string, new_string}，行级对比统计增删行
+    // （与 DiffViewer 的 jsdiff 统计同口径）；旧格式：-/+ 伪 diff 字符串（存量
+    // 消息），行前缀即增删统计
+    const d = r.diff
+    if (d && typeof d === 'object') {
+      const oldStr = String((d as Record<string, unknown>).old_string ?? '')
+      const newStr = String((d as Record<string, unknown>).new_string ?? '')
+      let added = 0
+      let removed = 0
+      for (const part of diffLines(oldStr, newStr)) {
+        if (part.added) added += part.count || 0
+        else if (part.removed) removed += part.count || 0
+      }
+      return { path, kind: 'edit', added, removed }
+    }
+
+    const diff = typeof d === 'string' ? d : ''
+    if (!diff) return null
     let added = 0
     let removed = 0
     for (const line of diff.split('\n')) {

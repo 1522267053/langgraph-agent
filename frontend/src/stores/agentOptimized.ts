@@ -388,7 +388,12 @@ export const useAgentStore = defineStore('agent', () => {
     try {
       const res = await agentApi.getSessions(agentId, page, sessionPageSize.value)
       if (res.data.code === 1) {
-        sessions.value = res.data.data?.list || []
+        const list = res.data.data?.list || []
+        // finish_unread（DB 持久化）→ justFinished（前端展示态）
+        for (const s of list) {
+          s.justFinished = (s as unknown as { finish_unread?: number }).finish_unread === 1
+        }
+        sessions.value = list
         sessionTotal.value = res.data.data?.total || 0
         // 列表含运行中会话 → 启动 2s 批量状态轮询（全结束自动停表）
         syncSessionStatusPolling(agentId)
@@ -431,8 +436,19 @@ export const useAgentStore = defineStore('agent', () => {
         if (pollVersion !== sessionStatusPollVersion) return
         if (res.data.code === 1) {
           const runningIds = new Set(res.data.data?.running_ids || [])
+          const prevRunningIds = new Set(
+            sessions.value.filter(s => s.running).map(s => s.id)
+          )
           for (const s of sessions.value) {
             s.running = runningIds.has(s.id)
+            // 执行完成亮点：非当前会话 running→false 翻转时点亮，点击会话后熄灭
+            if (
+              prevRunningIds.has(s.id) &&
+              !s.running &&
+              s.id !== currentSession.value?.id
+            ) {
+              s.justFinished = true
+            }
           }
           if (runningIds.size > 0) {
             sessionStatusPollTimer = setTimeout(poll, SESSION_STATUS_POLL_INTERVAL)
@@ -463,7 +479,17 @@ export const useAgentStore = defineStore('agent', () => {
   ) {
     if (currentAgent.value?.id !== agentId) return
     const target = sessions.value.find(s => s.id === sessionId)
-    if (target) target.running = running
+    if (target) {
+      // 执行完成亮点：与批量轮询同一翻转语义（非当前会话 running→false 点亮）
+      if (
+        target.running &&
+        !running &&
+        sessionId !== currentSession.value?.id
+      ) {
+        target.justFinished = true
+      }
+      target.running = running
+    }
     syncSessionStatusPolling(agentId)
   }
 
@@ -531,6 +557,13 @@ export const useAgentStore = defineStore('agent', () => {
     cancelStream()
     stopCompressPolling()
     isCompressing.value = false
+    // 用户点进该会话查看：本地立即熄灭红点，并异步清除 DB 未读标记（不阻塞加载）
+    if (session.justFinished) {
+      session.justFinished = false
+      agentApi.clearFinishUnread(agentId, session.id).catch(() => {
+        // 清除失败不影响会话使用；下次进入会重试
+      })
+    }
     const selectionGeneration = streamGeneration
     flowPreview.value = null
     // 切换会话：清空 Diff 面板状态（避免显示上一会话的文件变更）

@@ -374,6 +374,24 @@ class AgentApi:
                 msg="删除成功",
             )
 
+        @self.router.get(
+            "/{id}/sessions/{session_id}/clearFinishUnread",
+            response_model=ApiResponse,
+            summary="清除会话执行完成未读标记",
+        )
+        async def clear_finish_unread(
+            id: int,
+            session_id: int,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """用户打开会话时调用：清除执行完成未读标记（列表红点熄灭）"""
+            exists = await agent_executor_service.clear_session_finish_unread(
+                db, session_id
+            )
+            if not exists:
+                return ApiResponse.error(msg="会话不存在")
+            return ApiResponse.success(msg="清除成功")
+
         @self.router.post(
             "/{id}/sessions/{session_id}/messages/page",
             response_model=ApiResponse[AgentMessageListResponse],
