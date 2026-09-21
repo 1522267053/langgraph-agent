@@ -121,9 +121,37 @@ export const useAgentStore = defineStore('agent', () => {
     latestPromptTokens
   } = useStreamingMessage()
 
-  const totalSessionTokens = computed(() =>
-    chatMessages.value.reduce((sum, m) => sum + (m.total_tokens || 0), 0)
+  // 会话累计 token：以服务端 token_usage 全量聚合为权威基线（含压缩调用，与消息分页无关），
+  // 流式期间叠加本轮 SSE token_usage 事件增量；轮次结束重拉基线对齐后清零增量
+  const serverTotalTokens = ref(0)
+  const streamRunTokens = ref(0)
+  const totalSessionTokens = computed(
+    () => serverTotalTokens.value + streamRunTokens.value
   )
+
+  /**
+   * 拉取会话累计 token 基线（服务端 token_usage 全量聚合）
+   * @param resetIncrement true 时同时清零本轮流式增量（轮次结束/切会话对齐场景）
+   */
+  async function fetchSessionTotalTokens(
+    agentId: number,
+    sessionId: number,
+    resetIncrement = false
+  ): Promise<void> {
+    try {
+      const res = await agentApi.getSessionTotalTokens(agentId, sessionId)
+      if (
+        res.data.code === 1 &&
+        currentAgent.value?.id === agentId &&
+        currentSession.value?.id === sessionId
+      ) {
+        serverTotalTokens.value = res.data.data?.total_tokens || 0
+        if (resetIncrement) streamRunTokens.value = 0
+      }
+    } catch {
+      // 拉取失败保留旧基线，不影响会话使用
+    }
+  }
 
   // ========== SSE连接（使用composable） ==========
 
@@ -574,6 +602,8 @@ export const useAgentStore = defineStore('agent', () => {
     lastRevertedChangeId.value = null
 
     currentSession.value = session
+    // 切会话：重拉累计 token 基线并对齐清零增量（守卫在 fetchSessionTotalTokens 内）
+    void fetchSessionTotalTokens(agentId, session.id, true)
     try {
       const res = await agentApi.getMessages(agentId, session.id)
       if (
@@ -1308,6 +1338,8 @@ export const useAgentStore = defineStore('agent', () => {
           event.data.completion_tokens || 0,
           event.data.total_tokens || 0
         )
+        // 会话累计 = 服务端基线 + 本轮 SSE 增量（轮次结束重拉基线后清零）
+        streamRunTokens.value += event.data.total_tokens || 0
       },
       onTodoUpdate: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
@@ -1492,6 +1524,8 @@ export const useAgentStore = defineStore('agent', () => {
           applyLatestMessages(fresh.list, fresh.total, true, true)
           messageRefreshVersion.value++
         }
+        // 轮次结束：重拉服务端累计 token 基线对齐落库终值，并清零本轮增量（防 SSE 丢事件漂移）
+        void fetchSessionTotalTokens(context.agentId, context.sessionId, true)
         // 流正常结束：立即熄灭列表图标并同步轮询（有其他运行中会话则续表）
         setSessionRunningLocal(context.agentId, context.sessionId, false)
         if (context.wasFirstMessage && isCurrentStream(context)) {
@@ -1623,6 +1657,8 @@ export const useAgentStore = defineStore('agent', () => {
     clearOrphanPlaceholders()
     addUserMessage(content, files)
     startStreaming()
+    // 新轮次开始：增量从零累计（基线 serverTotalTokens 保持服务端值）
+    streamRunTokens.value = 0
     // 立即点亮列表图标并启动轮询（不等 loadSessions）
     setSessionRunningLocal(context.agentId, context.sessionId, true)
 
@@ -1658,6 +1694,8 @@ export const useAgentStore = defineStore('agent', () => {
     isWaitingHuman.value = false
     currentWaitData.value = null
     startStreaming()
+    // 新轮次开始：增量从零累计（基线 serverTotalTokens 保持服务端值）
+    streamRunTokens.value = 0
     // 立即点亮列表图标并启动轮询（不等 loadSessions）
     setSessionRunningLocal(context.agentId, context.sessionId, true)
 
@@ -2165,6 +2203,8 @@ export const useAgentStore = defineStore('agent', () => {
     messages.value = []
     clearMessages()
     streamBaseMsgId = 0
+    serverTotalTokens.value = 0
+    streamRunTokens.value = 0
     flowPreview.value = null
     isWaitingHuman.value = false
     currentWaitData.value = null
@@ -2279,6 +2319,7 @@ export const useAgentStore = defineStore('agent', () => {
     messages,
     chatMessages,
     totalSessionTokens,
+    fetchSessionTotalTokens,
     latestPromptTokens,
     // 分页
     sessionPage,

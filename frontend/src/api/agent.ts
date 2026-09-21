@@ -333,6 +333,17 @@ export const agentApi = {
   },
 
   /**
+   * 获取会话累计 token（token_usage 全量聚合，含压缩调用，与消息分页无关）
+   * @param agentId Agent ID
+   * @param sessionId 会话ID
+   */
+  getSessionTotalTokens(agentId: number, sessionId: number) {
+    return get<{ total_tokens: number }>(
+      `/agent/${agentId}/sessions/${sessionId}/totalTokens`
+    )
+  },
+
+  /**
    * 搜索会话和消息内容
    * @param agentId Agent ID
    * @param keyword 搜索关键词
