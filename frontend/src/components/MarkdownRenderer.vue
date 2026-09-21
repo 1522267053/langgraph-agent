@@ -1,3 +1,15 @@
+<script lang="ts">
+/**
+ * 模块级状态：跨所有组件实例共享。
+ * renderCount 必须全局唯一：虚拟滚动下多个 MarkdownRenderer 实例同时挂载，
+ * 各自实例级计数会生成重复的 mermaid-{n} SVG id；mermaid 11 的 SVG 内部
+ * url(#id_...) 引用按 DOM 全局解析，重复 id 会让先渲染的图引用被后渲染的
+ * 劫持（defs 断裂），表现为图表整体空白且相互传染（回滚重挂载后互翻空白）。
+ */
+let renderCount = 0
+export default {}
+</script>
+
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import VueMarkdown from 'vue-markdown-render'
@@ -274,7 +286,6 @@ const containerRef = ref<HTMLDivElement>()
 let mermaidModule: (typeof import('mermaid'))['default'] | null = null
 let hljsModule: (typeof import('highlight.js'))['default'] | null = null
 let mermaidInitialized = false
-let renderCount = 0
 let mermaidTimer: ReturnType<typeof setTimeout> | null = null
 
 let streamRenderTimer: ReturnType<typeof setTimeout> | null = null
