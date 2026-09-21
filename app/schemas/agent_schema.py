@@ -116,6 +116,13 @@ class AgentSessionResponse(AgentSessionBase):
         default=None,
         description="会话级推理深度覆盖，空=跟随 LLM 节点配置",
     )
+    finish_unread: Optional[int] = Field(
+        default=0,
+        description=(
+            "执行完成未读标记：1=本轮执行完毕未打开（列表红点），打开后置 0；"
+            "存量行经 ALTER TABLE 补列后为 NULL，按未读=0 处理"
+        ),
+    )
     created_at: Optional[ChinaDateTime] = Field(
         default=None,
         validation_alias=AliasChoices("created_at", "create_time"),

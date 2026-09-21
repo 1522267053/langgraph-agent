@@ -63,7 +63,8 @@ const isTextEditor = computed(() => {
   return (
     props.toolName === 'text_editor' &&
     parsedResult.value?.success &&
-    typeof parsedResult.value?.diff === 'string'
+    (typeof parsedResult.value?.diff === 'object' ||
+      typeof parsedResult.value?.diff === 'string')
   )
 })
 
@@ -136,12 +137,10 @@ const fileReadMeta = computed(() => {
 })
 
 /**
- * 从后端 _diff_preview 的 -/+ 行还原新旧文本（格式：旧行 - 前缀在前、新行 + 前缀
- * 在后；-.../+... 为超限截断标记，按内容行处理），交由 DiffViewer 重新计算
- * 真正的行级对齐 diff（旧消息的存量数据同样适用）
+ * 解析旧版 -/+ 伪 diff（存量消息：旧行 - 前缀在前、新行 + 前缀在后；
+ * -.../+... 为超限截断标记，按内容行处理）
  */
-const editorDiffParts = computed(() => {
-  const diff: string = parsedResult.value?.diff || ''
+function parseLegacyDiff(diff: string): { oldText: string; newText: string } {
   const oldLines: string[] = []
   const newLines: string[] = []
   let isNew = false
@@ -157,6 +156,22 @@ const editorDiffParts = computed(() => {
     }
   }
   return { oldText: oldLines.join('\n'), newText: newLines.join('\n') }
+}
+
+/**
+ * text_editor diff 载荷 → 新旧文本，交由 DiffViewer 计算真正的行级对齐 diff。
+ * 新格式为结构化对象 {old_string, new_string}（后端直出，不截断）；
+ * 旧格式为 -/+ 伪 diff 字符串（存量消息），走 parseLegacyDiff 兼容。
+ */
+const editorDiffParts = computed(() => {
+  const d = parsedResult.value?.diff
+  if (d && typeof d === 'object') {
+    return {
+      oldText: String((d as Record<string, unknown>).old_string ?? ''),
+      newText: String((d as Record<string, unknown>).new_string ?? '')
+    }
+  }
+  return parseLegacyDiff(typeof d === 'string' ? d : '')
 })
 
 const mediaInfo = computed(() => {

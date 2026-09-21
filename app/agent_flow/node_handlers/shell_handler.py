@@ -579,30 +579,14 @@ def _apply_shell_output_truncation(result: dict, task) -> None:
     result.update(truncated)
 
 
-def _diff_preview(
-    old_string: str, new_string: str, max_lines: int = 200, max_line_width: int = 240
-) -> str:
-    """生成 text_editor 的 diff 预览，返回 -/+ 格式的紧凑摘要"""
-    old_lines = old_string.splitlines()
-    new_lines = new_string.splitlines()
-    shown_old = old_lines[:max_lines]
-    shown_new = new_lines[:max_lines]
-    diff_lines = []
-    for line in shown_old:
-        truncated = (
-            line[:max_line_width] + "..." if len(line) > max_line_width else line
-        )
-        diff_lines.append(f"-{truncated}")
-    if len(old_lines) > max_lines:
-        diff_lines.append("-...")
-    for line in shown_new:
-        truncated = (
-            line[:max_line_width] + "..." if len(line) > max_line_width else line
-        )
-        diff_lines.append(f"+{truncated}")
-    if len(new_lines) > max_lines:
-        diff_lines.append("+...")
-    return "\n".join(diff_lines)
+def _diff_payload(old_string: str, new_string: str) -> dict[str, str]:
+    """生成 text_editor 的 diff 载荷：直接返回新旧字符串，由前端匹配渲染
+
+    不在后端做行级对齐/截断：工具结果展示层（前端 ToolResultViewer）已用
+    jsdiff 从新旧文本计算真正的行级 diff；后端截断会让前端 diff 失真，
+    且 old/new 本身就是模型传入的工具参数，长度受工具入参约束。
+    """
+    return {"old_string": old_string, "new_string": new_string}
 
 
 def _collect_match_lines(raw: str, starts: list[int], max_lines: int = 10) -> list[int]:
@@ -1609,7 +1593,7 @@ class ShellNodeHandler(BaseNodeHandler):
                             f"预览模式：找到 {count} 处匹配，未写入文件。"
                             "diff 为替换后将产生的变化；确认无误后去掉 dry_run 参数执行替换"
                         ),
-                        "diff": _diff_preview(old_string, new_string),
+                        "diff": _diff_payload(old_string, new_string),
                     }
                     if count > 1 and not replace_all:
                         result["warning"] = (
@@ -1688,7 +1672,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 )
 
                 replaced_count = count if replace_all else 1
-                diff = _diff_preview(old_string, new_string)
+                diff = _diff_payload(old_string, new_string)
                 result = {
                     "success": True,
                     "file_path": str(path),

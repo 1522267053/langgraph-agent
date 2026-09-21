@@ -88,7 +88,8 @@ export function hasToolCollapsedSummary(tool: ToolCall): boolean {
     return !!r.success && typeof r.content === 'string' && typeof r.file_path === 'string'
   }
   if (tool.name === 'text_editor') {
-    return !!r.success && typeof r.diff === 'string'
+    // diff 新格式为结构化对象 {old_string, new_string}，旧格式为 -/+ 字符串（存量消息）
+    return !!r.success && (typeof r.diff === 'object' || typeof r.diff === 'string')
   }
   return false
 }

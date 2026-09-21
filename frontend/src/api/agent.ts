@@ -324,6 +324,15 @@ export const agentApi = {
   },
 
   /**
+   * 清除会话执行完成未读标记（用户打开会话时调用，列表红点熄灭）
+   * @param agentId Agent ID
+   * @param sessionId 会话ID
+   */
+  clearFinishUnread(agentId: number, sessionId: number) {
+    return get<void>(`/agent/${agentId}/sessions/${sessionId}/clearFinishUnread`)
+  },
+
+  /**
    * 搜索会话和消息内容
    * @param agentId Agent ID
    * @param keyword 搜索关键词
