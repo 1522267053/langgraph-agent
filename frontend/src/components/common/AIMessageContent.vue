@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, CopyDocument, RefreshLeft } from '@element-plus/icons-vue'
+import { ArrowRight, CopyDocument } from '@element-plus/icons-vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import KnowledgeCitationList from '@/components/common/KnowledgeCitationList.vue'
 import TodoList from '@/components/common/TodoList.vue'
@@ -21,10 +21,8 @@ const props = withDefaults(
     disableActions?: boolean
     /** 单段模式（聊天段级虚拟行）：segments 恒为单元素，跳过内部窗口与折叠 */
     singleSegment?: boolean
-    /** 单段模式：本段是否为消息最后一个段（决定 thinking revert 显隐） */
+    /** 单段模式：本段是否为消息最后一个段 */
     isMsgLastSegment?: boolean
-    /** 单段模式：本段是否为消息最后一个 content 段（决定 content revert 显隐） */
-    isMsgLastContent?: boolean
     /** 单段模式：thinking 进行中（流式中且本段之后无 content 段） */
     isMsgThinkingInProgress?: boolean
     /** 聊天折叠交互：传入后工具块头部可点击展开/收起，key 为虚拟行 key */
@@ -36,15 +34,12 @@ const props = withDefaults(
     disableActions: false,
     singleSegment: false,
     isMsgLastSegment: true,
-    isMsgLastContent: true,
     isMsgThinkingInProgress: false,
     expandKey: ''
   }
 )
 
-const emit = defineEmits<{
-  (e: 'revert', dbMsgId: number): void
-}>()
+const emit = defineEmits<{}>()
 
 const MAX_VISIBLE_SEGMENTS = 35
 /** 非流式（历史加载/回合结束）默认最多渲染的分段数，超出折叠，避免长回合全量挂载 */
@@ -69,24 +64,9 @@ const hiddenSegmentCount = computed(() => {
 })
 
 /** 单段模式的上下文标志由父组件传入；列表模式沿用内部推导 */
-function isMsgRevertVisible(idx: number): boolean {
-  return props.singleSegment ? !props.isMsgLastSegment : !isLastSegment(idx)
-}
-
-function isMsgContentRevertHidden(idx: number): boolean {
-  return props.singleSegment ? props.isMsgLastContent : idx === lastContentIdx.value
-}
-
 function isMsgThinkingLoading(idx: number): boolean {
   return props.singleSegment ? props.isMsgThinkingInProgress : isThinkingInProgress(idx)
 }
-
-const lastContentIdx = computed(() => {
-  for (let i = visibleSegments.value.length - 1; i >= 0; i--) {
-    if (visibleSegments.value[i]?.type === 'content') return i
-  }
-  return -1
-})
 
 function isLastSegment(idx: number): boolean {
   return idx === visibleSegments.value.length - 1
@@ -277,19 +257,6 @@ watch(
           <span v-if="!showThinking && isMsgThinkingLoading(idx)" class="thinking-loading">
             思考中...
           </span>
-          <el-tooltip
-            v-if="!disableActions && segment.dbMsgId && isMsgRevertVisible(idx)"
-            content="删除此条及之后的内容"
-            placement="top"
-          >
-            <el-button
-              :icon="RefreshLeft"
-              link
-              size="small"
-              class="revert-btn"
-              @click="emit('revert', segment.dbMsgId!)"
-            />
-          </el-tooltip>
         </div>
       </div>
       <el-scrollbar
@@ -404,20 +371,6 @@ watch(
             size="small"
             class="copy-btn"
             @click="handleCopy(segment.content || '')"
-          />
-        </el-tooltip>
-        <el-tooltip
-          v-if="!disableActions && segment.dbMsgId && !isMsgContentRevertHidden(idx)"
-          content="删除此条及之后的内容"
-          placement="top"
-          :popper-options="{ strategy: 'fixed' }"
-        >
-          <el-button
-            :icon="RefreshLeft"
-            link
-            size="small"
-            class="content-revert-btn"
-            @click="emit('revert', segment.dbMsgId!)"
           />
         </el-tooltip>
       </div>
@@ -736,16 +689,6 @@ watch(
   color: #dc2626;
 }
 
-.revert-btn {
-  color: var(--paper-ink-4);
-  font-size: 14px;
-  transition: color 0.2s;
-}
-
-.revert-btn:hover {
-  color: var(--vermilion);
-}
-
 .message-content {
   word-break: break-word;
   line-height: 1.7;
@@ -788,16 +731,6 @@ watch(
 }
 
 .copy-btn:hover {
-  color: var(--vermilion);
-}
-
-.content-revert-btn {
-  color: var(--paper-ink-3);
-  font-size: 14px;
-  transition: color 0.2s;
-}
-
-.content-revert-btn:hover {
   color: var(--vermilion);
 }
 

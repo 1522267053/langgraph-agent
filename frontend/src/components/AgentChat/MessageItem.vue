@@ -20,7 +20,6 @@ defineProps<{
 
 const emit = defineEmits<{
   (e: 'delete', msg: StreamingMessage): void
-  (e: 'revert', dbMsgId: number): void
   (e: 'preview', data: ImagePreviewData): void
 }>()
 </script>
@@ -50,7 +49,6 @@ const emit = defineEmits<{
     :is-last="!!row.isLast"
     :expand-key="row.key"
     @delete="m => emit('delete', m)"
-    @revert="dbMsgId => emit('revert', dbMsgId)"
     @preview="data => emit('preview', data)"
   />
 </template>

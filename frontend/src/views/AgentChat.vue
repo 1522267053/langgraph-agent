@@ -1429,15 +1429,6 @@ function handleDeleteMessage(msg: (typeof store.chatMessages)[0]) {
   openRevertDialog(msgId)
 }
 
-function handleRevertFrom(dbMsgId: number) {
-  if (!store.currentSession || !store.currentAgent) return
-  if (store.isStreaming) {
-    ElMessage.warning({ message: '请等待回复完成', duration: 5000 })
-    return
-  }
-  openRevertDialog(dbMsgId)
-}
-
 async function openRevertDialog(msgId: number) {
   revertDialog.messageId = msgId
   revertDialog.files = []
@@ -1737,7 +1728,6 @@ function handleRejectTools() {
               :show-end-output="showEndOutput"
               :is-streaming="store.isStreaming"
               @delete="handleDeleteMessage"
-              @revert="handleRevertFrom"
               @preview="handleImagePreview"
             />
           </div>

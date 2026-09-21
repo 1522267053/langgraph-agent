@@ -35,7 +35,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'delete', msg: StreamingMessage): void
-  (e: 'revert', dbMsgId: number): void
   (e: 'preview', data: ImagePreviewData): void
 }>()
 
@@ -56,14 +55,6 @@ const endOutputText = computed(() =>
 const isMsgLastSegment = computed(() => {
   const segs = props.msg.segments
   return props.segmentIndex === segs.length - 1
-})
-
-const isMsgLastContent = computed(() => {
-  const segs = props.msg.segments
-  for (let i = segs.length - 1; i >= 0; i--) {
-    if (segs[i]?.type === 'content') return props.segmentIndex === i
-  }
-  return isMsgLastSegment.value
 })
 
 const isMsgThinkingInProgress = computed(() => {
@@ -134,13 +125,11 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
           :segments="[segment]"
           single-segment
           :is-msg-last-segment="isMsgLastSegment"
-          :is-msg-last-content="isMsgLastContent"
           :is-msg-thinking-in-progress="isMsgThinkingInProgress"
           :show-thinking="showThinking"
           :is-streaming="segmentStreaming"
           :disable-actions="isStreaming"
           :expand-key="expandKey"
-          @revert="dbMsgId => emit('revert', dbMsgId)"
         />
         <!-- 刷新重连场景：AI 消息已从 DB 恢复但段尚未到达（segment 为空且流式中），
              显示三点等待指示，避免空消息行 -->
