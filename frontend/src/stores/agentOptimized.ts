@@ -522,6 +522,22 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   /**
+   * 当前会话流结束：清除后端 finish_unread（用户正看着本会话，红点不应出现）。
+   * 后台完成的会话（用户在别的会话/页面）不清除——红点保留提醒有新完成。
+   * 与 selectSession 的清除对称：后端 mark 无条件置位，观看侧负责熄灭。
+   */
+  function clearFinishUnreadIfCurrent(agentId: number, sessionId: number) {
+    if (
+      currentAgent.value?.id === agentId &&
+      currentSession.value?.id === sessionId
+    ) {
+      agentApi.clearFinishUnread(agentId, sessionId).catch(() => {
+        // 清除失败不影响使用；下次进入会话仍会清除兜底
+      })
+    }
+  }
+
+  /**
    * 创建新会话
    * @param workDir 可选，会话级项目工作路径
    * @param planMode 可选，计划模式开关
@@ -1534,6 +1550,8 @@ export const useAgentStore = defineStore('agent', () => {
         void fetchSessionTotalTokens(context.agentId, context.sessionId, true)
         // 流正常结束：立即熄灭列表图标并同步轮询（有其他运行中会话则续表）
         setSessionRunningLocal(context.agentId, context.sessionId, false)
+        // 用户正看着本会话：清除后端完成未读标记（否则刷新后红点误亮）
+        clearFinishUnreadIfCurrent(context.agentId, context.sessionId)
         if (context.wasFirstMessage && isCurrentStream(context)) {
           void loadSessions(context.agentId, sessionPage.value)
         }
@@ -1545,6 +1563,8 @@ export const useAgentStore = defineStore('agent', () => {
         isCompressing.value = false
         // 流异常结束：立即熄灭列表图标（waiting_human 除外——等待人工输入仍算对话中）
         setSessionRunningLocal(context.agentId, context.sessionId, false)
+        // 错误终态同样清除观看中会话的完成未读（错误不算「新完成」红点）
+        clearFinishUnreadIfCurrent(context.agentId, context.sessionId)
         if (isWaitingToolApproval.value) {
           pendingApprovals.clear()
           currentApprovalId.value = null
@@ -2136,6 +2156,8 @@ export const useAgentStore = defineStore('agent', () => {
           refreshMessages(agentId, sessionId, expectedGeneration)
           // 后台会话结束：同步熄灭列表图标（有其他运行中会话则续表）
           setSessionRunningLocal(agentId, sessionId, false)
+          // 用户已切回该会话观看：清除完成未读（否则刷新后红点误亮）
+          clearFinishUnreadIfCurrent(agentId, sessionId)
         }
       } catch {
         if (!isCurrentPoll()) return
