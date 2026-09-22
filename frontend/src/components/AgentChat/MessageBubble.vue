@@ -394,7 +394,7 @@ export default {
   color: var(--paper-ink-3);
   line-height: 1.6;
   /* 内容封顶：超出滚动查看；封顶值与 chatRow.ts 的 SUMMARY_BODY_MAX 对齐 */
-  max-height: 400px;
+  max-height: 300px;
   overflow-y: auto;
 }
 </style>
