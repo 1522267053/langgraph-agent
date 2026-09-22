@@ -1,4 +1,4 @@
-import { get, post, put, del } from '@/api/index'
+import { get, post, put } from '@/api/index'
 import type { ApiResponse, PaginatedResponse } from '@/types/common'
 import type { ModelInfo } from '@/api/ai_provider'
 
@@ -65,7 +65,8 @@ export const providerConnectionApi = {
   },
 
   delete(id: number): Promise<{ data: ApiResponse }> {
-    return del(`/ai-provider-connection/delete/${id}`)
+    // BaseApi 注册的删除路由是 GET /delete/{id}（全项目统一惯例，非 RESTful DELETE）
+    return get<void>(`/ai-provider-connection/delete/${id}`)
   },
 
   setDefault(id: number): Promise<{ data: ApiResponse }> {
