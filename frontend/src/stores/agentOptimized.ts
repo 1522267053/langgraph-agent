@@ -584,10 +584,72 @@ export const useAgentStore = defineStore('agent', () => {
         clearMessages()
         streamBaseMsgId = 0
       }
-      await loadSessions(agentId, 1)
+      // 删除后停留在当前页；当前页被删空则回退一页（第 1 页除外）
+      const page = sessionPage.value
+      await loadSessions(agentId, page)
+      if (page > 1 && sessions.value.length === 0) {
+        await loadSessions(agentId, page - 1)
+      }
     } catch {
       // error handled by interceptor
     }
+  }
+
+  /**
+   * 上次会话（localStorage 持久化）：刷新/切页返回/重开浏览器均恢复。
+   * 仅记 sessionId；页码由后端 /position 接口按 id 降序实时计算（分页漂移也能精确恢复）。
+   * key 按 agentId 隔离，多 Agent 互不干扰。
+   */
+  function lastSessionPosKey(agentId: number): string {
+    return `last_session_pos:${agentId}`
+  }
+
+  function saveLastSessionPos(agentId: number, sessionId: number): void {
+    try {
+      localStorage.setItem(lastSessionPosKey(agentId), String(sessionId))
+    } catch {
+      // 存储失败不影响功能
+    }
+  }
+
+  function loadLastSessionPos(agentId: number): number | null {
+    try {
+      const raw = localStorage.getItem(lastSessionPosKey(agentId))
+      if (!raw) return null
+      const sessionId = Number(raw)
+      return Number.isInteger(sessionId) && sessionId > 0 ? sessionId : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 恢复上次会话：先加载第 1 页兜底（保证列表总有数据），localStorage 有记录
+   * 则经后端 /position 算页码后跳页选中。任一步失败返回 false，由调用方回退
+   * 默认逻辑（保持第 1 页选第一个）。
+   */
+  async function restoreLastSession(agentId: number): Promise<boolean> {
+    await loadSessions(agentId, 1)
+    const sessionId = loadLastSessionPos(agentId)
+    if (!sessionId) return false
+    try {
+      const res = await agentApi.getSessionPosition(
+        agentId,
+        sessionId,
+        sessionPageSize.value
+      )
+      if (res.data.code !== 1 || !res.data.data) return false
+      const page = res.data.data.page
+      if (page !== 1) await loadSessions(agentId, page)
+      const target = sessions.value.find(s => s.id === sessionId)
+      if (target) {
+        await selectSession(agentId, target)
+        return true
+      }
+    } catch {
+      // 接口失败保持第 1 页走回退
+    }
+    return false
   }
 
   /**
@@ -618,6 +680,8 @@ export const useAgentStore = defineStore('agent', () => {
     lastRevertedChangeId.value = null
 
     currentSession.value = session
+    // 记录上次会话 id，供刷新/切页返回后恢复（页码由后端 /position 实时计算）
+    saveLastSessionPos(agentId, session.id)
     // 切会话：重拉累计 token 基线并对齐清零增量（守卫在 fetchSessionTotalTokens 内）
     void fetchSessionTotalTokens(agentId, session.id, true)
     try {
@@ -2399,6 +2463,7 @@ export const useAgentStore = defineStore('agent', () => {
     createSession,
     deleteSession,
     selectSession,
+    restoreLastSession,
     loadMoreMessages,
     sendMessage,
     resumeWithInput,

@@ -641,8 +641,9 @@ watch(
     try {
       await store.loadAgent(targetId)
       store.lastUsedAgentId = targetId
-      await store.loadSessions(targetId)
-      if (store.sessions.length > 0) {
+      if (await store.restoreLastSession(targetId)) {
+        // 已恢复该 Agent 上次会话位置（localStorage 记录的页码 + 会话 id）
+      } else if (store.sessions.length > 0) {
         await store.selectSession(targetId, store.sessions[0])
       } else {
         store.chatMessages = []
@@ -1051,8 +1052,8 @@ onMounted(async () => {
     await store.loadAgent(agentId.value)
     store.lastUsedAgentId = agentId.value
     loadModelSelection(agentId.value)
-    await store.loadSessions(agentId.value)
     if (sessionId) {
+      await store.loadSessions(agentId.value)
       const target = store.sessions.find(s => s.id === parseInt(sessionId))
       if (target) {
         await store.selectSession(agentId.value, target)
@@ -1061,6 +1062,8 @@ onMounted(async () => {
           id: parseInt(sessionId)
         } as (typeof store.sessions)[0])
       }
+    } else if (await store.restoreLastSession(agentId.value)) {
+      // 已恢复上次会话位置（localStorage 记录的页码 + 会话 id）
     } else if (store.sessions.length > 0) {
       const session = store.sessions[0]
       if (session) await store.selectSession(agentId.value, session)
