@@ -746,7 +746,7 @@ watch(
 /* 任务计划项数无上限，封顶后内部滚动，避免超长计划撑爆虚拟行高；
    :deep 穿透 TodoList 子组件根节点 */
 .todo-block :deep(.todo-list) {
-  max-height: 320px;
+  max-height: 300px;
   overflow-y: auto;
 }
 

@@ -196,10 +196,10 @@ const TODO_LINE_HEIGHT = 13 * 1.6
 /** todo 项折行单位数：块 padding 40 + 状态图标 26 + 优先级标签占位后再留余量，
  * 取保守低值（低值=高估行数，符合官方"estimate the largest possible size"） */
 const TODO_UNITS_PER_LINE = 30
-/** todo 列表封顶（.todo-block :deep(.todo-list) max-height: 320px） */
-const TODO_BODY_MAX = 320
-/** compress-summary 内容封顶（.compress-summary-content max-height: 400px） */
-const SUMMARY_BODY_MAX = 400
+/** todo 列表封顶（.todo-block :deep(.todo-list) max-height: 300px） */
+const TODO_BODY_MAX = 300
+/** compress-summary 内容封顶（.compress-summary-content max-height: 300px） */
+const SUMMARY_BODY_MAX = 300
 /** compress-summary 块外 chrome：label 行 ~28（14px 文本 + 6px margin-bottom）+ 容器 padding 28 + 块外边距 8 */
 const SUMMARY_CHROME = 64
 /** compress-summary 内容内边距：与 .compress-summary 的 padding 14px × 2 一致 */
