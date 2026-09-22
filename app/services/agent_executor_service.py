@@ -826,6 +826,56 @@ class AgentExecutorService(BaseExecutorService):
 
         return sessions, total
 
+    async def get_session_position(
+        self,
+        db: AsyncSession,
+        flow_id: int,
+        session_id: int,
+        page_size: int = 20,
+    ) -> Optional[dict]:
+        """
+        计算会话在分页列表中的页码（列表按 id 降序，与 get_sessions 同口径）
+
+        Args:
+            db: 数据库会话
+            flow_id: Agent Flow ID
+            session_id: 会话 ID
+            page_size: 每页条数（须与前端列表页大小一致）
+
+        Returns:
+            dict: {page, total, page_size}；会话不存在或已删除返回 None
+        """
+        count_query = (
+            select(func.count())
+            .select_from(AgentSession)
+            .where(AgentSession.flow_id == flow_id, AgentSession.is_delete == 0)
+        )
+        count_result = await db.execute(count_query)
+        total = count_result.scalar() or 0
+
+        # 排在该会话之前的会话数（id 比它大的未删除会话数）→ 页码 = 序号 // page_size + 1
+        rank_query = (
+            select(func.count())
+            .select_from(AgentSession)
+            .where(
+                AgentSession.flow_id == flow_id,
+                AgentSession.is_delete == 0,
+                AgentSession.id > session_id,
+            )
+        )
+        rank_result = await db.execute(rank_query)
+        rank = rank_result.scalar() or 0
+
+        if not await self._get_session(db, session_id):
+            return None
+        if total == 0:
+            return None
+        return {
+            "page": rank // page_size + 1,
+            "total": total,
+            "page_size": page_size,
+        }
+
     async def mark_session_finish_unread(
         self, db: AsyncSession, session_id: int
     ) -> None:

@@ -248,6 +248,18 @@ export const agentApi = {
   },
 
   /**
+   * 获取会话在分页列表中的页码（按 id 降序，与 getSessions 同口径）
+   * @param agentId Agent ID
+   * @param sessionId 会话 ID
+   * @param pageSize 每页条数（须与前端列表页大小一致）
+   */
+  getSessionPosition(agentId: number, sessionId: number, pageSize: number = 20) {
+    return get<{ page: number; total: number; page_size: number }>(
+      `/agent/${agentId}/sessions/${sessionId}/position?page_size=${pageSize}`
+    )
+  },
+
+  /**
    * 创建会话
    * @param agentId Agent ID
    * @param workDir 可选，项目工作路径

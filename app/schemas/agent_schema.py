@@ -224,6 +224,14 @@ class AgentSessionPageRequest(BaseModel):
     page_size: int = Field(default=20, ge=1, le=100, description="每页条数")
 
 
+class AgentSessionPositionResponse(BaseModel):
+    """会话在分页列表中的位置"""
+
+    page: int = Field(..., ge=1, description="所在页码（按 page_size 计算）")
+    total: int = Field(..., ge=0, description="会话总数")
+    page_size: int = Field(..., ge=1, description="查询时使用的每页条数")
+
+
 class AgentSessionRunningStatusRequest(BaseModel):
     """会话运行状态批量查询请求（会话列表「对话中」图标轮询数据源）"""
 

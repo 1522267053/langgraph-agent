@@ -27,6 +27,7 @@ from app.schemas.agent_schema import (
     AgentSessionResponse,
     AgentSessionListResponse,
     AgentSessionPageRequest,
+    AgentSessionPositionResponse,
     AgentSessionRunningStatusRequest,
     AgentSessionCreateRequest,
     AgentSessionWorkDirRequest,
@@ -408,6 +409,27 @@ class AgentApi:
             )
             return ApiResponse.success(
                 data={"total_tokens": total_tokens}, msg="查询成功"
+            )
+
+        @self.router.get(
+            "/{id}/sessions/{session_id}/position",
+            response_model=ApiResponse[AgentSessionPositionResponse],
+            summary="获取会话所在分页页码",
+        )
+        async def get_session_position(
+            id: int,
+            session_id: int,
+            page_size: int = 20,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """会话在分页列表中的页码（按 id 降序与 /sessions/page 同口径），用于恢复上次浏览位置"""
+            position = await agent_executor_service.get_session_position(
+                db, id, session_id, page_size
+            )
+            if not position:
+                return ApiResponse.error(msg="会话不存在")
+            return ApiResponse.success(
+                data=AgentSessionPositionResponse(**position), msg="查询成功"
             )
 
         @self.router.post(
