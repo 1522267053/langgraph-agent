@@ -262,7 +262,7 @@ watch(
       <el-scrollbar
         v-if="showThinking"
         :ref="el => setThinkingWrapRef(segmentKey(segment, idx), el)"
-        max-height="400px"
+        max-height="300px"
         @scroll="onThinkingScroll(segmentKey(segment, idx))"
       >
         <pre class="thinking-content">{{ segment.thinking }}</pre>

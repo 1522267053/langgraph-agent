@@ -169,8 +169,8 @@ const THINKING_UNITS_PER_LINE = 45
 const THINKING_LINE_HEIGHT = 13.5 * 1.7
 /** thinking 正文上下 padding（14px × 2） */
 const THINKING_BODY_PADDING = 28
-/** thinking 正文封顶（AIMessageContent 中 el-scrollbar max-height="400px"） */
-const THINKING_BODY_MAX = 400
+/** thinking 正文封顶（AIMessageContent 中 el-scrollbar max-height="300px"） */
+const THINKING_BODY_MAX = 300
 /** thinking 块外 chrome：头部（7px padding×2 + 单行 ~19）+ 块外边距 12 */
 const THINKING_CHROME = 46
 /** content：14.5px 全角宽约 14.5px，行宽 ~600px，保守取 38 */
@@ -220,8 +220,8 @@ const FOOTER_CHROME = 42
 const TYPING_ROW_HEIGHT = 52
 
 // ---- human 附件估值常量（与 FilePreviewer.vue 渲染 CSS 对齐，官方建议宁可高估）----
-/** 单图行高上估：.file-thumbnail max-height 200 + border 2 */
-const HUMAN_FILE_IMAGE_MAX = 210
+/** 单图行高上估：.file-thumbnail max-height 100 + border 2 */
+const HUMAN_FILE_IMAGE_MAX = 110
 /** flex-wrap 项间距 gap: 8 */
 const HUMAN_FILE_GAP = 8
 /** 非图片文件链接行高：.file-link padding 6×2 + 13px 文本行高 ~19 + border 2 */
