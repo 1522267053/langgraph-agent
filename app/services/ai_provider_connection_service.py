@@ -100,8 +100,10 @@ class AIProviderConnectionService(
     async def list_model_groups(self, db: AsyncSession) -> List[dict]:
         """聚合启用连接的供应商模型分组
 
-        供 AgentChat 跨供应商选择模型。无模型元数据的供应商（如虚拟兼容供应商）
-        跳过——其模型需手动输入，由节点自有供应商通道兜底。
+        供 AgentChat 跨供应商选择模型。有模型元数据的供应商按元数据全量列出；
+        虚拟兼容供应商（openai-compatible / anthropic-compatible，models.dev
+        无其元数据）回退用连接的 default_model 构造单模型分组——用户在连接
+        配置里填写的默认模型即「已配置的模型」，可选可恢复。
         """
         from app.services.ai_model_service import ai_model_service
 
@@ -111,7 +113,35 @@ class AIProviderConnectionService(
                 db, conn.provider_id
             )
             if not models:
-                continue
+                # 兼容供应商兜底：连接 default_model 非空时构造单模型项
+                # （模型 id 与展示名同值；无元数据字段，前端按空处理）
+                if conn.default_model:
+                    models = [
+                        {
+                            "model_id": conn.default_model,
+                            "name": conn.default_model,
+                            "provider_id": conn.provider_id,
+                            "modalities": None,
+                            "limits": None,
+                            "cost": None,
+                            "reasoning": None,
+                            "tool_call": None,
+                            "temperature": None,
+                            "attachment": None,
+                            "open_weights": None,
+                            "is_experimental": None,
+                            "structured_output": None,
+                            "reasoning_options": None,
+                            "knowledge": None,
+                            "release_date": None,
+                            "last_updated": None,
+                            "family": None,
+                            "status": None,
+                            "provider_name": conn.provider_name,
+                        }
+                    ]
+                else:
+                    continue
             groups.append(
                 {
                     "provider_id": conn.provider_id,
