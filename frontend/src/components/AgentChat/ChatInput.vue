@@ -465,6 +465,7 @@ function handleStop() {
               <button
                 class="toolbar-icon-btn workdir-btn"
                 :class="{ active: !!workDir }"
+                :disabled="isStreaming || isWaitingHuman"
                 @click="emit('select-workdir')"
               >
                 <el-icon :size="18"><FolderOpened /></el-icon>
