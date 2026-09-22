@@ -542,6 +542,7 @@ function handleStop() {
                 <button
                   class="toolbar-icon-btn reasoning-btn"
                   :class="{ active: !!selectedReasoning }"
+                  :disabled="isStreaming || isWaitingHuman"
                 >
                   <el-icon :size="18"><Lightning /></el-icon>
                   <span v-if="reasoningBtnLabel" class="reasoning-btn-label">{{
@@ -868,6 +869,15 @@ export default {
   background: var(--vermilion-soft);
 }
 
+/* 工具栏按钮统一禁用态：灰化并压制 active/hover 高亮（流式/等待人工输入期间
+   模型与推理深度按钮禁用，橙色激活样式会误导用户以为仍可操作） */
+.toolbar-icon-btn:disabled,
+.toolbar-icon-btn:disabled:hover {
+  color: var(--paper-ink-4);
+  background: transparent;
+  cursor: not-allowed;
+}
+
 /* 工作目录按钮：选中时横向展示 目录名 + 清除按钮；空间不足时优先收缩 */
 .workdir-btn {
   width: auto;
@@ -924,6 +934,12 @@ export default {
 }
 
 .model-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 推理深度按钮禁用态与模型按钮一致 */
+.reasoning-btn:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }

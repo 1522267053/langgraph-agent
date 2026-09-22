@@ -88,8 +88,8 @@ function handleImageClick(file: FileItem) {
 }
 
 .file-thumbnail {
-  max-width: 200px;
-  max-height: 200px;
+  max-width: 100px;
+  max-height: 100px;
   border-radius: 8px;
   cursor: pointer;
   object-fit: cover;
@@ -103,7 +103,7 @@ function handleImageClick(file: FileItem) {
 
 .file-video {
   max-width: 320px;
-  max-height: 200px;
+  max-height: 100px;
   border-radius: 8px;
   border: 1px solid #ebeef5;
 }
