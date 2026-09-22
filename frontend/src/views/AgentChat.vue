@@ -1860,7 +1860,6 @@ function handleRejectTools() {
         @toggle-plan-mode="store.togglePlanMode"
         @restore-consumed="restoreParamsSignal = null"
         @select-workdir="handleSelectWorkDir"
-        @clear-workdir="handleWorkDirConfirm('')"
       />
     </div>
 

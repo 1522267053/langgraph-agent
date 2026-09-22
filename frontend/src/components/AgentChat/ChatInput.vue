@@ -50,7 +50,6 @@ const emit = defineEmits<{
   (e: 'toggle-plan-mode'): void
   (e: 'restore-consumed'): void
   (e: 'select-workdir'): void
-  (e: 'clear-workdir'): void
 }>()
 
 const inputMessage = defineModel<string>('inputMessage', { default: '' })
@@ -470,14 +469,6 @@ function handleStop() {
               >
                 <el-icon :size="18"><FolderOpened /></el-icon>
                 <span v-if="workDir" class="workdir-name">{{ workDirName }}</span>
-                <span
-                  v-if="workDir"
-                  class="workdir-clear"
-                  title="清除（回退默认目录）"
-                  @click.stop="emit('clear-workdir')"
-                >
-                  <el-icon :size="13"><CircleClose /></el-icon>
-                </span>
               </button>
             </el-tooltip>
             <!-- 模型切换：图标按钮 + 分组弹出菜单（与推理深度同款交互）；
@@ -899,18 +890,6 @@ export default {
   white-space: nowrap;
 }
 
-.workdir-clear {
-  display: flex;
-  align-items: center;
-  color: var(--paper-ink-4);
-  border-radius: 50%;
-  transition: color 0.15s;
-}
-
-.workdir-clear:hover {
-  color: var(--vermilion);
-}
-
 .param-dot {
   position: absolute;
   top: 4px;
@@ -1234,15 +1213,14 @@ export default {
     display: none;
   }
 
-  /* 工作目录按钮收成纯图标：目录名与清除小图标隐藏（tooltip 仍有全路径，
+  /* 工作目录按钮收成纯图标：目录名隐藏（tooltip 仍有全路径，
      清除操作走弹窗内"清除选择"），为右侧发送按钮腾出空间 */
   .workdir-btn {
     max-width: 32px;
     padding: 0;
   }
 
-  .workdir-name,
-  .workdir-clear {
+  .workdir-name {
     display: none;
   }
 
