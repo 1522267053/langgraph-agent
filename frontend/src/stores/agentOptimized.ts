@@ -464,11 +464,13 @@ export const useAgentStore = defineStore('agent', () => {
         if (pollVersion !== sessionStatusPollVersion) return
         if (res.data.code === 1) {
           const runningIds = new Set(res.data.data?.running_ids || [])
+          const waitingIds = new Set(res.data.data?.waiting_ids || [])
           const prevRunningIds = new Set(
             sessions.value.filter(s => s.running).map(s => s.id)
           )
           for (const s of sessions.value) {
             s.running = runningIds.has(s.id)
+            s.waiting = waitingIds.has(s.id)
             // 执行完成亮点：非当前会话 running→false 翻转时点亮，点击会话后熄灭
             if (
               prevRunningIds.has(s.id) &&
@@ -517,6 +519,9 @@ export const useAgentStore = defineStore('agent', () => {
         target.justFinished = true
       }
       target.running = running
+      // 点亮时跟随当前等待态（错误→等待路径 isWaitingHuman 已置真）；
+      // 熄灭同步清 waiting。发消息/resume 前 isWaitingHuman 已复位为 false。
+      target.waiting = running ? isWaitingHuman.value : false
     }
     syncSessionStatusPolling(agentId)
   }
@@ -1376,6 +1381,9 @@ export const useAgentStore = defineStore('agent', () => {
         question: event.data.question || '请提供输入',
         context: event.data.context
       }
+      // 即时把列表图标切到等待态（呼吸灯），不等 2s 批量轮询
+      const target = sessions.value.find(s => s.id === context.sessionId)
+      if (target) target.waiting = true
     }
 
     const handlers: FlowSSEHandlers = {

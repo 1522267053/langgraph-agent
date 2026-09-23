@@ -157,14 +157,20 @@ class AgentApi:
             sessions, total = await agent_executor_service.get_sessions(
                 db, id, req.page, req.page_size
             )
-            # 「对话中」标记：批量填充内存运行态（与 /running 单查接口同口径）
+            # 「对话中」标记：批量填充内存运行态（与 /running 单查接口同口径）；
+            # waiting 单独标记（审批/反问等待用户响应，列表图标呼吸灯样式）
+            session_ids = [s.id for s in sessions]
             running_ids = agent_executor_service.get_running_session_ids(
-                [s.id for s in sessions]
+                session_ids
+            )
+            waiting_ids = agent_executor_service.get_waiting_session_ids(
+                session_ids
             )
             session_list = []
             for s in sessions:
                 item = AgentSessionResponse.model_validate(s)
                 item.running = s.id in running_ids
+                item.waiting = s.id in waiting_ids
                 session_list.append(item)
             return ApiResponse.success(
                 data=AgentSessionListResponse(total=total, list=session_list),
@@ -183,11 +189,20 @@ class AgentApi:
             """按 session id 列表批量返回正在对话中的会话（列表页图标 2s 轮询）。
 
             纯内存查询无 DB 成本；须注册在 {session_id} 通配子路由之前。
+            waiting_ids 为子集：停在审批/反问等待用户响应的会话（列表呼吸灯）。
             """
             running_ids = agent_executor_service.get_running_session_ids(
                 req.session_ids
             )
-            return ApiResponse.success(data={"running_ids": sorted(running_ids)})
+            waiting_ids = agent_executor_service.get_waiting_session_ids(
+                req.session_ids
+            )
+            return ApiResponse.success(
+                data={
+                    "running_ids": sorted(running_ids),
+                    "waiting_ids": sorted(waiting_ids),
+                }
+            )
 
         @self.router.post(
             "/{id}/sessions",

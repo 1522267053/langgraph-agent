@@ -665,6 +665,21 @@ class AgentExecutorService(BaseExecutorService):
             or ((run := self._agent_runs.get(sid)) is not None and not run.done)
         }
 
+    def get_waiting_session_ids(self, session_ids: List[int]) -> set[int]:
+        """批量返回停在人工输入中断点（审批/反问）的会话 ID 集合。
+
+        纯内存查询，供会话列表区分「执行中」（旋转图标）与「等待用户响应」
+        （呼吸灯）两种对话中形态。两个来源：
+        - LangGraph interrupt（审批）：_waiting_sessions
+        - question 反问：工具内 await Future 阻塞，agent run 仍在运行、
+          不走 interrupt，改查 question_service 的 pending 队列
+        与 get_running_session_ids 口径独立：waiting ⊆ running。
+        """
+        return (
+            {sid for sid in session_ids if sid in self._waiting_sessions}
+            | question_service.any_pending(session_ids)
+        )
+
     def start_compress_background(
         self, session_id: int, custom_prompt: str = ""
     ) -> None:
