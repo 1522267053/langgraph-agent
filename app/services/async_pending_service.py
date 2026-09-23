@@ -189,6 +189,10 @@ class AsyncPendingService(Generic[T_FUTURE, T_RESULT]):
             return item_id in items
         return bool(items)
 
+    def any_pending(self, session_ids: list[int]) -> set[int]:
+        """批量返回有任意 pending 项的 session_id 子集（列表轮询口径）"""
+        return {sid for sid in session_ids if self._pending.get(sid)}
+
     def list_pending(self, session_id: int) -> list[str]:
         """返回当前 session 下所有 pending item_id（按创建时间排序）"""
         items = self._pending.get(session_id)

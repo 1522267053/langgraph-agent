@@ -41,6 +41,8 @@ export interface AgentSession extends BaseEntity {
   status: number
   /** 是否正在对话中（后端内存运行态，会话列表页区分执行中的会话） */
   running?: boolean
+  /** 停在人工输入中断点（审批/反问等待用户响应，列表图标呼吸灯样式；running 为真时才有意义） */
+  waiting?: boolean
   /** 执行完成未读标记（DB 持久化）：1=本轮执行完毕且未打开该会话（列表红点），打开后置 0 */
   justFinished?: boolean
   /** 项目工作路径（空则使用 Agent 默认工作目录） */

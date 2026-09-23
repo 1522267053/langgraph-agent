@@ -646,9 +646,18 @@ function handleSessionPageChange(page: number): void {
                     @click="handleSelectSession(session)"
                   >
                     <el-icon
-                      :class="['session-icon', { 'session-icon-running': session.running }]"
+                      :class="[
+                        'session-icon',
+                        {
+                          'session-icon-running': session.running,
+                          'session-icon-waiting': session.running && session.waiting
+                        }
+                      ]"
                     >
-                      <Loading v-if="session.running" class="icon-spin" />
+                      <Loading
+                        v-if="session.running"
+                        :class="session.waiting ? 'icon-breath' : 'icon-spin'"
+                      />
                       <ChatDotRound v-else />
                     </el-icon>
                     <!-- 执行完成未读红点：finish_unread=1 点亮，打开会话后熄灭 -->
@@ -790,9 +799,18 @@ function handleSessionPageChange(page: number): void {
                     @click="handleSelectSession(session)"
                   >
                     <el-icon
-                      :class="['session-icon', { 'session-icon-running': session.running }]"
+                      :class="[
+                        'session-icon',
+                        {
+                          'session-icon-running': session.running,
+                          'session-icon-waiting': session.running && session.waiting
+                        }
+                      ]"
                     >
-                      <Loading v-if="session.running" class="icon-spin" />
+                      <Loading
+                        v-if="session.running"
+                        :class="session.waiting ? 'icon-breath' : 'icon-spin'"
+                      />
                       <ChatDotRound v-else />
                     </el-icon>
                     <!-- 执行完成未读红点：finish_unread=1 点亮，打开会话后熄灭 -->
@@ -1138,6 +1156,11 @@ function handleSessionPageChange(page: number): void {
   color: var(--vermilion);
 }
 
+/* 审批/反问等待用户响应：停旋转改呼吸灯（透明度+缩放渐变），琥珀色区分执行中 */
+.session-icon-waiting {
+  color: var(--el-color-warning, #e6a23c);
+}
+
 /* 执行完成未读红点：图标右上角徽标（finish_unread=1 点亮，打开会话后熄灭）；
    桌面侧栏 .session-item 与移动抽屉 .drawer-session-item 均已 position:relative */
 .finish-dot {
@@ -1156,12 +1179,28 @@ function handleSessionPageChange(page: number): void {
   animation: session-icon-rotate 1.2s linear infinite;
 }
 
+.icon-breath {
+  animation: session-icon-breath 1.6s ease-in-out infinite;
+}
+
 @keyframes session-icon-rotate {
   from {
     transform: rotate(0deg);
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes session-icon-breath {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.88);
   }
 }
 

@@ -102,6 +102,13 @@ class AgentSessionResponse(AgentSessionBase):
         default=False,
         description="是否正在对话中（后端内存态，列表页区分执行中的会话）",
     )
+    waiting: bool = Field(
+        default=False,
+        description=(
+            "是否停在人工输入中断点（审批/反问等待用户响应，"
+            "列表页图标改呼吸灯样式；running 与 waiting 可同时为真）"
+        ),
+    )
     work_dir: Optional[str] = Field(default=None, description="项目工作路径")
     plan_mode: Optional[int] = Field(
         default=0, description="计划模式：1=开启（只读探索），0/空=关闭"
