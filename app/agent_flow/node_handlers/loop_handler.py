@@ -57,6 +57,12 @@ class LoopNodeConfig(BaseModel):
     )
     break_on_error: bool = Field(True, description="迭代出错时是否中断循环")
     concurrency: int = Field(1, description="并发执行数（1 为串行）")
+    interval_seconds: float = Field(
+        0,
+        description="迭代间隔秒数（仅串行模式生效，用于批量操作限速）",
+        ge=0,
+        le=300,
+    )
     input_mappings: list = Field(default=[], description="输入映射列表")
     output_variables: list[dict] = Field(default=[], description="输出变量列表")
 
@@ -113,6 +119,7 @@ class LoopNodeHandler(BaseNodeHandler):
             "for_each_item_type": config.get("for_each_item_type"),
             "break_on_error": config.get("break_on_error", True),
             "concurrency": config.get("concurrency", 1),
+            "interval_seconds": config.get("interval_seconds", 0),
             "input_mappings": config.get("input_mappings", []),
         }
 
@@ -138,6 +145,18 @@ class LoopNodeHandler(BaseNodeHandler):
         concurrency = checked["concurrency"]
         input_mappings = checked["input_mappings"]
         is_concurrent = concurrency > 1
+
+        try:
+            interval_seconds = float(checked.get("interval_seconds", 0) or 0)
+        except (TypeError, ValueError):
+            interval_seconds = 0.0
+        if is_concurrent and interval_seconds > 0:
+            logger.warning(
+                "循环节点[%s]配置了迭代间隔 %.1f 秒，但并发模式下不生效，已忽略",
+                loop_key,
+                interval_seconds,
+            )
+            interval_seconds = 0.0
 
         loop_prefix = f"{loop_key}__"
 
@@ -225,6 +244,7 @@ class LoopNodeHandler(BaseNodeHandler):
                 state,
                 config,
                 writer,
+                interval_seconds,
             )
 
         # ---- 收集输出 ----
@@ -254,6 +274,7 @@ class LoopNodeHandler(BaseNodeHandler):
         state: FlowState,
         config: Optional[RunnableConfig],
         writer: Optional[StreamWriter],
+        interval_seconds: float = 0,
     ) -> List[dict]:
         """串行模式：逐次流式调用子图"""
         results: List[dict] = []
@@ -262,6 +283,9 @@ class LoopNodeHandler(BaseNodeHandler):
         execution_id = ctx.execution_id if ctx else 0
 
         for i, item in enumerate(items):
+            if i > 0 and interval_seconds > 0:
+                await asyncio.sleep(interval_seconds)
+
             state.set_variable("loop_index", i)
             state.set_variable("loop_count", total_count)
             state.set_variable("loop_item", item)

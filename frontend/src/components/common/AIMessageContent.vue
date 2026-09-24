@@ -39,8 +39,6 @@ const props = withDefaults(
   }
 )
 
-const emit = defineEmits<{}>()
-
 const MAX_VISIBLE_SEGMENTS = 35
 /** 非流式（历史加载/回合结束）默认最多渲染的分段数，超出折叠，避免长回合全量挂载 */
 const MAX_FINAL_SEGMENTS = 100

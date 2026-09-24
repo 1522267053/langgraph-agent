@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch } from 'vue'
 import type { PythonConfig } from './types'
 import { fieldTypeOptions } from './types'
 import { ElMessage } from 'element-plus'

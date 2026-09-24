@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- **可视化流程编辑** - 基于 Vue Flow 的拖拽式流程设计，支持 19 种节点类型
+- **可视化流程编辑** - 基于 Vue Flow 的拖拽式流程设计，支持 20 种节点类型
 - **双模式编辑** - Flow（工作流编排）和 Agent（对话式助手）共用编辑器，按模式过滤可用节点
 - **Agent 对话** - 完整的会话管理、SSE 流式对话、Human-in-the-loop 交互恢复
 - **流式推理展示** - 实时显示 LLM 思维链（DeepSeek thinking / Anthropic thinking）、内容输出、工具调用
@@ -92,8 +92,8 @@ src/
 ├── components/
 │   ├── FlowEditor/         # 流程编辑器
 │   │   ├── nodeRegistry.ts  #   节点注册表（自动发现 + 元数据 + hook，唯一数据源）
-│   │   ├── nodes/          #   节点组件（19 种 + BaseNode，import.meta.glob 自动注册）
-│   │   ├── config/         #   节点配置面板（19 种 + ApiFileItem，import.meta.glob 自动注册）
+│   │   ├── nodes/          #   节点组件（20 种 + BaseNode，import.meta.glob 自动注册）
+│   │   ├── config/         #   节点配置面板（20 种 + ApiFileItem，import.meta.glob 自动注册）
 │   │   ├── FlowCanvas.vue  #   Vue Flow 画布（快捷键、拖拽、连接）
 │   │   ├── ConfigPanel.vue #   右侧配置面板（component :is 动态渲染）
 │   │   ├── NodePanel.vue   #   左侧节点面板（从注册表派生节点列表）
@@ -150,11 +150,11 @@ src/
 
 ## 节点类型
 
-流程编辑器支持 19 种节点，分为 4 个类别：
+流程编辑器支持 20 种节点，分为 4 个类别：
 
 | 类别 | 节点 | Handle 模式 |
 |------|------|------------|
-| **基础** | start, end, condition, loop, intent_router | 标准 I/O |
+| **基础** | start, end, condition, loop, intent_router, wait | 标准 I/O |
 | **LLM** | llm | 标准 I/O + 工具输入（orange） |
 | **工具** | mcp, api, skill, knowledge, python, shell, memory, todo, sub_agent, agenda | 纯工具输出（green→tools） |
 | **交互** | human, card | 标准 I/O + 工具输出 |

@@ -244,6 +244,20 @@ function insertVariable(snippet: string): void {
             @change="updateConfig"
           />
         </el-form-item>
+
+        <el-form-item v-if="localConfig.concurrency === 1" label="迭代间隔">
+          <el-input-number
+            v-model="localConfig.interval_seconds"
+            :min="0"
+            :max="300"
+            :step="0.5"
+            @change="updateConfig"
+          />
+          <el-text size="small" type="info" style="margin-left: 8px">秒</el-text>
+        </el-form-item>
+        <el-form-item v-if="localConfig.concurrency > 1" label="迭代间隔">
+          <el-text size="small" type="info">并发模式下迭代间隔不生效</el-text>
+        </el-form-item>
       </el-form>
     </div>
 
