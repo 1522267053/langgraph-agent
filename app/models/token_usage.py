@@ -1,7 +1,7 @@
 """Token 使用记录模型"""
 
 from typing import Optional
-from sqlalchemy import String, Integer, Text, JSON
+from sqlalchemy import String, Integer, Text, JSON, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base_model import DbBaseModel
 
@@ -14,6 +14,11 @@ class TokenUsage(DbBaseModel):
     """
 
     __tablename__ = "token_usage"
+
+    # 来源维度聚合（totalTokens 接口按 source_type+source_id 求和）高频走此索引
+    __table_args__ = (
+        Index("idx_token_usage_source", "source_type", "source_id", "is_delete"),
+    )
 
     source_type: Mapped[str] = mapped_column(
         String(20), nullable=False, comment="来源类型：flow/agent"

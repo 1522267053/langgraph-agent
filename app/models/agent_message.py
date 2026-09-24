@@ -3,7 +3,7 @@ Agent消息模型
 """
 
 from typing import Optional
-from sqlalchemy import String, Integer, Text, JSON
+from sqlalchemy import String, Integer, Text, JSON, Index
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base_model import DbBaseModel
 
@@ -16,6 +16,12 @@ class AgentMessage(DbBaseModel):
     """
 
     __tablename__ = "agent_message"
+
+    # 会话维度查询（messages/page 分页 + count）高频走此索引；
+    # 缺失时 4 万行全表 SCAN，单次 count/page 约 50ms，接口累计 2s+
+    __table_args__ = (
+        Index("idx_agent_message_session_id", "session_id", "is_delete"),
+    )
 
     session_id: Mapped[int] = mapped_column(Integer, nullable=False, comment="会话ID")
     role: Mapped[str] = mapped_column(
