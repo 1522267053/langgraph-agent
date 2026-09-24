@@ -75,12 +75,16 @@ class PythonNodeConfig(BaseNodeConfig):
 #    - 移除模块前请检查是否有节点代码依赖（无法做静态分析，按需谨慎）
 # 3. 设计权衡：
 #    - 包含 os/pathlib/csv/base64 是为了支持工作流节点的文件 IO 与编码转换
-#    - 包含 requests 是为了支持 HTTP 数据拉取（如外部 API 拉数据）
+#    - 包含 requests/urllib 是为了支持 HTTP 数据拉取（如外部 API 拉数据），
+#      两者网络能力面相同（任意 HTTP 出口已由 requests 引入，urllib 未扩大攻击面）
+#    - 包含 docx/pdfplumber/pymupdf(fitz) 是为了支持 Word/PDF 文档解析
+#    - 包含 cryptography 是为了支持加解密/签名类数据处理
 #    - 不包含 subprocess/socket/ctypes 之类需要进程/系统级隔离的能力
 #      （如需使用请改用 shell_executor / ssh_executor 工具节点）
 # 4. 实测说明：
 #    - 列表中所有模块均经过 RestrictedPython 编译测试 + 运行时 import 测试
-#    - openpyxl 需要项目依赖已安装（pyproject.toml 已有）
+#    - openpyxl/docx/pdfplumber/pymupdf/cryptography 需要项目依赖已安装
+#      （pyproject.toml 均已声明）
 # =============================================================================
 ALLOWED_MODULES = frozenset(
     {
@@ -119,6 +123,12 @@ ALLOWED_MODULES = frozenset(
         "calendar",
         "zoneinfo",
         "openpyxl",
+        "docx",
+        "pdfplumber",
+        "pymupdf",
+        "fitz",
+        "urllib",
+        "cryptography",
         "os",
         "requests",
     }
