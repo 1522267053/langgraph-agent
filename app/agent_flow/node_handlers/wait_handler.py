@@ -6,7 +6,7 @@
 - 重试退避
 - 批量操作的节奏控制（配合循环节点的迭代间隔）
 
-等待基于 asyncio.sleep，流程被取消时 LangGraph 任务取消会立即中断等待。
+等待基于 asyncio.sleep 分段轮询，取消/中断信号到达后在下一段（≤1s）内退出。
 """
 
 import asyncio
@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 # 单次最大等待秒数（防呆：避免误配置导致流程长时间挂起）
 MAX_WAIT_SECONDS = 3600
+
+# 中断检查粒度（秒）：分段 sleep 的每段时长，决定取消响应延迟上限
+CHECK_INTERVAL_SECONDS = 1.0
 
 
 class WaitNodeConfig(BaseModel):
@@ -67,6 +70,17 @@ class WaitNodeHandler(BaseNodeHandler):
             return state
 
         logger.info("延时节点[%s]开始等待 %d 秒", node_key, seconds)
-        await asyncio.sleep(seconds)
+        waited = 0.0
+        while waited < seconds:
+            # 协作式取消：分段 sleep，中断信号到达后立即退出
+            if self._is_cancelled(state):
+                state.add_error(node_key, "延时等待被取消，提前退出")
+                logger.info("延时节点[%s]等待中检测到取消，已提前退出", node_key)
+                return state
+
+            slice_seconds = min(CHECK_INTERVAL_SECONDS, seconds - waited)
+            await asyncio.sleep(slice_seconds)
+            waited += slice_seconds
+
         logger.info("延时节点[%s]等待完成", node_key)
         return state

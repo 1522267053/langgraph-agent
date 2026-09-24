@@ -283,8 +283,29 @@ class LoopNodeHandler(BaseNodeHandler):
         execution_id = ctx.execution_id if ctx else 0
 
         for i, item in enumerate(items):
+            # 协作式取消：中断信号到达后停止发起后续迭代（已完成的迭代保留结果）
+            if self._is_cancelled(state):
+                logger.info(
+                    "循环节点[%s]检测到取消，停止迭代（已完成 %d/%d）",
+                    loop_key,
+                    i,
+                    total_count,
+                )
+                break
+
             if i > 0 and interval_seconds > 0:
-                await asyncio.sleep(interval_seconds)
+                # 迭代间隔同样分段可中断，避免取消后仍被 sleep 卡住
+                remaining = interval_seconds
+                while remaining > 0:
+                    if self._is_cancelled(state):
+                        logger.info(
+                            "循环节点[%s]迭代间隔中检测到取消，停止迭代",
+                            loop_key,
+                        )
+                        return results
+                    slice_seconds = min(1.0, remaining)
+                    await asyncio.sleep(slice_seconds)
+                    remaining -= slice_seconds
 
             state.set_variable("loop_index", i)
             state.set_variable("loop_count", total_count)
@@ -383,6 +404,12 @@ class LoopNodeHandler(BaseNodeHandler):
 
         async def run_iteration(index: int, item: Any) -> None:
             if break_on_error and failed.is_set():
+                return
+            # 协作式取消：中断信号到达后跳过尚未开始的迭代
+            if self._is_cancelled(state):
+                logger.info(
+                    "循环节点[%s]并发模式检测到取消，跳过迭代 %d", loop_key, index
+                )
                 return
             async with semaphore:
                 if break_on_error and failed.is_set():

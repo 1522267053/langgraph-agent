@@ -177,6 +177,9 @@ class FlowExecutorService(BaseExecutorService):
             ExecutionStatus.WAITING_HUMAN.value,
         )
         if execution.status in cancellable:
+            # 先设内存中断标志：协作式取消的信号源，节点/循环检查点据此停止
+            # （WS 网关取消路径已设过，此处统一兜底 REST 直调路径，幂等）
+            interrupt_service.set_flow_interrupted(execution_id)
             execution.status = ExecutionStatus.CANCELLED.value
             execution.end_time = datetime.now()
             execution.wait_data = None

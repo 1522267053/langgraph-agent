@@ -18,7 +18,9 @@ from pydantic import BaseModel, Field
 
 from app.models.flow_node import FlowNode
 from app.agent_flow.flow_event import ErrorEvent
+from app.agent_flow.execution_context import get_execution_context
 from app.agent_flow.variable_resolver import VariableResolver, variable_resolver
+from app.services.interrupt_service import interrupt_service
 
 if TYPE_CHECKING:
     from app.agent_flow.flow_event import FlowEvent
@@ -291,6 +293,21 @@ class BaseNodeHandler(ABC):
     ) -> None:
         """发送错误事件到流式输出"""
         self._emit(writer, ErrorEvent(message=message, node_key=node_key))
+
+    def _is_cancelled(self, state: FlowState) -> bool:
+        """协作式取消检查点（Flow 模式）：state 标志 + 全局中断服务。
+
+        中断信号到达时写入 state.is_interrupted（幂等），供上游
+        _execute_graph_stream 收尾时判定取消状态。循环迭代间、
+        分段 sleep 等长耗时等待点应调用本方法实现及时停止。
+        """
+        if state.is_interrupted:
+            return True
+        ctx = get_execution_context()
+        if ctx and interrupt_service.is_flow_interrupted(ctx.execution_id):
+            state.set_interrupted()
+            return True
+        return False
 
     # ---- 工具审批钩子（基类默认实现，shell/ssh/python 等"命令工具"复用）----
 
