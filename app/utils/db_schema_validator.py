@@ -86,9 +86,7 @@ def _collect_missing_indexes(
         if table_name not in existing_tables:
             continue
         # 新表由 create_all 建表时带上索引，无需补
-        existing_names = {
-            idx["name"] for idx in inspector.get_indexes(table_name)
-        }
+        existing_names = {idx["name"] for idx in inspector.get_indexes(table_name)}
         for index in table_obj.indexes:
             if index.name not in existing_names:
                 missing.append((table_obj, index))
@@ -96,9 +94,7 @@ def _collect_missing_indexes(
     return missing
 
 
-def _apply_missing_indexes(
-    sync_conn, missing: list[tuple[Table, Index]]
-) -> list[str]:
+def _apply_missing_indexes(sync_conn, missing: list[tuple[Table, Index]]) -> list[str]:
     """为缺失索引执行 CREATE INDEX（同步函数，通过 run_sync 调用）
 
     返回已创建的 "表名.索引名" 列表。
@@ -107,7 +103,7 @@ def _apply_missing_indexes(
 
     created: list[str] = []
     for table_obj, index in missing:
-        sync_conn.execute(CreateIndex(index).compile(bind=sync_conn))
+        sync_conn.execute(CreateIndex(index))
         created.append(f"{table_obj.name}.{index.name}")
 
     return created
@@ -140,4 +136,6 @@ async def validate_and_update_db_schema(
     if added:
         logger.info("自动同步表结构，新增 %d 列：%s", len(added), ", ".join(added))
     if created:
-        logger.info("自动同步表结构，新增 %d 个索引：%s", len(created), ", ".join(created))
+        logger.info(
+            "自动同步表结构，新增 %d 个索引：%s", len(created), ", ".join(created)
+        )
