@@ -117,6 +117,7 @@ API 节点的请求体里嵌入上游变量：
 | `api` / `python` / `knowledge` | 可作执行节点，也可作工具 | `default` 或 `tools` |
 | `human` | Workflow 人工检查点或人工工具 | `default` 或 `tools` |
 | `card` / `loop` | Workflow 子图复用和迭代 | `default` 数据流 |
+| `wait` | 延时等待 N 秒后继续（宽限期/重试退避/节奏控制） | `default` 数据流 |
 | `mcp` / `skill` / `memory` / `todo` | Agent 工具提供者 | `tools -> tools` |
 | `shell` / `sub_agent` / `agenda` | Agent 工具提供者 | `tools -> tools` |
 | `ssh` | Agent 工具提供者（远程命令与 SFTP） | `tools -> tools` |
@@ -348,7 +349,13 @@ SSH 节点（`ssh`）是 Agent 专用工具提供者，仅支持工具边 `tools
 | `condition` | `condition_expression`、`max_count` |
 | `for_each` | `for_each_source`、`concurrency` |
 
+`interval_seconds`（默认 0，上限 300）为串行模式下的迭代间隔秒数，用于批量操作限速（如外部接口防雪崩）；`concurrency > 1` 时忽略。
+
 循环体节点位于同一 Flow，key 必须以 `<loop_key>__` 开头，并包含 start 和 end。循环体可读取 `loop_index`、`loop_count`、`loop_item`；输入由 `input_mappings` 映射，输出通过循环节点自己的 `nodes.<loop_key>.<name>` 聚合。循环内禁止直接或经卡片间接嵌套另一个循环。
+
+## 延时
+
+`wait` 节点等待 `wait_seconds` 秒（0-3600，默认 5）后原样透传状态，无输入输出变量。典型用途：宽限期等待、重试退避、流程节奏控制。等待为分段轮询（1 秒粒度），执行取消后在 ≤1 秒内退出。
 
 ## 人工节点
 

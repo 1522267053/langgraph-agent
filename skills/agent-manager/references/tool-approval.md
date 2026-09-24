@@ -10,7 +10,7 @@ Agent 模式下，工具节点在执行危险操作前可触发用户审批。�
 
 ## 节点覆盖范围
 
-只有 **LLM 可调用的工具节点** 才需要审批；纯编排节点（start / end / condition / intent_router / card / loop）不触发。
+只有 **LLM 可调用的工具节点** 才需要审批；纯编排节点（start / end / condition / intent_router / card / loop / wait）不触发。
 
 | 节点 | 是否支持审批 | 备注 |
 |---|---|---|
