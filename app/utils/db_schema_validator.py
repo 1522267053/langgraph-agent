@@ -14,7 +14,7 @@
 import logging
 from typing import Any
 
-from sqlalchemy import inspect, text
+from sqlalchemy import Index, inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.sql.schema import Column, MetaData, Table
 
@@ -71,26 +71,73 @@ def _apply_missing_columns(
     return added
 
 
+def _collect_missing_indexes(
+    sync_conn, metadata: MetaData
+) -> list[tuple[Table, Index]]:
+    """对比模型与实际表结构，收集缺失的索引（同步函数，通过 run_sync 调用）
+
+    仅比对索引名（列组合以模型定义为准）；已存在同名索引即视为命中。
+    """
+    inspector = inspect(sync_conn)
+    existing_tables = set(inspector.get_table_names())
+    missing: list[tuple[Table, Index]] = []
+
+    for table_name, table_obj in metadata.tables.items():
+        if table_name not in existing_tables:
+            continue
+        # 新表由 create_all 建表时带上索引，无需补
+        existing_names = {
+            idx["name"] for idx in inspector.get_indexes(table_name)
+        }
+        for index in table_obj.indexes:
+            if index.name not in existing_names:
+                missing.append((table_obj, index))
+
+    return missing
+
+
+def _apply_missing_indexes(
+    sync_conn, missing: list[tuple[Table, Index]]
+) -> list[str]:
+    """为缺失索引执行 CREATE INDEX（同步函数，通过 run_sync 调用）
+
+    返回已创建的 "表名.索引名" 列表。
+    """
+    from sqlalchemy.schema import CreateIndex
+
+    created: list[str] = []
+    for table_obj, index in missing:
+        sync_conn.execute(CreateIndex(index).compile(bind=sync_conn))
+        created.append(f"{table_obj.name}.{index.name}")
+
+    return created
+
+
 async def validate_and_update_db_schema(
     engine: AsyncEngine, metadata: MetaData
 ) -> None:
-    """自动同步表结构：为已存在的表补充缺失列
+    """自动同步表结构：为已存在的表补充缺失列与缺失索引
 
     Args:
         engine: 异步引擎
         metadata: SQLAlchemy 模型元数据（通常为 DbBaseModel.metadata）
 
-    幂等：列已存在时跳过，可安全重复执行。
+    幂等：列/索引已存在时跳过，可安全重复执行。
     """
     async with engine.begin() as conn:
 
-        def _sync(sync_conn) -> list[str]:
-            missing = _collect_missing_columns(sync_conn, metadata)
-            if not missing:
-                return []
-            return _apply_missing_columns(sync_conn, missing)
+        def _sync(sync_conn) -> tuple[list[str], list[str]]:
+            added = _apply_missing_columns(
+                sync_conn, _collect_missing_columns(sync_conn, metadata)
+            )
+            created = _apply_missing_indexes(
+                sync_conn, _collect_missing_indexes(sync_conn, metadata)
+            )
+            return added, created
 
-        added = await conn.run_sync(_sync)
+        added, created = await conn.run_sync(_sync)
 
     if added:
         logger.info("自动同步表结构，新增 %d 列：%s", len(added), ", ".join(added))
+    if created:
+        logger.info("自动同步表结构，新增 %d 个索引：%s", len(created), ", ".join(created))
