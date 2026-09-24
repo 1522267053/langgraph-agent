@@ -44,6 +44,7 @@ class NodeType(str, Enum):
     SSH = "ssh"
     QUESTION = "question"
     FLOW_TOOL = "flow_tool"
+    WAIT = "wait"
 
 
 # ---- 派生表：从 NODE_REGISTRY 自动生成 ----

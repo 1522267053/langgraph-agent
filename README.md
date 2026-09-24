@@ -194,7 +194,7 @@ langgraph-agent/
 │   ├── services/               # 业务逻辑层（BaseService 泛型 CRUD）
 │   ├── middleware/              # 全局异常处理器 + 认证中间件 + 安全头中间件
 │   ├── agent_flow/             # LangGraph 流程执行引擎
-│   │   ├── node_handlers/      #   节点处理器（19 种，自动注册）
+│   │   ├── node_handlers/      #   节点处理器（20 种，自动注册）
 │   │   │   ├── llm_*.py        #     LLM 节点模块化拆分（主入口 + factory + stream + message + executor）
 │   │   ├── tools/              #   LLM 工具实现（非自动扫描，显式导入）
 │   │   │   ├── common.py       #     文件类工具共享原语（路径校验/编码读取/大小上限）
@@ -240,7 +240,7 @@ langgraph-agent/
 
 | 模式 | 说明 | 允许的节点 |
 |------|------|-----------|
-| **Flow** | 可视化工作流编排，Start → End 完整流程 | 全部 19 种节点 |
+| **Flow** | 可视化工作流编排，Start → End 完整流程 | 全部 20 种节点 |
 | **Agent** | 对话式 AI 助手，单 LLM + 工具节点 | 排除 card/loop/human，memory 和 agenda 仅 Agent 可用 |
 
 ### 节点类型
@@ -266,6 +266,7 @@ langgraph-agent/
 | **agenda** | 日程管理，LLM 自主创建/查询/更新/删除日程 | Flow / Agent |
 | **sub_agent** | 子 Agent 调用，引用 Agent 作为子任务执行器 | Flow / Agent |
 | **question** | 问题反问，Agent 向用户抛出结构化选项（1-4 项 + Other 自填） | Flow / Agent |
+| **wait** | 延时等待，等待指定秒数后继续执行（宽限期/重试退避/节奏控制） | Flow / Agent |
 
 ### 变量引用
 

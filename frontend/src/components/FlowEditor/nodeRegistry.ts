@@ -27,7 +27,8 @@ import {
   Calendar,
   Postcard,
   Key,
-  QuestionFilled
+  QuestionFilled,
+  Clock
 } from '@element-plus/icons-vue'
 import type { NodeVariable, FlowIOField, FieldType } from '@/types/flow'
 
@@ -265,6 +266,7 @@ const registry: Record<string, NodeRegistryEntry> = {
       for_each_item_type: undefined,
       break_on_error: true,
       concurrency: 1,
+      interval_seconds: 0,
       input_mappings: [],
       output_variables: []
     }),
@@ -272,6 +274,18 @@ const registry: Record<string, NodeRegistryEntry> = {
       ...rawConfig,
       input_mappings: rawConfig.input_mappings || [],
       output_variables: rawConfig.output_variables || []
+    })
+  },
+
+  wait: {
+    label: '延时',
+    description: '等待指定秒数后继续执行，用于宽限期等待、重试退避、节奏控制',
+    category: 'basic',
+    icon: Clock,
+    iconColor: '#0ea5e9',
+    iconBgColor: '#f0f9ff',
+    defaultConfig: () => ({
+      wait_seconds: 5
     })
   },
 

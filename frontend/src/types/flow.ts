@@ -6,7 +6,7 @@
 import type { BaseEntity } from './common'
 
 /** 节点类型 */
-export type NodeType = 'start' | 'end' | 'condition' | 'card' | 'loop' | 'intent_router'
+export type NodeType = 'start' | 'end' | 'condition' | 'card' | 'loop' | 'intent_router' | 'wait'
 
 /** 卡片节点类型 */
 export type CardNodeType =

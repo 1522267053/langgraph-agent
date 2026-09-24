@@ -253,6 +253,13 @@ NODE_REGISTRY: dict[str, NodeMeta] = {
         agent_tool=True,
         tool_only=True,
     ),
+    "wait": NodeMeta(
+        label="延时",
+        source={"default"},
+        target={"default"},
+        flow=True,
+        agent=True,
+    ),
 }
 
 

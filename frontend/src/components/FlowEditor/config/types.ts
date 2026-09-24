@@ -328,8 +328,14 @@ export interface LoopConfig {
   for_each_item_type?: FieldType
   break_on_error: boolean
   concurrency: number
+  interval_seconds: number
   input_mappings: CardInputMapping[]
   output_variables: NodeVariable[]
+}
+
+/** 延时节点配置 */
+export interface WaitConfig {
+  wait_seconds: number
 }
 
 /** 开始节点配置 */
