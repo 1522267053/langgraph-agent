@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, CopyDocument } from '@element-plus/icons-vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
@@ -27,6 +27,9 @@ const props = withDefaults(
     isMsgThinkingInProgress?: boolean
     /** 聊天折叠交互：传入后工具块头部可点击展开/收起，key 为虚拟行 key */
     expandKey?: string
+    /** 列表折叠交互（Flow 执行面板等）：传入前缀后各工具块可独立点击展开/收起，
+     * 状态 key = 前缀 + segmentKey；默认展开，点击后按块记忆 */
+    listExpandPrefix?: string
   }>(),
   {
     showThinking: true,
@@ -35,7 +38,8 @@ const props = withDefaults(
     singleSegment: false,
     isMsgLastSegment: true,
     isMsgThinkingInProgress: false,
-    expandKey: ''
+    expandKey: '',
+    listExpandPrefix: ''
   }
 )
 
@@ -85,22 +89,45 @@ function segmentKey(segment: Segment, idx: number): string {
 const expandedArgsSegments = ref(new Set<string>())
 const { open: openKnowledgeReference } = useKnowledgeReferenceDrawer()
 
-// ---- 工具块折叠交互（聊天段级模式：传入 expandKey 后启用） ----
+// ---- 工具块折叠交互 ----
+// 聊天段级模式：传入 expandKey 后启用，状态存模块级 Map（虚拟行重挂后保持）；
+// 列表模式（无 expandKey）：传入 listExpandPrefix 后同样启用，状态 key =
+// prefix + segmentKey，不同工具块独立开合（Flow 执行面板等场景）
 
-/** 工具块头部可点击展开/收起；列表模式（无 expandKey）不可交互、始终展开 */
-const isToolInteractive = computed(() => !!props.expandKey)
+/** 列表模式：各工具块的折叠覆盖状态（模块级，实例重建后仍保持） */
+const listExpandOverrides = reactive(new Map<string, boolean>())
+
+/** 工具块头部是否可点击展开/收起（两种模式任一启用即交互） */
+const isToolInteractive = computed(() => !!props.expandKey || !!props.listExpandPrefix)
+
+/** 列表模式某分段的折叠状态 key */
+function listSegmentKey(segment: Segment, idx: number): string {
+  return `${props.listExpandPrefix}:${segmentKey(segment, idx)}`
+}
 
 /** 工具块内容（入参/结果/错误/加载）显隐：
  * 聊天模式 = 手动操作覆盖 ?? 默认折叠（业界模式：工具默认状态行，点击回看）；
- * 列表模式（Flow 执行面板等）始终展开 */
-const toolBodyVisible = computed(() => {
+ * 列表模式 = 手动操作覆盖 ?? 默认折叠（与聊天模式一致，点击回看完整入参/结果）；
+ * 均未启用交互时始终展开 */
+function isSegmentToolBodyVisible(segment: Segment, idx: number): boolean {
   if (props.expandKey) return getBlockExpandOverride(props.expandKey) ?? false
+  if (props.listExpandPrefix) {
+    return listExpandOverrides.get(listSegmentKey(segment, idx)) ?? false
+  }
   return true
-})
+}
 
 function toggleToolBody(): void {
-  if (!props.expandKey) return
-  toggleBlockExpand(props.expandKey, !toolBodyVisible.value)
+  if (props.expandKey) {
+    toggleBlockExpand(props.expandKey, !(getBlockExpandOverride(props.expandKey) ?? false))
+    return
+  }
+  // 列表模式在工具行点击处按 segment 粒度切换（见模板）
+}
+
+function toggleListToolBody(segment: Segment, idx: number): void {
+  const key = listSegmentKey(segment, idx)
+  listExpandOverrides.set(key, !(listExpandOverrides.get(key) ?? false))
 }
 
 function toggleArgsFormat(segment: Segment, idx: number): void {
@@ -143,8 +170,8 @@ function isArgsExpanded(segment: Segment, idx: number): boolean {
  * 工具名右侧展示结果 pill（读取/写入行数、diff 增删）。
  * 仅折叠态展示（展开后结果区自带完整 meta，避免重复）；成功且有有效数据才显示。
  */
-function toolInlineStat(segment: Segment) {
-  if (!segment.tool || toolBodyVisible.value) return null
+function toolInlineStat(segment: Segment, idx: number) {
+  if (!segment.tool || isSegmentToolBodyVisible(segment, idx)) return null
   return statFromTool(segment.tool)
 }
 
@@ -274,7 +301,7 @@ watch(
           'tool-status-' + segment.tool.status,
           { 'tool-header-clickable': isToolInteractive }
         ]"
-        @click="toggleToolBody"
+        @click="isToolInteractive && (expandKey ? toggleToolBody() : toggleListToolBody(segment, idx))"
       >
         <div class="tool-line-main">
           <div class="tool-line-row">
@@ -282,22 +309,22 @@ watch(
             <span v-else :class="['tool-line-dot', segment.tool.status]"></span>
             <span class="tool-line-name">{{ segment.tool.name }}</span>
             <!-- file_ 类工具统计 pill：名称右侧（读取/写入行数、diff 增删），仅折叠态 -->
-            <span v-if="toolInlineStat(segment)" class="tool-inline-stats">
-              <template v-if="toolInlineStat(segment)!.kind === 'read'">
-                <span v-if="toolInlineStat(segment)!.isMedia" class="stat-pill stat-plain">
-                  查看{{ mediaTypeLabel(toolInlineStat(segment)!.isMedia) }}
+            <span v-if="toolInlineStat(segment, idx)" class="tool-inline-stats">
+              <template v-if="toolInlineStat(segment, idx)!.kind === 'read'">
+                <span v-if="toolInlineStat(segment, idx)!.isMedia" class="stat-pill stat-plain">
+                  查看{{ mediaTypeLabel(toolInlineStat(segment, idx)!.isMedia) }}
                 </span>
-                <span v-else-if="toolInlineStat(segment)!.readStart != null" class="stat-pill stat-plain">
-                  {{ toolInlineStat(segment)!.readStart }}-{{ toolInlineStat(segment)!.readEnd }} 行
+                <span v-else-if="toolInlineStat(segment, idx)!.readStart != null" class="stat-pill stat-plain">
+                  {{ toolInlineStat(segment, idx)!.readStart }}-{{ toolInlineStat(segment, idx)!.readEnd }} 行
                 </span>
-                <span v-else class="stat-pill stat-plain">{{ toolInlineStat(segment)!.readLines }} 行</span>
+                <span v-else class="stat-pill stat-plain">{{ toolInlineStat(segment, idx)!.readLines }} 行</span>
               </template>
-              <template v-else-if="toolInlineStat(segment)!.kind === 'write'">
-                <span class="stat-pill stat-plain">写入 {{ toolInlineStat(segment)!.writeLines }} 行</span>
+              <template v-else-if="toolInlineStat(segment, idx)!.kind === 'write'">
+                <span class="stat-pill stat-plain">写入 {{ toolInlineStat(segment, idx)!.writeLines }} 行</span>
               </template>
               <template v-else>
-                <span v-if="(toolInlineStat(segment)!.added ?? 0) > 0" class="stat-pill stat-add">+{{ toolInlineStat(segment)!.added }}</span>
-                <span v-if="(toolInlineStat(segment)!.removed ?? 0) > 0" class="stat-pill stat-del">−{{ toolInlineStat(segment)!.removed }}</span>
+                <span v-if="(toolInlineStat(segment, idx)!.added ?? 0) > 0" class="stat-pill stat-add">+{{ toolInlineStat(segment, idx)!.added }}</span>
+                <span v-if="(toolInlineStat(segment, idx)!.removed ?? 0) > 0" class="stat-pill stat-del">−{{ toolInlineStat(segment, idx)!.removed }}</span>
               </template>
             </span>
             <!-- 折叠交互：箭头指向提示可点击，展开时旋转 90°；无统计 pill 时独占推右 -->
@@ -305,7 +332,10 @@ watch(
               v-if="isToolInteractive"
               :class="[
                 'tool-expand-arrow',
-                { 'is-expanded': toolBodyVisible, 'no-inline-stat': !toolInlineStat(segment) }
+                {
+                  'is-expanded': isSegmentToolBodyVisible(segment, idx),
+                  'no-inline-stat': !toolInlineStat(segment, idx)
+                }
               ]"
             >
               <ArrowRight />
@@ -315,7 +345,11 @@ watch(
       </div>
       <!-- 入参 JSON：折叠态隐藏，点击头部展开后显示 -->
       <div
-        v-if="toolBodyVisible && segment.tool.args && Object.keys(segment.tool.args).length > 0"
+        v-if="
+          isSegmentToolBodyVisible(segment, idx) &&
+          segment.tool.args &&
+          Object.keys(segment.tool.args).length > 0
+        "
         class="tool-content-args-wrapper"
       >
         <pre class="tool-content tool-content-args">{{
@@ -342,8 +376,8 @@ watch(
           :tool-name="segment.tool.name"
           :result="toolDisplayResult(segment)"
           :status="segment.tool.status"
-          :hide-plain-json="!toolBodyVisible"
-          :collapsed="!!expandKey && !toolBodyVisible"
+          :hide-plain-json="!isSegmentToolBodyVisible(segment, idx)"
+          :collapsed="isToolInteractive && !isSegmentToolBodyVisible(segment, idx)"
         />
       </div>
       <pre

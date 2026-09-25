@@ -90,14 +90,16 @@ function validate(): string | null {
     // boolean 不校验：required 的开关默认 false，若拦截则关闭状态永远无法提交
     // （与 ChatInput.vue 必填校验口径一致）
     if (field.type === 'boolean') continue
+    // 提示用表单标签口径（description 优先），与界面展示一致
+    const label = field.description || field.name
     const val = formData[field.name]
     if (field.type === 'file_list') {
       const fileVal = val as FileInfo[] | number[] | undefined
       if (!fileVal || !(Array.isArray(fileVal) && fileVal.length > 0)) {
-        return `请上传文件：${field.name}`
+        return `请上传文件：${label}`
       }
     } else if (!val) {
-      return `请填写输入参数：${field.name}`
+      return `请填写输入参数：${label}`
     }
   }
   return null

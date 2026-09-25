@@ -167,7 +167,7 @@ function getExecutionSteps(node: NodeExecution): ExecutionStep[] {
           <span>总计: {{ formatTokenCount(node.total_tokens) }} token</span>
         </div>
 
-        <!-- 实时流式内容（LLM 节点） -->
+        <!-- 实时流式内容（LLM 节点）：工具块可点击展开/收起（按块记忆） -->
         <AIMessageContent
           v-if="
             streamingContent &&
@@ -176,12 +176,14 @@ function getExecutionSteps(node: NodeExecution): ExecutionStep[] {
             streamingContent[node.node_key].segments.length > 0
           "
           :segments="streamingContent[node.node_key].segments"
+          :list-expand-prefix="`exec-stream:${execution.id}:${node.id}:${node.node_key}`"
         />
 
-        <!-- 历史执行步骤（LLM 节点） -->
+        <!-- 历史执行步骤（LLM 节点）：工具块可点击展开/收起（按块记忆） -->
         <AIMessageContent
           v-else-if="getExecutionSteps(node).length > 0"
           :segments="executionStepsToSegments(getExecutionSteps(node))"
+          :list-expand-prefix="`exec-steps:${execution.id}:${node.id}:${node.node_key}`"
         />
 
         <!-- 节点输入数据 -->

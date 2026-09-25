@@ -76,7 +76,7 @@ def _parse_input_schema(input_schema: Any) -> list[dict]:
 def _build_flow_tool_schema(flow: Flow, node_key: str):
     """根据 Flow 的 input_schema 构建 invoke 工具的 Pydantic 模型
 
-    返回 (model_class, file_list_fields)，与 sub_agent_handler 风格一致。
+    返回 (model_class, file_list_fields, required_fields)，与 sub_agent_handler 风格一致。
 
     Schema 字段：
     - Flow.input_schema.fields 中除 'message' 外的字段（LLM 入参）
@@ -86,6 +86,7 @@ def _build_flow_tool_schema(flow: Flow, node_key: str):
     model_name = f"FlowToolInvoke{node_key}Input"
     fields_def: dict[str, Any] = {}
     file_list_fields: set[str] = set()
+    required_fields: list[str] = []
 
     schema_fields = _parse_input_schema(getattr(flow, "input_schema", None))
     for sf in schema_fields:
@@ -107,6 +108,7 @@ def _build_flow_tool_schema(flow: Flow, node_key: str):
             desc = description
 
         if required:
+            required_fields.append(name)
             fields_def[name] = (py_type, Field(..., description=desc))
         else:
             fields_def[name] = (
@@ -137,7 +139,7 @@ def _build_flow_tool_schema(flow: Flow, node_key: str):
     )
 
     model = create_model(model_name, **fields_def)
-    return model, file_list_fields
+    return model, file_list_fields, required_fields
 
 
 @NodeHandlerRegistry.register("flow_tool")
@@ -216,12 +218,15 @@ class FlowToolNodeHandler(BaseNodeHandler):
         flow_name = flow.name or f"flow_{flow_id}"
         tool_name = f"flow_{flow_id}_tool"
 
-        tool_schema, _file_list_fields = _build_flow_tool_schema(flow, node.node_key)
+        tool_schema, _file_list_fields, required_fields = _build_flow_tool_schema(
+            flow, node.node_key
+        )
 
         description = self._build_description(flow, flow_name)
 
         _flow_id = flow_id
         _node_key = node.node_key
+        _required_fields = required_fields
 
         async def invoke_flow_tool(**kwargs) -> dict | str:
             """单入口：根据 execution_id 是否提供路由 execute / resume"""
@@ -229,6 +234,36 @@ class FlowToolNodeHandler(BaseNodeHandler):
             human_input = kwargs.pop("human_input", None)
             # 余下 kwargs 即 input_data 字段（None 字段剔除）
             input_data = {k: v for k, v in kwargs.items() if v is not None}
+
+            # 必填参数前置校验：空串/缺失/None 均拦截。
+            # Pydantic args_schema 只挡类型与缺失，不挡空串；空串会被 LLM
+            # 当成"已传"而放行，直到 Flow 内部节点才报错，来回浪费轮次。
+            # resume 模式（execution_id 非空）不校验业务字段，只要求 human_input。
+            missing: list[str] = []
+            if execution_id is None:
+                for name in _required_fields:
+                    value = input_data.get(name)
+                    if value is None or (isinstance(value, str) and not value.strip()):
+                        missing.append(name)
+                if missing:
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "error": (
+                            f"必填参数未提供或为空: {', '.join(missing)}。"
+                            f"请向用户确认这些参数的值后重新调用本工具"
+                            f"（不要传空字符串）。"
+                        ),
+                        "missing_fields": missing,
+                    }
+            elif human_input is None or not str(human_input).strip():
+                return {
+                    "success": False,
+                    "status": "error",
+                    "error": (
+                        "resume 模式必须提供 human_input（恢复 Flow 时的人工输入内容）。"
+                    ),
+                }
 
             try:
                 result = await flow_tool_service.invoke(
@@ -317,8 +352,6 @@ class FlowToolNodeHandler(BaseNodeHandler):
         return [
             {
                 "name": f"flow_{flow_id}_tool",
-                "description": (
-                    f"调用 Flow #{flow_id} 作为工具（保留中断/审批能力）"
-                ),
+                "description": (f"调用 Flow #{flow_id} 作为工具（保留中断/审批能力）"),
             }
         ]
