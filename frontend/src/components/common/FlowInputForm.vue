@@ -167,7 +167,7 @@ defineExpose({ validate, collect })
 
 <template>
   <el-form
-    :label-width="props.labelWidth || 'auto'"
+    :label-width="props.labelWidth || '140px'"
     class="flow-input-form"
     style="flex: 1; overflow-y: auto"
     @submit.prevent
@@ -240,10 +240,17 @@ defineExpose({ validate, collect })
 </template>
 
 <style scoped>
+/* label 固定宽度（默认 140px）：长 description 在标签区内换行，
+   不再按 auto 模式撑宽挤压右侧输入框 */
 .flow-input-form :deep(.el-form-item__label) {
   white-space: normal;
   word-break: break-all;
   line-height: 1.4;
+}
+
+/* auto 模式下 label 实际渲染在 label-wrap 内，同样限宽防挤压 */
+.flow-input-form :deep(.el-form-item__label-wrap) {
+  max-width: 140px;
 }
 
 .flow-input-form .field-label-text {
