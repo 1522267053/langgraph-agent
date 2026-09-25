@@ -11,6 +11,7 @@ const props = defineProps<{
   modelValue: Record<string, unknown>
   sourceType?: string
   showTooltip?: boolean
+  /** 已废弃：label 改为上置布局（label-position=top），保留参数兼容旧调用 */
   labelWidth?: string
 }>()
 
@@ -167,7 +168,7 @@ defineExpose({ validate, collect })
 
 <template>
   <el-form
-    :label-width="props.labelWidth || '140px'"
+    label-position="top"
     class="flow-input-form"
     style="flex: 1; overflow-y: auto"
     @submit.prevent
@@ -240,17 +241,17 @@ defineExpose({ validate, collect })
 </template>
 
 <style scoped>
-/* label 固定宽度（默认 140px）：长 description 在标签区内换行，
-   不再按 auto 模式撑宽挤压右侧输入框 */
+/* 标签上置布局（label-position="top"）：长 description 完整占一行显示，
+   输入框占满行宽，不再出现标签折行挤压输入框的问题 */
+.flow-input-form :deep(.el-form-item) {
+  margin-bottom: 14px;
+}
+
 .flow-input-form :deep(.el-form-item__label) {
   white-space: normal;
   word-break: break-all;
   line-height: 1.4;
-}
-
-/* auto 模式下 label 实际渲染在 label-wrap 内，同样限宽防挤压 */
-.flow-input-form :deep(.el-form-item__label-wrap) {
-  max-width: 140px;
+  margin-bottom: 4px;
 }
 
 .flow-input-form .field-label-text {
