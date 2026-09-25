@@ -912,9 +912,9 @@ onUnmounted(() => {
         :class="{ panning: fullscreenPanning }"
         :style="{ background: fullscreenBg }"
         @mousedown="handlePanStart"
-        @wheel.prevent="handleMermaidWheel"
-        @touchstart="handleTouchStart"
-        @touchmove.prevent="handleTouchMove"
+        @wheel.passive="handleMermaidWheel"
+        @touchstart.passive="handleTouchStart"
+        @touchmove.passive="handleTouchMove"
         @touchend="handleTouchEnd"
         @touchcancel="handleTouchEnd"
       >
