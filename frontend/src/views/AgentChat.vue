@@ -2399,6 +2399,8 @@ export default {
   padding: 5px 24px;
   max-height: 250px;
   overflow: hidden;
+  /* Vue Flow 需要确定高度的父容器：兜底最小高度，防止警告 */
+  min-height: 170px;
 }
 
 @media (max-width: 768px) {

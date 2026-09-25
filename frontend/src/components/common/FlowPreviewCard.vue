@@ -160,6 +160,9 @@ function openEditor(): void {
 
 .preview-canvas {
   height: 200px;
+  /* Vue Flow 要求父容器有确定宽高：外层 wrapper 的 max-height 裁剪时
+     保证画布仍有可测量尺寸，避免 "parent container needs a width and a height" 警告 */
+  min-height: 160px;
   width: 100%;
 }
 </style>

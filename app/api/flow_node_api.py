@@ -234,7 +234,7 @@ class FlowNodeApi(
         ref_flow_id: int | None,
         base_config: dict | None,
     ) -> None:
-        """统一的节点校验：循环嵌套 + 卡片循环嵌套 + 卡片循环引用 + 子Agent嵌套。"""
+        """统一的节点校验：循环嵌套 + 卡片/Flow工具循环引用 + 卡片循环嵌套 + 子Agent嵌套。"""
         if node_type == "loop":
             await self._check_nested_loop(db, flow_id, node_key)
         if node_type == "card":
@@ -250,6 +250,14 @@ class FlowNodeApi(
                 ref_flow_id=ref_flow_id,
                 base_config=base_config,
             )
+        if node_type == "flow_tool":
+            tool_flow_id = (
+                base_config.get("flow_id") if isinstance(base_config, dict) else None
+            )
+            if tool_flow_id:
+                await flow_service.check_circular_flow_tool_refs(
+                    db, flow_id, int(tool_flow_id)
+                )
         if node_type == "sub_agent":
             await self._check_nested_sub_agent(db, flow_id, base_config)
 

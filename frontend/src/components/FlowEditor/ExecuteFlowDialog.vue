@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import type { FlowIOField } from '@/types/flow'
 import FlowInputForm from '@/components/common/FlowInputForm.vue'
 
@@ -38,7 +39,8 @@ function confirmExecute(): void {
   }
   const error = inputFormRef.value.validate()
   if (error) {
-    emit('update:visible', false)
+    // 必填未填：提示具体字段，保持弹窗不关闭
+    ElMessage.warning({ message: error, duration: 5000 })
     return
   }
   const { input, attachedFiles } = inputFormRef.value.collect()

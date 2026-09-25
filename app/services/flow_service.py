@@ -269,6 +269,58 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
                 elif isinstance(base_config, dict) and base_config.get("ref_flow_id"):
                     queue.append(base_config["ref_flow_id"])
 
+    async def check_circular_flow_tool_refs(
+        self, db: AsyncSession, flow_id: int, ref_flow_id: int
+    ) -> None:
+        """检查 Flow 工具引用是否形成循环链
+
+        从 ref_flow_id 出发 BFS 遍历引用链，链上同时展开 card 与 flow_tool
+        两类节点的引用（card 用 ref_flow_id，flow_tool 用 base_config.flow_id），
+        回到 flow_id 即视为循环引用——含 flow_tool→B→card→A 这类间接环。
+
+        Args:
+            db: 数据库异步会话
+            flow_id: 当前流程 ID（flow_tool 节点所属流程）
+            ref_flow_id: flow_tool 要引用的目标流程 ID
+
+        Raises:
+            FlowValidationError: 存在循环引用时抛出
+        """
+        if ref_flow_id == flow_id:
+            raise FlowValidationError("Flow工具节点不能引用自身所在的流程")
+
+        visited: set[int] = {flow_id}
+        queue = deque([ref_flow_id])
+
+        while queue:
+            current_id = queue.popleft()
+            if current_id in visited:
+                ref_flow = await self.get_by_id(db, current_id, raise_not_found=False)
+                ref_name = ref_flow.name if ref_flow else str(current_id)
+                raise FlowValidationError(
+                    f"Flow工具引用的流程「{ref_name}」会形成循环引用"
+                )
+            visited.add(current_id)
+
+            stmt = select(
+                FlowNode.node_type, FlowNode.ref_flow_id, FlowNode.base_config
+            ).where(
+                FlowNode.flow_id == current_id,
+                FlowNode.node_type.in_(["card", "flow_tool"]),
+                FlowNode.is_delete == 0,
+            )
+            result = await db.execute(stmt)
+            for node_type, ref_id, base_config in result.fetchall():
+                if node_type == "card":
+                    if ref_id is not None:
+                        queue.append(ref_id)
+                    elif isinstance(base_config, dict) and base_config.get(
+                        "ref_flow_id"
+                    ):
+                        queue.append(base_config["ref_flow_id"])
+                elif isinstance(base_config, dict) and base_config.get("flow_id"):
+                    queue.append(base_config["flow_id"])
+
     async def get_with_nodes_and_edges(
         self, db: AsyncSession, flow_id: int
     ) -> Optional[Flow]:
@@ -1242,6 +1294,14 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
                     ref_id = n["base_config"].get("ref_flow_id")
                 if ref_id:
                     await self.check_circular_card_refs(db, flow.id, ref_id)
+            elif n.get("node_type") == "flow_tool":
+                tool_ref = (
+                    n["base_config"].get("flow_id")
+                    if isinstance(n.get("base_config"), dict)
+                    else None
+                )
+                if tool_ref:
+                    await self.check_circular_flow_tool_refs(db, flow.id, int(tool_ref))
 
         nodes_create = []
         for n in ai_nodes:
@@ -1324,6 +1384,14 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
                     ref_id = n["base_config"].get("ref_flow_id")
                 if ref_id:
                     await self.check_circular_card_refs(db, flow_id, ref_id)
+            elif n.get("node_type") == "flow_tool":
+                tool_ref = (
+                    n["base_config"].get("flow_id")
+                    if isinstance(n.get("base_config"), dict)
+                    else None
+                )
+                if tool_ref:
+                    await self.check_circular_flow_tool_refs(db, flow_id, int(tool_ref))
 
         if name is not None or description is not None:
             update_data = FlowUpdate(
