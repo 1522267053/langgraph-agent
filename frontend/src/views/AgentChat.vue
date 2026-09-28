@@ -182,31 +182,68 @@ function refreshModelSelectionIfStale(): void {
     // 只刷新分组数据，不触碰 selectedModel（保留用户当前选择；
     // 选中项失效由发送链路兜底解析，列表内自然消失）
     try {
-      const groupsRes = await providerConnectionApi.modelGroups()
+      const [groupsRes, flowRes] = await Promise.allSettled([
+        providerConnectionApi.modelGroups(),
+        flowApi.get(agentId.value)
+      ])
       const options: ChatModelOption[] = []
       const seen = new Set<string>()
-      for (const group of groupsRes.data.data || []) {
-        for (const m of group.models) {
-          const value = toModelValue(group.provider_id, m.model_id)
-          if (seen.has(value)) continue
-          seen.add(value)
-          options.push({
-            value,
-            label: m.name,
-            multimodal: (m.modalities?.input || []).some(t =>
-              ['image', 'video', 'audio', 'pdf'].includes(t)
-            ),
-            provider: group.provider_id,
-            providerLabel: group.provider_label,
-            reasoningOptions: parseReasoningOptions(m.reasoning_options)
-          })
+      if (groupsRes.status === 'fulfilled') {
+        for (const group of groupsRes.value.data.data || []) {
+          for (const m of group.models) {
+            const value = toModelValue(group.provider_id, m.model_id)
+            if (seen.has(value)) continue
+            seen.add(value)
+            options.push({
+              value,
+              label: m.name,
+              multimodal: (m.modalities?.input || []).some(t =>
+                ['image', 'video', 'audio', 'pdf'].includes(t)
+              ),
+              provider: group.provider_id,
+              providerLabel: group.provider_label,
+              reasoningOptions: parseReasoningOptions(m.reasoning_options)
+            })
+          }
         }
       }
-      // 保留节点自有供应商分组（loadModelSelection 已加载，刷新不重拉）
-      const nodeOnly = modelOptions.value.filter(
-        o => !options.some(n => n.provider === o.provider)
-      )
-      modelOptions.value = [...options, ...nodeOnly]
+      // 节点自有供应商：与 loadModelSelection 同口径——仅节点手动配置了
+      // API Key 且连接分组未覆盖时保留，防止已删除连接的分组残留
+      if (flowRes.status === 'fulfilled') {
+        const llmNode = (flowRes.value.data.data?.nodes || []).find(
+          n => n.node_type === 'llm'
+        )
+        const nodeProvider = String(llmNode?.base_config?.provider || '')
+        const nodeHasOwnKey = Boolean(llmNode?.base_config?.api_key)
+        if (nodeProvider && nodeHasOwnKey) {
+          const covered = options.some(o => o.provider === nodeProvider)
+          if (!covered) {
+            try {
+              const modelsRes = await aiProviderApi.getModels(nodeProvider)
+              for (const m of modelsRes.data.data || []) {
+                const value = toModelValue(nodeProvider, m.model_id)
+                if (seen.has(value)) continue
+                seen.add(value)
+                options.push({
+                  value,
+                  label: m.name,
+                  multimodal: (m.modalities?.input || []).some(t =>
+                    ['image', 'video', 'audio', 'pdf'].includes(t)
+                  ),
+                  provider: nodeProvider,
+                  providerLabel: nodeProvider,
+                  reasoningOptions: parseReasoningOptions(m.reasoning_options)
+                })
+              }
+            } catch {
+              // 节点供应商模型列表加载失败不阻塞
+            }
+          }
+        }
+      }
+      modelOptions.value = options
+      // 列表变化后重新校验当前选中项（选中项已被删除则清空回退默认）
+      syncSelectedModelFromSession()
     } catch {
       // 刷新失败保持旧列表
     }
@@ -980,15 +1017,23 @@ async function loadModelSelection(id: number) {
     }
 
     let nodeProvider = ''
+    let nodeHasOwnKey = false
     if (flowRes.status === 'fulfilled') {
       const llmNode = (flowRes.value.data.data?.nodes || []).find(n => n.node_type === 'llm')
       if (llmNode?.base_config) {
         nodeProvider = String(llmNode.base_config.provider || '')
+        // 节点手动配置了 API Key（不走连接体系）才允许在无连接时列出其模型
+        nodeHasOwnKey = Boolean(llmNode.base_config.api_key)
         defaultModelLabel.value = String(llmNode.base_config.model || '')
       }
     }
-    // 节点自有供应商（连接分组里未覆盖时）追加为独立分组
-    if (nodeProvider && !options.some(o => o.provider === nodeProvider)) {
+    // 节点自有供应商（连接分组里未覆盖时）：仅当节点手动配置了 API Key 才追加。
+    // 连接已删除/禁用的供应商不再从元数据表列出——可选不可用（发送时无 Key 必失败）
+    if (
+      nodeProvider &&
+      nodeHasOwnKey &&
+      !options.some(o => o.provider === nodeProvider)
+    ) {
       try {
         const modelsRes = await aiProviderApi.getModels(nodeProvider)
         for (const m of modelsRes.data.data || []) {
