@@ -165,6 +165,54 @@ function handleScrollbarPointerDown(event: PointerEvent): void {
 // 切窗口：隐藏期渲染暂停（rAF/RO 延迟）而流式内容照常增长，恢复可见时若
 // 隐藏前贴底则强制回底，随后的跟随强制器无缝接管
 let wasAtEndOnHide = true
+/** 上次模型列表刷新时间：窗口重新可见/路由回到会话页时限频刷新 */
+let lastModelSelectionLoadAt = 0
+const MODEL_SELECTION_REFRESH_INTERVAL = 30_000
+
+/**
+ * 静默刷新模型列表（供应商/连接可能在其他页面被增删改）。
+ * 不重置 selectedModel 之外的 UI 状态；限频避免频繁切窗口打接口。
+ */
+function refreshModelSelectionIfStale(): void {
+  const now = Date.now()
+  if (now - lastModelSelectionLoadAt < MODEL_SELECTION_REFRESH_INTERVAL) return
+  lastModelSelectionLoadAt = now
+  if (!agentId.value) return
+  void (async () => {
+    // 只刷新分组数据，不触碰 selectedModel（保留用户当前选择；
+    // 选中项失效由发送链路兜底解析，列表内自然消失）
+    try {
+      const groupsRes = await providerConnectionApi.modelGroups()
+      const options: ChatModelOption[] = []
+      const seen = new Set<string>()
+      for (const group of groupsRes.data.data || []) {
+        for (const m of group.models) {
+          const value = toModelValue(group.provider_id, m.model_id)
+          if (seen.has(value)) continue
+          seen.add(value)
+          options.push({
+            value,
+            label: m.name,
+            multimodal: (m.modalities?.input || []).some(t =>
+              ['image', 'video', 'audio', 'pdf'].includes(t)
+            ),
+            provider: group.provider_id,
+            providerLabel: group.provider_label,
+            reasoningOptions: parseReasoningOptions(m.reasoning_options)
+          })
+        }
+      }
+      // 保留节点自有供应商分组（loadModelSelection 已加载，刷新不重拉）
+      const nodeOnly = modelOptions.value.filter(
+        o => !options.some(n => n.provider === o.provider)
+      )
+      modelOptions.value = [...options, ...nodeOnly]
+    } catch {
+      // 刷新失败保持旧列表
+    }
+  })()
+}
+
 function handleVisibilityChange(): void {
   if (document.hidden) {
     wasAtEndOnHide = isAtEnd.value
@@ -172,6 +220,8 @@ function handleVisibilityChange(): void {
   }
   syncAtEnd()
   if (wasAtEndOnHide && autoScroll.value) scrollToLatest()
+  // 回到标签页：供应商连接可能已在其他页面/其他端被删除，限频刷新模型列表
+  refreshModelSelectionIfStale()
 }
 document.addEventListener('visibilitychange', handleVisibilityChange)
 onUnmounted(() => {
@@ -594,6 +644,17 @@ loadDisplayPrefs()
 
 watch([autoScroll, showThinking, showEndOutput], saveDisplayPrefs)
 
+// SPA 内从其他页面（供应商管理等）切回会话页：组件不重挂载，
+// visibilitychange 也不触发——限频刷新模型列表，避免已删除供应商仍可选
+watch(
+  () => route.path,
+  (newPath, oldPath) => {
+    if (newPath !== oldPath && /^\/chat/.test(newPath) && !/^\/chat/.test(oldPath || '')) {
+      refreshModelSelectionIfStale()
+    }
+  }
+)
+
 watch(
   () => route.params.id,
   async newId => {
@@ -882,6 +943,7 @@ function resolveSelectedModel(): { provider: string; model: string } | null {
  * 失败时静默降级：下拉框隐藏、发送走 Agent 默认模型
  */
 async function loadModelSelection(id: number) {
+  lastModelSelectionLoadAt = Date.now()
   modelOptions.value = []
   defaultModelLabel.value = ''
   // 重置/恢复 selectedModel 都不触发持久化（watcher 为 pre-flush，nextTick 后才放行）
