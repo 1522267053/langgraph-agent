@@ -1,6 +1,8 @@
+from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +12,15 @@ from app.schemas.file_schema import FileBase, FileCondition, FileView
 from app.schemas.base_schema import ApiResponse, PaginatedResponse, PaginationParams
 from app.models.file import File as FileModel
 from app.services.file_service import file_service
+
+# 内联预览时按扩展名强制修正 MIME（历史记录可能存 application/octet-stream）
+INLINE_MIME_MAP = {
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".doc": "application/msword",
+}
 
 
 class FileApi(BaseApi[FileModel, FileBase, FileCondition, FileView, FileView]):
@@ -49,7 +60,11 @@ class FileApi(BaseApi[FileModel, FileBase, FileCondition, FileView, FileView]):
             return ApiResponse.success(data=view, msg="上传成功")
 
         @self.router.get("/download/{file_id}", summary="下载/预览文件")
-        async def download_file(file_id: int, db: AsyncSession = Depends(get_db)):
+        async def download_file(
+            file_id: int,
+            inline: bool = Query(False, description="浏览器内联预览（PDF 渲染需要）"),
+            db: AsyncSession = Depends(get_db),
+        ):
             try:
                 (
                     file_path,
@@ -58,6 +73,27 @@ class FileApi(BaseApi[FileModel, FileBase, FileCondition, FileView, FileView]):
                 ) = await file_service.get_download_path(db, file_id)
             except FileNotFoundError:
                 return ApiResponse.error(msg="文件不存在")
+            if inline:
+                # 内联预览：去掉 attachment 下载头，并强制常见可预览类型的 MIME
+                # （历史记录 mime_type 可能是 application/octet-stream，浏览器不认则不内嵌渲染）
+                ext = Path(original_name).suffix.lower()
+                inline_mime = INLINE_MIME_MAP.get(ext)
+                # RFC 5987：header 仅支持 ASCII，中文文件名须用 filename*=UTF-8'' 百分号编码
+                ascii_name = (
+                    original_name.encode("ascii", "ignore").decode() or "preview"
+                )
+                encoded_name = quote(original_name)
+                return FileResponse(
+                    path=file_path,
+                    filename=original_name,
+                    media_type=inline_mime or mime_type,
+                    headers={
+                        "Content-Disposition": (
+                            f'inline; filename="{ascii_name}"; '
+                            f"filename*=UTF-8''{encoded_name}"
+                        )
+                    },
+                )
             return FileResponse(
                 path=file_path,
                 filename=original_name,

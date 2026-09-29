@@ -198,10 +198,37 @@ export function isAudio(mimeType: string): boolean {
   return mimeType.startsWith('audio/')
 }
 
+/** 按文件名取小写扩展名（mime_type 后端存储宽松，文档类型判定以扩展名为准） */
+function getExt(name?: string): string {
+  if (!name) return ''
+  const idx = name.lastIndexOf('.')
+  return idx >= 0 ? name.slice(idx + 1).toLowerCase() : ''
+}
+
+export function isPdf(mimeType: string, fileName?: string): boolean {
+  return getExt(fileName) === 'pdf' || mimeType === 'application/pdf'
+}
+
+export function isDocx(mimeType: string, fileName?: string): boolean {
+  return getExt(fileName) === 'docx'
+}
+
+export function isXlsx(mimeType: string, fileName?: string): boolean {
+  return getExt(fileName) === 'xlsx'
+}
+
+/** 是否为前端可内嵌预览的文档（xlsx/docx/pdf，走 DocumentPreviewerDialog） */
+export function isPreviewableDoc(mimeType: string, fileName?: string): boolean {
+  return isPdf(mimeType, fileName) || isDocx(mimeType, fileName) || isXlsx(mimeType, fileName)
+}
+
 /**
  * 根据文件扩展名获取Element Plus Tag类型
+ * 注意：doc 类不能返回 ''，新版 el-tag 的 type 校验器不接受空串（custom validator 报警）
  */
-export function getFileTypeTag(type: string): '' | 'success' | 'warning' | 'danger' | 'info' {
+export function getFileTypeTag(
+  type: string
+): 'primary' | 'success' | 'warning' | 'danger' | 'info' {
   const imageTypes = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg']
   const videoTypes = ['mp4', 'avi', 'mov', 'wmv', 'mkv', 'flv']
   const audioTypes = ['mp3', 'wav', 'ogg', 'flac', 'aac']
@@ -209,7 +236,7 @@ export function getFileTypeTag(type: string): '' | 'success' | 'warning' | 'dang
   if (imageTypes.includes(type)) return 'success'
   if (videoTypes.includes(type)) return 'danger'
   if (audioTypes.includes(type)) return 'warning'
-  if (docTypes.includes(type)) return ''
+  if (docTypes.includes(type)) return 'primary'
   return 'info'
 }
 

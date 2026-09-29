@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { Document } from '@element-plus/icons-vue'
 import { fileApi } from '@/api/file'
-import { isImage, isVideo, isAudio } from '@/utils/format'
+import { isImage, isVideo, isAudio, isPreviewableDoc } from '@/utils/format'
+import DocumentPreviewerDialog from '@/components/common/DocumentPreviewerDialog.vue'
 
 export interface FileItem {
   id: number
@@ -23,6 +25,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'preview', data: ImagePreviewData): void
 }>()
+
+const docPreviewVisible = ref(false)
+const docPreviewFile = ref<FileItem | null>(null)
 
 const imageUrls = computed(() =>
   props.files.filter(f => isImage(f.mime_type)).map(f => getFileUrl(f))
@@ -50,6 +55,11 @@ function handleImageClick(file: FileItem) {
     index: imageIndexMap.value[file.id]
   })
 }
+
+function handleDocClick(file: FileItem) {
+  docPreviewFile.value = file
+  docPreviewVisible.value = true
+}
 </script>
 
 <template>
@@ -67,10 +77,21 @@ function handleImageClick(file: FileItem) {
       <div v-else-if="isAudio(file.mime_type)" class="file-media-wrapper">
         <audio :src="getFileUrl(file)" controls class="file-audio" />
       </div>
+      <button
+        v-else-if="isPreviewableDoc(file.mime_type, file.original_name)"
+        type="button"
+        class="file-link file-doc-link"
+        @click="handleDocClick(file)"
+      >
+        <el-icon :size="14"><Document /></el-icon>
+        {{ file.original_name }}
+      </button>
       <a v-else :href="getFileUrl(file)" target="_blank" class="file-link">
         {{ file.original_name }}
       </a>
     </div>
+
+    <DocumentPreviewerDialog v-model:visible="docPreviewVisible" :file="docPreviewFile" />
   </div>
 </template>
 
@@ -132,5 +153,18 @@ function handleImageClick(file: FileItem) {
 .file-link:hover {
   background: #ecf5ff;
   border-color: #d9ecff;
+}
+
+/* 文档预览按钮：重置 button 默认样式对齐 .file-link 外观 */
+.file-doc-link {
+  font-family: inherit;
+  border-style: solid;
+  border-width: 1px;
+  cursor: pointer;
+}
+
+.file-doc-link .el-icon {
+  margin-right: 4px;
+  color: #409eff;
 }
 </style>

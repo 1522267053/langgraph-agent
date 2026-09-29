@@ -8,8 +8,10 @@ import { fileApi } from '@/api/file'
 import type { FileInfo } from '@/api/file'
 import type { PaginatedResponse } from '@/types/common'
 import { flowApi } from '@/api/flow'
-import { formatFileSize, formatDate, getFileTypeTag, isImage, isVideo } from '@/utils/format'
+import { formatFileSize, formatDate, getFileTypeTag, isImage, isVideo, isPreviewableDoc } from '@/utils/format'
 import ActionColumn from '@/components/common/ActionColumn.vue'
+import DocumentPreviewerDialog from '@/components/common/DocumentPreviewerDialog.vue'
+import type { DocumentPreviewFile } from '@/components/common/DocumentPreviewerDialog.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 
 const { isMobile } = useIsMobile()
@@ -23,6 +25,8 @@ const total = ref(0)
 const previewVisible = ref(false)
 const previewUrl = ref('')
 const previewType = ref<'image' | 'video'>('image')
+const docPreviewVisible = ref(false)
+const docPreviewFile = ref<DocumentPreviewFile | null>(null)
 
 const queryParams = reactive({
   page: 1,
@@ -41,7 +45,7 @@ function getRowActions(row: any) {
       label: '预览',
       icon: View,
       btnClass: 'action-view',
-      visible: isImage(row.mime_type) || isVideo(row.mime_type)
+      visible: isImage(row.mime_type) || isVideo(row.mime_type) || isPreviewableDoc(row.mime_type, row.original_name)
     },
     { key: 'download', label: '下载', icon: Download, btnClass: 'action-download' },
     { key: 'delete', label: '删除', icon: Delete, btnClass: 'action-delete', danger: true }
@@ -125,7 +129,10 @@ async function handleUpload(options: UploadRequestOptions): Promise<void> {
 }
 
 function handlePreview(row: FileInfo): void {
-  if (isImage(row.mime_type)) {
+  if (isPreviewableDoc(row.mime_type, row.original_name)) {
+    docPreviewFile.value = row
+    docPreviewVisible.value = true
+  } else if (isImage(row.mime_type)) {
     previewUrl.value = row.preview_url || fileApi.download(row.id)
     previewType.value = 'image'
     previewVisible.value = true
@@ -303,6 +310,8 @@ onMounted(() => {
       </div>
       <video v-else :src="previewUrl" controls autoplay class="preview-video" />
     </el-dialog>
+
+    <DocumentPreviewerDialog v-model:visible="docPreviewVisible" :file="docPreviewFile" />
   </div>
 </template>
 
