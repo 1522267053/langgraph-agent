@@ -449,14 +449,26 @@ const registry: Record<string, NodeRegistryEntry> = {
       knowledge_base_name: '',
       top_k: 5,
       enable_document_edit: true,
+      hybrid_enabled: true,
+      rrf_k: 60,
+      keyword_top_k: 20,
       input_variables: [],
       output_variables: [{ name: 'result', source: '', type: undefined }]
     }),
     initConfig: (rawConfig, ctx) => {
       const config = { ...rawConfig }
-      // 兼容历史节点：缺省时默认开启文档编辑
+      // 兼容历史节点：缺省时默认开启文档编辑与混合检索
       if (config.enable_document_edit === undefined) {
         config.enable_document_edit = true
+      }
+      if (config.hybrid_enabled === undefined) {
+        config.hybrid_enabled = true
+      }
+      if (config.rrf_k === undefined) {
+        config.rrf_k = 60
+      }
+      if (config.keyword_top_k === undefined) {
+        config.keyword_top_k = 20
       }
       config.input_variables = ensureInputVars(resolveInputVars(rawConfig, 'knowledge', ctx))
       config.output_variables = resolveOutputVars(rawConfig, 'knowledge', ctx)

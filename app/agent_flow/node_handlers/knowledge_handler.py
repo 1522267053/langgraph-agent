@@ -186,6 +186,10 @@ class KnowledgeNodeConfig(BaseNodeConfig):
     knowledge_base_name: str = ""
     top_k: Optional[int] = Field(default=5, ge=1, le=50)
     enable_document_edit: bool = True
+    # 混合检索参数（None/缺省时回退 settings 全局默认值）
+    hybrid_enabled: Optional[bool] = True
+    rrf_k: Optional[int] = Field(default=60, ge=1)
+    keyword_top_k: Optional[int] = Field(default=20, ge=1, le=100)
 
 
 @NodeHandlerRegistry.register("knowledge")
@@ -221,6 +225,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
 
         knowledge_base_id = input_data.get("knowledge_base_id") if input_data else None
         top_k = input_data.get("top_k", 5) if input_data else 5
+        cfg = self._get_config(node)
 
         if not knowledge_base_id:
             state.add_error(node.node_key, "未配置知识库")
@@ -234,8 +239,14 @@ class KnowledgeNodeHandler(BaseNodeHandler):
 
         try:
             async with AsyncSessionLocal() as db:
-                results = await knowledge_title_service.vector_search(
-                    db, knowledge_base_id, query_text, top_k
+                results = await knowledge_title_service.search(
+                    db,
+                    knowledge_base_id,
+                    query_text,
+                    top_k,
+                    hybrid_enabled=cfg.hybrid_enabled,
+                    rrf_k=cfg.rrf_k,
+                    keyword_top_k=cfg.keyword_top_k,
                 )
                 score_map = {r["segment_id"]: r.get("score") for r in results}
                 method_map = {
@@ -309,9 +320,10 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                     if value is not None:
                         output[name] = value
         else:
-            value = state.get_node_variable(node.node_key, f"{node.node_key}_result")
+            # 未配置 output_variables 时，与 execute 的默认写入键（result）对齐
+            value = state.get_node_variable(node.node_key, "result")
             if value is not None:
-                output[f"{node.node_key}_result"] = value
+                output["result"] = value
 
         return output if output else None
 
@@ -565,8 +577,14 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                     return build_knowledge_result(content, insight_references)
 
                 # ③ 补充查原始文档
-                doc_results = await knowledge_title_service.vector_search(
-                    db, kb_id, query, top_k
+                doc_results = await knowledge_title_service.search(
+                    db,
+                    kb_id,
+                    query,
+                    top_k,
+                    hybrid_enabled=cfg.hybrid_enabled,
+                    rrf_k=cfg.rrf_k,
+                    keyword_top_k=cfg.keyword_top_k,
                 )
                 doc_score_map = {
                     result["segment_id"]: result.get("score") for result in doc_results

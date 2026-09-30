@@ -798,12 +798,25 @@ class FlowExecutorService(BaseExecutorService):
 
     @staticmethod
     def _get_tool_node_keys(flow: ExpandedFlow) -> set[str]:
-        """获取通过 source_handle='tools' 边连接到 LLM 的工具节点 key 集合"""
-        tool_keys: set[str] = set()
+        """获取「纯工具节点」key 集合（执行面板对其隐藏执行记录）
+
+        纯工具节点 = 仅通过 source_handle='tools' 边连出、没有任何数据流
+        （非 tools 把手）出边的节点。此类节点不进入主图拓扑，其能力由
+        LLM 以工具调用方式使用，故不创建执行记录、不上报节点事件。
+
+        注意：节点可以同时拥有 tools 出边和 default 出边（如知识库节点
+        双连线 = 固定检索注入上下文 + LLM 自主调工具的 Adaptive RAG 形态），
+        此时该节点的 default 边参与主图执行，必须保留其执行记录与事件，
+        因此不能仅凭「有 tools 出边」就排除。
+        """
+        tool_source_keys: set[str] = set()
+        data_flow_source_keys: set[str] = set()
         for edge in flow.edges:
             if edge.source_handle == "tools":
-                tool_keys.add(edge.source_node_key)
-        return tool_keys
+                tool_source_keys.add(edge.source_node_key)
+            else:
+                data_flow_source_keys.add(edge.source_node_key)
+        return tool_source_keys - data_flow_source_keys
 
     @staticmethod
     def _check_interrupted(execution_id: int, state: FlowState) -> bool:

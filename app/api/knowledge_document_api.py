@@ -289,7 +289,7 @@ class KnowledgeDocumentApi(
             - 通过向量语义相似度匹配最相关的分段
             - 返回匹配的分段内容、所属文档和标题信息
             """
-            results = await knowledge_title_service.vector_search(
+            results = await knowledge_title_service.search(
                 db=db,
                 knowledge_base_id=condition.knowledge_base_id,
                 query=condition.query,
