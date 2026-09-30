@@ -215,6 +215,10 @@ export interface KnowledgeConfig {
   knowledge_base_name: string
   top_k: number
   enable_document_edit: boolean
+  /** 混合检索参数（节点级覆盖） */
+  hybrid_enabled: boolean
+  rrf_k: number
+  keyword_top_k: number
   input_variables: NodeVariable[]
   output_variables: NodeVariable[]
 }

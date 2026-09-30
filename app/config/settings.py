@@ -71,8 +71,21 @@ class Settings(BaseSettings):
         default=0.6, alias="MEMORY_SEARCH_MIN_SCORE"
     )  # 记忆检索阈值（多关键词逐词检索语义较泛，阈值略低）
     knowledge_search_min_score: float = Field(
-        default=0.75, alias="KNOWLEDGE_SEARCH_MIN_SCORE"
-    )  # 知识库检索阈值（过滤后为空时回退 LIKE 模糊搜索）
+        default=0.5, alias="KNOWLEDGE_SEARCH_MIN_SCORE"
+    )  # 知识库向量检索阈值（score = 1 - cosine distance；bge-m3 中文主题相似度
+    # 典型区间 0.4~0.6，0.75 会把向量通道滤空导致静默降级为关键词搜索；
+    # 过滤后为空时回退关键词搜索）
+    knowledge_hybrid_enabled: bool = Field(
+        default=True, alias="KNOWLEDGE_HYBRID_ENABLED"
+    )  # 混合检索开关（向量+关键词 RRF 融合）的全局默认值；flow 知识库节点
+    # 永远读取节点配置（默认 True/60/20），此组配置仅服务非节点检索场景
+    # （如 /api/knowledge/document/search 检索 API）
+    knowledge_rrf_k: int = Field(
+        default=60, alias="KNOWLEDGE_RRF_K"
+    )  # RRF 融合常数（标准值 60，越大排名差异越平滑；见上：仅非节点场景生效）
+    knowledge_keyword_top_k: int = Field(
+        default=20, alias="KNOWLEDGE_KEYWORD_TOP_K"
+    )  # 关键词通道候选数量（融合前参与排序的召回数；见上：仅非节点场景生效）
 
     # 文档处理定时任务配置
     doc_process_interval: int = Field(
