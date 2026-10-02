@@ -16,11 +16,25 @@ const mcpServers = inject<Ref<{ id: number; name: string; description?: string }
 
 const handles = [
   {
+    type: 'target' as const,
+    position: 'left' as const,
+    id: 'default',
+    label: '入',
+    color: 'green' as const
+  },
+  {
+    type: 'source' as const,
+    position: 'right' as const,
+    id: 'default',
+    label: '出',
+    color: 'blue' as const
+  },
+  {
     type: 'source' as const,
     position: 'right' as const,
     id: 'tools',
     label: '工具',
-    color: 'blue' as const
+    color: 'green' as const
   }
 ]
 

@@ -296,7 +296,27 @@ class FlowExecutorService(BaseExecutorService):
             )
             context.start()
 
-            graph = self._build_graph(expanded_flow, execution.id, conversation_service)
+            try:
+                graph = self._build_graph(
+                    expanded_flow, execution.id, conversation_service
+                )
+            except Exception as build_err:
+                # 构建期异常（如节点/边配置非法）：执行记录已以 RUNNING 落库，
+                # 必须在此标记 FAILED，否则执行永远卡在「执行中」
+                error_msg = str(build_err)
+                logger.exception(f"流程图构建失败: {build_err}")
+                try:
+                    async with AsyncSessionLocal() as fail_db:
+                        fail_exec = await self.get_execution(fail_db, execution.id)
+                        if fail_exec:
+                            fail_exec.status = ExecutionStatus.FAILED.value
+                            fail_exec.error_message = error_msg
+                            fail_exec.end_time = datetime.now()
+                            await fail_db.commit()
+                except Exception as db_err:
+                    logger.warning(f"更新执行状态失败: {db_err}")
+                yield FlowEventFactory.error(error_msg, execution_id=execution.id)
+                return
             config: RunnableConfig = {
                 "configurable": {
                     "thread_id": f"flow_{execution.id}",
@@ -381,7 +401,27 @@ class FlowExecutorService(BaseExecutorService):
                 yield FlowEventFactory.error(f"展开能力卡片失败: {str(e)}")
                 return
 
-            graph = self._build_graph(expanded_flow, execution.id, conversation_service)
+            try:
+                graph = self._build_graph(
+                    expanded_flow, execution.id, conversation_service
+                )
+            except Exception as build_err:
+                # 恢复场景构建失败同样会卡在 WAITING_HUMAN/RUNNING，标记 FAILED
+                error_msg = str(build_err)
+                logger.exception(f"流程图构建失败（恢复执行）: {build_err}")
+                try:
+                    async with AsyncSessionLocal() as fail_db:
+                        fail_exec = await self.get_execution(fail_db, execution.id)
+                        if fail_exec:
+                            fail_exec.status = ExecutionStatus.FAILED.value
+                            fail_exec.error_message = error_msg
+                            fail_exec.end_time = datetime.now()
+                            await fail_db.commit()
+                except Exception as db_err:
+                    logger.warning(f"更新执行状态失败: {db_err}")
+                yield FlowEventFactory.error(error_msg, execution_id=execution.id)
+                return
+
             config: RunnableConfig = {
                 "configurable": {
                     "thread_id": f"flow_{execution_id}",

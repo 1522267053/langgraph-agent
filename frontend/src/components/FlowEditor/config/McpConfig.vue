@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { QuestionFilled } from '@element-plus/icons-vue'
 import { mcpServerApi } from '@/api/mcpServer'
 import type { McpConfig } from './types'
 import ApprovalConfigSection, { type ApprovalConfig } from './ApprovalConfigSection.vue'
@@ -38,6 +39,9 @@ function cloneConfig(c: McpConfig): McpConfig {
   return {
     ...c,
     mcp_server_ids: [...(c.mcp_server_ids ?? [])],
+    tool_args: { ...(c.tool_args ?? {}) },
+    input_variables: (c.input_variables ?? []).map(v => ({ ...v })),
+    output_variables: (c.output_variables ?? []).map(v => ({ ...v })),
     approval_required_tools: Array.isArray(c.approval_required_tools)
       ? [...c.approval_required_tools]
       : [],
@@ -70,16 +74,24 @@ function updateConfig(): void {
 
 // ---- 工具审批配置（approval 已下沉到本节点，复用 ApprovalConfigSection）----
 
-/** 调后端 resolveConnectedTools 拿本节点实际暴露的 MCP 工具名（mcp__<server>__<tool>） */
+/** 调后端 resolveConnectedTools 拿本节点实际暴露的 MCP 工具元数据（名称/描述/参数schema） */
 const flowStore = useFlowStore()
-const mcpAvailableTools = ref<{ label: string; value: string }[]>([])
+interface McpToolMeta {
+  label: string
+  value: string
+  parameters?: { name: string; type: string; description: string; required: boolean }[]
+}
+const mcpToolMetas = ref<McpToolMeta[]>([])
+const mcpAvailableTools = computed(() =>
+  mcpToolMetas.value.map(t => ({ label: t.label, value: t.value }))
+)
 let mcpToolRequestVersion = 0
 
 async function fetchMcpAvailableTools(): Promise<void> {
   const version = ++mcpToolRequestVersion
   const flowId = flowStore.flowInfo?.id
   if (!flowId || !props.nodeId) {
-    mcpAvailableTools.value = []
+    mcpToolMetas.value = []
     return
   }
   try {
@@ -94,23 +106,27 @@ async function fetchMcpAvailableTools(): Promise<void> {
     if (version !== mcpToolRequestVersion) return
     if (res.data.code === 1 && Array.isArray(res.data.data)) {
       const tools = res.data.data.flatMap(g => g.tools || [])
-      mcpAvailableTools.value = tools.map(t => ({
+      mcpToolMetas.value = tools.map(t => ({
         label: t.description ? `${t.name} - ${t.description.slice(0, 30)}` : t.name,
-        value: t.name
+        value: t.name,
+        parameters: t.parameters || []
       }))
     } else {
-      mcpAvailableTools.value = []
+      mcpToolMetas.value = []
     }
   } catch {
-    if (version === mcpToolRequestVersion) mcpAvailableTools.value = []
+    if (version === mcpToolRequestVersion) mcpToolMetas.value = []
   }
+  syncSelectedToolParams()
 }
 
-// mcp_server_ids 变化时（连了不同 MCP server）必须重拉
+// mcp_server_ids 变化时（连了不同 MCP server）必须重拉；
+// 用序列化串做比较——cloneConfig 会整体替换 localConfig，直接 watch 数组
+// 会因引用不等而频繁误触发（每次配置编辑都多发一次 resolve 请求）
 watch(
-  () => [props.nodeId, [...(localConfig.value.mcp_server_ids || [])]],
+  () => [props.nodeId, JSON.stringify(localConfig.value.mcp_server_ids || [])],
   () => fetchMcpAvailableTools(),
-  { immediate: true, deep: true }
+  { immediate: true }
 )
 
 function onApprovalUpdate(val: ApprovalConfig): void {
@@ -118,6 +134,45 @@ function onApprovalUpdate(val: ApprovalConfig): void {
   localConfig.value.approval_required_patterns = [...val.approval_required_patterns]
   updateConfig()
 }
+
+// ---- 直接执行模式（挂到主干流程：入→出，按固定工具+参数直接调用）----
+
+/** 当前选中工具的参数 schema（来自 resolveConnectedTools 的 parameters 字段） */
+interface ToolParam {
+  name: string
+  type: string
+  description: string
+  required: boolean
+}
+const selectedToolParams = ref<ToolParam[]>([])
+
+/** 从 mcpAvailableTools 元数据提取选中工具的参数定义 */
+function syncSelectedToolParams(): void {
+  const toolName = localConfig.value.tool_name
+  if (!toolName) {
+    selectedToolParams.value = []
+    return
+  }
+  // resolveConnectedTools 响应里 tools 带 name/description/parameters
+  const found = mcpToolMetas.value.find(t => t.value === toolName)
+  selectedToolParams.value = (found?.parameters as ToolParam[] | undefined) || []
+}
+
+/** 切换工具时重置参数绑定（保留同名参数的旧值） */
+function onToolNameChange(): void {
+  const oldArgs = { ...(localConfig.value.tool_args || {}) }
+  const next: Record<string, string> = {}
+  for (const p of selectedToolParams.value) {
+    if (oldArgs[p.name] !== undefined) next[p.name] = oldArgs[p.name]
+  }
+  localConfig.value.tool_args = next
+  updateConfig()
+}
+
+function onArgChange(): void {
+  updateConfig()
+}
+
 </script>
 
 <template>
@@ -147,9 +202,68 @@ function onApprovalUpdate(val: ApprovalConfig): void {
       </el-form>
       <div class="config-hint">
         <el-text size="small" type="info">
-          将此节点连接到LLM节点（使用"工具"连接点），LLM即可调用所选服务器的工具
+          工具连接：连到LLM节点（"工具"把手）后由 AI 自主调用
+          <br />
+          直接执行：连接到主干流程（"入/出"把手），按下方固定配置直接执行
         </el-text>
       </div>
+    </div>
+
+    <div class="config-section">
+      <div class="section-title">直接执行配置（挂到主干流程时生效）</div>
+      <el-form label-width="80px" size="small">
+        <el-form-item label="执行工具">
+          <el-select
+            v-model="localConfig.tool_name"
+            placeholder="选择要直接执行的工具（留空=仅作为工具提供者）"
+            style="width: 100%"
+            clearable
+            filterable
+            :loading="loading"
+            @change="onToolNameChange"
+          >
+            <el-option
+              v-for="tool in mcpAvailableTools"
+              :key="tool.value"
+              :label="tool.label"
+              :value="tool.value"
+            />
+            <template #empty>
+              <div class="select-empty-hint">
+                <el-text size="small" type="info">无可用工具</el-text>
+                <br />
+                <el-text size="small" type="info">检查 MCP 服务器是否在线；后端刚重启时首次加载会自动建立连接，稍后重试</el-text>
+              </div>
+            </template>
+          </el-select>
+        </el-form-item>
+        <el-form-item
+          v-for="param in selectedToolParams"
+          :key="param.name"
+          :required="param.required"
+        >
+          <template #label>
+            {{ param.name }}
+            <el-tooltip
+              v-if="param.description"
+              :content="`[${param.type}] ${param.description}`"
+              placement="top"
+            >
+              <el-icon class="param-tip-icon"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </template>
+          <el-input
+            v-model="localConfig.tool_args[param.name]"
+            :placeholder="param.type"
+            @change="onArgChange"
+          />
+        </el-form-item>
+        <el-form-item v-if="selectedToolParams.length" label="">
+          <el-text size="small" type="info">
+            参数值支持变量插值：双大括号包裹变量路径（语法同 API 节点，如输入变量的 message）
+          </el-text>
+        </el-form-item>
+      </el-form>
     </div>
 
     <ApprovalConfigSection
@@ -185,5 +299,16 @@ function onApprovalUpdate(val: ApprovalConfig): void {
   padding: 8px;
   background: #fdf6ec;
   border-radius: 4px;
+}
+
+.select-empty-hint {
+  padding: 8px 12px;
+  line-height: 1.6;
+}
+
+.param-tip-icon {
+  margin-left: 4px;
+  cursor: help;
+  color: #909399;
 }
 </style>

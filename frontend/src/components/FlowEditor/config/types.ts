@@ -191,9 +191,15 @@ export interface ApiConfig {
 export interface McpConfig {
   mcp_server_ids: number[]
   mcp_server_names?: string[]
+  /** 直接执行模式：挂到主干流程时按固定工具+参数直接调用 */
+  tool_name?: string
+  /** 工具参数（逐参数绑定值，支持 {{变量}} 插值） */
+  tool_args?: Record<string, string>
   // 工具审批配置（已下沉到本节点）：工具名白名单 + 调用内容正则
   approval_required_tools?: string[]
   approval_required_patterns?: string[]
+  input_variables: NodeVariable[]
+  output_variables: NodeVariable[]
 }
 
 /** Human节点配置 */

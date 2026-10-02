@@ -18,7 +18,7 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
    - `/nodes/batch/config` 接口**不支持改 `node_name` 和坐标**，因为它们不是 `base_config` 的字段；要调整必须删除重建。
    - 当不确定某个字段属于哪一层时，先 `GET /ai/flow/{id}/detail` 查实际节点结构反推，或对照 `references/api.md` 的请求体示例。
 6. **模型优先用全局默认值**：LLM 的 `provider/model/api_key/base_url` 可留空；系统有默认模型时会自动注入。
-7. **工具边不参与执行图**：`source_handle="tools"` 只声明工具能力；普通数据流使用 `default -> default`。
+7. **节点模式由连线拓扑决定**：`source_handle="tools"` 只声明工具能力，不参与执行图；普通数据流使用 `default -> default`。`mcp` / `knowledge` / `api` / `python` 等节点支持工具/直接执行双模式（可共存）：仅 tools 边 = 纯工具节点（不进主图、无执行记录）；有 default 边 = 主干执行节点，MCP 需在 `base_config` 配 `tool_name` + `tool_args`（详见节点配置参考的 MCP 章节）。
 8. **必须执行验证**：创建或修改后实际运行一次，检查 SSE 是否出现 `flow_done` 且 `data.status="success"`，不能只确认 API 返回成功。
 9. **不要泄露密钥**：响应中的 `api_key`、`password`、`private_key`、`passphrase` 等敏感字段都是掩码展示，只用于原样保留回传，不在回复或日志中展示明文。
 
@@ -42,7 +42,7 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
 | `flow` | 固定步骤、批处理、API/Python/Shell 编排 | `/execution/stream/{id}` |
 | `agent` | 对话、工具调用、记忆、知识库、子 Agent | `/agent/{id}/sessions` |
 
-Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router`、`wait` 及工具节点（`mcp` / `skill` / `memory` / `todo` / `python` / `shell` / `api` / `knowledge` / `sub_agent` / `agenda` / `ssh` / `question`），并且只能各有一个 `start`、`end`、`llm`。典型主链为 `start -> llm -> end`，能力节点通过 `tools -> tools` 连接到 LLM。
+Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router`、`wait` 及工具节点（`mcp` / `skill` / `memory` / `todo` / `python` / `shell` / `api` / `knowledge` / `sub_agent` / `agenda` / `ssh` / `question`），并且只能各有一个 `start`、`end`、`llm`。典型主链为 `start -> llm -> end`，能力节点通过 `tools -> tools` 连接到 LLM。注意：`mcp` / `knowledge` / `api` / `python` 同时支持 `default -> default` 主干连接（Workflow 模式的直接执行节点）。
 
 `question` 是工具节点，与 `skill` / `memory` 同形态（同一 LLM 仅能连接一个实例），但交互行为不同：LLM 调用 `ask_user_question` 工具时由后端 `question_service` 推送 `question_request` SSE 事件，前端弹窗展示选项，用户提交后通过 `POST /agent/{id}/sessions/{session_id}/question/resolve` 唤醒 Future，工具返回 `answers` 给 LLM。完整工具节点列表见 [节点配置](references/node-config.md)。
 

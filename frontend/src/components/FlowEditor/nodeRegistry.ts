@@ -377,11 +377,26 @@ const registry: Record<string, NodeRegistryEntry> = {
     icon: Connection,
     iconColor: '#6366f1',
     iconBgColor: '#eef2ff',
-    defaultConfig: () => ({ mcp_server_ids: [] }),
-    initConfig: rawConfig => ({
-      ...rawConfig,
-      mcp_server_ids: rawConfig.mcp_server_ids || []
+    defaultConfig: () => ({
+      mcp_server_ids: [],
+      tool_name: '',
+      tool_args: {},
+      input_variables: [],
+      output_variables: [{ name: 'result', source: '', type: undefined }]
     }),
+    initConfig: (rawConfig, ctx) => {
+      const config = { ...rawConfig }
+      // 兼容历史节点（纯工具模式）：直接执行相关字段缺省回填
+      if (config.tool_name === undefined) {
+        config.tool_name = ''
+      }
+      if (config.tool_args === undefined) {
+        config.tool_args = {}
+      }
+      config.input_variables = resolveInputVars(rawConfig, 'mcp', ctx)
+      config.output_variables = resolveOutputVars(rawConfig, 'mcp', ctx)
+      return config
+    },
     getExtraProps: ctx => ({ nodeId: ctx.selectedNodeId })
   },
 
