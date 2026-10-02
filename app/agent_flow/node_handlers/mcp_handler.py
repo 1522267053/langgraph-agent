@@ -18,7 +18,11 @@ from pydantic import Field
 from app.config.database import AsyncSessionLocal
 from app.models.flow_node import FlowNode
 from app.agent_flow.flow_context import FlowState
-from app.agent_flow.node_handlers.base_handler import BaseNodeHandler, BaseNodeConfig
+from app.agent_flow.node_handlers.base_handler import (
+    BaseNodeHandler,
+    BaseNodeConfig,
+    NodeVariable,
+)
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.agent_flow.mcp_manager import mcp_tool_manager
 
@@ -40,6 +44,13 @@ class McpNodeConfig(BaseNodeConfig):
         default_factory=dict,
         description="工具参数（逐参数绑定值，支持 {{变量}} 插值）",
     )
+    # 显式声明默认输出变量：变量选择器的 schema 兜底从此读取（与 API 节点
+    # 声明 body/status_code/headers 同模式），旧节点 config 未声明时也可选。
+    # type 标 object：MCP 工具返回值形态不定（str/dict/list），object 是
+    # 最通用的标注（string 结果兼容，结构化结果可用子变量路径继续取字段）
+    output_variables: list[NodeVariable] = [
+        NodeVariable(name="result", type="object")
+    ]
     # 注：approval_required_tools / approval_required_patterns 字段已在 BaseNodeConfig 提供
 
 
