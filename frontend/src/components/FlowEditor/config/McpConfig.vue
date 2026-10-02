@@ -3,7 +3,10 @@ import { computed, ref, watch } from 'vue'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import { mcpServerApi } from '@/api/mcpServer'
 import type { McpConfig } from './types'
+import { fieldTypeOptions } from './types'
 import ApprovalConfigSection, { type ApprovalConfig } from './ApprovalConfigSection.vue'
+import { useInputVariables } from '@/composables/useInputVariables'
+import VariableSelector from '../components/VariableSelector.vue'
 import { useFlowStore } from '@/stores/flowStore'
 import { flowApi } from '@/api/flow'
 
@@ -52,6 +55,10 @@ function cloneConfig(c: McpConfig): McpConfig {
 }
 
 const localConfig = ref<McpConfig>(cloneConfig(props.config))
+const { addInputVariable, removeInputVariable, handleSourceTypeChange } = useInputVariables(
+  localConfig,
+  updateConfig
+)
 
 watch(
   () => props.config,
@@ -178,6 +185,64 @@ function onArgChange(): void {
 <template>
   <div class="mcp-config">
     <div class="config-section">
+      <div class="section-title">
+        <span>输入变量</span>
+        <el-button type="primary" size="small" link @click="addInputVariable">+ 添加变量</el-button>
+      </div>
+      <div class="input-variables">
+        <div
+          v-for="(variable, index) in localConfig.input_variables"
+          :key="index"
+          class="input-variable"
+        >
+          <div class="variable-header">
+            <span class="variable-index">变量 {{ index + 1 }}</span>
+            <el-button type="danger" size="small" link @click="removeInputVariable(index)">
+              删除
+            </el-button>
+          </div>
+          <el-form label-width="60px" size="small">
+            <el-form-item label="名称">
+              <el-input
+                v-model="variable.name"
+                placeholder="变量名（可在参数值中用双大括号引用）"
+                @blur="updateConfig"
+              />
+            </el-form-item>
+            <el-form-item label="类型">
+              <el-select
+                v-model="variable.type"
+                placeholder="选择类型"
+                style="width: 100%"
+                @change="updateConfig"
+              >
+                <el-option
+                  v-for="item in fieldTypeOptions"
+                  :key="item.value"
+                  :label="item.label"
+                  :value="item.value"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="来源">
+              <VariableSelector
+                v-model="variable.source"
+                :current-node-id="nodeId"
+                placeholder="选择变量来源"
+                @update:model-value="updateConfig"
+                @update:type="t => handleSourceTypeChange(index, t)"
+              />
+            </el-form-item>
+          </el-form>
+        </div>
+      </div>
+      <div class="config-hint">
+        <el-text size="small" type="info">
+          直接执行参数值中用双大括号包裹变量名即可引用（如 target_url）
+        </el-text>
+      </div>
+    </div>
+    <div class="config-section">
       <div class="section-title">MCP服务器配置</div>
       <el-form label-width="80px" size="small">
         <el-form-item label="服务器">
@@ -211,7 +276,7 @@ function onArgChange(): void {
 
     <div class="config-section">
       <div class="section-title">直接执行配置（挂到主干流程时生效）</div>
-      <el-form label-width="80px" size="small">
+      <el-form label-width="100px" size="small">
         <el-form-item label="执行工具">
           <el-select
             v-model="localConfig.tool_name"
@@ -266,6 +331,17 @@ function onArgChange(): void {
       </el-form>
     </div>
 
+    <div class="config-section">
+      <div class="section-title">输出变量</div>
+      <div class="output-variables-info">
+        <div v-for="ov in localConfig.output_variables" :key="ov.name" class="output-var-tag">
+          <el-tag size="small" type="info">{{ ov.name }}</el-tag>
+          <span class="output-var-type">{{ ov.type || '' }}</span>
+        </div>
+        <el-text size="small" type="info">工具执行结果写入（下游用 nodes.节点key.result 引用）</el-text>
+      </div>
+    </div>
+
     <ApprovalConfigSection
       :model-value="{
         approval_required_tools: localConfig.approval_required_tools,
@@ -309,6 +385,21 @@ function onArgChange(): void {
 .param-tip-icon {
   margin-left: 4px;
   cursor: help;
+  color: #909399;
+}
+.output-variables-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.output-var-tag {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.output-var-type {
+  font-size: 12px;
   color: #909399;
 }
 </style>
