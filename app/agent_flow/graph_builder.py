@@ -202,8 +202,16 @@ class GraphBuilder:
 
         start_node_key, end_node_key = self._find_node_keys()
 
+        # MCP 节点按需注册：self.edges 已过滤工具边，此处出现在数据流边中的
+        # MCP 节点 = 直接执行模式（入/出把手挂主干），必须 add_node；
+        # 纯工具 MCP（仅 tools 把手连 LLM）不在任何数据流边中，跳过注册。
+        data_flow_node_keys: set[str] = set()
+        for edge in self.edges:
+            data_flow_node_keys.add(edge.source_node_key)
+            data_flow_node_keys.add(edge.target_node_key)
+
         for node_key, node in self.nodes.items():
-            if node.node_type == NodeType.MCP.value:
+            if node.node_type == NodeType.MCP.value and node_key not in data_flow_node_keys:
                 continue
             if "__" in node_key:
                 continue

@@ -114,16 +114,16 @@ API 节点的请求体里嵌入上游变量：
 | `llm` | 对话、生成、工具编排 | 数据流；工具目标 |
 | `condition` | 规则真假分支 | `true/false -> default` |
 | `intent_router` | 规则和 LLM 意图分类 | intent key / `default` 分支 |
-| `api` / `python` / `knowledge` | 可作执行节点，也可作工具 | `default` 或 `tools` |
+| `api` / `python` / `knowledge` / `mcp` | 可作执行节点，也可作工具 | `default` 或 `tools` |
 | `human` | Workflow 人工检查点或人工工具 | `default` 或 `tools` |
 | `card` / `loop` | Workflow 子图复用和迭代 | `default` 数据流 |
 | `wait` | 延时等待 N 秒后继续（宽限期/重试退避/节奏控制） | `default` 数据流 |
-| `mcp` / `skill` / `memory` / `todo` | Agent 工具提供者 | `tools -> tools` |
+| `skill` / `memory` / `todo` | Agent 工具提供者 | `tools -> tools` |
 | `shell` / `sub_agent` / `agenda` | Agent 工具提供者 | `tools -> tools` |
 | `ssh` | Agent 工具提供者（远程命令与 SFTP） | `tools -> tools` |
 | `question` | Agent 反问工具，LLM 调用 `ask_user_question` 时弹出结构化选项 | `tools -> tools` |
 
-`source_handle="tools"` 的边不加入 LangGraph 执行图。MCP 节点同样不执行，只负责向 LLM 提供工具。
+`source_handle="tools"` 的边不加入 LangGraph 执行图。节点的「工具/直接执行」形态由**连线拓扑**决定：只有 tools 出边 = 纯工具节点（不进主图、无执行记录）；有 default 边 = 参与主干执行（有执行记录），两种形态可共存（见 [MCP 节点](#mcp-节点)）。
 
 ## LLM
 
@@ -365,15 +365,49 @@ Workflow 中的 `human` 节点使用 `prompt` 或 `review_prompt` 暂停执行�
 
 | 类型 | 关键配置 | 说明 |
 |---|---|---|
-| `mcp` | `mcp_server_ids` | 加载所选 MCP 服务的工具 |
+| `mcp` | `mcp_server_ids` + 直接执行配置（见下节） | 工具模式加载所选 MCP 服务的全部工具；直接执行模式按固定工具+参数挂主干 |
 | `skill` | `skill_ids` | 提供 `load_skill`，按需加载 Skill 文档 |
-| `knowledge` | `knowledge_base_id`、`top_k` | 提供检索、导航和知识沉淀工具 |
+| `knowledge` | `knowledge_base_id`、`top_k`、hybrid 参数 | 检索默认向量+关键词 RRF 混合（`hybrid_enabled`/`rrf_k`/`keyword_top_k` 可按节点覆盖）；工具模式提供三层导航与知识沉淀工具 |
 | `memory` | 实时 Schema 中的容量、衰减和整理参数 | 提供 save/search/list/get/delete 五类操作 |
 | `todo` | 通常使用默认配置 | 提供 `todowrite`、`todoread` |
 | `agenda` | 通常使用默认配置 | 提供日程创建、查询、更新和删除 |
 | `sub_agent` | `agent_id` | 委派任务，详见 [子 Agent](sub-agent.md) |
 
 同一 LLM 最多连接一个 `skill` 和一个 `memory` 节点；其他限制由批量边接口实时校验。
+
+## MCP 节点
+
+MCP 节点支持两种工作模式（由连线拓扑决定，可共存）：
+
+### 工具模式（tools 把手 → LLM）
+
+把服务器的**全套工具**注册给 LLM 自主调用，配置只有 `mcp_server_ids`。工具名格式 `mcp__<server_name>__<tool_name>`。
+
+### 直接执行模式（入/出把手挂主干）
+
+在 `base_config` 配置固定工具与参数，主干执行到该节点时直接调用：
+
+| 字段 | 说明 |
+|---|---|
+| `tool_name` | 目标工具完整名（`mcp__<server>__<tool>`）；**留空 = 纯工具模式**，execute 为空操作 |
+| `tool_args` | 参数对象，值支持 `{{变量}}` 深度插值（语法同 API 节点；`input_variables` 声明的别名可用裸名） |
+| `output_variables` | 默认 `result`，写入工具返回值，下游用 `nodes.<mcp_key>.result` 引用 |
+
+```json
+{
+  "mcp_server_ids": [13],
+  "tool_name": "mcp__chrome-devtools__new_page",
+  "tool_args": {"url": "{{input.target_url}}"},
+  "input_variables": [{"name": "target_url", "source": "input.url", "type": "string"}],
+  "output_variables": [{"name": "result"}]
+}
+```
+
+参数名与类型来自工具的 args_schema（前端逐参数表单；API 侧 connected-tools / resolve 接口的 `tools[].parameters` 返回 `name/type/description/required`）。
+
+### 双模式共存语义
+
+同一节点同时连 tools 边和 default 边时：主干固定执行一次（直接执行路径），LLM 仍可自主调用该服务器全部工具（工具路径）。两条通道数据不互通；写入类工具慎用双开（可能重复执行）；审批仅覆盖工具路径，直接执行路径不走审批。
 
 ## 配置检查
 

@@ -121,12 +121,11 @@ NODE_REGISTRY: dict[str, NodeMeta] = {
     ),
     "mcp": NodeMeta(
         label="MCP",
-        source={"tools"},
-        target=set(),
+        source={"default", "tools"},
+        target={"default"},
         flow=True,
         agent=True,
         agent_tool=True,
-        tool_only=True,
     ),
     "knowledge": NodeMeta(
         label="知识库",

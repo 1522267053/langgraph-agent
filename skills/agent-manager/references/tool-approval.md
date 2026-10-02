@@ -120,14 +120,13 @@ LLM 调用工具时使用的是 `name` 字段（不是节点的 `node_key`）。
 
 **竞态保护**：组件内 `let requestVersion = 0`，每次 watch 触发时自增；请求回调里比较 `version` 是否仍是当前值，旧请求直接丢弃，防止 A→B→A 切换时旧请求污染。
 
-### MCP 已知限制
+### MCP 工具列表来源与已知限制
 
-MCP 工具列表来自 `mcp_tool_manager._tools_cache`——**server 从未测试连接过时缓存为空，下拉为空**。
+MCP 工具列表按**三级读取**：① 内存连接缓存（存活 10 分钟）→ ② DB 持久缓存 `McpToolCache`（服务重启不丢，毫秒级）→ ③ 两者皆无（服务器从未连接过）才真实建连预热。因此**重启后下拉不再为空**（DB 缓存兜底）；仅全新服务器首次使用需一次建连（stdio 类型需数秒）。
 
-- **临时方案**：`allow-create` 自由输入完整工具名
-- **未来优化**：节点配置 UI 增加"刷新 MCP 工具"按钮（触发 server test connection 后重读缓存）
-
-不在本轮范围。
+- 下拉仍为空时：检查 MCP 服务器是否在线（预热失败不报错，静默返回空）；`allow-create` 仍可自由输入完整工具名
+- `McpConfig.vue` 的 resolve 请求按 `mcp_server_ids` 序列化值去重触发，仅服务器增删时重新拉取
+- **审批只覆盖工具路径**（LLM 自主调用）：MCP 节点直接执行模式（固定工具挂主干）**不走审批**，Workflow 中的危险固定调用需在流程内用 Human 节点兜底
 
 ## 后端基类实现要点
 
@@ -156,6 +155,6 @@ async def _check_and_request_approval(
 - [ ] 工具名不匹配 → 用 connected-tools 复制真实名称，别用 `node_key`
 - [ ] 正则没命中 → 检查 `content_for_pattern` 是什么（python 是 code，api 是 method+url+body 前 200 字）
 - [ ] 5 分钟超时被拒 → 拉长审批等待或拆解为更小的命令
-- [ ] MCP 下拉为空 → server 还没测试连接；用 `allow-create` 手填或先去 MCP 管理页测试
+- [ ] MCP 下拉为空 → 检查服务器在线状态；DB 持久缓存应兜底（仅全新服务器首次需建连，稍候重试）；仍不行用 `allow-create` 手填
 - [ ] Python preset 工具名前缀漏写 → 是 `python_executor_xxx` 不是 `xxx`
 - [ ] 老 flow 没配审批字段 → `approval_required_tools` / `approval_required_patterns` 默认空，行为不变，不报错

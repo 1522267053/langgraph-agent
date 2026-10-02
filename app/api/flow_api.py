@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config.database import get_db
+from app.config.database import AsyncSessionLocal, get_db
 from app.api.base_api import BaseApi, RouteConfig
 from app.models.flow import Flow, FlowType
 from app.models.flow_node import FlowNode
@@ -160,6 +160,33 @@ class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
         ):
             """解析前端尚未保存的当前工具节点配置。"""
             from app.agent_flow.tool_resolver import resolve_tool_node_info
+
+            # MCP 缓存预热（仅在内存缓存未命中时）：get_tool_info 内部已实现
+            # 「内存→DB 持久缓存→建连」三级读取，此处只对内存缓存 miss 的
+            # 服务器补一次预热，保证本次响应能拿到工具（多数请求直接跳过）。
+            mcp_server_ids: set[int] = set()
+            for item in nodes:
+                if item.node_type == "mcp":
+                    for sid in (item.base_config or {}).get("mcp_server_ids") or []:
+                        try:
+                            mcp_server_ids.add(int(sid))
+                        except (TypeError, ValueError):
+                            continue
+            if mcp_server_ids:
+                from app.agent_flow.mcp_manager import mcp_tool_manager
+
+                cold_ids = [
+                    sid
+                    for sid in mcp_server_ids
+                    if not mcp_tool_manager._tools_cache.get(sid)
+                ]
+                for sid in cold_ids:
+                    try:
+                        async with AsyncSessionLocal() as warm_db:
+                            await mcp_tool_manager.get_tools(warm_db, [sid])
+                    except Exception:
+                        # 预热失败不阻断解析（如服务器离线），返回现有缓存内容
+                        pass
 
             tool_nodes = [
                 FlowNode(
