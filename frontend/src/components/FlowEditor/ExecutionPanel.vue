@@ -42,7 +42,11 @@ const panelContentRef = ref<HTMLElement | null>(null)
 const { isAtBottom, scrollToBottom, handleScroll } = useAutoScroll(panelContentRef, [
   toRef(props, 'nodeExecutions'),
   toRef(props, 'streamingContent')
-])
+], {
+  // 总开关：仅「执行结果」tab 允许自动贴底跟随。滚动容器被两个 tab 共享，
+  // 流式 watch 源在历史 tab 下仍持续更新，不开开关会把历史列表视口拉向底部
+  enabled: () => activeTab.value === 'result'
+})
 
 watch(
   () => props.visible,

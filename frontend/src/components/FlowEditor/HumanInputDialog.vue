@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { QuestionFilled } from '@element-plus/icons-vue'
+import { computed, ref, watch } from 'vue'
+import { QuestionFilled, Minus, FullScreen } from '@element-plus/icons-vue'
 import { formatToolArgs } from '@/utils/format'
 
 interface ConversationMessage {
@@ -10,7 +10,7 @@ interface ConversationMessage {
   tool_calls?: Array<{ name: string; args: Record<string, unknown>; id?: string }>
 }
 
-defineProps<{
+const props = defineProps<{
   visible: boolean
   question: string
   context: string
@@ -25,6 +25,39 @@ const emit = defineEmits<{
 }>()
 
 const inputValue = ref('')
+// 最小化状态：true 时隐藏弹窗（含遮罩），右下角显示悬浮条，可随时恢复。
+// 输入内容保留——最小化/恢复间不丢已填回答
+const minimized = ref(false)
+
+function minimize(): void {
+  minimized.value = true
+}
+
+function restore(): void {
+  minimized.value = false
+}
+
+/**
+ * el-dialog model-value 变化分流：
+ * - 最小化引发的内部关闭（minimized=true）不上报父组件——否则父组件把 visible
+ *   置 false，悬浮条（visible && minimized）随之消失，最小化失效
+ * - 真实用户关闭（modal/esc，当前均已禁用）仍透传，保持 v-model:visible 语义
+ */
+function onDialogModelChange(val: boolean): void {
+  if (!val && minimized.value) return
+  emit('update:visible', val)
+}
+
+// 弹窗重新打开（新问题到来）时退出最小化，默认弹出
+watch(
+  () => props.visible,
+  visible => {
+    if (visible) minimized.value = false
+  }
+)
+
+// 问题摘要（悬浮条展示用）
+const questionPreview = computed(() => props.question || '请提供输入')
 
 function getRoleLabel(role: string): string {
   const labels: Record<string, string> = {
@@ -48,15 +81,29 @@ function handleOpen(): void {
 
 <template>
   <el-dialog
-    :model-value="visible"
+    :model-value="visible && !minimized"
     title="需要您的输入"
     width="600px"
     :close-on-click-modal="false"
     :close-on-press-escape="false"
     :show-close="false"
-    @update:model-value="emit('update:visible', $event)"
+    @update:model-value="onDialogModelChange"
     @open="handleOpen"
   >
+    <template #header>
+      <div class="dialog-header">
+        <span class="dialog-title">需要您的输入</span>
+        <!-- 最小化：隐藏弹窗与遮罩，右下角悬浮条恢复；已填回答保留 -->
+        <button
+          class="dialog-minimize"
+          type="button"
+          title="最小化（可回看执行输出，稍后恢复作答）"
+          @click="minimize"
+        >
+          <el-icon :size="16"><Minus /></el-icon>
+        </button>
+      </div>
+    </template>
     <div class="human-input-content">
       <div class="question">
         <el-icon style="margin-right: 8px; color: #e6a23c">
@@ -116,9 +163,105 @@ function handleOpen(): void {
       </div>
     </template>
   </el-dialog>
+
+  <!-- 最小化悬浮条：弹窗隐藏期间显示，点击恢复作答 -->
+  <Teleport to="body">
+    <button v-if="visible && minimized" class="human-input-minimized-bar" type="button" @click="restore">
+      <el-icon :size="16" class="bar-icon"><QuestionFilled /></el-icon>
+      <span class="bar-title">需要您的输入</span>
+      <span class="bar-question">{{ questionPreview }}</span>
+      <el-icon :size="14" class="bar-expand"><FullScreen /></el-icon>
+    </button>
+  </Teleport>
 </template>
 
 <style scoped>
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dialog-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: #303133;
+}
+
+/* header 最小化按钮 */
+.dialog-minimize {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #909399;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.dialog-minimize:hover {
+  background: #f0f2f5;
+  color: #606266;
+}
+
+/* 最小化悬浮条（Teleport 到 body，fixed 定位） */
+.human-input-minimized-bar {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 420px;
+  padding: 10px 14px;
+  border: 1px solid #e6a23c;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(230, 162, 60, 0.25);
+  cursor: pointer;
+  text-align: left;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+
+.human-input-minimized-bar:hover {
+  box-shadow: 0 6px 20px rgba(230, 162, 60, 0.35);
+  transform: translateY(-1px);
+}
+
+.bar-icon {
+  flex-shrink: 0;
+  color: #e6a23c;
+}
+
+.bar-title {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.bar-question {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #606266;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-expand {
+  flex-shrink: 0;
+  color: #c0c4cc;
+}
+
 .human-input-content {
   padding: 10px 0;
 }

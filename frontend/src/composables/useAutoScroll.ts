@@ -203,7 +203,7 @@ export function useAutoScroll(
     // 隐藏页 rAF 暂停，排队的跟随帧永不执行导致视口漂移；直接同步贴底
     // （scrollTop 赋值在隐藏文档有效，引发的 scroll 事件由手势白名单归为程序化）
     if (document.hidden) {
-      if (autoScroll.value && isAtBottom.value && !userScrolledUp.value) performScrollToBottom()
+      if (canFollowNow()) performScrollToBottom()
       return
     }
     if (_scrollFrame !== null) return
@@ -211,8 +211,9 @@ export function useAutoScroll(
       // 再等一帧，让工具结果、高亮和 Markdown 的后续 DOM 更新先完成。
       _scrollFrame = requestAnimationFrame(() => {
         _scrollFrame = null
-        // 与按钮状态联动：仅按钮未显示（仍在底部）且用户未上滚时才贴底
-        if (autoScroll.value && isAtBottom.value && !userScrolledUp.value) performScrollToBottom()
+        // 决策时点重查 enabled：跟随帧排队期间开关可能已关闭（如执行面板切到
+        // 历史 tab），否则迟到帧会把新 tab 视口拉向底部
+        if (canFollowNow()) performScrollToBottom()
       })
     })
   }
@@ -220,6 +221,16 @@ export function useAutoScroll(
   function markUserScrolledUp(): void {
     userScrolledUp.value = true
     cancelPendingScroll()
+  }
+
+  /** 当前时刻是否允许贴底跟随：enabled 总开关 + 基础三条件（在底部/未上滚/启用） */
+  function canFollowNow(): boolean {
+    return (
+      autoScroll.value &&
+      isAtBottom.value &&
+      !userScrolledUp.value &&
+      (!options.enabled || options.enabled())
+    )
   }
 
   /**
@@ -260,11 +271,7 @@ export function useAutoScroll(
       return
     }
     // 决策时点的贴底状态（即按钮是否隐藏）：不在底部 / 已上滚 / 未启用则不跟随
-    const canFollow =
-      autoScroll.value &&
-      isAtBottom.value &&
-      !userScrolledUp.value &&
-      (!options.enabled || options.enabled())
+    const canFollow = canFollowNow()
     if (!canFollow) {
       // 未跟随：按真实几何刷新贴底状态，内容继续撑高时按钮立即出现
       // （隐藏期例外：无手势环境下按几何翻转即「下毒」，交由 visibilitychange 回底自愈）
