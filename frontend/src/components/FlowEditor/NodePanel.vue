@@ -37,8 +37,11 @@ const cardNodes = getCardPanelNodes()
 // Agent 模式排除的节点类型
 const agentExcludeTypes = new Set(['loop', 'human'])
 
-// Flow 模式排除的工具类型（仅 Agent 模式显示）
-const flowExcludeTypes = new Set(['memory', 'agenda'])
+// Flow 模式排除的工具类型（仅 Agent 模式显示）：
+// - memory/agenda：工具链路绑定 Agent 身份（agent_id / 会话），flow 执行域无语义
+// - question：ask_user_question 需要 Agent 会话身份（session_id）+ 会话域 SSE
+//   与 resolve 端点，flow 下 LLM 调用只会收到「仅在 Agent 模式下可用」错误
+const flowExcludeTypes = new Set(['memory', 'agenda', 'question'])
 
 const filteredBasicNodes = computed(() => {
   if (props.isAgent) {

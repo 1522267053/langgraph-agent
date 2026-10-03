@@ -10,7 +10,7 @@
  *   expires_in（刷新重连回放时由服务端重算）
  */
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { QuestionFilled, Check } from '@element-plus/icons-vue'
+import { QuestionFilled, Check, Minus, FullScreen } from '@element-plus/icons-vue'
 import { formatCountdown } from '@/utils/format'
 import { USER_RESPONSE_COUNTDOWN_SECONDS } from '@/constants/timing'
 
@@ -50,6 +50,16 @@ const showCustomInput = ref(false)
 // 用户已主动提交（submit / cancel 按钮触发过）后置 true，
 // 防止 store 清空 pendingQuestion 引发 dialog v-model 同步时再次误触发 cancel → submit
 const submitted = ref(false)
+// 最小化状态：true 时隐藏弹窗（含遮罩），右下角显示悬浮条，可随时恢复
+const minimized = ref(false)
+
+function minimize(): void {
+  minimized.value = true
+}
+
+function restore(): void {
+  minimized.value = false
+}
 
 // ---- 回答倒计时 ----
 const remainingSeconds = ref(0)
@@ -100,6 +110,7 @@ watch(
     customText.value = ''
     showCustomInput.value = false
     submitted.value = false // 新问题到来时重置提交标志
+    minimized.value = false // 新问题默认弹出（最小化只由用户主动触发）
     if (q) startCountdown(q)
     else stopCountdown()
   }
@@ -165,7 +176,7 @@ const confirmDisabled = computed(() => {
 
 <template>
   <el-dialog
-    :model-value="visible"
+    :model-value="visible && !minimized"
     width="560px"
     :close-on-click-modal="false"
     :close-on-press-escape="false"
@@ -185,6 +196,15 @@ const confirmDisabled = computed(() => {
         <span v-else-if="remainingSeconds > 0" class="dialog-countdown">
           {{ formatCountdown(remainingSeconds) }}
         </span>
+        <!-- 最小化：隐藏弹窗与遮罩，右下角悬浮条恢复；倒计时与已选状态保持 -->
+        <button
+          class="dialog-minimize"
+          type="button"
+          title="最小化（可回看对话，稍后恢复作答）"
+          @click="minimize"
+        >
+          <el-icon :size="16"><Minus /></el-icon>
+        </button>
       </div>
     </template>
 
@@ -258,6 +278,26 @@ const confirmDisabled = computed(() => {
       </div>
     </template>
   </el-dialog>
+
+  <!-- 最小化悬浮条：弹窗隐藏期间显示，点击恢复作答；倒计时/过期状态实时同步 -->
+  <Teleport to="body">
+    <button
+      v-if="visible && minimized"
+      class="question-minimized-bar"
+      type="button"
+      :class="{ 'is-expired': expired }"
+      @click="restore"
+    >
+      <el-icon :size="16" class="bar-icon"><QuestionFilled /></el-icon>
+      <span class="bar-title">{{ question?.header || '问题反问' }}</span>
+      <span class="bar-question">{{ question?.question }}</span>
+      <span v-if="expired" class="bar-expired">已过期</span>
+      <span v-else-if="remainingSeconds > 0" class="bar-countdown">
+        {{ formatCountdown(remainingSeconds) }}
+      </span>
+      <el-icon :size="14" class="bar-expand"><FullScreen /></el-icon>
+    </button>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -442,5 +482,105 @@ const confirmDisabled = computed(() => {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* header 最小化按钮 */
+.dialog-minimize {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-left: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #909399;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.dialog-minimize:hover {
+  background: #f0f2f5;
+  color: #606266;
+}
+
+/* 最小化悬浮条（Teleport 到 body，fixed 定位不随页面滚动） */
+.question-minimized-bar {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 420px;
+  padding: 10px 14px;
+  border: 1px solid #a855f7;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(168, 85, 247, 0.25);
+  cursor: pointer;
+  text-align: left;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+
+.question-minimized-bar:hover {
+  box-shadow: 0 6px 20px rgba(168, 85, 247, 0.35);
+  transform: translateY(-1px);
+}
+
+.question-minimized-bar.is-expired {
+  border-color: #dcdfe6;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  opacity: 0.75;
+}
+
+.bar-icon {
+  flex-shrink: 0;
+  color: #a855f7;
+}
+
+.bar-title {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.bar-question {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #606266;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-countdown {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #e6a23c;
+  background: #fdf6ec;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.bar-expired {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #909399;
+  background: #f4f4f5;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.bar-expand {
+  flex-shrink: 0;
+  color: #c0c4cc;
 }
 </style>

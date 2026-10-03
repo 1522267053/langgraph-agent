@@ -14,7 +14,10 @@ import {
   Warning,
   Document,
   MoreFilled,
-  Loading
+  Loading,
+  Minus,
+  ChatDotRound,
+  CaretBottom
 } from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
 import { flowApi } from '@/api/flow'
@@ -1672,6 +1675,67 @@ function handleApproveTools() {
 function handleRejectTools() {
   store.rejectToolCalls()
 }
+
+// ===== 等待弹层最小化（human-input / tool-approval 共用模式） =====
+// 最小化后隐藏遮罩与卡片，右下角悬浮条恢复；等待期间 SSE 流继续，回看不受影响
+const humanInputMinimized = ref(false)
+const approvalMinimized = ref(false)
+
+function minimizeHumanInput() {
+  humanInputMinimized.value = true
+}
+
+function minimizeApproval() {
+  approvalMinimized.value = true
+}
+
+// 底部悬浮条：任一最小化等待存在即显示（两者同时最小化时并列展示）。
+// 结构与 QuestionDialog 悬浮条一致：图标 + 标题 + 摘要 + 倒计时 + 展开图标
+const minimizedWaits = computed(() => {
+  const bars: Array<{
+    key: string
+    icon: typeof Warning
+    iconClass: string
+    title: string
+    summary: string
+    countdown: number
+    restore: () => void
+  }> = []
+  if (store.isWaitingHuman && humanInputMinimized.value) {
+    bars.push({
+      key: 'human-input',
+      icon: ChatDotRound,
+      iconClass: 'bar-icon-wait',
+      title: '人工输入',
+      summary: store.currentWaitData?.question || '请提供输入',
+      countdown: 0,
+      restore: () => {
+        humanInputMinimized.value = false
+      }
+    })
+  }
+  if (store.isWaitingToolApproval && approvalMinimized.value) {
+    const tc = store.pendingToolCalls[0]
+    const total = store.pendingToolCalls.length
+    const summary = tc
+      ? total > 1
+        ? `${tc.name} 等 ${total} 个工具`
+        : tc.name
+      : '请求执行工具'
+    bars.push({
+      key: 'tool-approval',
+      icon: Warning,
+      iconClass: 'bar-icon-approval',
+      title: '工具审批',
+      summary,
+      countdown: store.approvalCountdown,
+      restore: () => {
+        approvalMinimized.value = false
+      }
+    })
+  }
+  return bars
+})
 </script>
 
 <template>
@@ -1865,13 +1929,23 @@ function handleRejectTools() {
       </div>
     </div>
 
-    <div v-if="store.isWaitingHuman" class="human-input-overlay">
+    <div v-if="store.isWaitingHuman && !humanInputMinimized" class="human-input-overlay">
       <el-card class="human-input-card">
-        <div class="human-input-question">
-          <el-icon style="color: #e6a23c; margin-right: 8px">
-            <ChatDotRound />
-          </el-icon>
-          {{ store.currentWaitData?.question || '请提供输入' }}
+        <div class="overlay-card-header">
+          <div class="human-input-question">
+            <el-icon style="color: #e6a23c; margin-right: 8px">
+              <ChatDotRound />
+            </el-icon>
+            {{ store.currentWaitData?.question || '请提供输入' }}
+          </div>
+          <button
+            class="overlay-minimize-btn"
+            type="button"
+            title="最小化（可回看对话，稍后恢复作答）"
+            @click="minimizeHumanInput"
+          >
+            <el-icon :size="16"><Minus /></el-icon>
+          </button>
         </div>
         <div v-if="store.currentWaitData?.context" class="human-input-context">
           {{ store.currentWaitData.context }}
@@ -1892,20 +1966,30 @@ function handleRejectTools() {
       </el-card>
     </div>
 
-    <div v-if="store.isWaitingToolApproval" class="tool-approval-overlay">
+    <div v-if="store.isWaitingToolApproval && !approvalMinimized" class="tool-approval-overlay">
       <el-card class="tool-approval-card">
-        <div class="approval-header">
-          <el-icon style="color: #e6a23c; margin-right: 8px">
-            <Warning />
-          </el-icon>
-          <span v-if="store.subAgentApproval?.isSubAgent">
-            子Agent「{{ store.subAgentApproval.agentName }}」
-          </span>
-          <span v-if="store.approvalProgress.total > 1">
-            工具 {{ store.approvalProgress.current }}/{{ store.approvalProgress.total }}
-          </span>
-          <span v-else>请求执行工具</span>
-          <span class="approval-countdown">{{ formatCountdown(store.approvalCountdown) }}</span>
+        <div class="overlay-card-header">
+          <div class="approval-header">
+            <el-icon style="color: #e6a23c; margin-right: 8px">
+              <Warning />
+            </el-icon>
+            <span v-if="store.subAgentApproval?.isSubAgent">
+              子Agent「{{ store.subAgentApproval.agentName }}」
+            </span>
+            <span v-if="store.approvalProgress.total > 1">
+              工具 {{ store.approvalProgress.current }}/{{ store.approvalProgress.total }}
+            </span>
+            <span v-else>请求执行工具</span>
+            <span class="approval-countdown">{{ formatCountdown(store.approvalCountdown) }}</span>
+          </div>
+          <button
+            class="overlay-minimize-btn"
+            type="button"
+            title="最小化（可回看对话，稍后恢复审批）"
+            @click="minimizeApproval"
+          >
+            <el-icon :size="16"><Minus /></el-icon>
+          </button>
         </div>
         <div class="approval-tools">
           <div
@@ -1976,6 +2060,28 @@ function handleRejectTools() {
     <MemoryPanel v-model:visible="showMemory" :agent-id="agentId" />
     <FileChangePanel v-model:visible="showFileChanges" />
     <ToolOutputDrawer />
+    <!-- 最小化等待悬浮条：human-input / tool-approval 最小化期间显示，点击恢复。
+         结构与 QuestionDialog 悬浮条一致：图标 + 标题 + 摘要 + 倒计时 + 展开图标 -->
+    <div v-if="minimizedWaits.length > 0" class="minimized-waits">
+      <button
+        v-for="bar in minimizedWaits"
+        :key="bar.key"
+        class="minimized-wait-bar"
+        type="button"
+        :title="bar.summary"
+        @click="bar.restore"
+      >
+        <el-icon :size="16" class="bar-icon" :class="bar.iconClass">
+          <component :is="bar.icon" />
+        </el-icon>
+        <span class="bar-title">{{ bar.title }}</span>
+        <span class="bar-question">{{ bar.summary }}</span>
+        <span v-if="bar.countdown > 0" class="bar-countdown">
+          {{ formatCountdown(bar.countdown) }}
+        </span>
+        <el-icon :size="14" class="bar-expand"><CaretBottom /></el-icon>
+      </button>
+    </div>
     <QuestionDialog
       :question="store.pendingQuestion"
       :sub-agent-name="store.subAgentQuestion?.isSubAgent ? store.subAgentQuestion.agentName : ''"
@@ -2052,10 +2158,7 @@ function handleRejectTools() {
 </template>
 
 <script lang="ts">
-import { ChatDotRound } from '@element-plus/icons-vue'
-export default {
-  components: { ChatDotRound }
-}
+export default {}
 </script>
 
 <style scoped>
@@ -2364,6 +2467,111 @@ export default {
   justify-content: center;
   align-items: center;
   z-index: 100;
+}
+
+/* 等待卡片头部：内容 + 最小化按钮横排 */
+.overlay-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.overlay-minimize-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #909399;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.overlay-minimize-btn:hover {
+  background: #f0f2f5;
+  color: #606266;
+}
+
+/* 最小化等待悬浮条组（右下角，避开输入框区域） */
+.minimized-waits {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.minimized-wait-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 420px;
+  padding: 10px 14px;
+  border: 1px solid #f59e0b;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(245, 158, 11, 0.25);
+  cursor: pointer;
+  text-align: left;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+
+.minimized-wait-bar:hover {
+  box-shadow: 0 6px 20px rgba(245, 158, 11, 0.35);
+  transform: translateY(-1px);
+}
+
+.bar-icon {
+  flex-shrink: 0;
+}
+
+.bar-icon-wait {
+  color: #e6a23c;
+}
+
+.bar-icon-approval {
+  color: #f59e0b;
+}
+
+.bar-title {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.bar-question {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #606266;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-countdown {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #e6a23c;
+  background: #fdf6ec;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.bar-expand {
+  flex-shrink: 0;
+  color: #c0c4cc;
+  transform: rotate(180deg);
 }
 
 .human-input-card {
