@@ -100,11 +100,13 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
           }
         }
       }
-      if (runningCount.value === 0) {
-        stopPolling()
-      }
     } catch {
       // ignore poll errors
+    }
+    // stopPolling 移出捕获区：finalizeVanishedTask 可能将 running 任务落为终态，
+    // 提前 return 会跳过收尾检查，导致 UI 永远显示「执行中」且轮询不停止
+    if (runningCount.value === 0) {
+      stopPolling()
     }
   }
 

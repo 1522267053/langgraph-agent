@@ -3,6 +3,7 @@ import type { ShellConfig } from './types'
 import { fieldTypeOptions } from './types'
 import { useConfigBase } from '@/composables/useConfigBase'
 import { useInputVariables } from '@/composables/useInputVariables'
+import { QuestionFilled } from '@element-plus/icons-vue'
 import VariableSelector from '../components/VariableSelector.vue'
 import ApprovalConfigSection, { type ApprovalConfig } from './ApprovalConfigSection.vue'
 
@@ -122,14 +123,36 @@ function onApprovalUpdate(val: ApprovalConfig): void {
             @blur="updateConfig"
           />
         </el-form-item>
-        <el-form-item label="超时">
+        <el-form-item label="空闲超时">
           <el-input-number
             v-model="localConfig.timeout"
             :min="5"
-            :max="300"
+            :max="7200"
             @change="updateConfig"
           />
           <span class="unit-label">秒</span>
+          <el-tooltip
+            content="连续无输出达到该时长才判超时并清杀进程；服务器等持续输出的任务不会被误杀"
+            placement="top"
+          >
+            <el-icon class="field-help"><QuestionFilled /></el-icon>
+          </el-tooltip>
+        </el-form-item>
+        <el-form-item label="最大时长">
+          <el-input-number
+            v-model="localConfig.max_duration"
+            :min="0"
+            :max="86400"
+            placeholder="1800"
+            @change="updateConfig"
+          />
+          <span class="unit-label">秒</span>
+          <el-tooltip
+            content="总运行时长硬上限，默认 1800 秒（半小时），0 表示不限制；到点强制终止防止进程泄漏（与空闲超时先到先触发）"
+            placement="top"
+          >
+            <el-icon class="field-help"><QuestionFilled /></el-icon>
+          </el-tooltip>
         </el-form-item>
         <el-form-item label="工作目录">
           <el-input
@@ -187,5 +210,10 @@ function onApprovalUpdate(val: ApprovalConfig): void {
 .output-var-type {
   font-size: 12px;
   color: #909399;
+}
+.field-help {
+  margin-left: 6px;
+  color: #c0c4cc;
+  cursor: help;
 }
 </style>

@@ -253,7 +253,10 @@ export interface PythonConfig {
 /** Shell节点配置 */
 export interface ShellConfig {
   command: string
+  /** 空闲超时（秒）：连续 N 秒无输出才判超时（工具模式）；服务器持续输出不误杀 */
   timeout: number
+  /** 最大总时长硬上限（秒），0/undefined=不限制；到点必杀防进程泄漏 */
+  max_duration?: number
   default_workdir?: string
   input_variables: NodeVariable[]
   output_variables: NodeVariable[]

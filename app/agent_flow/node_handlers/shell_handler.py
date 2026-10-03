@@ -5,7 +5,7 @@ Shell命令执行节点处理器
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 import fnmatch
 import json
 import os
@@ -56,7 +56,13 @@ from app.models.flow_node import FlowNode
 
 class ShellNodeConfig(BaseNodeConfig):
     command: str = ""
+    # 工具模式（连接到 LLM）下的空闲超时：连续 N 秒无任何 stdout/stderr 输出才判超时。
+    # 服务器/长驻进程持续吐日志永不误杀；真正卡死的无输出命令照样杀
     timeout: int = 300
+    # 工具模式下的最大总时长硬上限（秒），默认 1800（半小时）；0/None=不限制。
+    # 到点必杀（防进程泄漏），与空闲超时先到先触发。
+    # flow 直跑模式不使用此配置（总时长语义不变）
+    max_duration: Optional[int] = 1800
     async_wait: int = 8
     default_workdir: str = Field(
         "",
@@ -604,6 +610,9 @@ class BackgroundShellTask:
     stdout: str = ""
     stderr: str = ""
     return_code: Optional[int] = None
+    # 超时终态细分：idle_timeout（连续 timeout 秒无输出）/ max_duration（总时长到上限）；
+    # 非 timeout 终态为 None。供 LLM 区分「卡死」与「长任务到寿」
+    timeout_reason: Optional[str] = None
     start_time: datetime = field(default_factory=datetime.now)
     end_time: Optional[datetime] = None
     process: Optional[asyncio.subprocess.Process] = None
@@ -628,6 +637,8 @@ class BackgroundShellTask:
             "return_code": self.return_code,
             "elapsed_seconds": round(elapsed, 2) if elapsed else None,
         }
+        if self.timeout_reason:
+            result["timeout_reason"] = self.timeout_reason
         error_type = _classify_shell_error(self.status, self.return_code, self.stderr)
         if error_type is None and self.return_code == 0:
             if not self.stdout.strip() and not self.stderr.strip():
@@ -710,9 +721,18 @@ async def _read_stream(
 
 async def _monitor_process(
     task: BackgroundShellTask,
-    timeout: float,
+    idle_timeout: float,
+    max_duration: Optional[float] = None,
 ) -> None:
-    """后台监控协程：读取 stdout/stderr 并等待进程结束，超时则 kill"""
+    """后台监控协程：读 stdout/stderr 并等待进程结束。
+
+    超时判定（双条件，先到先触发）：
+    - 空闲超时 idle_timeout：连续 idle_timeout 秒无任何新输出（stdout/stderr
+      字节缓冲区长度均无增长）才杀。服务器/长驻进程持续吐日志永不误杀；
+      真正卡死的无输出命令照样杀 → timeout_reason="idle_timeout"
+    - 最大时长 max_duration（可选）：总运行时长硬上限，到点必杀防进程泄漏
+      → timeout_reason="max_duration"
+    """
     process = task.process
     if not process:
         task.status = "failed"
@@ -720,19 +740,55 @@ async def _monitor_process(
         return
 
     try:
-        await asyncio.wait_for(
-            asyncio.gather(
-                _read_stream(process.stdout, task, "stdout"),
-                _read_stream(process.stderr, task, "stderr"),
-                process.wait(),
-            ),
-            timeout=timeout,
+        streams = asyncio.gather(
+            _read_stream(process.stdout, task, "stdout"),
+            _read_stream(process.stderr, task, "stderr"),
+            process.wait(),
         )
-    except asyncio.TimeoutError:
+        deadline = (
+            datetime.now() + timedelta(seconds=max_duration) if max_duration else None
+        )
+        # 空闲计时基准：输出活动（缓冲区长度变化）即重置。
+        # 轮询间隔必须远小于 idle_timeout：若一次睡满整个 idle_timeout，
+        # 窗口内到达的输出会被「迟到承认」（窗口结束才重置计时器），
+        # 导致最坏 2×idle_timeout 才杀（实测 banner 场景 300→600s）
+        idle_poll_interval = 1.0
+        last_activity = datetime.now()
+        out_len = len(task._stdout_bytes)
+        err_len = len(task._stderr_bytes)
+
+        while True:
+            now = datetime.now()
+            if deadline is not None and (deadline - now).total_seconds() <= 0:
+                raise TimeoutError("max_duration")
+
+            done, _pending = await asyncio.wait(
+                {streams}, timeout=idle_poll_interval
+            )
+            if done:
+                # gather 整体完成：进程已退出（含异常路径由 gather 结果抛出）
+                streams.result()
+                break
+
+            # 未完成：检查输出活动，有新字节则重置空闲计时
+            new_out = len(task._stdout_bytes)
+            new_err = len(task._stderr_bytes)
+            if new_out != out_len or new_err != err_len:
+                out_len, err_len = new_out, new_err
+                last_activity = datetime.now()
+                continue
+
+            if (datetime.now() - last_activity).total_seconds() >= idle_timeout:
+                raise TimeoutError("idle_timeout")
+    except TimeoutError as exc:
         # cmd 宿主与用户子进程是树状结构，必须整树清杀防止孤儿进程
         await _force_kill_process_tree(process)
         task.status = "timeout"
         task.return_code = -1
+        task.timeout_reason = str(exc)
+    except asyncio.CancelledError:
+        # shell_task_cancel 路径：monitor 被取消后由取消方负责状态与清杀，此处静默
+        raise
     except Exception:
         task.status = "failed"
         task.return_code = -1
@@ -1236,7 +1292,9 @@ class ShellNodeHandler(BaseNodeHandler):
             )
             _background_tasks[task.task_id] = task
 
-            monitor = asyncio.create_task(_monitor_process(task, timeout))
+            monitor = asyncio.create_task(
+                _monitor_process(task, timeout, cfg.max_duration)
+            )
             task._monitor_task = monitor
 
             done, _ = await asyncio.wait({monitor}, timeout=async_wait)
@@ -1300,6 +1358,10 @@ class ShellNodeHandler(BaseNodeHandler):
                 f"在受限环境中执行Shell命令（{system_info}）。"
                 f"命令执行等待 {async_wait} 秒，未完成则转为后台任务并返回 task_id；"
                 f"后台任务支持并发，等待期间可继续其他工具调用或启动新任务。"
+                f"超时按空闲判定：连续 {timeout} 秒无任何输出才判超时并整树清杀"
+                f"（timeout_reason=idle_timeout），服务器/长驻进程持续输出不会被误杀；"
+                f"总时长硬上限默认 1800 秒（半小时，timeout_reason=max_duration），"
+                f"节点配置 max_duration=0 可解除限制。"
                 f"用 shell_task_status 的 wait_time 参数（8~120秒）阻塞等待结果。"
                 f"用 shell_task_input 向进程发送输入，用 shell_task_cancel 终止任务。"
                 f"可用 workdir 指定本次工作目录；返回的 cwd 字段是实际执行目录。"
@@ -1351,7 +1413,8 @@ class ShellNodeHandler(BaseNodeHandler):
                 "查询后台Shell任务的执行状态和输出。"
                 "当 shell_executor 返回 task_id 时使用此工具获取进度；支持多次调用与多个任务并发查询。"
                 "wait_time 参数指定阻塞等待秒数（8~120秒），长任务建议设置较大值一次性等待完成。"
-                "返回字段: status(running/completed/failed/timeout), stdout, stderr, return_code, elapsed_seconds。"
+                "返回字段: status(running/completed/failed/timeout/cancelled), stdout, stderr, return_code, elapsed_seconds, "
+                "timeout_reason(timeout 时：idle_timeout=连续无输出超时 / max_duration=总时长到上限)。"
                 "失败时附带 error_type(timeout/not_found/permission_denied/runtime_error/empty_stdout)，可据此决定重试或换方案。"
                 "运行中（status=running）的 stdout/stderr 也会实时返回——若含交互提示（如"
                 "'Enter your name:'/'Password:'/'Continue? [y/n]'），应据此立即调用 shell_task_input 写入回复文本，"
