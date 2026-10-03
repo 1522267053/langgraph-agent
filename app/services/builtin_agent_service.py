@@ -12,6 +12,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -172,6 +173,183 @@ BUILTIN_AGENT_SYSTEM_PROMPT = """你是 AI Agent OS 的内置助手，是用户�
 - 修改已有内容前，先展示当前配置供用户确认
 - 如需了解节点类型配置，调用 GET /api/ai/flow/node-types/{type}/config-schema
 """
+
+
+# ---- 内置 Agent 模板模型（对齐 flow_template_service 的声明式风格） ----
+
+
+class BuiltinAgentNode(BaseModel):
+    """内置 Agent 模板节点"""
+
+    node_type: str = Field(..., description="节点类型")
+    node_key: str = Field(..., description="节点标识")
+    node_name: str = Field(..., description="节点名称")
+    position_x: int = Field(0, description="X坐标")
+    position_y: int = Field(0, description="Y坐标")
+    base_config: dict = Field(default_factory=dict, description="节点配置")
+
+
+class BuiltinAgentEdge(BaseModel):
+    """内置 Agent 模板边"""
+
+    source_node_key: str = Field(..., description="源节点")
+    target_node_key: str = Field(..., description="目标节点")
+    source_handle: str = Field(default="default", description="源handle")
+    target_handle: str = Field(default="default", description="目标handle")
+
+
+class BuiltinAgentTemplate:
+    """内置 Agent 拓扑模板
+
+    静态拓扑声明为常量，动态值（skills / LLM 配置）通过方法参数注入：
+    - Start → LLM → End 主链路 + 10 个工具节点（skill 有则挂）
+    - 全部工具节点以 tools->tools 边挂到 LLM
+    """
+
+    # ---- 工具节点静态声明：(node_key, node_type, node_name, x, y, node_type_for_defaults) ----
+    # node_type_for_defaults 与 node_type 相同，仅为 fill_node_defaults 参数显式化；
+    # skill_tool 因依赖 skills 参数单独构造，不在此表
+    _TOOL_NODES: tuple[tuple[str, str, str, int, int], ...] = (
+        ("api_tool", NodeType.API.value, "API 工具", 300, 450),
+        ("todo_tool", NodeType.TODO.value, "任务计划", 500, 450),
+        ("python_tool", NodeType.PYTHON.value, "Python 工具", 700, 450),
+        ("shell_tool", NodeType.SHELL.value, "Shell 工具", 900, 450),
+        ("ssh_tool", NodeType.SSH.value, "SSH 工具", 100, 600),
+        ("memory_tool", NodeType.MEMORY.value, "记忆管理", 300, 600),
+        ("agenda_tool", NodeType.AGENDA.value, "日程管理", 500, 600),
+        ("mcp_tool", NodeType.MCP.value, "MCP 工具", 700, 600),
+        ("sub_agent_tool", NodeType.SUB_AGENT.value, "子 Agent", 900, 600),
+        ("question_tool", NodeType.QUESTION.value, "问题反问", 100, 750),
+    )
+
+    @classmethod
+    def nodes(
+        cls,
+        skills: list[dict],
+        llm_config: dict,
+        capabilities: dict,
+        context_length: int,
+    ) -> list[BuiltinAgentNode]:
+        """构建全部节点（主链路 + 工具节点）
+
+        Args:
+            skills: 已注册内置 Skill 列表 [{id, name}, ...]，非空时挂 skill_tool
+            llm_config: 全局 LLM 配置（provider/model/api_key/base_url）
+            capabilities: 模型多模态能力（由模型元数据推导）
+            context_length: 上下文窗口（全局配置优先，模型元数据兜底）
+        """
+        nodes = [
+            BuiltinAgentNode(
+                node_type=NodeType.START.value,
+                node_key="start",
+                node_name="开始",
+                position_x=100,
+                position_y=200,
+                base_config={
+                    "input_variables": [
+                        {
+                            "name": "message",
+                            "type": "string",
+                            "description": "用户消息",
+                            "required": True,
+                        },
+                        {
+                            "name": "files",
+                            "type": "file_list",
+                            "description": "上传文件",
+                            "multiple": True,
+                            "max_size": 20,
+                            "required": False,
+                        },
+                    ]
+                },
+            ),
+            BuiltinAgentNode(
+                node_type=NodeType.LLM.value,
+                node_key="llm",
+                node_name="AI 助手",
+                position_x=350,
+                position_y=200,
+                base_config=fill_node_defaults(
+                    "llm",
+                    {
+                        "provider": llm_config.get("provider", ""),
+                        "model": llm_config.get("model", ""),
+                        "api_key": llm_config.get("api_key", ""),
+                        "base_url": llm_config.get("base_url", ""),
+                        "context_length": context_length,
+                        "capabilities": capabilities,
+                        "system_prompt": BUILTIN_AGENT_SYSTEM_PROMPT,
+                        "user_prompt": "{{message}}",
+                        "max_tool_iterations": 99999,
+                        "input_variables": [
+                            {
+                                "name": "message",
+                                "source": "input.message",
+                                "type": "string",
+                            }
+                        ],
+                    },
+                ),
+            ),
+            BuiltinAgentNode(
+                node_type=NodeType.END.value,
+                node_key="end",
+                node_name="结束",
+                position_x=600,
+                position_y=200,
+                base_config={
+                    "output_variables": [
+                        {"name": "res", "source": "nodes.llm.result", "type": "string"}
+                    ]
+                },
+            ),
+        ]
+
+        if skills:
+            nodes.append(
+                BuiltinAgentNode(
+                    node_type=NodeType.SKILL.value,
+                    node_key="skill_tool",
+                    node_name="技能",
+                    position_x=100,
+                    position_y=450,
+                    base_config=fill_node_defaults(
+                        "skill", {"skill_ids": [s["id"] for s in skills]}
+                    ),
+                )
+            )
+
+        for key, ntype, name, x, y in cls._TOOL_NODES:
+            nodes.append(
+                BuiltinAgentNode(
+                    node_type=ntype,
+                    node_key=key,
+                    node_name=name,
+                    position_x=x,
+                    position_y=y,
+                    base_config=fill_node_defaults(ntype),
+                )
+            )
+        return nodes
+
+    @classmethod
+    def edges(cls, tool_keys: list[str]) -> list[BuiltinAgentEdge]:
+        """构建全部边：主链路 start→llm→end + 工具节点 tools->tools 挂到 llm"""
+        edges = [
+            BuiltinAgentEdge(source_node_key="start", target_node_key="llm"),
+            BuiltinAgentEdge(source_node_key="llm", target_node_key="end"),
+        ]
+        edges.extend(
+            BuiltinAgentEdge(
+                source_node_key=key,
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            )
+            for key in tool_keys
+        )
+        return edges
 
 
 class BuiltinAgentService:
@@ -500,251 +678,62 @@ class BuiltinAgentService:
     async def _build_nodes_and_edges(
         self, db: AsyncSession, flow: Flow, skills: list[dict], global_llm: dict
     ) -> None:
-        """构建内置 Agent 的节点和边（Start → LLM → End + 全部工具节点）"""
+        """构建内置 Agent 的节点和边（Start → LLM → End + 全部工具节点）
+
+        编排层：解析 LLM 动态配置 → BuiltinAgentTemplate 声明拓扑 → 批量落库。
+        拓扑细节见 BuiltinAgentTemplate。
+        """
         provider_name = global_llm.get("provider", "")
         model = global_llm.get("model", "")
-        api_key = global_llm.get("api_key", "")
         base_url = global_llm.get("base_url", "")
         model_meta = await self._get_model_metadata(db, provider_name, model)
         capabilities = model_meta["capabilities"]
         context_length = (
             global_llm.get("context_length") or model_meta["context_length"] or 0
         )
-        from app.services.ai_provider_service import ai_provider_service
 
         if not base_url:
+            from app.services.ai_provider_service import ai_provider_service
+
             provider = await ai_provider_service.get_by_provider_id(db, provider_name)
             base_url = provider.api_url if provider and provider.api_url else ""
 
-        # ---- 主链路节点 ----
-        nodes_data = [
-            {
-                "node_type": NodeType.START.value,
-                "node_key": "start",
-                "node_name": "开始",
-                "position_x": 100,
-                "position_y": 200,
-                "base_config": {
-                    "input_variables": [
-                        {
-                            "name": "message",
-                            "type": "string",
-                            "description": "用户消息",
-                            "required": True,
-                        },
-                        {
-                            "name": "files",
-                            "type": "file_list",
-                            "description": "上传文件",
-                            "multiple": True,
-                            "max_size": 20,
-                            "required": False,
-                        },
-                    ]
-                },
-            },
-            {
-                "node_type": NodeType.LLM.value,
-                "node_key": "llm",
-                "node_name": "AI 助手",
-                "position_x": 350,
-                "position_y": 200,
-                "base_config": fill_node_defaults(
-                    "llm",
-                    {
-                        "provider": provider_name,
-                        "model": model,
-                        "api_key": api_key,
-                        "base_url": base_url,
-                        "context_length": context_length,
-                        "capabilities": capabilities,
-                        "system_prompt": BUILTIN_AGENT_SYSTEM_PROMPT,
-                        "user_prompt": "{{message}}",
-                        "max_tool_iterations": 99999,
-                        "input_variables": [
-                            {
-                                "name": "message",
-                                "source": "input.message",
-                                "type": "string",
-                            }
-                        ],
-                    },
-                ),
-            },
-            {
-                "node_type": NodeType.END.value,
-                "node_key": "end",
-                "node_name": "结束",
-                "position_x": 600,
-                "position_y": 200,
-                "base_config": {
-                    "output_variables": [
-                        {"name": "res", "source": "nodes.llm.result", "type": "string"}
-                    ]
-                },
-            },
-        ]
-
-        # ---- 工具节点 ----
-        tool_nodes = []
-        if skills:
-            tool_nodes.append(
-                (
-                    "skill_tool",
-                    NodeType.SKILL.value,
-                    "技能",
-                    100,
-                    450,
-                    fill_node_defaults(
-                        "skill", {"skill_ids": [s["id"] for s in skills]}
-                    ),
-                )
-            )
-
-        tool_nodes.extend(
-            [
-                (
-                    "api_tool",
-                    NodeType.API.value,
-                    "API 工具",
-                    300,
-                    450,
-                    fill_node_defaults("api"),
-                ),
-                (
-                    "todo_tool",
-                    NodeType.TODO.value,
-                    "任务计划",
-                    500,
-                    450,
-                    fill_node_defaults("todo"),
-                ),
-                (
-                    "python_tool",
-                    NodeType.PYTHON.value,
-                    "Python 工具",
-                    700,
-                    450,
-                    fill_node_defaults("python"),
-                ),
-                (
-                    "shell_tool",
-                    NodeType.SHELL.value,
-                    "Shell 工具",
-                    900,
-                    450,
-                    fill_node_defaults("shell"),
-                ),
-                (
-                    "ssh_tool",
-                    NodeType.SSH.value,
-                    "SSH 工具",
-                    100,
-                    600,
-                    fill_node_defaults("ssh"),
-                ),
-                (
-                    "memory_tool",
-                    NodeType.MEMORY.value,
-                    "记忆管理",
-                    300,
-                    600,
-                    fill_node_defaults("memory"),
-                ),
-                (
-                    "agenda_tool",
-                    NodeType.AGENDA.value,
-                    "日程管理",
-                    500,
-                    600,
-                    fill_node_defaults("agenda"),
-                ),
-                (
-                    "mcp_tool",
-                    NodeType.MCP.value,
-                    "MCP 工具",
-                    700,
-                    600,
-                    fill_node_defaults("mcp"),
-                ),
-                (
-                    "sub_agent_tool",
-                    NodeType.SUB_AGENT.value,
-                    "子 Agent",
-                    900,
-                    600,
-                    fill_node_defaults("sub_agent"),
-                ),
-                (
-                    "question_tool",
-                    NodeType.QUESTION.value,
-                    "问题反问",
-                    100,
-                    750,
-                    fill_node_defaults("question"),
-                ),
-            ]
+        nodes = BuiltinAgentTemplate.nodes(
+            skills=skills,
+            llm_config=global_llm,
+            capabilities=capabilities,
+            context_length=context_length,
         )
-        for key, ntype, name, x, y, cfg in tool_nodes:
-            nodes_data.append(
-                {
-                    "node_type": ntype,
-                    "node_key": key,
-                    "node_name": name,
-                    "position_x": x,
-                    "position_y": y,
-                    "base_config": cfg,
-                }
-            )
+        tool_keys = [
+            n.node_key
+            for n in nodes
+            if n.node_key not in ("start", "llm", "end")
+        ]
+        edges = BuiltinAgentTemplate.edges(tool_keys)
 
         node_creates = [
             FlowNodeCreate(
                 flow_id=flow.id,
-                node_type=n["node_type"],
-                node_key=n["node_key"],
-                node_name=n["node_name"],
-                position_x=n["position_x"],
-                position_y=n["position_y"],
-                base_config=n.get("base_config"),
+                node_type=n.node_type,
+                node_key=n.node_key,
+                node_name=n.node_name,
+                position_x=n.position_x,
+                position_y=n.position_y,
+                base_config=n.base_config,
             )
-            for n in nodes_data
+            for n in nodes
         ]
         await flow_service.batch_create_nodes(db, flow.id, node_creates)
-
-        # ---- 边 ----
-        edges_data = [
-            {
-                "source_node_key": "start",
-                "target_node_key": "llm",
-                "source_handle": "default",
-                "target_handle": "default",
-            },
-            {
-                "source_node_key": "llm",
-                "target_node_key": "end",
-                "source_handle": "default",
-                "target_handle": "default",
-            },
-        ]
-        for key, *_ in tool_nodes:
-            edges_data.append(
-                {
-                    "source_node_key": key,
-                    "target_node_key": "llm",
-                    "source_handle": "tools",
-                    "target_handle": "tools",
-                }
-            )
 
         edge_creates = [
             FlowEdgeCreate(
                 flow_id=flow.id,
-                source_node_key=e["source_node_key"],
-                target_node_key=e["target_node_key"],
-                source_handle=e.get("source_handle"),
-                target_handle=e.get("target_handle"),
+                source_node_key=e.source_node_key,
+                target_node_key=e.target_node_key,
+                source_handle=e.source_handle,
+                target_handle=e.target_handle,
             )
-            for e in edges_data
+            for e in edges
         ]
         await flow_service.batch_create_edges(db, flow.id, edge_creates)
 

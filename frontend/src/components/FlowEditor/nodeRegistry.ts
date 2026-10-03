@@ -530,6 +530,7 @@ const registry: Record<string, NodeRegistryEntry> = {
     defaultConfig: () => ({
       command: '',
       timeout: 30,
+      max_duration: 1800,
       input_variables: [],
       output_variables: [
         { name: 'stdout', source: '', type: 'string' },
@@ -539,6 +540,10 @@ const registry: Record<string, NodeRegistryEntry> = {
     }),
     initConfig: (rawConfig, ctx) => {
       const config = { ...rawConfig }
+      // 新节点默认半小时硬上限；存量节点无此字段时同样回填（后端 Pydantic 默认一致）
+      if (config.max_duration === undefined) {
+        config.max_duration = 1800
+      }
       config.input_variables = resolveInputVars(rawConfig, 'shell', ctx)
       config.output_variables = resolveOutputVars(rawConfig, 'shell', ctx)
       return config

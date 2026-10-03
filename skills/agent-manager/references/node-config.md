@@ -282,14 +282,15 @@ def main(text):
 
 ## Shell 工具
 
-Shell 节点通过工具边提供 `shell_executor`、后台任务控制和文件操作工具。节点配置包含默认 `command`、`timeout`、`async_wait`、`default_workdir` 等字段；每次调用 `shell_executor` 还可传 `workdir` 指定工作目录。
+Shell 节点通过工具边提供 `shell_executor`、后台任务控制和文件操作工具。节点配置包含默认 `command`、`timeout`、`max_duration`、`async_wait`、`default_workdir` 等字段；每次调用 `shell_executor` 还可传 `workdir` 指定工作目录。
 
 - Windows 上命令经 cmd.exe 执行（不是 PowerShell）：命令必须为单行，含裸换行会被直接拒绝；多条独立命令用 `&&` 连接；多行 Python 先写入 .py 文件再执行；环境变量用 `%VAR%`。没有 `head`/`tail`，输出过滤用 `findstr` 或重定向文件后用 file_read 读取。
 - 工作目录优先级：节点配置 `default_workdir`（相对路径基于项目根目录解析）> Agent 工作目录 > 服务进程目录。
 - 每次调用结果附带 `cwd` 字段，表示实际执行目录。
 - 每次调用都是独立进程，`cd` 不会改变后续调用的目录，切换目录必须传 `workdir`。
 - 命令受危险模式和路径边界校验，不要尝试绕过（`Format-Volume`、`Clear-Disk`、递归强删盘根等 PowerShell 写法同样被拦截）。
-- 长时间命令会转为后台任务并返回 `task_id`；后台任务支持并发，`shell_task_status` 可用 `wait_time`（8~120秒）长阻塞等待，多次查询不受限制。
+- 超时按**空闲**判定：连续 `timeout` 秒（默认 300）无任何 stdout/stderr 输出才清杀进程（`timeout_reason=idle_timeout`）——服务器、dev server、watch 等持续输出的长驻任务不会被误杀；真正卡死的无输出命令照样杀。总时长硬上限 `max_duration` 默认 1800 秒（半小时），到点必杀防泄漏（`timeout_reason=max_duration`），与空闲超时先到先触发；设为 0 解除限制。flow 直跑模式（非工具边）仍是总时长语义，不使用 `max_duration`。
+- 长时间命令会转为后台任务并返回 `task_id`；后台任务支持并发，`shell_task_status` 可用 `wait_time`（8~120秒）长阻塞等待，多次查询不受限制；timeout 终态带 `timeout_reason` 供区分卡死与长任务到寿。
 
 ## SSH 工具
 
