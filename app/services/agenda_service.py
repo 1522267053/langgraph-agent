@@ -6,7 +6,7 @@
 
 import calendar
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Optional, Tuple, cast
 
 from sqlalchemy import CursorResult, Select, and_, func, or_, select, update
@@ -17,6 +17,36 @@ from app.schemas.agenda_schema import AgendaCondition, AgendaCreate, AgendaUpdat
 from app.services.base_service import BaseService
 
 logger = logging.getLogger(__name__)
+
+
+def _is_holiday(d: date) -> bool:
+    """判定法定节假日（含调休放假；调休补班的周末不算节假日）
+
+    数据源 chinesecalendar（国务院放假安排，需随年份更新包版本）。
+    超出库覆盖年份或导入失败时保守返回 False（按非节假日处理），不炸主流程。
+    """
+    try:
+        import chinese_calendar
+
+        return chinese_calendar.is_holiday(d)
+    except (ImportError, NotImplementedError, ValueError):
+        # NotImplementedError：日期超出库数据范围；ValueError：非法日期
+        return False
+
+
+def _is_weekend(d: date) -> bool:
+    """周六/周日（不感知调休：调休补班的周六日仍算周末重复）"""
+    return d.weekday() >= 5
+
+
+def _next_matching_date(start: datetime, pred) -> datetime:
+    """从 start 次日开始找第一个满足 pred 的日期，保留原时刻"""
+    d = start + timedelta(days=1)
+    for _ in range(366 * 3):  # 最长扫 3 年，防御无匹配死循环
+        if pred(d.date()):
+            return datetime.combine(d, start.time())
+        d += timedelta(days=1)
+    return start
 
 
 class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
@@ -147,10 +177,15 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
                 stmt = stmt.where(Agenda.status.in_(status))
             items = list((await db.execute(stmt)).scalars().all())
             if items:
+                # 生成器可能被 start_time is not None 过滤为空（窗口内只有未设
+                # 时间的日程），default 兜底回退窗口边界，与空 items 同语义
                 anchor = max(
-                    (i.end_time or i.start_time)
-                    for i in items
-                    if i.start_time is not None
+                    (
+                        (i.end_time or i.start_time)
+                        for i in items
+                        if i.start_time is not None
+                    ),
+                    default=end_dt.replace(hour=23, minute=59, second=59),
                 )
             else:
                 anchor = end_dt.replace(hour=23, minute=59, second=59)
@@ -171,7 +206,11 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
                 stmt = stmt.where(Agenda.status.in_(status))
             items = list((await db.execute(stmt)).scalars().all())
             if items:
-                anchor = min(i.start_time for i in items if i.start_time is not None)
+                # 同 forward 分支：start_time 过滤后可能为空，default 兜底
+                anchor = min(
+                    (i.start_time for i in items if i.start_time is not None),
+                    default=start_dt.replace(hour=0, minute=0),
+                )
             else:
                 anchor = start_dt.replace(hour=0, minute=0)
             next_stmt = select(func.max(func.date(Agenda.start_time))).where(
@@ -254,6 +293,17 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
                 next_start += timedelta(days=1)
         elif agenda.recurrence == AgendaRecurrence.WEEKLY.value:
             next_start = agenda.start_time + timedelta(days=7)
+        elif agenda.recurrence == AgendaRecurrence.WEEKEND.value:
+            # 每周六、日（不感知调休）
+            next_start = _next_matching_date(agenda.start_time, _is_weekend)
+        elif agenda.recurrence == AgendaRecurrence.HOLIDAY.value:
+            # 法定节假日（含调休放假；调休补班的周末不触发）
+            next_start = _next_matching_date(agenda.start_time, _is_holiday)
+        elif agenda.recurrence == AgendaRecurrence.HOLIDAY_WEEKEND.value:
+            # 节假日或周六日（并集）
+            next_start = _next_matching_date(
+                agenda.start_time, lambda d: _is_weekend(d) or _is_holiday(d)
+            )
         elif agenda.recurrence == AgendaRecurrence.MONTHLY.value:
             month = agenda.start_time.month + 1
             year = agenda.start_time.year + (month - 1) // 12
