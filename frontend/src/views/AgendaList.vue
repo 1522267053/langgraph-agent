@@ -204,7 +204,10 @@ const recurrenceOptions = [
   { label: '每日', value: 'daily' },
   { label: '仅工作日', value: 'weekday' },
   { label: '每周', value: 'weekly' },
-  { label: '每月', value: 'monthly' }
+  { label: '每月', value: 'monthly' },
+  { label: '每周六、日', value: 'weekend' },
+  { label: '节假日', value: 'holiday' },
+  { label: '节假日和周六、日', value: 'holiday_weekend' }
 ]
 
 const colorPresets = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#9B59B6']

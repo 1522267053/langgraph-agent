@@ -38,6 +38,11 @@ from app.utils.user_util import get_current_username
 
 _VALID_CATEGORIES = {c.value for c in AgendaCategory}
 _VALID_RECURRENCES = {r.value for r in AgendaRecurrence}
+# LLM 可见的重复规则枚举说明（工具 description 与校验报错共用，加枚举值时同步）
+_RECURRENCE_DESC = (
+    "none(不重复)/daily(每日)/weekday(仅工作日)/weekly(每周)/monthly(每月)/"
+    "weekend(每周六日)/holiday(法定节假日)/holiday_weekend(节假日和周六日)"
+)
 
 
 @NodeHandlerRegistry.register("agenda")
@@ -103,7 +108,7 @@ class AgendaNodeHandler(BaseNodeHandler):
             if recurrence not in _VALID_RECURRENCES:
                 return {
                     "success": False,
-                    "message": f"无效重复规则: {recurrence}（有效值: none/daily/weekday/weekly/monthly）",
+                    "message": f"无效重复规则: {recurrence}（有效值: {_RECURRENCE_DESC}）",
                 }
             if not 1 <= priority <= 3:
                 return {
@@ -358,7 +363,7 @@ class AgendaNodeHandler(BaseNodeHandler):
                     "创建一条日程。title 必填，其他参数可选。"
                     "时间格式：YYYY-MM-DD HH:MM:SS。"
                     "category: work/life/study/other, priority: 1低/2中/3高, "
-                    "recurrence: none/daily/weekday/weekly/monthly"
+                    f"recurrence: {_RECURRENCE_DESC}"
                 ),
                 func=None,
                 coroutine=create_agenda,
@@ -383,7 +388,7 @@ class AgendaNodeHandler(BaseNodeHandler):
                     "字段语义：不传=保持原值；传 null 或空串=清空；传值=设为该值（title 不可清空）。"
                     "status: 0=待办/1=进行中/2=已完成。"
                     "  → 设为已完成自动写入完成时间；从已完成改回其他状态会清空完成时间并重置提醒标志。"
-                    "recurrence: none/daily/weekday/weekly/monthly（修改后会重置重复生成锁）。"
+                    f"recurrence: {_RECURRENCE_DESC}（修改后会重置重复生成锁）。"
                     "修改 remind_at 会重置已推送标志，允许重新推送。"
                     "color/location/description 支持清空（传 null 或空串）。"
                 ),
@@ -433,7 +438,7 @@ class _AgendaFields(BaseModel):
         default=None, description="提醒时间 YYYY-MM-DD HH:MM:SS"
     )
     recurrence: Optional[str] = Field(
-        default=None, description="重复规则：none/daily/weekday/weekly/monthly"
+        default=None, description=f"重复规则：{_RECURRENCE_DESC}"
     )
     description: Optional[str] = Field(default=None, description="备注")
     color: Optional[str] = Field(default=None, description="颜色标签")
@@ -443,9 +448,7 @@ class AgendaCreateInput(_AgendaFields):
     title: str = Field(..., description="日程标题")
     category: str = Field(default="other", description="分类：work/life/study/other")
     priority: int = Field(default=2, description="优先级：1=低/2=中/3=高")
-    recurrence: str = Field(
-        default="none", description="重复：none/daily/weekday/weekly/monthly"
-    )
+    recurrence: str = Field(default="none", description=f"重复：{_RECURRENCE_DESC}")
 
 
 class AgendaListInput(BaseModel):
