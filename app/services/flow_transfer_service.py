@@ -37,6 +37,10 @@ from app.models.mcp_server import McpServer
 from app.models.memory import Memory
 from app.models.skill import Skill
 from app.schemas.flow_schema import FlowIOSchema
+from app.schemas.mcp_server_schema import (
+    MCP_SERVER_NAME_PATTERN,
+    sanitize_mcp_server_name,
+)
 from app.services.flow_service import flow_service
 from app.services.knowledge_base_service import knowledge_base_service
 from app.services.knowledge_document_service import knowledge_document_service
@@ -1321,6 +1325,13 @@ class FlowTransferService:
         for mcp in mcp_data:
             try:
                 original_name = mcp["name"]
+                # 名称需满足 OpenAI 兼容工具名规范：不合规时自动转写并提示
+                if not MCP_SERVER_NAME_PATTERN.match(original_name or ""):
+                    original_name = sanitize_mcp_server_name(original_name)
+                    warnings.append(
+                        f"MCP 服务器名称不合规，已自动转写为「{original_name}」"
+                        "（工具名仅支持字母/数字/下划线/连字符）"
+                    )
                 unique_name = await self._ensure_unique_name(
                     db, McpServer, original_name
                 )
