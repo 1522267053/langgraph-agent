@@ -265,6 +265,20 @@ const totalKbDocs = computed(() =>
     0
   )
 )
+const totalKbSegments = computed(() =>
+  (importFileData.value?.knowledge_bases || []).reduce(
+    (sum, kb) =>
+      sum +
+      (kb.documents || []).reduce((s, doc) => s + (doc.segments?.length || 0), 0),
+    0
+  )
+)
+const totalKbInsights = computed(() =>
+  (importFileData.value?.knowledge_bases || []).reduce(
+    (sum, kb) => sum + (kb.insights?.length || 0),
+    0
+  )
+)
 
 function handleOpenImport() {
   importFileData.value = null
@@ -601,6 +615,14 @@ onMounted(() => {
             知识库:
             <strong>{{ importFileData.knowledge_bases.length }}</strong>
             <span v-if="totalKbDocs > 0" class="kb-docs-count">（{{ totalKbDocs }} 篇文档）</span>
+          </span>
+          <span v-if="totalKbSegments > 0">
+            段落:
+            <strong>{{ totalKbSegments }}</strong>
+          </span>
+          <span v-if="totalKbInsights > 0">
+            知识沉淀:
+            <strong>{{ totalKbInsights }}</strong>
           </span>
           <span v-if="importFileData.skills?.length">
             技能:
