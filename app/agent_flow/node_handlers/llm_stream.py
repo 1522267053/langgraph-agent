@@ -134,10 +134,15 @@ async def stream_llm_response(
                 raise
             delay = _RETRY_DELAYS[retry_count - 1]
             if writer:
+                from app.utils.error_extract import extract_llm_error
+
                 writer(
                     LlmRetryEvent(
                         node_key=node_key,
-                        message=f"LLM请求失败({e})，{delay}秒后重试({retry_count}/3)",
+                        message=(
+                            f"LLM请求失败({extract_llm_error(str(e))})，"
+                            f"{delay}秒后重试({retry_count}/3)"
+                        ),
                         retry_count=retry_count,
                         max_retries=len(_RETRY_DELAYS),
                         wait_seconds=delay,
