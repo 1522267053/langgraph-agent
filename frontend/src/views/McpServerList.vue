@@ -19,6 +19,19 @@ import type { FormInstance, FormRules } from 'element-plus'
 
 const { isMobile } = useIsMobile()
 
+// MCP 服务器名称是 OpenAI 兼容工具名的组成部分（mcp__<server>__<tool>），
+// 必须满足 function calling 名称规范：字母开头，仅字母/数字/下划线/连字符，≤64
+const MCP_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/
+
+/** 将任意名称转写为合规形态（JSON 导入等场景自动降级）：非法字符→_，非字母开头补 mcp_ 前缀 */
+function sanitizeMcpName(raw: string): string {
+  let cleaned = (raw || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/_+/g, '_')
+  cleaned = cleaned.replace(/^_+|_+$/g, '')
+  if (!cleaned) return 'mcp_server'
+  if (!/^[a-zA-Z]/.test(cleaned)) cleaned = `mcp_${cleaned}`
+  return cleaned.slice(0, 64)
+}
+
 const loading = ref(false)
 const tableData = ref<McpServer[]>([])
 const total = ref(0)
@@ -86,7 +99,13 @@ const testServerName = ref('')
 const rules: FormRules = {
   name: [
     { required: true, message: '请输入服务器名称', trigger: 'blur' },
-    { max: 100, message: '名称不能超过100个字符', trigger: 'blur' }
+    { max: 100, message: '名称不能超过100个字符', trigger: 'blur' },
+    {
+      pattern: MCP_NAME_PATTERN,
+      message:
+        '仅允许字母/数字/下划线/连字符（字母开头，≤64字符），不能包含中文或特殊符号',
+      trigger: 'blur'
+    }
   ],
   transport: [{ required: true, message: '请选择传输类型', trigger: 'change' }]
 }
@@ -420,6 +439,14 @@ function _applyJsonEntry(key: string, entry: Record<string, unknown>): void {
     formData.transport = 'stdio'
   }
   formData.name = key
+  // 名称需满足工具名规范（OpenAI function calling）：不合规时自动转写并提示
+  if (!MCP_NAME_PATTERN.test(formData.name)) {
+    formData.name = sanitizeMcpName(key)
+    ElMessage.info({
+      message: `名称「${key}」不合规，已自动转写为「${formData.name}」，可继续修改`,
+      duration: 5000
+    })
+  }
   const configCopy = { ...entry }
   delete configCopy.type
   formData.config = { ...defaultConfig, ...configCopy } as McpServerConfig
@@ -610,7 +637,11 @@ onMounted(() => {
         </div>
 
         <el-form-item label="服务器名称" prop="name">
-          <el-input v-model="formData.name" placeholder="请输入服务器名称" maxlength="100" />
+          <el-input v-model="formData.name" placeholder="如 elink-ops、qcc" maxlength="100" />
+          <div class="name-tip">
+            仅允许字母/数字/下划线/连字符，字母开头，≤64字符（将用于拼接工具名
+            mcp__服务器名__工具名，不支持中文）
+          </div>
         </el-form-item>
         <el-form-item label="描述" prop="description">
           <el-input
@@ -824,5 +855,13 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   width: 100%;
+}
+
+.name-tip {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #94a3b8;
 }
 </style>
