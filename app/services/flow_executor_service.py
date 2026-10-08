@@ -601,7 +601,9 @@ class FlowExecutorService(BaseExecutorService):
             raise
 
         except Exception as e:
-            error_msg = str(e)
+            from app.utils.error_extract import extract_llm_error
+
+            error_msg = extract_llm_error(str(e))
             logger.exception(f"图执行失败: {e}")
 
             is_recoverable = self._is_recoverable_exception(e)

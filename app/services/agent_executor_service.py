@@ -51,9 +51,13 @@ logger = logging.getLogger(__name__)
 
 
 def format_exception_message(e: BaseException) -> str:
-    """格式化异常信息，str() 为空时回退到 repr() 以保留异常类名。"""
+    """格式化异常信息：str() 为空回退 repr()；含服务商错误载荷时提取可读消息。"""
+    from app.utils.error_extract import extract_llm_error
+
     msg = str(e).strip()
-    return msg if msg else repr(e)
+    if not msg:
+        return repr(e)
+    return extract_llm_error(msg)
 
 
 def normalize_work_dir(work_dir: Optional[str]) -> Optional[str]:
