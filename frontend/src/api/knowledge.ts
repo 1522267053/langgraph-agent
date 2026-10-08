@@ -10,6 +10,7 @@ import type {
   KnowledgeDocumentCreate,
   KnowledgeDocumentUpdate,
   KnowledgeDocumentUploadResult,
+  KnowledgeImportResult,
   KnowledgeSegmentContextResult,
   SegmentSearchResult
 } from '@/types/knowledge'
@@ -40,6 +41,19 @@ export const knowledgeBaseApi = {
 
   deleteBatch(ids: number[]) {
     return request.post<ApiResponse<void>>('/knowledge/base/delete-batch', ids)
+  },
+
+  exportKbs(ids: number[]) {
+    return request.post('/knowledge/base/export', { ids }, { responseType: 'blob' })
+  },
+
+  importPackage(file: File) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return request.post<ApiResponse<KnowledgeImportResult>>(
+      '/knowledge/base/import',
+      formData
+    )
   }
 }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import {
   Plus,
   Upload,
@@ -11,6 +11,7 @@ import {
   Refresh,
   SetUp
 } from '@element-plus/icons-vue'
+import JSZip from 'jszip'
 import { knowledgeBaseApi, knowledgeDocumentApi, knowledgeInsightApi } from '@/api/knowledge'
 import { configApi } from '@/api/config'
 import { downloadKnowledgeDocument } from '@/utils/knowledgeDownload'
@@ -23,6 +24,7 @@ import type {
   KnowledgeDocumentSegment,
   KnowledgeInsight,
   KnowledgeBaseStatus,
+  KnowledgeExportData,
   SegmentSearchResult
 } from '@/types/knowledge'
 import type { PaginatedResponse } from '@/types/common'
@@ -517,9 +519,141 @@ async function checkEmbedding(): Promise<void> {
   }
 }
 
+// ---- 知识库导出 ----
+
+async function handleExportKb(row: KnowledgeBase) {
+  try {
+    const res = await knowledgeBaseApi.exportKbs([row.id!])
+    const blob = res.data as Blob
+    // 后端导出失败时返回 JSON（非 zip），解析错误信息
+    if (blob.type && blob.type.includes('json')) {
+      const text = await blob.text()
+      try {
+        const errData = JSON.parse(text)
+        ElMessage.error({ message: errData.msg || '导出失败', duration: 5000 })
+      } catch {
+        ElMessage.error({ message: '导出失败', duration: 5000 })
+      }
+      return
+    }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')
+    a.download = `${row.name || 'knowledge'}_${timestamp}.lga`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success({ message: '导出成功', duration: 5000 })
+  } catch {
+    ElMessage.error({ message: '导出失败', duration: 5000 })
+  }
+}
+
+// ---- 知识库导入 ----
+
+const importDialogVisible = ref(false)
+const importLoading = ref(false)
+const importFileData = ref<KnowledgeExportData | null>(null)
+const importFileName = ref('')
+const importFile = ref<File | null>(null)
+const totalKbDocs = computed(() =>
+  (importFileData.value?.knowledge_bases || []).reduce(
+    (sum, kb) => sum + (kb.documents?.length || 0),
+    0
+  )
+)
+const totalKbSegments = computed(() =>
+  (importFileData.value?.knowledge_bases || []).reduce(
+    (sum, kb) =>
+      sum +
+      (kb.documents || []).reduce((s, doc) => s + (doc.segments?.length || 0), 0),
+    0
+  )
+)
+const totalKbInsights = computed(() =>
+  (importFileData.value?.knowledge_bases || []).reduce(
+    (sum, kb) => sum + (kb.insights?.length || 0),
+    0
+  )
+)
+
+function handleOpenImport() {
+  importFileData.value = null
+  importFileName.value = ''
+  importFile.value = null
+  importDialogVisible.value = true
+}
+
+async function handleImportFileChange(file: File) {
+  importFileName.value = file.name
+  importFile.value = file
+  importFileData.value = null
+  try {
+    const zip = await JSZip.loadAsync(file)
+    const manifestFile = zip.file('manifest.json')
+    if (!manifestFile) {
+      ElMessage.error({ message: '.lga 文件中缺少 manifest.json', duration: 5000 })
+      importFile.value = null
+      importFileName.value = ''
+      return
+    }
+    const text = await manifestFile.async('text')
+    const data = JSON.parse(text) as KnowledgeExportData
+    if (!data.version || !Array.isArray(data.knowledge_bases)) {
+      ElMessage.error({ message: '无效的知识库文件格式', duration: 5000 })
+      importFile.value = null
+      importFileName.value = ''
+      return
+    }
+    importFileData.value = data
+  } catch {
+    ElMessage.error({ message: '文件解析失败，请检查文件格式', duration: 5000 })
+    importFile.value = null
+    importFileName.value = ''
+  }
+}
+
+async function handleConfirmImport() {
+  if (!importFile.value) return
+  importLoading.value = true
+  try {
+    const res = await knowledgeBaseApi.importPackage(importFile.value)
+    if (res.data.code === 1) {
+      const result = res.data.data
+      const warnings: string[] = result.warnings || []
+      importDialogVisible.value = false
+      loadKbData()
+      if (warnings.length > 0) {
+        const message = `成功导入 ${result.created.length} 个知识库，${warnings.length} 条警告`
+        let msgHtml = `<div style="max-height:300px;overflow-y:auto"><p style="font-weight:600;margin:0 0 8px">${message}</p><ul style="margin:0;padding-left:16px">`
+        for (const w of warnings) {
+          msgHtml += `<li style="color:#e6a23c;margin-bottom:4px">${w}</li>`
+        }
+        msgHtml += '</ul></div>'
+        await ElMessageBox.alert(msgHtml, '导入完成（有警告）', {
+          dangerouslyUseHTMLString: true,
+          confirmButtonText: '确定'
+        })
+      } else {
+        ElMessage.success({
+          message: `成功导入 ${result.created.length} 个知识库，文档后台解析向量化中`,
+          duration: 5000
+        })
+      }
+    }
+  } catch {
+    ElMessage.error({ message: '导入失败', duration: 5000 })
+  } finally {
+    importLoading.value = false
+  }
+}
+
 function getKbActions(_row: any) {
   return [
     { key: 'view', label: '查看', icon: View, btnClass: 'action-view' },
+    { key: 'export', label: '导出', icon: Download, btnClass: 'action-export' },
     { key: 'edit', label: '编辑', icon: Edit, btnClass: 'action-edit' },
     { key: 'delete', label: '删除', icon: Delete, btnClass: 'action-delete', danger: true }
   ]
@@ -529,6 +663,9 @@ function onKbAction(row: any, key: string) {
   switch (key) {
     case 'view':
       openKbDetail(row)
+      break
+    case 'export':
+      handleExportKb(row)
       break
     case 'edit':
       openKbDialog(row)
@@ -605,7 +742,10 @@ onMounted(() => {
     <template v-if="!selectedKb">
       <div class="page-header">
         <h1 class="page-title">知识库管理</h1>
-        <el-button type="primary" :icon="Plus" @click="openKbDialog()">新建知识库</el-button>
+        <div class="header-actions">
+          <el-button :icon="Upload" @click="handleOpenImport">导入</el-button>
+          <el-button type="primary" :icon="Plus" @click="openKbDialog()">新建知识库</el-button>
+        </div>
       </div>
 
       <el-alert
@@ -659,7 +799,7 @@ onMounted(() => {
             </template>
           </el-table-column>
           <el-table-column prop="modify_time" label="更新时间" width="180" />
-          <el-table-column label="操作" :width="isMobile ? 60 : 160" fixed="right">
+          <el-table-column label="操作" :width="isMobile ? 60 : 210" fixed="right">
             <template #default="{ row }">
               <ActionColumn :actions="getKbActions(row)" @action="onKbAction(row, $event)" />
             </template>
@@ -915,6 +1055,88 @@ onMounted(() => {
 
     <!-- ---- 弹窗 ---- -->
 
+    <!-- 导入知识库对话框 -->
+    <el-dialog
+      v-model="importDialogVisible"
+      title="导入知识库"
+      width="640px"
+      :close-on-click-modal="false"
+    >
+      <!-- 文件上传区域 -->
+      <div v-if="!importFile" class="import-upload-area">
+        <el-upload
+          drag
+          accept=".lga"
+          :auto-upload="false"
+          :show-file-list="false"
+          :on-change="(f: any) => handleImportFileChange(f.raw)"
+        >
+          <div class="upload-content">
+            <el-icon class="upload-icon"><upload /></el-icon>
+            <div class="upload-text">
+              将 .lga 文件拖拽到此处，或
+              <em>点击选择文件</em>
+            </div>
+            <div class="upload-tip">支持知识库导出的 .lga 打包文件（含原始文档）</div>
+          </div>
+        </el-upload>
+      </div>
+
+      <!-- 预览区域 -->
+      <div v-else-if="importFileData" class="import-preview">
+        <el-alert type="warning" :closable="false" show-icon class="import-tip">
+          导入时如果有相同名称的知识库，会创建新副本
+        </el-alert>
+
+        <div class="preview-section">
+          <h4>知识库列表 ({{ importFileData.knowledge_bases.length }} 个)</h4>
+          <el-table :data="importFileData.knowledge_bases" size="small" max-height="250">
+            <el-table-column prop="name" label="名称" min-width="160" />
+            <el-table-column label="描述" min-width="160" show-overflow-tooltip>
+              <template #default="{ row }">
+                {{ row.description || '-' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="文档数" width="80" align="center">
+              <template #default="{ row }">
+                {{ row.documents?.length || 0 }}
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <div class="preview-stats">
+          <span v-if="totalKbDocs > 0">
+            文档总数:
+            <strong>{{ totalKbDocs }}</strong>
+          </span>
+          <span v-if="totalKbSegments > 0">
+            段落总数:
+            <strong>{{ totalKbSegments }}</strong>
+          </span>
+          <span v-if="totalKbInsights > 0">
+            知识沉淀:
+            <strong>{{ totalKbInsights }}</strong>
+          </span>
+          <span v-if="totalKbDocs > 0" class="kb-docs-count">
+            段落结构原样保留，导入后自动向量化
+          </span>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button
+          v-if="importFile"
+          type="primary"
+          :loading="importLoading"
+          @click="handleConfirmImport"
+        >
+          确认导入
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog
       v-model="kbDialogVisible"
       :title="kbForm.id ? '编辑知识库' : '新建知识库'"
@@ -1080,6 +1302,81 @@ onMounted(() => {
 .detail-actions {
   display: flex;
   gap: 8px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---- 导入知识库对话框 ---- */
+
+.import-upload-area {
+  margin-bottom: 20px;
+}
+
+.import-upload-area :deep(.el-upload-dragger) {
+  border-radius: 12px;
+  padding: 40px 20px;
+}
+
+.upload-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.upload-icon {
+  font-size: 48px;
+  color: #94a3b8;
+}
+
+.upload-text {
+  font-size: 14px;
+  color: #64748b;
+}
+
+.upload-text em {
+  color: #2563eb;
+  font-style: normal;
+}
+
+.upload-tip {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.import-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.import-tip {
+  border-radius: 8px;
+}
+
+.preview-section h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 0 0 8px 0;
+}
+
+.preview-stats {
+  display: flex;
+  gap: 20px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.preview-stats strong {
+  color: #0f172a;
+}
+
+.kb-docs-count {
+  color: #94a3b8;
 }
 
 /* ---- 卡片面板 ---- */

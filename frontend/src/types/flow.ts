@@ -318,6 +318,15 @@ export interface FlowExportMcpServer {
   tools_cache: FlowExportMcpToolCache[]
 }
 
+/** 导出的知识库文档段落快照 */
+export interface FlowExportKnowledgeSegment {
+  segment_index: number
+  title?: string
+  content: string
+  word_count: number
+  title_index: number
+}
+
 /** 导出的知识库文档 */
 export interface FlowExportKnowledgeDocument {
   title: string
@@ -325,6 +334,25 @@ export interface FlowExportKnowledgeDocument {
   word_count: number
   segment_count: number
   file_path?: string | null
+  /** 以下为解析产物快照（新包字段，已完成解析的文档才有） */
+  content?: string
+  titles?: Array<{
+    title_index: number
+    level: number
+    title: string
+    start_segment_index: number
+    end_segment_index: number
+  }>
+  segments?: FlowExportKnowledgeSegment[]
+}
+
+/** 导出的知识库沉淀 */
+export interface FlowExportKnowledgeInsight {
+  question: string
+  answer: string
+  keywords?: string
+  source_doc_indexes?: number[]
+  source_segment_indexes?: number[]
 }
 
 /** 导出的知识库 */
@@ -333,6 +361,7 @@ export interface FlowExportKnowledgeBase {
   description?: string
   status: number
   documents?: FlowExportKnowledgeDocument[]
+  insights?: FlowExportKnowledgeInsight[]
 }
 
 /** 导出的技能 */

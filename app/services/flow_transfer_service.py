@@ -30,6 +30,9 @@ from app.models.flow_node import FlowNode
 from app.models.flow_edge import FlowEdge
 from app.models.knowledge_base import KnowledgeBase
 from app.models.knowledge_document import KnowledgeDocument, ProcessingStatus
+from app.models.knowledge_document_segment import KnowledgeDocumentSegment
+from app.models.knowledge_document_title import KnowledgeDocumentTitle
+from app.models.knowledge_insight import KnowledgeInsight, KnowledgeInsightSegment
 from app.models.mcp_server import McpServer
 from app.models.memory import Memory
 from app.models.skill import Skill
@@ -37,6 +40,7 @@ from app.schemas.flow_schema import FlowIOSchema
 from app.services.flow_service import flow_service
 from app.services.knowledge_base_service import knowledge_base_service
 from app.services.knowledge_document_service import knowledge_document_service
+from app.services.knowledge_insight_service import knowledge_insight_service
 from app.services.mcp_server_service import mcp_server_service
 from app.services.memory_service import memory_service
 from app.services.skill_service import skill_service
@@ -315,6 +319,60 @@ class FlowTransferService:
             )
         return buf.getvalue()
 
+    async def export_knowledge_bases(self, db: AsyncSession, kb_ids: list[int]) -> dict:
+        """导出指定知识库（独立知识库包，不含流程等其他资源）"""
+        if not kb_ids:
+            raise ValueError("未选择要导出的知识库")
+        knowledge_bases = await self._collect_knowledge_bases(db, set(kb_ids))
+        if not knowledge_bases:
+            raise ValueError("知识库不存在或已被删除")
+        return {
+            "version": PACKAGE_VERSION,
+            "export_time": datetime.now().isoformat(),
+            "flows": [],
+            "memories": [],
+            "mcp_servers": [],
+            "knowledge_bases": knowledge_bases,
+            "skills": [],
+            "sessions": [],
+        }
+
+    async def export_knowledge_package(
+        self, db: AsyncSession, kb_ids: list[int]
+    ) -> bytes:
+        """导出知识库为 .lga 打包文件（zip），含知识库原始文档"""
+        data = await self.export_knowledge_bases(db, kb_ids)
+
+        buf = io.BytesIO()
+        # 同名知识库在 zip 内用唯一目录名，避免相互覆盖（manifest 中保留原名）
+        used_dir_names: set[str] = set()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for kb in data.get("knowledge_bases", []):
+                safe_kb = _safe_name(kb["name"])
+                dir_name = safe_kb
+                suffix = 2
+                while dir_name in used_dir_names:
+                    dir_name = f"{safe_kb}_{suffix}"
+                    suffix += 1
+                used_dir_names.add(dir_name)
+                for i, doc in enumerate(kb.get("documents", [])):
+                    abs_path = doc.pop("file_path", None)
+                    if abs_path and Path(abs_path).exists():
+                        ext = doc.get("file_type") or "dat"
+                        zip_name = (
+                            f"knowledge/{dir_name}/{i:03d}_"
+                            f"{_safe_name(doc.get('title') or f'doc{i}')}.{ext}"
+                        )
+                        zf.write(abs_path, zip_name)
+                        doc["file_path"] = zip_name
+                    else:
+                        doc["file_path"] = None
+            zf.writestr(
+                "manifest.json",
+                json.dumps(data, ensure_ascii=False, indent=2),
+            )
+        return buf.getvalue()
+
     async def _collect_flows_recursive(
         self, db: AsyncSession, flow_ids: list[int], visited: set[int]
     ) -> list[Flow]:
@@ -556,7 +614,7 @@ class FlowTransferService:
     async def _collect_knowledge_bases(
         self, db: AsyncSession, kb_ids: set[int]
     ) -> list[dict]:
-        """收集知识库元数据及其文档清单（含原始文件路径，供打包使用）"""
+        """收集知识库元数据及其文档清单（含原始文件路径与解析产物快照，供打包使用）"""
         if not kb_ids:
             return []
         result = []
@@ -567,8 +625,11 @@ class FlowTransferService:
             documents = await knowledge_document_service.get_list(
                 db, filters=KnowledgeDocument(knowledge_base_id=kid)
             )
-            doc_list = [
-                {
+            # doc_index 作为跨环境引用锚点：文档在导出数组中的位置（与导入还原顺序一致）
+            doc_anchor_map = {doc.id: i for i, doc in enumerate(documents)}
+            doc_list = []
+            for doc in documents:
+                doc_data: dict = {
                     "title": doc.title,
                     "file_type": doc.file_type,
                     "word_count": doc.word_count or 0,
@@ -576,14 +637,164 @@ class FlowTransferService:
                     # 本地绝对路径，export_package 打包时替换为 zip 内相对路径
                     "file_path": doc.file_path,
                 }
-                for doc in documents
-            ]
+                snapshot = await self._collect_document_snapshot(db, doc)
+                if snapshot:
+                    doc_data.update(snapshot)
+                doc_list.append(doc_data)
             result.append(
                 {
                     "name": kb.name,
                     "description": kb.description,
                     "status": kb.status,
                     "documents": doc_list,
+                    "insights": await self._collect_kb_insights(
+                        db, kid, doc_anchor_map
+                    ),
+                }
+            )
+        return result
+
+    async def _collect_document_snapshot(
+        self, db: AsyncSession, doc: KnowledgeDocument
+    ) -> Optional[dict]:
+        """收集单个文档的解析产物快照（content/标题树/段落）
+
+        仅快照已完成解析的文档；PENDING/失败等未解析文档返回空，导入端回退重新解析。
+        """
+        if doc.processing_status != ProcessingStatus.COMPLETED.value:
+            return None
+        content_stmt = select(
+            KnowledgeDocument.content, KnowledgeDocument.word_count
+        ).where(KnowledgeDocument.id == doc.id)
+        content_row = (await db.execute(content_stmt)).first()
+        if not content_row or not content_row.content:
+            return None
+
+        titles = (
+            (
+                await db.execute(
+                    select(KnowledgeDocumentTitle)
+                    .where(
+                        KnowledgeDocumentTitle.document_id == doc.id,
+                        KnowledgeDocumentTitle.is_delete == 0,
+                    )
+                    .order_by(KnowledgeDocumentTitle.title_index)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        segments = (
+            (
+                await db.execute(
+                    select(KnowledgeDocumentSegment)
+                    .where(
+                        KnowledgeDocumentSegment.document_id == doc.id,
+                        KnowledgeDocumentSegment.is_delete == 0,
+                    )
+                    .order_by(KnowledgeDocumentSegment.segment_index)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not segments:
+            return None
+
+        title_index_map = {t.id: t.title_index for t in titles}
+        return {
+            "content": content_row.content,
+            "titles": [
+                {
+                    "title_index": t.title_index,
+                    "level": t.level,
+                    "title": t.title,
+                    "start_segment_index": t.start_segment_index,
+                    "end_segment_index": t.end_segment_index,
+                }
+                for t in titles
+            ],
+            "segments": [
+                {
+                    "segment_index": s.segment_index,
+                    "title": s.title,
+                    "content": s.content,
+                    "word_count": s.word_count,
+                    # title_id 为本地 ID，转换为 title_index 锚点
+                    "title_index": title_index_map.get(s.title_id, -1)
+                    if s.title_id is not None
+                    else -1,
+                }
+                for s in segments
+            ],
+        }
+
+    async def _collect_kb_insights(
+        self, db: AsyncSession, kb_id: int, doc_anchor_map: dict[int, int]
+    ) -> list[dict]:
+        """收集知识库沉淀（question/answer/keywords + 来源引用锚点）"""
+        stmt = (
+            select(KnowledgeInsight)
+            .where(
+                KnowledgeInsight.knowledge_base_id == kb_id,
+                KnowledgeInsight.is_delete == 0,
+            )
+            .order_by(KnowledgeInsight.id)
+        )
+        insights = (await db.execute(stmt)).scalars().all()
+        if not insights:
+            return []
+
+        # 批量取关联段落，并解析出段落所属文档（segment → document → doc_index）
+        insight_ids = [i.id for i in insights]
+        seg_stmt = select(
+            KnowledgeInsightSegment.insight_id,
+            KnowledgeInsightSegment.segment_id,
+        ).where(
+            KnowledgeInsightSegment.insight_id.in_(insight_ids),
+            KnowledgeInsightSegment.is_delete == 0,
+        )
+        insight_segments: dict[int, list[int]] = {}
+        for row in (await db.execute(seg_stmt)).all():
+            insight_segments.setdefault(row.insight_id, []).append(row.segment_id)
+
+        referenced_ids = {sid for ids in insight_segments.values() for sid in ids}
+        seg_doc_map: dict[int, tuple[int, int]] = {}
+        if referenced_ids:
+            doc_rows = (
+                await db.execute(
+                    select(
+                        KnowledgeDocumentSegment.id,
+                        KnowledgeDocumentSegment.document_id,
+                        KnowledgeDocumentSegment.segment_index,
+                    ).where(
+                        KnowledgeDocumentSegment.id.in_(referenced_ids),
+                        KnowledgeDocumentSegment.is_delete == 0,
+                    )
+                )
+            ).all()
+            seg_doc_map = {r.id: (r.document_id, r.segment_index) for r in doc_rows}
+
+        result = []
+        for insight in insights:
+            doc_indexes: set[int] = set()
+            seg_indexes: list[int] = []
+            for sid in insight_segments.get(insight.id, []):
+                anchor = seg_doc_map.get(sid)
+                if not anchor:
+                    continue
+                doc_index = doc_anchor_map.get(anchor[0])
+                if doc_index is None:
+                    continue
+                doc_indexes.add(doc_index)
+                seg_indexes.append(anchor[1])
+            result.append(
+                {
+                    "question": insight.question,
+                    "answer": insight.answer,
+                    "keywords": insight.keywords,
+                    "source_doc_indexes": sorted(doc_indexes),
+                    "source_segment_indexes": seg_indexes,
                 }
             )
         return result
@@ -793,6 +1004,34 @@ class FlowTransferService:
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
+    async def import_knowledge_package(
+        self, db: AsyncSession, zip_bytes: bytes
+    ) -> tuple[list[dict], list[str]]:
+        """从知识库 .lga 打包文件（zip）导入：还原知识库与文档
+
+        manifest 校验：仅接受包含 knowledge_bases 数据的知识库包；
+        文档还原后为 PENDING 状态，由定时任务自动解析+向量化。
+        [事件循环保护] 与 import_package 相同，zip 解析/解压移入工作线程。
+        """
+        manifest = await asyncio.to_thread(_read_package_manifest, zip_bytes)
+
+        kb_data = manifest.get("knowledge_bases")
+        if not kb_data or not isinstance(kb_data, list):
+            raise ValueError("该文件不包含知识库数据（流程 .lga 请在流程页面导入）")
+
+        tmpdir = tempfile.mkdtemp(prefix="lga_kb_import_")
+        try:
+            await asyncio.to_thread(_extract_package, zip_bytes, Path(tmpdir))
+            warnings: list[str] = []
+            created = await self._import_knowledge_bases(
+                db, kb_data, warnings, file_root=Path(tmpdir)
+            )
+            return [
+                {"name": name, "id": kb_id} for name, kb_id in created.items()
+            ], warnings
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
     async def _import_skills(
         self,
         db: AsyncSession,
@@ -865,7 +1104,12 @@ class FlowTransferService:
         warnings: list[str],
         file_root: Optional[Path] = None,
     ) -> dict[str, int]:
-        """导入知识库，返回 {原始名称: new_id}。file_root 非空时还原文档并触发重新向量化"""
+        """导入知识库，返回 {原始名称: new_id}
+
+        file_root 非空时还原文档；文档带 segments 快照（新包）时同步重建
+        解析产物（content/标题树/段落）并置为待向量化，否则回退重新解析。
+        最后还原知识沉淀（含来源引用，通过 doc_index+segment_index 锚点映射）。
+        """
         name_map: dict[str, int] = {}
         for kb in kb_data:
             try:
@@ -884,30 +1128,22 @@ class FlowTransferService:
                 await db.refresh(kb_obj)
                 name_map[original_name] = kb_obj.id
 
-                # 2.0：还原原始文档，建记录为待处理，由定时任务自动解析+向量化
-                if file_root is not None:
-                    for doc in kb.get("documents", []):
-                        rel_path = doc.get("file_path")
-                        title = doc.get("title") or "未命名文档"
-                        if not rel_path:
-                            continue
-                        src = Path(file_root) / rel_path
-                        if not src.exists():
-                            continue
-                        content = src.read_bytes()
-                        file_path = await document_processor.save_bytes(
-                            content, title, kb_obj.id
+                if file_root is None:
+                    continue
+
+                # 还原文档，收集 (segment_index → 新段落ID) 映射供沉淀引用还原
+                seg_id_map: dict[tuple[int, int], int] = {}
+                for doc_index, doc in enumerate(kb.get("documents", [])):
+                    seg_id_map.update(
+                        await self._import_knowledge_document(
+                            db, kb_obj.id, doc_index, doc, file_root, warnings
                         )
-                        document = KnowledgeDocument(
-                            knowledge_base_id=kb_obj.id,
-                            title=title,
-                            file_type=doc.get("file_type") or "",
-                            file_path=file_path,
-                            processing_status=ProcessingStatus.PENDING.value,
-                            is_delete=0,
-                        )
-                        db.add(document)
-                        await db.commit()
+                    )
+
+                # 还原知识沉淀（新包字段，旧包无 insights 时自然跳过）
+                await self._import_kb_insights(
+                    db, kb_obj.id, kb.get("insights", []), seg_id_map, warnings
+                )
 
                 if unique_name != original_name:
                     warnings.append(
@@ -916,6 +1152,166 @@ class FlowTransferService:
             except Exception as e:
                 warnings.append(f"导入知识库「{kb.get('name', '?')}」失败: {e}")
         return name_map
+
+    async def _import_knowledge_document(
+        self,
+        db: AsyncSession,
+        kb_id: int,
+        doc_index: int,
+        doc: dict,
+        file_root: Path,
+        warnings: list[str],
+    ) -> dict[tuple[int, int], int]:
+        """导入单个文档，返回 {(doc_index, segment_index): 新段落ID} 映射
+
+        带 segments 快照：还原始文件 + 同步重建解析产物，状态置待向量化
+        （定时任务走「仅向量化」路径）；无快照或文件缺失：回退重新解析（PENDING）。
+        """
+        seg_id_map: dict[tuple[int, int], int] = {}
+        rel_path = doc.get("file_path")
+        title = doc.get("title") or "未命名文档"
+        if not rel_path:
+            return seg_id_map
+        src = Path(file_root) / rel_path
+        if not src.exists():
+            return seg_id_map
+
+        content = src.read_bytes()
+        file_path = await document_processor.save_bytes(content, title, kb_id)
+        segments_data = doc.get("segments") or []
+        has_snapshot = bool(segments_data)
+
+        document = KnowledgeDocument(
+            knowledge_base_id=kb_id,
+            title=title,
+            content=doc.get("content") if has_snapshot else None,
+            file_type=doc.get("file_type") or "",
+            file_path=file_path,
+            word_count=doc.get("word_count") or 0 if has_snapshot else 0,
+            segment_count=len(segments_data) if has_snapshot else 0,
+            processing_status=(
+                ProcessingStatus.VECTORIZING.value
+                if has_snapshot
+                else ProcessingStatus.PENDING.value
+            ),
+            is_delete=0,
+        )
+        db.add(document)
+        await db.commit()
+        await db.refresh(document)
+
+        if not has_snapshot:
+            return seg_id_map
+
+        seg_map = await self._restore_document_segments(db, document, doc)
+        if seg_map is None:
+            # 快照重建失败：状态回退 PENDING，由定时任务重新解析兜底
+            document.content = None
+            document.word_count = 0
+            document.segment_count = 0
+            document.processing_status = ProcessingStatus.PENDING.value
+            document.error_message = "导入快照重建失败，等待重新解析"
+            await db.commit()
+            warnings.append(f"文档「{title}」段落快照重建失败，已回退为重新解析模式")
+            return {}
+        await db.commit()
+        return {(doc_index, seg_index): sid for seg_index, sid in seg_map.items()}
+
+    async def _restore_document_segments(
+        self, db: AsyncSession, document: KnowledgeDocument, doc: dict
+    ) -> Optional[dict[int, int]]:
+        """按快照重建文档的标题树与段落（flush 取 ID，commit 由调用方负责）
+
+        Returns:
+            {segment_index: 新段落ID}；数据非法（段落缺 content/segment_index、
+            字段类型异常）时返回 None，由调用方降级为重新解析。
+        """
+        if not document.id:
+            return None
+        try:
+            title_id_map: dict[int, int] = {}
+            for t in doc.get("titles") or []:
+                title_record = KnowledgeDocumentTitle(
+                    document_id=document.id,
+                    title_index=t["title_index"],
+                    level=t["level"],
+                    title=t["title"],
+                    start_segment_index=t["start_segment_index"],
+                    end_segment_index=t["end_segment_index"],
+                )
+                db.add(title_record)
+                await db.flush()
+                title_id_map[t["title_index"]] = title_record.id
+
+            seg_map: dict[int, int] = {}
+            for s in doc.get("segments") or []:
+                content = s.get("content")
+                seg_index = s.get("segment_index")
+                if content is None or seg_index is None:
+                    return None
+                segment = KnowledgeDocumentSegment(
+                    document_id=document.id,
+                    segment_index=seg_index,
+                    title=s.get("title") or "",
+                    title_id=title_id_map.get(s.get("title_index", -1)),
+                    content=content,
+                    word_count=s.get("word_count") or 0,
+                )
+                db.add(segment)
+                await db.flush()
+                seg_map[seg_index] = segment.id
+            return seg_map
+        except (KeyError, TypeError):
+            return None
+
+    async def _import_kb_insights(
+        self,
+        db: AsyncSession,
+        kb_id: int,
+        insights_data: list[dict],
+        seg_id_map: dict[tuple[int, int], int],
+        warnings: list[str],
+    ) -> None:
+        """还原知识沉淀：锚点映射回新段落ID，调用 save_insight 保存并自动向量化"""
+        if not insights_data:
+            return
+        from app.services.embedding_service import get_embedding_service_async
+
+        embedding_available = (await get_embedding_service_async()).is_available()
+        if not embedding_available:
+            warnings.append("向量模型未配置，沉淀导入后仅支持关键词搜索")
+
+        for ins in insights_data:
+            question = ins.get("question") or ""
+            answer = ins.get("answer") or ""
+            if not question or not answer:
+                continue
+            source_segment_ids: list[int] = []
+            for doc_index, seg_index in zip(
+                ins.get("source_doc_indexes") or [],
+                ins.get("source_segment_indexes") or [],
+            ):
+                new_id = seg_id_map.get((doc_index, seg_index))
+                if new_id:
+                    source_segment_ids.append(new_id)
+            lost_refs = len(ins.get("source_segment_indexes") or []) - len(
+                source_segment_ids
+            )
+            try:
+                await knowledge_insight_service.save_insight(
+                    db,
+                    knowledge_base_id=kb_id,
+                    question=question,
+                    answer=answer,
+                    keywords=ins.get("keywords"),
+                    source_segment_ids=source_segment_ids or None,
+                )
+                if lost_refs > 0:
+                    warnings.append(
+                        f"沉淀「{question[:30]}」有 {lost_refs} 条来源引用因文档降级未能还原"
+                    )
+            except Exception as e:
+                warnings.append(f"导入沉淀「{question[:30] or '?'}」失败: {e}")
 
     async def _import_mcp_servers(
         self, db: AsyncSession, mcp_data: list[dict], warnings: list[str]

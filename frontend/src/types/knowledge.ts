@@ -119,3 +119,62 @@ export interface KnowledgeSegmentContextResult {
   prev?: KnowledgeSegmentContextItem
   next?: KnowledgeSegmentContextItem
 }
+
+export interface KnowledgeExportTitle {
+  title_index: number
+  level: number
+  title: string
+  start_segment_index: number
+  end_segment_index: number
+}
+
+export interface KnowledgeExportSegment {
+  segment_index: number
+  title?: string
+  content: string
+  word_count: number
+  /** 所属标题的 title_index 锚点，-1 表示无标题 */
+  title_index: number
+}
+
+export interface KnowledgeExportDocument {
+  title: string
+  file_type?: string
+  word_count: number
+  segment_count: number
+  file_path?: string | null
+  /** 以下为解析产物快照（新包字段，已完成解析的文档才有） */
+  content?: string
+  titles?: KnowledgeExportTitle[]
+  segments?: KnowledgeExportSegment[]
+}
+
+export interface KnowledgeExportInsight {
+  question: string
+  answer: string
+  keywords?: string
+  /** 来源引用锚点：文档在导出数组中的下标 */
+  source_doc_indexes?: number[]
+  /** 来源引用锚点：文档内段落序号 */
+  source_segment_indexes?: number[]
+}
+
+export interface KnowledgeExportItem {
+  name: string
+  description?: string
+  status?: KnowledgeBaseStatus
+  documents: KnowledgeExportDocument[]
+  insights?: KnowledgeExportInsight[]
+}
+
+/** 知识库 .lga 导出包的 manifest 结构 */
+export interface KnowledgeExportData {
+  version: string
+  export_time?: string
+  knowledge_bases: KnowledgeExportItem[]
+}
+
+export interface KnowledgeImportResult {
+  created: Array<{ id: number; name: string }>
+  warnings: string[]
+}
