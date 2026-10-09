@@ -31,8 +31,8 @@ services:
     networks:
       - langgraph_agent_network
 
-# 使用docker-compose-env.yml的网络
+# compose 自建网络（数据层为 SQLite 文件，无需独立数据库容器）
 networks:
   langgraph_agent_network:
     name: langgraph_agent_network
-    external: true
+    driver: bridge

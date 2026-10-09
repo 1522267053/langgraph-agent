@@ -1,7 +1,8 @@
 """
-MySQL Checkpointer for LangGraph
+数据库 Checkpointer for LangGraph
 
-实现基于 MySQL 的 LangGraph Checkpoint 持久化存储
+实现基于 SQLAlchemy 异步会话的 LangGraph Checkpoint 持久化存储
+（SQLite / MySQL 等任意 AsyncEngine 后端通用）
 支持 interrupt/resume 机制
 """
 
@@ -30,18 +31,18 @@ from app.config.database import AsyncSessionLocal
 from app.models.checkpoint import CheckpointModel, CheckpointWrite, CheckpointBlob
 
 
-class AsyncMySQLSaver(BaseCheckpointSaver[str]):
+class AsyncDbCheckpointer(BaseCheckpointSaver[str]):
     """
-    MySQL 异步 Checkpointer
+    数据库异步 Checkpointer
 
-    使用 MySQL 数据库持久化存储 LangGraph 的 checkpoint 状态
+    使用 SQLAlchemy 异步会话持久化存储 LangGraph 的 checkpoint 状态
     支持多轮人工交互的 interrupt/resume 机制
 
     Example:
         ```python
-        from app.agent_flow.mysql_checkpointer import AsyncMySQLSaver
+        from app.agent_flow.db_checkpointer import AsyncDbCheckpointer
 
-        checkpointer = AsyncMySQLSaver()
+        checkpointer = AsyncDbCheckpointer()
         graph = builder.compile(checkpointer=checkpointer)
 
         # 执行时传入 thread_id

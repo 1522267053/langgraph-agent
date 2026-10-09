@@ -17,7 +17,10 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.agent_flow.node_handlers.python_handler import ALLOWED_MODULES, _run_python_in_sandbox
+from app.agent_flow.node_handlers.python_handler import (
+    ALLOWED_MODULES,
+    _run_python_in_sandbox,
+)
 from app.schemas.base_schema import ApiResponse
 from app.utils.debug_file import save_debug_bytes
 

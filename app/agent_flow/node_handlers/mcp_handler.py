@@ -48,9 +48,7 @@ class McpNodeConfig(BaseNodeConfig):
     # 声明 body/status_code/headers 同模式），旧节点 config 未声明时也可选。
     # type 标 object：MCP 工具返回值形态不定（str/dict/list），object 是
     # 最通用的标注（string 结果兼容，结构化结果可用子变量路径继续取字段）
-    output_variables: list[NodeVariable] = [
-        NodeVariable(name="result", type="object")
-    ]
+    output_variables: list[NodeVariable] = [NodeVariable(name="result", type="object")]
     # 注：approval_required_tools / approval_required_patterns 字段已在 BaseNodeConfig 提供
 
 
@@ -87,18 +85,15 @@ class McpNodeHandler(BaseNodeHandler):
         tool_name = cfg.tool_name
         try:
             # 1. 解析输入变量（input_variables → context），再对参数做 {{var}} 深度插值
-            context = self._resolve_input_variables(
-                cfg.input_variables or [], state
-            )
-            resolved_args = self._resolver.resolve_config(
-                cfg.tool_args, state, context
-            )
+            context = self._resolve_input_variables(cfg.input_variables or [], state)
+            resolved_args = self._resolver.resolve_config(cfg.tool_args, state, context)
 
             # 2. 加载工具并按名匹配
             tool = await self._find_tool(node, tool_name)
             if tool is None:
                 state.add_error(
-                    node.node_key, f"未找到MCP工具: {tool_name}（检查服务器配置或工具名）"
+                    node.node_key,
+                    f"未找到MCP工具: {tool_name}（检查服务器配置或工具名）",
                 )
                 return state
 
@@ -154,7 +149,10 @@ class McpNodeHandler(BaseNodeHandler):
                 if name and source:
                     context[name] = resolver.resolve_safe(source, state)
             args = resolver.resolve_config(cfg.get("tool_args") or {}, state, context)
-            return {"tool": cfg.get("tool_name"), **(args if isinstance(args, dict) else {})}
+            return {
+                "tool": cfg.get("tool_name"),
+                **(args if isinstance(args, dict) else {}),
+            }
         except Exception:
             return None
 
@@ -321,13 +319,12 @@ class McpNodeHandler(BaseNodeHandler):
         return tools
 
     @classmethod
-    def _load_tools_from_db_cache(
-        cls, server_ids: list[int]
-    ) -> dict[int, list[dict]]:
+    def _load_tools_from_db_cache(cls, server_ids: list[int]) -> dict[int, list[dict]]:
         """从 DB 工具缓存表读取工具元数据（毫秒级，无建连）"""
         import asyncio
 
         try:
+
             async def _read():
                 from app.services.mcp_server_service import mcp_server_service
                 from app.config.database import AsyncSessionLocal

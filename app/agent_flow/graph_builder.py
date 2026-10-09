@@ -211,7 +211,10 @@ class GraphBuilder:
             data_flow_node_keys.add(edge.target_node_key)
 
         for node_key, node in self.nodes.items():
-            if node.node_type == NodeType.MCP.value and node_key not in data_flow_node_keys:
+            if (
+                node.node_type == NodeType.MCP.value
+                and node_key not in data_flow_node_keys
+            ):
                 continue
             if "__" in node_key:
                 continue

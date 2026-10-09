@@ -1,7 +1,7 @@
 # AI 智能体流程编排平台开发指南
 
 基于 LangGraph 的前后端分离智能体平台。
-- **后端**: Python 3.12 | FastAPI | SQLAlchemy 2.0 (aiomysql/aiosqlite) | Pydantic v2 | LangGraph | ChromaDB
+- **后端**: Python 3.12 | FastAPI | SQLAlchemy 2.0 (aiosqlite) | Pydantic v2 | LangGraph | ChromaDB
 - **前端**: Vue 3 | TypeScript | Vite | Pinia | Vue Flow | Element Plus
 
 ## 构建与运行

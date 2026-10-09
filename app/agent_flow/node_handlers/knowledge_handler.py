@@ -172,7 +172,7 @@ class ListDocumentInput(BaseModel):
     )
 
 
-# AI 写入文档的字符数上限（content 列为 Text，MySQL 下约 64KB）
+# AI 写入文档的字符数上限（content 列为 Text 类型）
 _MAX_DOCUMENT_CHARS = 20000
 
 

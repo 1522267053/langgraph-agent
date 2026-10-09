@@ -762,9 +762,7 @@ async def _monitor_process(
             if deadline is not None and (deadline - now).total_seconds() <= 0:
                 raise TimeoutError("max_duration")
 
-            done, _pending = await asyncio.wait(
-                {streams}, timeout=idle_poll_interval
-            )
+            done, _pending = await asyncio.wait({streams}, timeout=idle_poll_interval)
             if done:
                 # gather 整体完成：进程已退出（含异常路径由 gather 结果抛出）
                 streams.result()

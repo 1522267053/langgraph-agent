@@ -13,7 +13,7 @@ from app.config.settings import settings
 # 导入 Base 类（从 base_model 导入，包含公共字段）
 from app.models.base_model import DbBaseModel
 
-# 连接池参数对 SQLite / MySQL 均生效（SQLite 异步默认池过小，流式长会话易耗尽）
+# 连接池参数（SQLite 异步默认池过小，流式长会话易耗尽，显式调大）
 _engine_kwargs: dict = {
     "echo": settings.debug,
     "pool_size": settings.database_pool_size,
@@ -22,6 +22,7 @@ _engine_kwargs: dict = {
 if settings.is_sqlite:
     _engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
 else:
+    # 非默认 SQLite 后端（custom_database_url 指定时）：长连接需保活探测
     _engine_kwargs["pool_pre_ping"] = True
     _engine_kwargs["pool_recycle"] = 3600
 

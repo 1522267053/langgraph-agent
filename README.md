@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Gitee](https://img.shields.io/badge/Gitee-wgb20000527-red.svg)](https://gitee.com/wgb20000527/langgraph-agent)
 
-轻量 AI 智能体平台，个人和团队均可使用。个人用户默认 SQLite 零配置启动，一行命令即可运行；团队部署支持 MySQL + Docker，单进程架构 2-3 个容器即可上线。
+轻量 AI 智能体平台，单人本机使用。默认 SQLite 零配置启动，个人电脑一行命令即可运行。
 
 ![首页](docs/images/首页.png)
 ![工作流编辑页](docs/images/工作流编辑页.png)
@@ -17,7 +17,7 @@
 
 | 维度 | 本项目 | Dify | OpenClaw | DeerFlow |
 |------|--------|------|----------|----------|
-| **部署门槛** | 个人零配置（SQLite 单进程），团队轻量部署（MySQL + Docker，2-3 容器） | 9+ 容器（API/Worker/DB/Redis/SSO/Web/Plugin/Queue/Sandbox），部署门槛高 | VPS 部署 + Node.js | Docker 多容器 |
+| **部署门槛** | 个人零配置（SQLite 单进程） | 9+ 容器（API/Worker/DB/Redis/SSO/Web/Plugin/Queue/Sandbox），部署门槛高 | VPS 部署 + Node.js | Docker 多容器 |
 | **可视化编排** | 拖拽式画布，条件分支 + 循环 + 嵌套子流程 + 意图路由 | 有工作流画布，但无循环节点和嵌套子流程 | 无可视化编辑器，YAML/CLI 定义 | 无可视化编辑器，Skill 文件驱动 |
 | **循环控制** | 计数/条件/forEach 三种模式，支持顺序和并发，嵌套校验 | 不支持循环节点 | 不支持 | 不支持 |
 | **流程复用** | 能力卡片，子图递归展开嵌套引用，变量隔离 | 工作流模板，无运行时子图嵌套 | 无 | 子 Agent 编排（非可视化） |
@@ -30,7 +30,7 @@
 
 **1. 开箱即用 — 一行命令启动**
 
-Dify 需要 9+ 个容器、Redis、MySQL 才能跑起来，部署成本高。本项目默认 SQLite，`poetry install` 之后 `poetry run uvicorn main:app --reload` 直接运行，个人电脑直接跑，团队部署也只需 MySQL + Docker 2-3 个容器。
+Dify 需要 9+ 个容器、Redis、MySQL 才能跑起来，部署成本高。本项目默认 SQLite，`poetry install` 之后 `poetry run uvicorn main:app --reload` 直接运行，个人电脑直接跑。
 
 **2. 唯一具备 可视化编排 + 循环 + 嵌套子流程 的开源 AI 平台**
 
@@ -58,11 +58,11 @@ Dify 仅有短期对话记忆，DeerFlow 尚未实现分层记忆。本项目的
 - **定时任务** — 基于 APScheduler 的 Cron 定时触发，支持 Flow/Agent 执行目标
 - **日程管理** — 完整 CRUD + FullCalendar 日历视图 + APScheduler 提醒推送 + Agent 工具节点
 - **执行追踪** — 完整的节点级执行记录和状态追踪
-- **轻量部署** — 默认 SQLite 零配置启动，单服务架构，支持 Docker 和 PyInstaller/Nuitka 打包
+- **轻量部署** — 默认 SQLite 零配置启动，单服务架构，支持 EXE 打包（PyInstaller/Nuitka）
 
 ## 技术栈
 
-**后端**: Python 3.12 | FastAPI | SQLAlchemy 2.0 (aiomysql/aiosqlite) | Pydantic v2 | LangGraph | ChromaDB | APScheduler
+**后端**: Python 3.12 | FastAPI | SQLAlchemy 2.0 (aiosqlite) | Pydantic v2 | LangGraph | ChromaDB | APScheduler
 
 **前端**: Vue 3 | TypeScript | Vite | Element Plus | Vue Flow | Pinia | Axios
 
@@ -78,7 +78,7 @@ Dify 仅有短期对话记忆，DeerFlow 尚未实现分层记忆。本项目的
 | Node.js | 18+ |
 | Poetry | 最新版本 |
 
-> 默认使用 SQLite，无需安装数据库。如需 MySQL，修改 `.env` 中 `DATABASE_TYPE=mysql` 即可。
+> 默认使用 SQLite，无需安装数据库。
 
 ### 后端启动
 
@@ -158,10 +158,9 @@ dist/langgraph_agent/
 ### Docker 部署
 
 ```bash
-# 环境层（MySQL）
-cd docker && docker-compose -f docker-compose-env.yml up -d
-
-# 应用层（构建镜像并启动）
+# 构建依赖层镜像 + 构建应用镜像并启动
+cd docker
+docker-compose build langgraph_agent_env
 docker-compose up -d --build
 ```
 
@@ -212,7 +211,7 @@ langgraph-agent/
 │   │   ├── loop_subgraph.py    #   循环体子图构建器
 │   │   ├── execution_context.py #  执行上下文（ContextVar 跨层级传递）
 │   │   ├── mcp_manager.py      #   MCP 服务器管理（持久化会话 + 自愈重连）
-│   │   ├── mysql_checkpointer.py # MySQL Checkpointer（ormsgpack + gzip）
+│   │   ├── db_checkpointer.py   # 数据库 Checkpointer（ormsgpack + gzip，SQLAlchemy 异步会话）
 │   │   ├── variable_resolver.py  # 统一变量解析器
 │   │   ├── message_buffer.py    # 对话消息缓冲区
 │   │   └── ...                 #   handler_registry, safe_eval, exceptions
@@ -307,16 +306,8 @@ langgraph-agent/
 ## 环境变量配置
 
 ```env
-# 数据库配置（默认 SQLite，零配置启动）
-DATABASE_TYPE=sqlite
+# 数据库配置（SQLite，零配置启动）
 SQLITE_DB_PATH=data/langgraph_agent.db
-
-# MySQL 配置（DATABASE_TYPE=mysql 时生效）
-DATABASE_HOST=localhost
-DATABASE_PORT=3306
-DATABASE_USER=root
-DATABASE_PASSWORD=your_password
-DATABASE_NAME=langgraph_agent
 
 # 应用配置
 APP_HOST=0.0.0.0

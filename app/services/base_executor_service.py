@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent_flow.execution_context import ExecutionContext, set_execution_context
 from app.agent_flow.graph_builder import FlowLike, GraphBuilder
 from app.agent_flow.handler_registry import NodeHandlerRegistry
-from app.agent_flow.mysql_checkpointer import AsyncMySQLSaver
+from app.agent_flow.db_checkpointer import AsyncDbCheckpointer
 from app.config.database import AsyncSessionLocal
 from app.models.flow import Flow, FlowType
 from app.models.flow_edge import FlowEdge
@@ -30,8 +30,8 @@ class BaseExecutorService:
     提供流程执行的公共方法，子类可重写特定行为
     """
 
-    def __init__(self, checkpointer: Optional[AsyncMySQLSaver] = None):
-        self._checkpointer = checkpointer or AsyncMySQLSaver()
+    def __init__(self, checkpointer: Optional[AsyncDbCheckpointer] = None):
+        self._checkpointer = checkpointer or AsyncDbCheckpointer()
 
     async def _get_flow_with_details(
         self, db: AsyncSession, flow_id: int, flow_type: Optional[FlowType] = None

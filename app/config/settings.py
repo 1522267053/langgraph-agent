@@ -13,24 +13,16 @@ from app.config.build_utils import BASE_DIR, get_env_file
 class Settings(BaseSettings):
     """应用配置类"""
 
-    # 数据库配置
-    database_type: str = Field(
-        default="sqlite", alias="DATABASE_TYPE"
-    )  # sqlite / mysql
+    # 数据库配置（本机 SQLite，零配置启动）
     custom_database_url: str = Field(
         default="", alias="DATABASE_URL"
     )  # 直接指定完整 URL（优先级最高）
     sqlite_db_path: str = Field(
         default="data/langgraph_agent.db", alias="SQLITE_DB_PATH"
     )  # SQLite 文件路径（相对于项目根目录）
-    database_host: str = Field(default="localhost", alias="DATABASE_HOST")
-    database_port: int = Field(default=3306, alias="DATABASE_PORT")
-    database_user: str = Field(default="root", alias="DATABASE_USER")
-    database_password: str = Field(default="", alias="DATABASE_PASSWORD")
-    database_name: str = Field(default="langgraph_agent", alias="DATABASE_NAME")
     database_pool_size: int = Field(
         default=20, alias="DATABASE_POOL_SIZE"
-    )  # 连接池大小（SQLite / MySQL 均生效）
+    )  # SQLite 连接池大小
     database_max_overflow: int = Field(
         default=10, alias="DATABASE_MAX_OVERFLOW"
     )  # 连接池溢出大小（总连接数 = POOL_SIZE + MAX_OVERFLOW）
@@ -160,22 +152,16 @@ class Settings(BaseSettings):
         # 优先使用直接指定的 URL
         if self.custom_database_url:
             return self.custom_database_url
-        # 根据数据库类型构建 URL
-        if self.database_type == "sqlite":
-            db_path = self.get_absolute_path(self.sqlite_db_path)
-            db_path.parent.mkdir(parents=True, exist_ok=True)
-            return f"sqlite+aiosqlite:///{db_path}"
-        return (
-            f"mysql+aiomysql://{self.database_user}:{self.database_password}"
-            f"@{self.database_host}:{self.database_port}/{self.database_name}?charset=utf8mb4"
-        )
+        db_path = self.get_absolute_path(self.sqlite_db_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        return f"sqlite+aiosqlite:///{db_path}"
 
     @property
     def is_sqlite(self) -> bool:
-        """当前是否使用 SQLite"""
-        return (
-            self.database_type == "sqlite"
-            and not self.custom_database_url.startswith("mysql")
+        """当前是否使用 SQLite（默认恒为 True，仅当显式指定非 SQLite
+        的 custom_database_url 时为 False）"""
+        return not self.custom_database_url.startswith(
+            ("postgresql", "mssql", "oracle", "mysql")
         )
 
     def get_absolute_path(self, relative_path: str) -> Path:
