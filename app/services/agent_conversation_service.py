@@ -134,8 +134,14 @@ class AgentConversationService:
         capabilities: Optional[dict] = None,
     ) -> list[BaseMessage]:
         """获取对话历史，limit=0 表示不限制"""
+        # 执行错误消息（execution_error）仅前端展示，不进 LLM 上下文；
+        # is_(None) | (!=) 组合必要：SQL 中 NULL != 'x' 为 NULL 会被 where 丢弃，
+        # 单写 != 会把 message_type 为 NULL 的普通消息全部滤掉
         query = select(AgentMessage).where(
-            AgentMessage.session_id == session_id, AgentMessage.is_delete == 0
+            AgentMessage.session_id == session_id,
+            AgentMessage.is_delete == 0,
+            AgentMessage.message_type.is_(None)
+            | (AgentMessage.message_type != "execution_error"),
         )
 
         if node_key:

@@ -679,10 +679,9 @@ class AgentExecutorService(BaseExecutorService):
           不走 interrupt，改查 question_service 的 pending 队列
         与 get_running_session_ids 口径独立：waiting ⊆ running。
         """
-        return (
-            {sid for sid in session_ids if sid in self._waiting_sessions}
-            | question_service.any_pending(session_ids)
-        )
+        return {
+            sid for sid in session_ids if sid in self._waiting_sessions
+        } | question_service.any_pending(session_ids)
 
     def start_compress_background(
         self, session_id: int, custom_prompt: str = ""
@@ -1880,6 +1879,8 @@ class AgentExecutorService(BaseExecutorService):
 
             # 清除可能残留的中断状态，发送流程开始事件
             interrupt_service.clear_agent_interrupted(session_id)
+            # 新一轮执行开始：上一轮失败遗留的错误卡片退场（软删，API 不再返回）
+            await self._clear_error_messages(db, session_id)
             yield FlowEventFactory.flow_start(flow_id=flow.id, execution_id=session_id)
 
             # 收集LLM响应内容
@@ -2017,6 +2018,8 @@ class AgentExecutorService(BaseExecutorService):
             except Exception as e:
                 error_msg = format_exception_message(e)
                 logger.exception(f"Agent执行失败: {e}")
+                # 错误落库为内部消息（先于 error 事件下发，前端 onError 刷新即可拉到展示行）
+                await self._save_error_message(db, session_id, error_msg)
                 # ---- WebSocket 广播（chat 失败通知）----
                 try:
                     from app.services.ws_manager import ws_manager
@@ -2097,6 +2100,57 @@ class AgentExecutorService(BaseExecutorService):
                 await db.commit()
         except Exception as e:
             logger.warning("保存结束节点输出失败 session_id=%s: %s", session_id, e)
+
+    async def _save_error_message(
+        self, db: AsyncSession, session_id: int, error_msg: str
+    ) -> None:
+        """把执行错误落库为内部消息（仅前端展示，get_history 已过滤不进 LLM 上下文）
+
+        先软删该会话旧错误行再插入新行——错误是「最后一轮失败」的临时状态，
+        全局至多一条活跃错误行；新一轮执行开始时由 _clear_error_messages 退场。
+        落库失败不阻断错误事件下发（错误提示优先级最高）。
+        """
+        try:
+            # 异常路径 db 可能处于待回滚状态，先恢复事务（业务消息均已各自 commit，无可丢数据）
+            await db.rollback()
+            await db.execute(
+                update(AgentMessage)
+                .where(
+                    AgentMessage.session_id == session_id,
+                    AgentMessage.message_type == "execution_error",
+                    AgentMessage.is_delete == 0,
+                )
+                .values(is_delete=1)
+            )
+            max_seq = await agent_conversation_service.get_max_sequence(db, session_id)
+            db.add(
+                AgentMessage(
+                    session_id=session_id,
+                    role="ai",
+                    message_type="execution_error",
+                    content=f"执行失败: {error_msg}",
+                    sequence=max_seq + 1,
+                )
+            )
+            await db.commit()
+        except Exception as e:
+            logger.warning("保存执行错误消息失败 session_id=%s: %s", session_id, e)
+
+    async def _clear_error_messages(self, db: AsyncSession, session_id: int) -> None:
+        """新一轮执行开始时软删旧错误行（重新发送/恢复后错误卡片退场，API 不再返回）"""
+        try:
+            await db.execute(
+                update(AgentMessage)
+                .where(
+                    AgentMessage.session_id == session_id,
+                    AgentMessage.message_type == "execution_error",
+                    AgentMessage.is_delete == 0,
+                )
+                .values(is_delete=1)
+            )
+            await db.commit()
+        except Exception as e:
+            logger.warning("清除执行错误消息失败 session_id=%s: %s", session_id, e)
 
     async def _update_session_title(
         self, db: AsyncSession, session_id: int, title: str
@@ -2221,6 +2275,8 @@ class AgentExecutorService(BaseExecutorService):
                     "_human_resume_input": human_input,
                 }
             }
+            # 新一轮执行开始：上一轮失败遗留的错误卡片退场（软删，API 不再返回）
+            await self._clear_error_messages(db, session_id)
             # 收集LLM响应内容
             llm_content = ""
             llm_thinking = ""
@@ -2355,6 +2411,8 @@ class AgentExecutorService(BaseExecutorService):
             except Exception as e:
                 error_msg = format_exception_message(e)
                 logger.exception(f"Agent恢复执行失败: {e}")
+                # 错误落库为内部消息（先于 error 事件下发，前端 onError 刷新即可拉到展示行）
+                await self._save_error_message(db, session_id, error_msg)
                 # ---- WebSocket 广播（resume 失败通知）----
                 try:
                     from app.services.ws_manager import ws_manager

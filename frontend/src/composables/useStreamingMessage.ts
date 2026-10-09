@@ -34,7 +34,7 @@ export interface StreamingMessage {
   /** 关联的 DB 消息 id。id 含流式前缀时通过该字段定位 DB 行 */
   dbMsgId?: number
   role: 'human' | 'ai'
-  displayType?: 'context-summary'
+  displayType?: 'context-summary' | 'execution-error'
   removedCount?: number
   content: string
   thinking?: string

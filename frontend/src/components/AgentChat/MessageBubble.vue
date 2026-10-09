@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Operation, RefreshLeft, Tickets } from '@element-plus/icons-vue'
+import { Operation, RefreshLeft, Tickets, WarningFilled } from '@element-plus/icons-vue'
 import AIMessageContent from '@/components/common/AIMessageContent.vue'
 import FilePreviewer from '@/components/common/FilePreviewer.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
@@ -45,6 +45,9 @@ const showFooter = computed(() => props.part === 'last' || props.part === 'singl
 /** 上下文摘要卡形态（压缩历史的 AI 消息） */
 const isSummary = computed(() => props.msg.displayType === 'context-summary')
 
+/** 执行错误卡形态（最后一轮失败的临时状态，仅展示不进 LLM 上下文） */
+const isError = computed(() => props.msg.displayType === 'execution-error')
+
 // ---- 结束节点输出（该轮 AI 消息携带，点击按钮查看） ----
 const endOutputVisible = ref(false)
 const endOutputText = computed(() =>
@@ -72,8 +75,16 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
 </script>
 
 <template>
+  <!-- 形态零：执行错误卡（最后一轮失败，仅展示；重新发送后退场） -->
+  <div v-if="isError" class="exec-error">
+    <div class="exec-error-label">
+      <el-icon :size="14"><WarningFilled /></el-icon>
+      <span>执行失败</span>
+    </div>
+    <div class="exec-error-content">{{ msg.content }}</div>
+  </div>
   <!-- 形态一：上下文摘要卡（压缩历史的 AI 消息） -->
-  <div v-if="isSummary" class="compress-summary">
+  <div v-else-if="isSummary" class="compress-summary">
     <div class="compress-summary-label">
       <el-icon :size="14"><Operation /></el-icon>
       <span>上下文摘要</span>
@@ -395,6 +406,38 @@ export default {
   line-height: 1.6;
   /* 内容封顶：超出滚动查看；封顶值与 chatRow.ts 的 SUMMARY_BODY_MAX 对齐 */
   max-height: 300px;
+  overflow-y: auto;
+}
+
+/* ---- 执行错误卡（isError 形态） ---- */
+
+.exec-error {
+  background: rgba(245, 108, 108, 0.08);
+  border: 1px solid rgba(245, 108, 108, 0.35);
+  border-left: 3px solid #f56c6c;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 4px 0 12px;
+}
+
+.exec-error-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f56c6c;
+  margin-bottom: 6px;
+}
+
+.exec-error-content {
+  font-size: 13px;
+  color: var(--paper-ink-3);
+  line-height: 1.6;
+  word-break: break-all;
+  white-space: pre-wrap;
+  /* 内容封顶：超长错误文本滚动查看；封顶值与 chatRow.ts 的 ERROR_BODY_MAX 对齐 */
+  max-height: 160px;
   overflow-y: auto;
 }
 </style>

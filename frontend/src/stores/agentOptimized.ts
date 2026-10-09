@@ -30,6 +30,8 @@ const MESSAGE_REFRESH_LIMIT = 100
 const CONTEXT_SUMMARY_MESSAGE_TYPE = 'context_summary'
 /** view_media 注入的多模态内部消息（后端标记，前端不渲染为用户气泡） */
 const MEDIA_INJECTED_MESSAGE_TYPE = 'media_injected'
+/** 执行错误内部消息：仅前端展示错误卡片，后端 get_history 已过滤不进 LLM 上下文 */
+const EXECUTION_ERROR_MESSAGE_TYPE = 'execution_error'
 
 interface AgentStreamContext {
   agentId: number
@@ -888,6 +890,25 @@ export const useAgentStore = defineStore('agent', () => {
           total_tokens: msg.total_tokens,
           createdAt: new Date(msg.created_at || Date.now())
         })
+      } else if (msg.message_type === EXECUTION_ERROR_MESSAGE_TYPE) {
+        // 执行错误卡片：内部消息独立成行（同 context-summary 模式），
+        // flush 当前 AI 组避免错误行被吸进前一条 AI 消息
+        if (currentAssistant) {
+          result.push(currentAssistant)
+          currentAssistant = null
+        }
+        result.push({
+          id: `msg-${msg.id}`,
+          dbMsgId: msg.id,
+          role: 'ai',
+          displayType: 'execution-error',
+          content: msg.content,
+          segments: [],
+          prompt_tokens: msg.prompt_tokens,
+          completion_tokens: msg.completion_tokens,
+          total_tokens: msg.total_tokens,
+          createdAt: new Date(msg.created_at || Date.now())
+        })
       } else if (role === 'human') {
         // view_media 注入的内部消息：不渲染为用户气泡（LLM 历史中仍保留标注文本）
         if (msg.message_type === MEDIA_INJECTED_MESSAGE_TYPE) {
@@ -1157,11 +1178,15 @@ export const useAgentStore = defineStore('agent', () => {
     // streamBaseMsgId=0（首轮/空会话）时 dbMsgId > 0 恒真，全部 rebuilt 行参与匹配
     const matchedFresh = new Set<StreamingMessage>()
     if (placeholders.length > 0) {
-      // 排除 context-summary：压缩摘要虽是压缩后最新的 DB 行，但属内部标记消息，
-      // 参与对齐会被尾部流式占位行吸收（matchedFresh 跳过摘要行 + dbMsgId 过继给
-      // 占位行），导致摘要卡在下次全量重建前不渲染；占位行只与真实对话行对齐
+      // 排除 context-summary / execution-error：两者是内部标记消息（压缩摘要/错误卡片），
+      // 参与对齐会被尾部流式占位行吸收（matchedFresh 跳过内部行 + dbMsgId 过继给
+      // 占位行），导致卡片卡在下次全量重建前不渲染；占位行只与真实对话行对齐
       const freshRows = rebuilt.filter(
-        r => r.dbMsgId != null && r.dbMsgId > streamBaseMsgId && r.displayType !== 'context-summary'
+        r =>
+          r.dbMsgId != null &&
+          r.dbMsgId > streamBaseMsgId &&
+          r.displayType !== 'context-summary' &&
+          r.displayType !== 'execution-error'
       )
       let freshIdx = freshRows.length - 1
       for (let pi = placeholders.length - 1; pi >= 0 && freshIdx >= 0; pi--) {
@@ -1753,6 +1778,13 @@ export const useAgentStore = defineStore('agent', () => {
 
     markStreamBaseMsgId()
     clearOrphanPlaceholders()
+    // 乐观移除旧错误卡片：重新发送即视为开启新一轮，不等后端软删生效
+    if (messages.value.some(m => m.message_type === EXECUTION_ERROR_MESSAGE_TYPE)) {
+      messages.value = messages.value.filter(
+        m => m.message_type !== EXECUTION_ERROR_MESSAGE_TYPE
+      )
+      rebuildChatMessages(true)
+    }
     addUserMessage(content, files)
     startStreaming()
     // 新轮次开始：增量从零累计（基线 serverTotalTokens 保持服务端值）
@@ -1788,6 +1820,13 @@ export const useAgentStore = defineStore('agent', () => {
     }
     isResume = true
     markStreamBaseMsgId()
+    // 乐观移除旧错误卡片：恢复执行即视为开启新一轮，不等后端软删生效
+    if (messages.value.some(m => m.message_type === EXECUTION_ERROR_MESSAGE_TYPE)) {
+      messages.value = messages.value.filter(
+        m => m.message_type !== EXECUTION_ERROR_MESSAGE_TYPE
+      )
+      rebuildChatMessages(true)
+    }
     addUserMessage(humanInput)
     isWaitingHuman.value = false
     currentWaitData.value = null
