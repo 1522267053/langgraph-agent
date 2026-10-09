@@ -43,7 +43,7 @@ class AgendaRecurrence(str, Enum):
     """重复规则
 
     - weekend：每周六、日
-    - holiday：法定节假日（含调休放假，按 chinese_calendar 判定）
+    - holiday：法定节假日（含调休放假，按 holiday-cn 数据判定）
     - holiday_weekend：节假日或周六日（并集）
     """
 
