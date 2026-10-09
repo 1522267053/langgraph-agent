@@ -15,7 +15,7 @@ poetry run ruff check app/ --fix        # 检查并修复
 
 # 前端
 cd frontend
-npm install && npm run dev              # 端口 3000，/api 代理到 127.0.0.1:8000
+npm install && npm run dev              # 端口 3010，/api 代理到 127.0.0.1:8000
 npm run lint                            # ESLint 检查（自动修复）
 npm run format                          # Prettier 格式化
 ```

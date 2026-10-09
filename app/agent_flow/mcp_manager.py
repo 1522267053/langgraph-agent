@@ -14,7 +14,7 @@ import shutil
 import sys
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 from datetime import datetime
 
 from anyio import BrokenResourceError, ClosedResourceError, EndOfStream
@@ -533,17 +533,17 @@ class McpToolManager:
             工具列表
         """
         tools: list[BaseTool] = []
-
-        for server_id in server_ids:
+        servers = await self._get_server_list(db, server_ids)
+        for server in servers:
             try:
                 server_tools = await asyncio.wait_for(
-                    self._get_server_tools(db, server_id),
+                    self._get_server_tools(db, server.id),
                     timeout=MCP_TOOL_FETCH_TIMEOUT,
                 )
                 tools.extend(server_tools)
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"MCP服务器 {server_id} 获取工具超时({MCP_TOOL_FETCH_TIMEOUT}s)，跳过"
+                    f"MCP服务器 {server.name} 获取工具超时({MCP_TOOL_FETCH_TIMEOUT}s)，跳过"
                 )
             except McpConnectionError as e:
                 logger.warning(f"MCP服务器加载失败，跳过: {e}")
@@ -622,6 +622,18 @@ class McpToolManager:
         result = await db.execute(query)
         return result.scalar_one_or_none()
 
+    async def _get_server_list(
+        self, db: AsyncSession, server_ids: list[int]
+    ) -> Sequence[McpServer]:
+        """获取服务器配置"""
+        from sqlalchemy import select
+
+        query = select(McpServer).where(
+            McpServer.id.in_(server_ids), McpServer.is_delete == 0
+        )
+        result = await db.execute(query)
+        return result.scalars().all()
+
     async def _get_server_config(
         self, db: AsyncSession, server_id: int
     ) -> dict[str, Any]:
@@ -679,7 +691,7 @@ class McpToolManager:
                     await session_ctx.__aexit__(None, None, None)
                 except Exception:
                     logger.warning(
-                        f"关闭MCP连接失败: server_id={server.id}",
+                        f"关闭MCP连接失败: server_name={server.name}",
                         exc_info=True,
                     )
 
