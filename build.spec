@@ -98,9 +98,6 @@ hiddenimports = [
     # 数据库相关
     "aiosqlite",
     "sqlalchemy.dialects.sqlite.aiosqlite",
-    "aiomysql",
-    "pymysql",
-    "sqlalchemy.dialects.mysql",
     "sqlalchemy.sql.default_comparator",
     # 其他依赖
     "docx",

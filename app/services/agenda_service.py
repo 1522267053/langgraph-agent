@@ -221,7 +221,7 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
         if status:
             next_stmt = next_stmt.where(Agenda.status.in_(status))
         next_val = (await db.execute(next_stmt)).scalar()
-        # SQLite 下 func.date() 返回 TEXT(str)，MySQL 下返回 date(datetime)
+        # SQLite 下 func.date() 返回 TEXT(str)
         if next_val is None:
             next_cursor = None
         elif isinstance(next_val, str):

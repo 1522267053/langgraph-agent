@@ -705,9 +705,7 @@ class BuiltinAgentService:
             context_length=context_length,
         )
         tool_keys = [
-            n.node_key
-            for n in nodes
-            if n.node_key not in ("start", "llm", "end")
+            n.node_key for n in nodes if n.node_key not in ("start", "llm", "end")
         ]
         edges = BuiltinAgentTemplate.edges(tool_keys)
 

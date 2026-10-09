@@ -160,12 +160,8 @@ class AgentApi:
             # 「对话中」标记：批量填充内存运行态（与 /running 单查接口同口径）；
             # waiting 单独标记（审批/反问等待用户响应，列表图标呼吸灯样式）
             session_ids = [s.id for s in sessions]
-            running_ids = agent_executor_service.get_running_session_ids(
-                session_ids
-            )
-            waiting_ids = agent_executor_service.get_waiting_session_ids(
-                session_ids
-            )
+            running_ids = agent_executor_service.get_running_session_ids(session_ids)
+            waiting_ids = agent_executor_service.get_waiting_session_ids(session_ids)
             session_list = []
             for s in sessions:
                 item = AgentSessionResponse.model_validate(s)

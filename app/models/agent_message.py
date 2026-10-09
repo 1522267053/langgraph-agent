@@ -19,9 +19,7 @@ class AgentMessage(DbBaseModel):
 
     # 会话维度查询（messages/page 分页 + count）高频走此索引；
     # 缺失时 4 万行全表 SCAN，单次 count/page 约 50ms，接口累计 2s+
-    __table_args__ = (
-        Index("idx_agent_message_session_id", "session_id", "is_delete"),
-    )
+    __table_args__ = (Index("idx_agent_message_session_id", "session_id", "is_delete"),)
 
     session_id: Mapped[int] = mapped_column(Integer, nullable=False, comment="会话ID")
     role: Mapped[str] = mapped_column(
