@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agenda import Agenda, AgendaRecurrence, AgendaStatus
 from app.schemas.agenda_schema import AgendaCondition, AgendaCreate, AgendaUpdate
 from app.services.base_service import BaseService
+from app.services.holiday_service import holiday_service
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +23,10 @@ logger = logging.getLogger(__name__)
 def _is_holiday(d: date) -> bool:
     """判定法定节假日（含调休放假；调休补班的周末不算节假日）
 
-    数据源 chinesecalendar（国务院放假安排，需随年份更新包版本）。
-    超出库覆盖年份或导入失败时保守返回 False（按非节假日处理），不炸主流程。
+    数据源 holiday-cn（每日抓取国务院公告，每年自动更新，无需升级依赖）。
+    数据未加载/拉取失败时降级返回 False（按非节假日处理），不炸主流程。
     """
-    try:
-        import chinese_calendar
-
-        return chinese_calendar.is_holiday(d)
-    except (ImportError, NotImplementedError, ValueError):
-        # NotImplementedError：日期超出库数据范围；ValueError：非法日期
-        return False
+    return holiday_service.is_holiday(d)
 
 
 def _is_weekend(d: date) -> bool:
@@ -285,6 +280,15 @@ class AgendaService(BaseService[Agenda, AgendaCreate, AgendaUpdate]):
             offset = int((agenda.remind_at - agenda.start_time).total_seconds())
 
         # 计算下一组时间
+        # holiday / holiday_weekend 规则逐日扫描（最长 3 年）：先预热逐年节假日数据
+        # （内存→磁盘→在线多镜像，已有缓存时近零开销），谓词扫描保持纯同步
+        if agenda.recurrence in (
+            AgendaRecurrence.HOLIDAY.value,
+            AgendaRecurrence.HOLIDAY_WEEKEND.value,
+        ):
+            await holiday_service.ensure_years(
+                [agenda.start_time.year + i for i in range(4)]
+            )
         if agenda.recurrence == AgendaRecurrence.DAILY.value:
             next_start = agenda.start_time + timedelta(days=1)
         elif agenda.recurrence == AgendaRecurrence.WEEKDAY.value:
