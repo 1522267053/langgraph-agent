@@ -86,7 +86,7 @@ class ScheduledTaskApi(
 
     @staticmethod
     def _validate_schedule(data) -> None:
-        """校验调度配置：cron 模式需 cron_expression，once 模式需 run_at"""
+        """校验调度配置：cron 模式需合法 cron_expression，once 模式需 run_at"""
         from datetime import datetime
 
         from fastapi import HTTPException
@@ -104,10 +104,21 @@ class ScheduledTaskApi(
                     detail="运行时间不能早于当前时间",
                 )
         else:
-            if not (data.cron_expression or "").strip():
+            cron_expr = (data.cron_expression or "").strip()
+            if not cron_expr:
                 raise HTTPException(
                     status_code=400,
                     detail="循环执行任务必须设置 Cron 表达式",
+                )
+            from app.services.scheduler_service import build_cron_trigger
+
+            if build_cron_trigger(cron_expr) is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Cron 表达式「{cron_expr}」格式非法：需为 5 段"
+                        "「分 时 日 月 周」（如每小时第20分 = 20 * * * *）"
+                    ),
                 )
 
     async def create(
@@ -133,7 +144,7 @@ class ScheduledTaskApi(
         """更新 - 校验名称唯一性 + 调度配置 + 流程目标合法性，同步调度"""
         if data.name is not None:
             await self._check_name_unique(db, data.name, exclude_id=data.id)
-        if data.schedule_type is not None:
+        if data.schedule_type is not None or data.cron_expression is not None:
             self._validate_schedule(data)
         if data.target_type is not None and data.target_id is not None:
             await self._check_flow_target(db, data.target_type, data.target_id)
@@ -166,6 +177,27 @@ class ScheduledTaskApi(
 
     def _register_custom_routes(self):
         """注册自定义路由"""
+
+        @self.router.get("/preview-next-run", response_model=ApiResponse)
+        async def preview_next_run(cron_expression: str):
+            """预览 cron 表达式的下次执行时间（编辑弹窗实时提示用）"""
+            from datetime import datetime
+
+            from app.services.scheduler_service import build_cron_trigger
+
+            trigger = build_cron_trigger(cron_expression)
+            if trigger is None:
+                return ApiResponse.success(
+                    data={"valid": False, "next_run_time": None},
+                    msg="Cron 表达式格式非法",
+                )
+            next_run = trigger.get_next_fire_time(None, datetime.now())
+            return ApiResponse.success(
+                data={
+                    "valid": True,
+                    "next_run_time": next_run.isoformat() if next_run else None,
+                }
+            )
 
         @self.router.post("/toggle/{task_id}", response_model=ApiResponse)
         async def toggle_enabled(task_id: int, db: AsyncSession = Depends(get_db)):
