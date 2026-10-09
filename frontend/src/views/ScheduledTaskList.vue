@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -188,6 +188,18 @@ const cronPresets = [
   { label: '每月1号', value: '0 0 1 * *' }
 ]
 
+// ---- Cron 下次执行时间实时预览（防抖 500ms，后端同一解析器校验）----
+const cronPreviewLoading = ref(false)
+const cronPreviewNextRun = ref('') // 空串=未知；'invalid'=格式非法
+let cronPreviewTimer: number | undefined
+
+function formatNextRun(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 const dialogVisible = ref(false)
 const dialogLoading = ref(false)
 const dialogTitle = ref('新建定时任务')
@@ -245,6 +257,31 @@ async function openCreateDialog() {
   dialogVisible.value = true
   await loadTargets(true)
 }
+
+// Cron 下次执行时间预览（放 form 声明之后，getter 首次求值需 form 已初始化）
+watch(
+  () => form.cron_expression,
+  expr => {
+    window.clearTimeout(cronPreviewTimer)
+    cronPreviewNextRun.value = ''
+    if (form.schedule_type !== 'cron' || !expr.trim()) return
+    cronPreviewTimer = window.setTimeout(async () => {
+      cronPreviewLoading.value = true
+      try {
+        const res = await scheduledTaskApi.previewNextRun(expr)
+        if (res.data.code === 1 && res.data.data) {
+          cronPreviewNextRun.value = res.data.data.valid
+            ? formatNextRun(res.data.data.next_run_time)
+            : 'invalid'
+        }
+      } catch {
+        // 预览失败不打扰输入
+      } finally {
+        cronPreviewLoading.value = false
+      }
+    }, 500)
+  }
+)
 
 async function openEditDialog(row: ScheduledTask) {
   resetForm()
@@ -649,6 +686,17 @@ async function loadLogs() {
                 {{ preset.label }}
               </el-button>
             </div>
+            <div
+              v-if="cronPreviewNextRun"
+              v-loading="cronPreviewLoading"
+              class="cron-preview"
+              :class="{ 'cron-preview-invalid': cronPreviewNextRun === 'invalid' }"
+            >
+              <template v-if="cronPreviewNextRun === 'invalid'">
+                格式非法：需为 5 段「分 时 日 月 周」（如每小时第20分 = 20 * * * *）
+              </template>
+              <template v-else>下次执行时间：{{ cronPreviewNextRun }}</template>
+            </div>
           </el-form-item>
         </template>
         <el-form-item v-else label="运行时间" required>
@@ -815,6 +863,18 @@ async function loadLogs() {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.cron-preview {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #67c23a;
+  line-height: 1.4;
+}
+
+.cron-preview-invalid {
+  color: #f56c6c;
 }
 
 .once-tip {

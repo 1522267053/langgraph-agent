@@ -22,6 +22,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def build_cron_trigger(cron_expr: str) -> CronTrigger | None:
+    """解析 5 段 cron 表达式为 CronTrigger；格式非法返回 None。
+
+    与 APScheduler 注册共用同一解析（单一事实源）：
+    - 5 段格式：分 时 日 月 周（Quartz 的 ? 等价于 *）
+    - 段数不对或字段值非法（CronTrigger 构造抛 ValueError）均视为无效
+    """
+    parts = (cron_expr or "").strip().split()
+    # Quartz 的 ? 表示"不指定"，等价于标准 cron 的 *
+    parts = ["*" if p == "?" else p for p in parts]
+    if len(parts) != 5:
+        return None
+    try:
+        return CronTrigger(
+            minute=parts[0],
+            hour=parts[1],
+            day=parts[2],
+            month=parts[3],
+            day_of_week=parts[4],
+        )
+    except ValueError:
+        return None
+
+
 class SchedulerService:
     """
     定时任务管理服务
@@ -159,22 +183,14 @@ class SchedulerService:
             cron_expr = task.cron_expression or ""
             if not cron_expr:
                 return
-            parts = cron_expr.strip().split()
-            # Quartz 的 ? 表示"不指定"，等价于标准 cron 的 *
-            parts = ["*" if p == "?" else p for p in parts]
-            if len(parts) != 5:
+            trigger = build_cron_trigger(cron_expr)
+            if trigger is None:
                 logger.warning(f"定时任务[{task.id}] cron 表达式格式错误: {cron_expr}")
                 return
 
             self._scheduler.add_job(
                 self._run_scheduled_task,
-                CronTrigger(
-                    minute=parts[0],
-                    hour=parts[1],
-                    day=parts[2],
-                    month=parts[3],
-                    day_of_week=parts[4],
-                ),
+                trigger,
                 id=job_id,
                 name=job_name,
                 replace_existing=True,

@@ -61,5 +61,11 @@ export const scheduledTaskApi = {
   },
   logsPage(params: PaginationParams<{ task_id?: number }>) {
     return post<PaginatedResponse<ScheduledTaskLog>>('/scheduled-task/logs/page', params)
+  },
+  previewNextRun(cronExpression: string) {
+    return get<{ valid: boolean; next_run_time: string | null }>(
+      '/scheduled-task/preview-next-run',
+      { cron_expression: cronExpression }
+    )
   }
 }
