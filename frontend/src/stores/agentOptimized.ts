@@ -1176,10 +1176,10 @@ export const useAgentStore = defineStore('agent', () => {
     // 顺序单调消费在中间缺行（如中断轮次的 ai 为空 chunk 未落库）时会让后续
     // 占位级联失配；反向对齐只影响末尾对应关系，缺行位置的行保持独立成行。
     // streamBaseMsgId=0（首轮/空会话）时 dbMsgId > 0 恒真，全部 rebuilt 行参与匹配
-    const matchedFresh = new Set<StreamingMessage>()
+    const matchedPlaceholders: StreamingMessage[] = []
     if (placeholders.length > 0) {
       // 排除 context-summary / execution-error：两者是内部标记消息（压缩摘要/错误卡片），
-      // 参与对齐会被尾部流式占位行吸收（matchedFresh 跳过内部行 + dbMsgId 过继给
+      // 参与对齐会被尾部流式占位行吸收（跳过内部行 + dbMsgId 过继给
       // 占位行），导致卡片卡在下次全量重建前不渲染；占位行只与真实对话行对齐
       const freshRows = rebuilt.filter(
         r =>
@@ -1214,19 +1214,30 @@ export const useAgentStore = defineStore('agent', () => {
           ph.content = candidate.content
           ph.thinking = candidate.thinking
         }
-        matchedFresh.add(candidate)
+        matchedPlaceholders.push(ph)
       }
     }
 
     // ---- 已提交行按 dbMsgId 对齐：命中复用本地对象（保 key），未命中新建 ----
+    // 占位对齐命中行走同一 Map：已提交的占位行按 rebuilt 原位出现（本地替身），
+    // 只有未匹配占位行（真正未落库的流式占位）才堆尾部。旧实现把命中占位行
+    // matchedFresh 跳过+堆尾，当 freshRows 里夹着内部行（如 execution-error：
+    // 不参与对齐但仍在 rebuilt 尾部）时，[human占位堆尾, error行] 顺序颠倒——
+    // 错误卡片被插到用户消息前面（实时态与刷新后 DB 顺序不一致）
     const localById = new Map<number, StreamingMessage>()
     for (let i = 0; i < placeholderStart; i++) {
       const m = local[i]
       if (m.dbMsgId != null) localById.set(m.dbMsgId, m)
     }
+    const placeholderById = new Map<number, StreamingMessage>()
+    for (const ph of matchedPlaceholders) placeholderById.set(ph.dbMsgId!, ph)
     const result: StreamingMessage[] = []
     for (const r of rebuilt) {
-      if (matchedFresh.has(r)) continue
+      const placeholder = r.dbMsgId != null ? placeholderById.get(r.dbMsgId) : undefined
+      if (placeholder) {
+        result.push(placeholder)
+        continue
+      }
       const existing = r.dbMsgId != null ? localById.get(r.dbMsgId) : undefined
       if (existing) {
         if (!isSameMessage(existing, r)) Object.assign(existing, r)
@@ -1259,8 +1270,12 @@ export const useAgentStore = defineStore('agent', () => {
       result.unshift(...olderKept)
     }
 
-    // 未匹配占位行（DB 尚无对应行）保持尾部
-    result.push(...placeholders)
+    // 未匹配占位行（DB 尚无对应行）保持尾部；已匹配行已按 rebuilt 原位出现
+    const matchedSet = new Set(matchedPlaceholders)
+    const unmatchedPlaceholders = placeholders.filter(ph => !matchedSet.has(ph))
+    if (unmatchedPlaceholders.length > 0) {
+      result.push(...unmatchedPlaceholders)
+    }
     chatMessages.value = result
 
     thinkingContent.value = ''
