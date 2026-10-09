@@ -8,10 +8,11 @@ from pydantic import Field, field_validator
 from app.schemas.base_schema import BaseView, PaginationParams, ChinaDateTime
 
 # MCP 服务器名称即 OpenAI 兼容工具名的组成部分（mcp__<server>__<tool>），
-# 必须满足 function calling 的名称规范：字母开头，仅字母/数字/下划线/连字符，≤64
-MCP_SERVER_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]{0,63}$")
+# 需满足 function calling 的名称规范：仅字母/数字/下划线/连字符，1-64 字符
+# （OpenAI 官方 pattern：^[a-zA-Z0-9_-]{1,64}$，允许数字开头，如 12306-mcp）
+MCP_SERVER_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 MCP_SERVER_NAME_RULE = (
-    "服务器名称仅允许字母/数字/下划线/连字符（字母开头，最长64字符），"
+    "服务器名称仅允许字母/数字/下划线/连字符（1-64字符），"
     "不能包含中文或特殊符号——名称将用于拼接工具名（mcp__<server>__<tool>）"
 )
 
@@ -19,15 +20,12 @@ MCP_SERVER_NAME_RULE = (
 def sanitize_mcp_server_name(raw: str) -> str:
     """将任意名称转写为符合 MCP 服务器名规范的形态（导入等场景的自动降级）
 
-    非法字符（中文/全角/符号/空格）→ _；非字母开头补 mcp_ 前缀；超长截断到 64。
-    转写结果为空时返回 mcp_server 兜底。
+    非法字符（中文/全角/符号/空格）→ _；超长截断到 64；为空时返回 mcp_server 兜底。
     """
     cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", (raw or "").strip())
     cleaned = re.sub(r"_+", "_", cleaned).strip("_")
     if not cleaned:
         return "mcp_server"
-    if not cleaned[0].isalpha():
-        cleaned = f"mcp_{cleaned}"
     return cleaned[:64]
 
 
@@ -65,19 +63,6 @@ class McpServerBase(BaseView):
         default=None, description="配置详情"
     )
 
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, v: Optional[str]) -> Optional[str]:
-        """校验服务器名称（需满足 OpenAI 兼容工具名规范）"""
-        if v is None:
-            return v
-        name = v.strip()
-        if len(name) > 100:
-            raise ValueError("服务器名称不能超过100个字符")
-        if name and not MCP_SERVER_NAME_PATTERN.match(name):
-            raise ValueError(MCP_SERVER_NAME_RULE)
-        return v
-
     @field_validator("transport")
     @classmethod
     def validate_transport(cls, v: Optional[str]) -> Optional[str]:
@@ -98,11 +83,31 @@ class McpServerCreate(McpServerBase):
     name: str = Field(..., description="服务器名称")
     transport: str = Field(..., description="传输类型")
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """校验服务器名称（需满足 OpenAI 兼容工具名规范，仅入参方向）"""
+        name = v.strip()
+        if not name:
+            raise ValueError("服务器名称不能为空")
+        if not MCP_SERVER_NAME_PATTERN.match(name):
+            raise ValueError(MCP_SERVER_NAME_RULE)
+        return name
+
 
 class McpServerUpdate(McpServerBase):
     """更新MCP服务器"""
 
-    pass
+    @field_validator("name")
+    @classmethod
+    def validate_name_update(cls, v: Optional[str]) -> Optional[str]:
+        """校验服务器名称（更新时携带才校验，仅入参方向）"""
+        if v is None:
+            return v
+        name = v.strip()
+        if name and not MCP_SERVER_NAME_PATTERN.match(name):
+            raise ValueError(MCP_SERVER_NAME_RULE)
+        return v
 
 
 class McpServerQuery(BaseView):
