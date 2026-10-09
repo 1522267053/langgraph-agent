@@ -8,7 +8,7 @@ import type { StreamingMessage } from '@/composables/useStreamingMessage'
 import type { Segment, ToolCall } from '@/types/segment'
 import { getBlockExpandOverride } from '@/components/AgentChat/blockExpand'
 
-export type ChatRowKind = 'human' | 'summary' | 'typing' | 'ai'
+export type ChatRowKind = 'human' | 'summary' | 'typing' | 'error' | 'ai'
 
 /** 行在消息内的位置：first=带头部 mid=中间段 last=带尾部 single=头尾同行 */
 export type ChatRowPart = 'first' | 'mid' | 'last' | 'single'
@@ -112,6 +112,10 @@ export function buildChatRows(
       rows.push({ key: `m-${msg.id}`, kind: 'summary', part: 'single', msg, isLast: isLastMsg })
       return
     }
+    if (msg.displayType === 'execution-error') {
+      rows.push({ key: `m-${msg.id}`, kind: 'error', part: 'single', msg, isLast: isLastMsg })
+      return
+    }
     if (msg.role === 'human') {
       rows.push({ key: `m-${msg.id}`, kind: 'human', part: 'single', msg, isLast: isLastMsg })
       return
@@ -204,6 +208,12 @@ const SUMMARY_BODY_MAX = 300
 const SUMMARY_CHROME = 64
 /** compress-summary 内容内边距：与 .compress-summary 的 padding 14px × 2 一致 */
 const SUMMARY_BODY_PADDING = 28
+/** exec-error 内容封顶（.exec-error-content max-height: 160px，错误文本可能超长，超长内部滚动） */
+const ERROR_BODY_MAX = 160
+/** exec-error 块外 chrome：标题行 ~28（13px 文本 + 图标 + 6px margin-bottom）+ 容器 padding 24 + 卡片下边距 12 */
+const ERROR_CHROME = 64
+/** exec-error 内容内边距：与 .exec-error-content 的 padding 10px × 2 一致 */
+const ERROR_BODY_PADDING = 20
 
 /** 消息行 first chrome：header 行高（头像 36 与文本行高取大者）+ margin-bottom 8 = 44 */
 const FIRST_CHROME = 44
@@ -320,6 +330,20 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
         ) + SUMMARY_BODY_PADDING
       )
       return SUMMARY_CHROME + body
+    }
+    case 'error': {
+      // 执行错误卡片：13px / line-height 1.6 与 .exec-error-content CSS 对齐；
+      // 受渲染层 160px max-height 封顶（超长错误文本内部滚动），估值同步封顶
+      // 避免 virtualizer 首帧巨量 delta 触发滚动条跳变
+      const body = Math.min(
+        ERROR_BODY_MAX,
+        estimateTextHeight(
+          row.msg?.content,
+          unitsPerLine(prefs?.containerWidth, 13, CONTENT_UNITS_PER_LINE),
+          13 * 1.6
+        ) + ERROR_BODY_PADDING
+      )
+      return ERROR_CHROME + body
     }
     case 'human': {
       // 正文测高：14.5px 字号与 .message-content 对齐，折行单位数与 content 段

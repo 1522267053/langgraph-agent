@@ -69,7 +69,7 @@ export interface AgentMessage extends BaseEntity {
   session_id: number
   /** 消息角色（user/assistant/system/tool） */
   role: string
-  /** 内部消息类型，如 context_summary */
+  /** 内部消息类型，如 context_summary / execution_error（执行错误，仅前端展示） */
   message_type?: string
   /** 消息内容 */
   content: string
