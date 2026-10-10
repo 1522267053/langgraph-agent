@@ -774,7 +774,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
         last_content = ""
         thinking_content: list[str] = []
         called_tools: set[str] = set()
-        output_names = self._get_output_var_names(node, ["result", "thinking"])
+        output_names = self._resolve_output_var_names(node)
         result_name = output_names[0] if len(output_names) > 0 else "result"
         thinking_name = output_names[1] if len(output_names) > 1 else "thinking"
         try:
@@ -1345,20 +1345,12 @@ class LlmToolNodeHandler(BaseNodeHandler):
         cls, node: FlowNode, state: FlowState, resolver, config: Optional[dict] = None
     ) -> Optional[dict]:
         """获取 LLM 节点的输出内容"""
-        if config is None:
-            config = node.base_config or {}
         output = {}
-
-        output_vars = config.get("output_variables", [])
-        if not output_vars:
-            output_vars = [{"name": "result"}, {"name": "thinking"}]
-
-        for var in output_vars:
-            name = var.get("name", "") if isinstance(var, dict) else var.name
-            if name:
-                value = state.get_node_variable(node.node_key, name)
-                if value is not None:
-                    output[name] = value
+        # 输出名来自 ConfigClass.output_variables（与 execute 写入同源）
+        for name in cls._resolve_output_var_names(node):
+            value = state.get_node_variable(node.node_key, name)
+            if value is not None:
+                output[name] = value
 
         return output if output else None
 

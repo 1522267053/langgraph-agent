@@ -1063,9 +1063,7 @@ class ShellNodeHandler(BaseNodeHandler):
             result = await self._execute_shell(
                 command, timeout, self._effective_working_dir(cfg)
             )
-            output_names = self._get_output_var_names(
-                node, ["stdout", "stderr", "exit_code"]
-            )
+            output_names = self._resolve_output_var_names(node)
             stdout_name = output_names[0] if len(output_names) > 0 else "stdout"
             stderr_name = output_names[1] if len(output_names) > 1 else "stderr"
             exit_code_name = output_names[2] if len(output_names) > 2 else "exit_code"
@@ -1159,22 +1157,12 @@ class ShellNodeHandler(BaseNodeHandler):
     def get_output_content(
         cls, node: FlowNode, state: FlowState, resolver, config: Optional[dict] = None
     ) -> Optional[dict]:
-        if config is None:
-            config = node.base_config or {}
         output = {}
-
-        output_vars = config.get("output_variables", [])
-        if output_vars:
-            for var in output_vars:
-                name = var.get("name", "") if isinstance(var, dict) else var.name
-                if name:
-                    value = state.get_node_variable(node.node_key, name)
-                    if value is not None:
-                        output[name] = value
-        else:
-            value = state.get_node_variable(node.node_key, "shell_result")
+        # 默认输出名来自 ConfigClass.output_variables（与 execute 写入同源）
+        for name in cls._resolve_output_var_names(node):
+            value = state.get_node_variable(node.node_key, name)
             if value is not None:
-                output["shell_result"] = value
+                output[name] = value
 
         return output if output else None
 

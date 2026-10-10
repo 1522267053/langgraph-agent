@@ -111,7 +111,7 @@ class McpNodeHandler(BaseNodeHandler):
             result = await tool.ainvoke(call_kwargs)
 
             # 4. 结果写入输出变量（默认 result，可通过 output_variables 改名）
-            output_names = self._get_output_var_names(node, ["result"])
+            output_names = self._resolve_output_var_names(node)
             state.set_node_variable(node.node_key, output_names[0], result)
         except Exception as e:
             logger.exception(f"MCP节点直接执行失败: {e}")
@@ -164,12 +164,10 @@ class McpNodeHandler(BaseNodeHandler):
         cfg = (config if config is not None else node.base_config) or {}
         if not cfg.get("tool_name"):
             return None
-        raw = cfg.get("output_variables")
-        names = (
-            [v.get("name", "") for v in raw if v.get("name")]
-            if isinstance(raw, list) and raw
-            else ["result"]
-        )
+        # 输出名来自 ConfigClass.output_variables（与 execute 写入同源）
+        names = cls._resolve_output_var_names(node)
+        if not names:
+            return None
         value = state.get_node_variable(node.node_key, names[0])
         if value is None:
             return None

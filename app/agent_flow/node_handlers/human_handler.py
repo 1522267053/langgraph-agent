@@ -97,7 +97,7 @@ class HumanNodeHandler(BaseNodeHandler):
 
         context = "\n\n".join(context_parts) if context_parts else None
 
-        output_names = self._get_output_var_names(node, ["feedback"])
+        output_names = self._resolve_output_var_names(node)
         feedback_name = output_names[0] if output_names else "feedback"
 
         # 使用 LangGraph interrupt 机制中断执行
@@ -146,22 +146,12 @@ class HumanNodeHandler(BaseNodeHandler):
         cls, node: FlowNode, state: FlowState, resolver, config: Optional[dict] = None
     ) -> Optional[dict]:
         """获取Human节点的输出内容"""
-        if config is None:
-            config = node.base_config or {}
         output = {}
-
-        output_vars = config.get("output_variables", [])
-        if output_vars:
-            for var in output_vars:
-                name = var.get("name", "") if isinstance(var, dict) else var.name
-                if name:
-                    value = state.get_node_variable(node.node_key, name)
-                    if value is not None:
-                        output[name] = value
-        else:
-            value = state.get_node_variable(node.node_key, "feedback")
+        # 默认输出名来自 ConfigClass.output_variables（与 execute 写入同源）
+        for name in cls._resolve_output_var_names(node):
+            value = state.get_node_variable(node.node_key, name)
             if value is not None:
-                output["feedback"] = value
+                output[name] = value
 
         return output if output else None
 
