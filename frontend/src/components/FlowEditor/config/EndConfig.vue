@@ -4,6 +4,10 @@ import { fieldTypeOptions } from './types'
 import { useConfigBase } from '@/composables/useConfigBase'
 import VariableSelector from '../components/VariableSelector.vue'
 
+// 输出类型选项：排除 python_result（NodeVariable 专用类型标注，
+// 非流程 IO 合法类型，后端 FieldType 枚举不接受，选中会导致保存校验失败）
+const endFieldTypeOptions = fieldTypeOptions.filter(item => item.value !== 'python_result')
+
 const props = defineProps<{
   config: EndConfig
   currentNodeId: string
@@ -53,11 +57,19 @@ function removeOutputVariable(index: number): void {
   emitUpdate()
 }
 
-function handleSourceTypeChange(index: number, type: FieldType | undefined): void {
-  if (type && localConfig.value.output_variables?.[index]) {
-    localConfig.value.output_variables[index].type = type
-    emitUpdate()
+/**
+ * 来源选择后自动同步类型；python_result（NodeVariable 专用标注，非流程 IO
+ * 合法类型）映射为 object，避免保存时后端 FieldType 校验失败
+ */
+function handleSourceChange(index: number, type: FieldType | undefined): void {
+  const variable = localConfig.value.output_variables?.[index]
+  if (!variable) return
+  if (type === 'python_result') {
+    variable.type = 'object'
+  } else if (type) {
+    variable.type = type
   }
+  emitUpdate()
 }
 </script>
 
@@ -95,7 +107,7 @@ function handleSourceTypeChange(index: number, type: FieldType | undefined): voi
                 @change="emitUpdate"
               >
                 <el-option
-                  v-for="item in fieldTypeOptions"
+                  v-for="item in endFieldTypeOptions"
                   :key="item.value"
                   :label="item.label"
                   :value="item.value"
@@ -108,7 +120,7 @@ function handleSourceTypeChange(index: number, type: FieldType | undefined): voi
                 :current-node-id="currentNodeId"
                 placeholder="选择变量来源"
                 @update:model-value="emitUpdate"
-                @update:type="t => handleSourceTypeChange(index, t)"
+                @update:type="t => handleSourceChange(index, t)"
               />
             </el-form-item>
           </el-form>
