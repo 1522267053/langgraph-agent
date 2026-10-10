@@ -2038,7 +2038,11 @@ const minimizedWaits = computed(() => {
       </el-card>
     </div>
 
-    <div v-if="store.flowPreview" class="flow-preview-wrapper">
+    <div
+      v-if="store.flowPreview"
+      class="flow-preview-wrapper"
+      :class="{ collapsed: store.flowPreviewCollapsed }"
+    >
       <FlowPreviewCard
         :flow-id="store.flowPreview.flow_id"
         :flow-name="store.flowPreview.flow_name"
@@ -2046,6 +2050,8 @@ const minimizedWaits = computed(() => {
         :nodes="store.flowPreview.nodes"
         :edges="store.flowPreview.edges"
         :deleted="store.flowPreview.deleted"
+        :collapsed="store.flowPreviewCollapsed"
+        @toggle="store.flowPreviewCollapsed = !store.flowPreviewCollapsed"
         @close="store.flowPreview = null"
       />
     </div>
@@ -2735,6 +2741,11 @@ export default {}
   overflow: hidden;
   /* Vue Flow 需要确定高度的父容器：兜底最小高度，防止警告 */
   min-height: 170px;
+}
+/* 折叠态：单行条，无需画布兜底高度 */
+.flow-preview-wrapper.collapsed {
+  max-height: none;
+  min-height: 0;
 }
 
 @media (max-width: 768px) {
