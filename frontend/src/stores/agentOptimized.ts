@@ -370,6 +370,9 @@ export const useAgentStore = defineStore('agent', () => {
     edges?: Record<string, unknown>[]
     deleted?: boolean
   } | null>(null)
+  // 折叠态（单行条）：flow_done 后自动折叠，消除回合结束后画布悬空钉底；
+  // 手动最小化/展开（卡片「—」按钮）同走此状态，单一状态源
+  const flowPreviewCollapsed = ref(false)
 
   // ========== 中断函数引用 ==========
   let streamAbort: ((cancelRun?: boolean) => void | Promise<void>) | null = null
@@ -679,6 +682,7 @@ export const useAgentStore = defineStore('agent', () => {
     }
     const selectionGeneration = streamGeneration
     flowPreview.value = null
+    flowPreviewCollapsed.value = false
     // 切换会话：清空 Diff 面板状态（避免显示上一会话的文件变更）
     fileChanges.value = []
     fileChangesReqSeq++
@@ -1614,9 +1618,16 @@ export const useAgentStore = defineStore('agent', () => {
           edges: event.data.edges as Record<string, unknown>[] | undefined,
           deleted: event.data.action === 'delete'
         }
+        // 新预览推入时展开（若处于上一回合折叠态）
+        flowPreviewCollapsed.value = false
       },
       onFlowDone: async () => {
         if (!isCurrentStream(context)) return
+        // 回合结束自动折叠流程预览卡：消除画布在输入框上方悬空钉底的观感；
+        // 折叠为单行条保留编辑入口，用户点击或下轮 flow_preview 再展开
+        if (flowPreview.value) {
+          flowPreviewCollapsed.value = true
+        }
         // [FLOW-END] 结束帧合并修复：日志实证 T2→T3 的网络往返（~100ms）期间
         // 「isStreaming=false 的 UI 中间态」已被浏览器绘制（waiting-dots 卸载/
         // 操作按钮出现/markdown 退出流式态 → 第一次重排「一下」），随后 rebuild
@@ -2368,6 +2379,7 @@ export const useAgentStore = defineStore('agent', () => {
     serverTotalTokens.value = 0
     streamRunTokens.value = 0
     flowPreview.value = null
+    flowPreviewCollapsed.value = false
     isWaitingHuman.value = false
     currentWaitData.value = null
     sessionPage.value = 1
@@ -2520,6 +2532,7 @@ export const useAgentStore = defineStore('agent', () => {
     isCompressing,
     isStopping,
     flowPreview,
+    flowPreviewCollapsed,
     planMode,
     // 消息分页
     hasMoreMessages,

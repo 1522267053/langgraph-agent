@@ -21,10 +21,13 @@ const props = defineProps<{
   nodes?: Record<string, unknown>[]
   edges?: Record<string, unknown>[]
   deleted?: boolean
+  /** 折叠态（单行条，不渲染画布）：由父组件受控（flow_done 自动折叠/手动切换） */
+  collapsed?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
+  (e: 'toggle'): void
 }>()
 
 const router = useRouter()
@@ -34,23 +37,30 @@ const { fitView } = useVueFlow(instanceId)
 
 const localNodes = ref<Node[]>([])
 const localEdges = ref<Edge[]>([])
-const minimized = ref(false)
 
 const nodeCount = computed(() => props.nodes?.length || 0)
 
 function rebuildGraph(): void {
   localNodes.value = (props.nodes || []).map(n => backendNodeToVueFlow(n as unknown as FlowNode))
   localEdges.value = (props.edges || []).map(e => backendEdgeToVueFlow(e as unknown as FlowEdge))
-  if (!minimized.value) {
-    setTimeout(() => {
-      try {
-        fitView()
-      } catch {
-        // ignore
-      }
-    }, 50)
-  }
 }
+
+// 折叠→展开时重建并适配视口（折叠期间画布未挂载，nodes watch 不触发）
+watch(
+  () => props.collapsed,
+  (val, old) => {
+    if (old && !val) {
+      rebuildGraph()
+      setTimeout(() => {
+        try {
+          fitView()
+        } catch {
+          // ignore
+        }
+      }, 50)
+    }
+  }
+)
 
 watch(() => props.nodes, rebuildGraph, { immediate: false })
 watch(() => props.edges, rebuildGraph, { immediate: false })
@@ -58,19 +68,6 @@ watch(() => props.edges, rebuildGraph, { immediate: false })
 onMounted(() => {
   rebuildGraph()
 })
-
-function toggleMinimize(): void {
-  minimized.value = !minimized.value
-  if (!minimized.value) {
-    setTimeout(() => {
-      try {
-        fitView()
-      } catch {
-        // ignore
-      }
-    }, 50)
-  }
-}
 
 function openEditor(): void {
   // 按真实数据 flow_type 选路由名：agent → /agent/edit/:id，否则 → /flow/edit/:id
@@ -80,17 +77,35 @@ function openEditor(): void {
 </script>
 
 <template>
-  <div class="flow-preview-card">
+  <!-- 折叠态：单行条，不渲染画布 -->
+  <div v-if="collapsed" class="flow-preview-card flow-preview-collapsed" @click="emit('toggle')">
+    <span class="flow-name">{{ flowName || `流程 #${flowId}` }}</span>
+    <span v-if="nodeCount" class="node-count">{{ nodeCount }} 个节点</span>
+    <div class="header-spacer" />
+    <el-button
+      v-if="!deleted"
+      size="small"
+      :icon="Edit"
+      link
+      @click.stop="openEditor"
+    >编辑流程</el-button>
+    <el-tag v-else type="info" size="small">已删除</el-tag>
+    <el-button class="header-btn" :icon="Minus" link size="small" @click.stop="emit('toggle')" />
+    <el-button class="header-btn" :icon="Close" link size="small" @click.stop="emit('close')" />
+  </div>
+
+  <!-- 展开态：完整画布卡片 -->
+  <div v-else class="flow-preview-card">
     <div class="preview-header">
       <span class="flow-name">{{ flowName || `流程 #${flowId}` }}</span>
       <span v-if="nodeCount" class="node-count">{{ nodeCount }} 个节点</span>
       <div class="header-spacer" />
       <el-button v-if="!deleted" size="small" :icon="Edit" @click="openEditor">编辑流程</el-button>
       <el-tag v-else type="info" size="small">已删除</el-tag>
-      <el-button class="header-btn" :icon="Minus" link size="small" @click="toggleMinimize" />
+      <el-button class="header-btn" :icon="Minus" link size="small" @click="emit('toggle')" />
       <el-button class="header-btn" :icon="Close" link size="small" @click="emit('close')" />
     </div>
-    <div v-show="!minimized" class="preview-canvas">
+    <div class="preview-canvas">
       <VueFlow
         :id="instanceId"
         v-model:nodes="localNodes"
@@ -123,6 +138,20 @@ function openEditor(): void {
   max-width: 896px;
   margin: 0 auto;
   width: 100%;
+}
+
+/* 折叠态：单行条 */
+.flow-preview-collapsed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  background: #f8fafc;
+  box-shadow: none;
+}
+.flow-preview-collapsed:hover {
+  background: #f1f5f9;
 }
 
 .preview-header {
