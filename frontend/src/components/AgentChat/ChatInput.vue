@@ -193,6 +193,14 @@ function openFilePicker(fieldName: string): void {
   filePickerVisible.value = true
 }
 
+// 当前文件字段的约束（FilePickerDialog 移到组件根后，无法再从模板循环取 field，改从 fields 查）
+const currentFileFieldObj = computed(() =>
+  props.fields.find(f => f.name === currentFileField.value)
+)
+const currentFileMultiple = computed(() => currentFileFieldObj.value?.multiple ?? false)
+const currentFileMaxSize = computed(() => currentFileFieldObj.value?.max_size ?? 0)
+const currentFileAccept = computed(() => currentFileFieldObj.value?.accept ?? '')
+
 function handleFilePickerConfirm(files: FileInfo[]): void {
   if (currentFileField.value) {
     paramFormData[currentFileField.value] = files
@@ -432,16 +440,6 @@ function handleStop() {
                             }}
                           </span>
                         </el-button>
-                        <FilePickerDialog
-                          v-model="filePickerVisible"
-                          :selected-ids="
-                            (paramFormData[currentFileField!] as FileInfo[])?.map(f => f.id) || []
-                          "
-                          :multiple="field.multiple"
-                          :max-size="field.max_size"
-                          :accept="field.accept"
-                          @confirm="handleFilePickerConfirm"
-                        />
                       </div>
                     </div>
                   </div>
@@ -601,6 +599,19 @@ function handleStop() {
         </div>
       </div>
     </div>
+    <!-- 文件选择弹窗放在组件根（popover 内容之外）：弹窗内部点击/其预览弹窗/关闭
+         ElNotification 等任何 body 层元素的交互，都不会触发 popover 的
+         click-outside 而连带收起（原渲染在 popover 内，点 body 元素即被连带关闭） -->
+    <FilePickerDialog
+      v-model="filePickerVisible"
+      :selected-ids="
+        (paramFormData[currentFileField!] as FileInfo[])?.map(f => f.id) || []
+      "
+      :multiple="currentFileMultiple"
+      :max-size="currentFileMaxSize"
+      :accept="currentFileAccept"
+      @confirm="handleFilePickerConfirm"
+    />
   </div>
 </template>
 

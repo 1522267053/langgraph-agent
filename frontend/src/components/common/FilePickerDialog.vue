@@ -305,6 +305,7 @@ function handleCancel(): void {
     title="选择文件"
     width="680px"
     :close-on-click-modal="false"
+    append-to-body
     destroy-on-close
     @mousedown.stop
     @click.stop
@@ -418,7 +419,10 @@ function handleCancel(): void {
       </div>
     </div>
 
-    <!-- 文件预览：图片/视频内嵌（对齐 FileList.vue 查看能力） -->
+    <!-- 文件预览：图片/视频内嵌（对齐 FileList.vue 查看能力）。
+         append-to-body：本组件已被调用方移出 popover（治本），挂 body 后
+         z-index 由 popup manager 分配（2000+），不被页面 sticky header 等
+         stacking context 压住 -->
     <el-dialog
       v-model="viewVisible"
       :title="viewType === 'video' ? '视频预览' : '图片预览'"
@@ -428,7 +432,7 @@ function handleCancel(): void {
       <div v-if="viewType === 'image'" class="view-image-wrapper">
         <el-image :src="viewUrl" fit="contain" :preview-src-list="[viewUrl]" preview-teleported />
       </div>
-      <video v-else :src="viewUrl" controls autoplay class="view-video" />
+      <video v-else :src="viewUrl" controls class="view-video" />
     </el-dialog>
     <!-- xlsx/docx/pdf 文档预览 -->
     <DocumentPreviewerDialog v-model:visible="docViewVisible" :file="docViewFile" />
