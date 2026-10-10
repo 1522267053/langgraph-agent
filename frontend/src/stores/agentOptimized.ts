@@ -1232,7 +1232,15 @@ export const useAgentStore = defineStore('agent', () => {
     const placeholderById = new Map<number, StreamingMessage>()
     for (const ph of matchedPlaceholders) placeholderById.set(ph.dbMsgId!, ph)
     const result: StreamingMessage[] = []
+    // 执行错误卡延后到占位行之后：DB 里 error 紧跟 human，但异常终止时 AI 内容
+    // 未落库——本地仍持有未匹配的 AI 流式占位行（含已收到的 thinking）。时序上
+    // thinking 先于错误产生，错误卡作为本轮终态应保持在视图最下方
+    const terminalRows: StreamingMessage[] = []
     for (const r of rebuilt) {
+      if (r.displayType === 'execution-error') {
+        terminalRows.push(r)
+        continue
+      }
       const placeholder = r.dbMsgId != null ? placeholderById.get(r.dbMsgId) : undefined
       if (placeholder) {
         result.push(placeholder)
@@ -1273,9 +1281,9 @@ export const useAgentStore = defineStore('agent', () => {
     // 未匹配占位行（DB 尚无对应行）保持尾部；已匹配行已按 rebuilt 原位出现
     const matchedSet = new Set(matchedPlaceholders)
     const unmatchedPlaceholders = placeholders.filter(ph => !matchedSet.has(ph))
-    if (unmatchedPlaceholders.length > 0) {
-      result.push(...unmatchedPlaceholders)
-    }
+    // 错误卡（本轮终态）压轴：先于未匹配占位行（AI 流式思考）之上仍是其历史，
+    // 与未匹配占位行同属"DB 未沉淀的尾部状态"
+    result.push(...unmatchedPlaceholders, ...terminalRows)
     chatMessages.value = result
 
     thinkingContent.value = ''
