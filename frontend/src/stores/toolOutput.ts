@@ -113,7 +113,7 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
   /**
    * 结束服务端已不存在的本地 running 任务：
    * 优先查询单任务状态拿真实终态（completed/failed/timeout），
-   * 查询失败说明任务已彻底消失（服务重启或过期清理），标记为 cancelled
+   * 不存在/已过期（code=1 且 data=null）或请求异常则标记为 cancelled
    */
   async function finalizeVanishedTask(taskId: string) {
     try {
@@ -124,7 +124,7 @@ export const useToolOutputStore = defineStore('toolOutput', () => {
         return
       }
     } catch {
-      // 任务不存在（ApiResponse.error 被 axios 拦截器 reject），走下方兜底
+      // 网络等真实异常，同样走兜底
     }
     endTask(taskId, 'cancelled', null, null)
   }

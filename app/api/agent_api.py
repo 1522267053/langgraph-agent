@@ -696,13 +696,10 @@ class AgentApi:
             summary="获取后台工具任务状态",
         )
         async def get_tool_status(task_id: str):
-            """获取单个后台任务的详细状态和输出"""
+            """获取单个后台任务的详细状态和输出（任务不存在或已过期时 data 为 None）"""
             from app.agent_flow.node_handlers.shell_handler import get_task_by_id
 
-            result = get_task_by_id(task_id)
-            if not result:
-                return ApiResponse.error(msg="任务不存在或已过期")
-            return ApiResponse.success(data=result)
+            return ApiResponse.success(data=get_task_by_id(task_id))
 
         @self.router.post(
             "/tools/{task_id}/cancel",
