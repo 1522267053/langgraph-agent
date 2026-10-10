@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { Delete, Search, Upload } from '@element-plus/icons-vue'
+import { Delete, Search, Upload, View } from '@element-plus/icons-vue'
 import type { FileInfo, FileCondition } from '@/api/file'
 import { fileApi } from '@/api/file'
-import { formatFileSize, isImage, getFileTypeTag } from '@/utils/format'
+import { formatFileSize, isImage, isVideo, isPreviewableDoc, getFileTypeTag } from '@/utils/format'
 import { ElMessage } from 'element-plus'
+import DocumentPreviewerDialog from '@/components/common/DocumentPreviewerDialog.vue'
+import type { DocumentPreviewFile } from '@/components/common/DocumentPreviewerDialog.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -39,6 +41,33 @@ const pageSize = ref(10)
 const loading = ref(false)
 const uploading = ref(false)
 const localSelected = ref(new Set<number>())
+
+// ---- 文件预览（能力对齐 FileList：图片/视频内嵌预览，xlsx/docx/pdf 走文档预览器） ----
+const viewVisible = ref(false)
+const viewUrl = ref('')
+const viewType = ref<'image' | 'video'>('image')
+const docViewVisible = ref(false)
+const docViewFile = ref<DocumentPreviewFile | null>(null)
+
+function canPreview(file: FileInfo): boolean {
+  return isImage(file.mime_type) || isVideo(file.mime_type) || isPreviewableDoc(file.mime_type, file.original_name)
+}
+
+function handleView(file: FileInfo): void {
+  const url = file.preview_url || fileApi.download(file.id)
+  if (isPreviewableDoc(file.mime_type, file.original_name)) {
+    docViewFile.value = file
+    docViewVisible.value = true
+  } else if (isVideo(file.mime_type)) {
+    viewUrl.value = url
+    viewType.value = 'video'
+    viewVisible.value = true
+  } else {
+    viewUrl.value = url
+    viewType.value = 'image'
+    viewVisible.value = true
+  }
+}
 const supportsPastedImage = computed(() => {
   if (!props.accept) return true
   return props.accept.split(',').some(type => {
@@ -334,6 +363,15 @@ function handleCancel(): void {
           <span class="file-picker-name" :title="file.original_name">{{ file.original_name }}</span>
           <span class="file-picker-size">{{ formatFileSize(file.file_size) }}</span>
         </div>
+        <el-button
+          v-if="canPreview(file)"
+          class="file-picker-view"
+          type="primary"
+          :icon="View"
+          link
+          title="查看文件"
+          @click.stop="handleView(file)"
+        />
         <el-popconfirm
           title="确定删除这个文件吗？"
           confirm-button-text="删除"
@@ -379,6 +417,21 @@ function handleCancel(): void {
         </el-button>
       </div>
     </div>
+
+    <!-- 文件预览：图片/视频内嵌（对齐 FileList.vue 查看能力） -->
+    <el-dialog
+      v-model="viewVisible"
+      :title="viewType === 'video' ? '视频预览' : '图片预览'"
+      width="720px"
+      append-to-body
+    >
+      <div v-if="viewType === 'image'" class="view-image-wrapper">
+        <el-image :src="viewUrl" fit="contain" :preview-src-list="[viewUrl]" preview-teleported />
+      </div>
+      <video v-else :src="viewUrl" controls autoplay class="view-video" />
+    </el-dialog>
+    <!-- xlsx/docx/pdf 文档预览 -->
+    <DocumentPreviewerDialog v-model:visible="docViewVisible" :file="docViewFile" />
   </el-dialog>
 </template>
 
@@ -505,5 +558,25 @@ function handleCancel(): void {
 .file-picker-actions {
   display: flex;
   gap: 8px;
+}
+
+.file-picker-view {
+  flex-shrink: 0;
+}
+
+.view-image-wrapper {
+  display: flex;
+  justify-content: center;
+}
+
+.view-image-wrapper .el-image {
+  max-width: 100%;
+  max-height: 60vh;
+}
+
+.view-video {
+  display: block;
+  width: 100%;
+  max-height: 60vh;
 }
 </style>
