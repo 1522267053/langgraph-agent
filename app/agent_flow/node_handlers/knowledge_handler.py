@@ -268,7 +268,7 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 for result in results
                 if result["segment_id"] in marker_map
             ]
-            output_names = self._get_output_var_names(node, ["result"])
+            output_names = self._resolve_output_var_names(node)
             result_name = output_names[0] if output_names else "result"
             state.set_node_variable(node.node_key, result_name, results)
             state.set_node_variable(node.node_key, "knowledge_references", references)
@@ -307,23 +307,12 @@ class KnowledgeNodeHandler(BaseNodeHandler):
         cls, node: FlowNode, state: FlowState, resolver, config: Optional[dict] = None
     ) -> Optional[dict]:
         """获取Knowledge节点的输出内容"""
-        if config is None:
-            config = node.base_config or {}
         output = {}
-
-        output_vars = config.get("output_variables", [])
-        if output_vars:
-            for var in output_vars:
-                name = var.get("name", "") if isinstance(var, dict) else var.name
-                if name:
-                    value = state.get_node_variable(node.node_key, name)
-                    if value is not None:
-                        output[name] = value
-        else:
-            # 未配置 output_variables 时，与 execute 的默认写入键（result）对齐
-            value = state.get_node_variable(node.node_key, "result")
+        # 默认输出名来自 ConfigClass.output_variables（与 execute 写入同源）
+        for name in cls._resolve_output_var_names(node):
+            value = state.get_node_variable(node.node_key, name)
             if value is not None:
-                output["result"] = value
+                output[name] = value
 
         return output if output else None
 

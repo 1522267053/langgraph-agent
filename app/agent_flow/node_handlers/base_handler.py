@@ -49,6 +49,16 @@ class BaseNodeConfig(BaseModel):
     model_config = {"extra": "ignore"}
     input_variables: list[NodeVariable] = []
     output_variables: list[NodeVariable] = []
+    # 输出变量可编辑开关（元配置）：False=只读，保存时剥离 base_config.output_variables，
+    # 执行时以 ConfigClass 预设为准；True=保留显式配置。经 config-schema 自动下发给前端
+    output_variables_editable: bool = Field(
+        default=False,
+        description=(
+            "输出变量是否允许节点配置自定义。False（默认）= 只读，"
+            "保存时剥离 base_config.output_variables，执行时以 ConfigClass 预设为准；"
+            "True = 保留显式配置，执行与展示均按配置的变量名读写"
+        ),
+    )
     # ---- 工具审批（仅 Agent 模式生效；继承 BaseNodeHandler 的工具节点可直接调用
     # self._request_tool_approval；如 shell/ssh 等"命令工具"会用到）----
     approval_required_tools: list[str] = Field(
@@ -209,6 +219,34 @@ def _schema_from_pydantic(model_cls: type[BaseModel]) -> list[dict]:
         fields.append(field_desc)
 
     return fields
+
+
+def is_output_variables_editable(node_type: str) -> bool:
+    """判断指定节点类型的输出变量是否允许节点配置自定义
+
+    读取该类型 ConfigClass 的 output_variables_editable 字段默认值
+    （元配置，与 _strip_output_variables 的剥离豁免判断共用）。
+
+    Args:
+        node_type: 节点类型标识
+
+    Returns:
+        True=可编辑（保存时保留 base_config.output_variables）；False=只读。
+        未注册或无 ConfigClass 的类型一律 False。
+    """
+    from app.agent_flow.handler_registry import NodeHandlerRegistry
+
+    handler_cls = NodeHandlerRegistry.get_handler_class(node_type)
+    if handler_cls is None:
+        handler_cls = NodeHandlerRegistry._get_factory_handler_class(node_type)
+    config_cls = getattr(handler_cls, "ConfigClass", None)
+    if config_cls is None:
+        return False
+    return bool(
+        config_cls.model_fields.get("output_variables_editable").default
+        if config_cls.model_fields.get("output_variables_editable")
+        else False
+    )
 
 
 class BaseNodeHandler(ABC):
@@ -580,20 +618,38 @@ class BaseNodeHandler(ABC):
                 context[var.name] = self._resolve_variable(var.source, state)
         return context
 
-    @staticmethod
-    def _get_output_var_names(node: FlowNode, defaults: list[str]) -> list[str]:
-        """从节点配置中读取 output_variables 的名称列表，为空时回退到 defaults"""
+    @classmethod
+    def _resolve_output_var_names(cls, node: FlowNode) -> list[str]:
+        """解析节点的输出变量名列表（唯一事实源 = ConfigClass.output_variables）
+
+        保存时非 editable 节点的 base_config.output_variables 已被剥离，
+        以 ConfigClass 预设默认为准；editable 节点
+        （output_variables_editable=True）则优先取显式配置。
+        execute 写入与 get_output_content 读取共用本方法，两端名称永远同源。
+
+        用 model_construct 轻量构造（同 get_default_config），仅读取字段
+        默认值，不触发全字段校验（如 LlmNodeConfig.user_prompt 必填，
+        读取输出名的场景不应被迫提供无关必填字段）。
+
+        Args:
+            node: 流程节点对象
+
+        Returns:
+            输出变量名列表（保持 ConfigClass 定义顺序，过滤空名）
+        """
+        if cls.ConfigClass is None:
+            return []
         raw = node.base_config or {}
-        output_vars = raw.get("output_variables")
-        if output_vars and isinstance(output_vars, list):
+        explicit = raw.get("output_variables")
+        if explicit and isinstance(explicit, list):
             names = [
-                v.get("name", "") if isinstance(v, dict) else v.name
-                for v in output_vars
+                v.get("name", "") if isinstance(v, dict) else v.name for v in explicit
             ]
             names = [n for n in names if n]
             if names:
                 return names
-        return list(defaults)
+        cfg = cls.ConfigClass.model_construct()
+        return [v.name for v in cfg.output_variables if v.name]
 
     def _variable_exists(self, source: str, state: FlowState) -> bool:
         """

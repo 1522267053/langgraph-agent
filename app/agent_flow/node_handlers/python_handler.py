@@ -417,7 +417,7 @@ class PythonNodeHandler(BaseNodeHandler):
 
         try:
             result = await self._execute_python(code, context, timeout)
-            output_names = self._get_output_var_names(node, ["result"])
+            output_names = self._resolve_output_var_names(node)
             result_name = output_names[0] if output_names else "result"
             if not result["success"]:
                 raise NodeExecutionError(node.node_key, result["stderr"])
@@ -504,22 +504,12 @@ class PythonNodeHandler(BaseNodeHandler):
     def get_output_content(
         cls, node: FlowNode, state: FlowState, resolver, config: Optional[dict] = None
     ) -> Optional[dict]:
-        if config is None:
-            config = node.base_config or {}
-
         output = {}
-        output_vars = config.get("output_variables", [])
-        if output_vars:
-            for var in output_vars:
-                name = var.get("name", "") if isinstance(var, dict) else var.name
-                if name:
-                    value = state.get_node_variable(node.node_key, name)
-                    if value is not None:
-                        output[name] = value
-        else:
-            value = state.get_node_variable(node.node_key, "python_result")
+        # 默认输出名来自 ConfigClass.output_variables（与 execute 写入同源）
+        for name in cls._resolve_output_var_names(node):
+            value = state.get_node_variable(node.node_key, name)
             if value is not None:
-                output["python_result"] = value
+                output[name] = value
 
         return output if output else None
 

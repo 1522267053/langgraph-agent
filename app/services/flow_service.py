@@ -413,8 +413,19 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
     _OUTPUT_RELATED_KEYS = ("output_variables", "output_variable", "thinking_variable")
 
     @staticmethod
-    def _strip_output_variables(base_config: dict) -> None:
-        """剥离非 end 节点的输出变量相关字段，确保由 handler 默认值决定输出"""
+    def _strip_output_variables(node_type: str, base_config: dict) -> None:
+        """剥离非 end 节点的输出变量相关字段，确保由 handler 默认值决定输出
+
+        目的：防止保存时写入与执行不符的 output_variables 覆盖 ConfigClass 预设。
+        执行时 _get_config 重新初始化 ConfigClass，Pydantic 自动填回预设默认。
+        output_variables_editable=True 的节点类型（元配置）豁免剥离，允许显式配置。
+        """
+        from app.agent_flow.node_handlers.base_handler import (
+            is_output_variables_editable,
+        )
+
+        if is_output_variables_editable(node_type):
+            return
         for key in FlowService._OUTPUT_RELATED_KEYS:
             base_config.pop(key, None)
 
@@ -461,7 +472,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             ```
         """
         if node_data.base_config and node_data.node_type != NodeType.END:
-            self._strip_output_variables(node_data.base_config)
+            self._strip_output_variables(node_data.node_type, node_data.base_config)
         node = node_data.to_model(FlowNode)
         db.add(node)
         await db.commit()
@@ -474,7 +485,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         """批量创建流程节点"""
         for nd in nodes_data:
             if nd.base_config and nd.node_type != NodeType.END:
-                self._strip_output_variables(nd.base_config)
+                self._strip_output_variables(nd.node_type, nd.base_config)
         db_nodes = [nd.to_model(FlowNode) for nd in nodes_data]
         db.add_all(db_nodes)
         await db.commit()
@@ -519,7 +530,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         for field, value in update_data.items():
             setattr(node, field, value)
         if node.base_config and node.node_type != NodeType.END:
-            self._strip_output_variables(node.base_config)
+            self._strip_output_variables(node.node_type, node.base_config)
         await db.commit()
         await db.refresh(node)
         return node
@@ -695,7 +706,7 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
         for node_data in nodes_data:
             node_data.flow_id = flow_id
             if node_data.base_config and node_data.node_type != NodeType.END:
-                self._strip_output_variables(node_data.base_config)
+                self._strip_output_variables(node_data.node_type, node_data.base_config)
             node = node_data.to_model(FlowNode)
             nodes.append(node)
             db.add(node)
