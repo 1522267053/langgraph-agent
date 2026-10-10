@@ -12,7 +12,8 @@ export default {}
 
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import VueMarkdown from 'vue-markdown-render'
+import MarkdownIt from 'markdown-it'
+import morphdom from 'morphdom'
 import katex from 'katex'
 import texmath from 'markdown-it-texmath'
 import 'katex/dist/katex.min.css'
@@ -30,7 +31,32 @@ const texmathPlugin = (md: unknown) =>
     delimiters: 'dollars',
     katexOptions: { throwOnError: false, strict: 'ignore' }
   })
-const mdPlugins = [texmathPlugin]
+
+/**
+ * markdown-it 实例：与原 vue-markdown-render 默认配置对齐（html:false + breaks:true），
+ * 叠加 texmath 插件。渲染结果经 morphdom 增量应用到容器——未变化的块复用既有
+ * DOM 节点（innerHTML 全量替换会销毁选区与已渲染的 mermaid 图）。
+ */
+const mdRenderer = new MarkdownIt({ breaks: true }).use(
+  texmathPlugin as Parameters<MarkdownIt['use']>[0]
+)
+
+/**
+ * mermaid fence 输出为 div.mermaid-block（源码存 data-mermaid-code）：
+ * morphdom 仅在标签名相同时复用节点——旧树的渲染容器也是 div，才能被
+ * 配对复用（保留选区与已渲染的图）；若保持 pre 标签则每轮被销毁重建。
+ */
+const defaultFence =
+  mdRenderer.renderer.rules.fence ||
+  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
+mdRenderer.renderer.rules.fence = (tokens, idx, options, env, self) => {
+  const token = tokens[idx]
+  if (token.info.trim() === 'mermaid') {
+    const code = token.content.trim()
+    return `<div class="mermaid-block" data-mermaid-code="${encodeURIComponent(code)}"></div>`
+  }
+  return defaultFence(tokens, idx, options, env, self)
+}
 
 interface CitationEntry {
   marker: string
@@ -291,6 +317,11 @@ let mermaidTimer: ReturnType<typeof setTimeout> | null = null
 let streamRenderTimer: ReturnType<typeof setTimeout> | null = null
 let lastStreamRenderAt = 0
 let hasPendingStreamRender = false
+
+/** 流式 mermaid 渲染：与 markdown 同频（scheduleStreamRender 回调内触发），
+ *  m.render 异步耗时可能超过节流间隔，用「在飞守卫 + dirty 合并」防止堆积 */
+let streamMermaidInFlight = false
+let streamMermaidDirty = false
 
 /* ---------- Mermaid 全屏预览（左键拖拽平移 / 滚轮与按钮缩放） ---------- */
 
@@ -578,15 +609,27 @@ async function initMermaid(): Promise<void> {
   mermaidInitialized = true
 }
 
-async function renderMermaidBlocks(): Promise<void> {
+async function renderMermaidBlocks(silent = false): Promise<void> {
   if (!containerRef.value || isUnmounted) return
   await initMermaid()
   // initMermaid 动态导入期间组件可能已卸载
   if (!containerRef.value || isUnmounted) return
   const m = mermaidModule!
-  const placeholders = containerRef.value.querySelectorAll<HTMLPreElement>('.mermaid-block')
+  // 两类目标：未渲染过的 .mermaid-block（markdown-it 直接输出的空 div）+
+  // 源码已变化的 .mermaid-container.mermaid-stale（morphdom 钩子标记，保旧图重渲）
+  const placeholders = containerRef.value.querySelectorAll<HTMLElement>(
+    '.mermaid-block, .mermaid-container.mermaid-stale'
+  )
+  // 容器未完成布局（宽 0：流式早段/收起面板瞬间）时文本测量得 0，
+  // dagre 布局会产出 x1="NaN" 的损坏 SVG。静默（流式）模式直接跳过
+  // 留待下一轮；最终渲染用 800px 兜底宽度保证出图
+  const hostWidth = containerRef.value.clientWidth
+  if (silent && hostWidth === 0) return
   for (const el of placeholders) {
-    const code = el.textContent || ''
+    const code = (
+      el.dataset.mermaidPending ?? decodeURIComponent(el.dataset.mermaidCode ?? '')
+    ).trim()
+    if (!code) continue
     const id = `mermaid-${++renderCount}`
     const outer = document.createElement('div')
     outer.className = 'mermaid-container'
@@ -661,8 +704,9 @@ async function renderMermaidBlocks(): Promise<void> {
     measureHost.style.visibility = 'hidden'
     measureHost.style.left = '-9999px'
     measureHost.style.top = '0'
-    // 宽度对齐消息正文实际宽度，保证文本折行测量与真实展示一致
-    measureHost.style.width = `${containerRef.value.clientWidth}px`
+    // 宽度对齐消息正文实际宽度，保证文本折行测量与真实展示一致；
+    // 布局未就绪（宽 0）时用 800px 兜底，避免 NaN 坐标的损坏 SVG
+    measureHost.style.width = `${hostWidth > 0 ? hostWidth : 800}px`
     document.body.appendChild(measureHost)
     try {
       const { svg } = await m.render(id, code.trim(), measureHost)
@@ -685,9 +729,11 @@ async function renderMermaidBlocks(): Promise<void> {
         } catch {
           // 修复版仍失败（多为 mermaid elk/dagre 布局阶段问题，非源码语法问题）：
           // 不动源码视图，告知用户可尝试手动给含特殊字符的标签加引号
+          if (silent) return
           showRenderError(firstErr)
         }
       } else {
+        if (silent) return
         showRenderError(firstErr)
       }
     } finally {
@@ -720,8 +766,35 @@ async function renderMermaidBlocks(): Promise<void> {
     outer.appendChild(toolbar)
     outer.appendChild(previewDiv)
     outer.appendChild(sourceWrapper)
-    el.replaceWith(outer)
+    if (el.classList.contains('mermaid-container')) {
+      // stale 重渲：容器节点身份保留（morphdom 复用它），只换内容并记源码哈希。
+      // 期间旧图继续占位预览区，渲染成功后原子替换，无「图→代码→图」闪烁
+      el.dataset.mermaidHash = await hashMermaidCode(code)
+      el.querySelector('.mermaid-toolbar')?.replaceWith(toolbar)
+      el.querySelector('.mermaid-preview')?.replaceWith(previewDiv)
+      el.querySelector('.code-block-wrapper')?.replaceWith(sourceWrapper)
+      el.classList.remove('mermaid-stale')
+      delete el.dataset.mermaidPending
+    } else {
+      // 首次渲染：el 就是 markdown-it 输出的 div.mermaid-block，原地变身
+      // container（保留节点身份让下一轮 morphdom 继续复用）
+      el.className = 'mermaid-container'
+      el.appendChild(toolbar)
+      el.appendChild(previewDiv)
+      el.appendChild(sourceWrapper)
+      el.dataset.mermaidHash = await hashMermaidCode(code)
+    }
   }
+}
+
+/** FNV-1a 文本哈希：作为 mermaid 块「源码是否变化」的指纹（无需加密强度） */
+async function hashMermaidCode(code: string): Promise<string> {
+  let h = 0x811c9dc5
+  for (let i = 0; i < code.length; i++) {
+    h ^= code.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(36)
 }
 
 function attachCodeCopyBtns(): void {
@@ -760,7 +833,7 @@ function attachCodeCopyBtns(): void {
   }
 }
 
-async function onMarkdownRendered(immediate = false): Promise<void> {
+async function onMarkdownRendered(immediate = false, silent = false): Promise<void> {
   if (!containerRef.value || isUnmounted) return
   await loadHljs()
   // loadHljs 动态导入期间组件可能已卸载
@@ -778,41 +851,105 @@ async function onMarkdownRendered(immediate = false): Promise<void> {
         }
       }
     }
-    const classes = block.className || ''
-    const langMatch = classes.match(/language-(\S+)/)
-    if (langMatch && langMatch[1] === 'mermaid') {
-      const pre = block.parentElement
-      if (pre) {
-        // 仅打标（供 renderMermaidBlocks 定位、copy-btn 遍历排除），
-        // 不提前 display:none：隐藏会让块高瞬间塌到 0，而图表要等
-        // MERMAID_RENDER_DEBOUNCE + render 完成才挂载，期间出现
-        // 「高度骤降→SVG 挂载回升」的跳动；保持代码块可见直至
-        // renderMermaidBlocks 渲染完成后一次性 replaceWith，高度只切换一次
-        pre.className = 'mermaid-block'
-      }
-    }
   }
   if (mermaidTimer) clearTimeout(mermaidTimer)
   if (immediate) {
     await nextTick()
     attachCodeCopyBtns()
-    renderMermaidBlocks()
+    renderMermaidBlocks(silent)
   } else {
     await nextTick()
     attachCodeCopyBtns()
     mermaidTimer = setTimeout(() => {
       mermaidTimer = null
-      renderMermaidBlocks()
+      renderMermaidBlocks(silent)
     }, MERMAID_RENDER_DEBOUNCE)
   }
 }
 
 onMounted(async () => {
+  // 初始内容落 DOM：旧架构由 VueMarkdown 模板渲染兜底初始值，改 morphdom 后
+  // watch 非 immediate 不触发，历史消息（content 一次给全、后续不再变化）
+  // 若不在此处应用会永久空白
+  applyHtmlIncremental(renderedSource.value)
   await nextTick()
   await nextTick()
   decorateCitationLinks()
   onMarkdownRendered(true)
 })
+
+/** 将 markdown 源文本增量应用到容器：markdown-it 渲染 → morphdom tree-diff，
+ *  未变化的块复用既有 DOM 节点（保住文本选区与已渲染的 mermaid 图）。
+ *  注意：入参是 markdown 源文本而非 HTML——渲染由 mdRenderer.render 完成
+ *  （旧架构由 VueMarkdown 组件内部承担，改造时曾漏掉此步导致历史消息空白） */
+function applyHtmlIncremental(source: string): void {
+  const container = containerRef.value
+  if (!container) return
+  let html: string
+  try {
+    html = mdRenderer.render(source)
+  } catch (err) {
+    // markdown-it 渲染异常时降级为纯文本展示，避免静默空白
+    console.error('MarkdownRenderer: markdown-it 渲染异常，降级显示原文', err)
+    container.textContent = source
+    return
+  }
+  // morphdom 标准用法要求 toNode 是真实元素：DocumentFragment 作为 toNode
+  // 时内部子节点配对行为异常（实测只吐出首个文本节点，容器其余内容丢失）
+  const wrapper = document.createElement('div')
+  wrapper.innerHTML = html
+  if (wrapper.children.length === 0) {
+    // 渲染结果无元素节点（content 为空/纯空白）：同步为纯文本
+    container.textContent = html
+    return
+  }
+  try {
+    morphdom(container, wrapper, {
+      childrenOnly: true,
+      onBeforeElUpdated(fromEl, toEl) {
+        // VueMarkdown 时代输入类元素由 Vue 托管不受控；morphdom 默认同步
+        // value/checked 会反向覆盖用户输入，行为更差，保持不同步
+        if (fromEl instanceof HTMLInputElement || fromEl instanceof HTMLTextAreaElement) {
+          return false
+        }
+        // 已渲染的 mermaid 容器 ↔ 新树 mermaid 源码块（同为 div，标签配对成功）：
+        // 源码指纹相同 → 跳过同步，图与交互状态原样保留（不闪烁不丢选区）
+        if (
+          fromEl.classList?.contains('mermaid-container') &&
+          toEl.classList?.contains('mermaid-block')
+        ) {
+          const fromHash = fromEl.dataset.mermaidHash
+          const toCode = decodeURIComponent(toEl.dataset.mermaidCode ?? '')
+          if (fromHash && fromHash === hashMermaidCodeSync(toCode)) {
+            return false
+          }
+          // 源码变了：打 stale 标记保留旧图占位，正文同步延后到 renderMermaidBlocks
+          // （用 pending 数据重渲，成功后原子替换预览区，无「图→代码→图」闪烁）
+          if (fromHash) {
+            fromEl.classList.add('mermaid-stale')
+            fromEl.dataset.mermaidPending = toCode
+          }
+          return false
+        }
+        return true
+      }
+    })
+  } catch (err) {
+    // morphdom 异常时容器可能处于半更新状态，回退全量替换保证内容可见
+    console.error('MarkdownRenderer: morphdom 增量应用失败，回退全量替换', err)
+    container.innerHTML = html
+  }
+}
+
+/** hashMermaidCode 的同步包装（钩子内同步调用） */
+function hashMermaidCodeSync(code: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < code.length; i++) {
+    h ^= code.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(36)
+}
 
 /** 立即应用当前源文本并执行完整后处理（hljs/复制按钮/mermaid） */
 function applyRenderNow(): void {
@@ -822,7 +959,7 @@ function applyRenderNow(): void {
   })
 }
 
-/** 流式期间节流应用源文本，跳过所有后处理 */
+/** 流式期间节流应用源文本（morphdom 增量），并同步触发流式 mermaid 渲染 */
 function scheduleStreamRender(): void {
   hasPendingStreamRender = true
   if (streamRenderTimer) return
@@ -834,16 +971,37 @@ function scheduleStreamRender(): void {
     hasPendingStreamRender = false
     lastStreamRenderAt = Date.now()
     renderedSource.value = currentRenderedSource()
+    // 与 markdown 同频（200ms）：morphdom 落 DOM 后立刻尝试渲染流式 mermaid 块
+    void scheduleStreamMermaid()
   }, wait)
 }
 
-/** 流式结束：取消节流定时器，立即应用最终内容 + 完整后处理 */
+/** 流式 mermaid 渲染：在飞时仅置脏标志，本轮结束后自动合并补跑一轮 */
+async function scheduleStreamMermaid(): Promise<void> {
+  if (streamMermaidInFlight) {
+    streamMermaidDirty = true
+    return
+  }
+  streamMermaidInFlight = true
+  try {
+    await onMarkdownRendered(true, true)
+  } finally {
+    streamMermaidInFlight = false
+    if (streamMermaidDirty && props.streaming && !isUnmounted) {
+      streamMermaidDirty = false
+      void scheduleStreamMermaid()
+    }
+  }
+}
+
+/** 流式结束：立即应用最终内容 + 完整后处理（含最终 mermaid 渲染，非 silent） */
 function finishStreamRender(): void {
   if (streamRenderTimer) {
     clearTimeout(streamRenderTimer)
     streamRenderTimer = null
   }
   hasPendingStreamRender = false
+  streamMermaidDirty = false
   applyRenderNow()
 }
 
@@ -863,6 +1021,11 @@ watch(citationEntries, () => {
   }
 })
 
+watch(renderedSource, source => {
+  // morphdom 增量落 DOM（替代 VueMarkdown 的 v-html 全量重建）；
+  // 非流式路径由 onMarkdownRendered 的 nextTick 时序覆盖，此处统一应用即可
+  applyHtmlIncremental(source)
+})
 watch(renderedSource, queueCitationLinkDecoration, { flush: 'post' })
 watch(citationLinkMap, queueCitationLinkDecoration)
 
@@ -885,6 +1048,8 @@ onUnmounted(() => {
     clearTimeout(streamRenderTimer)
     streamRenderTimer = null
   }
+  // 流式 mermaid 在飞守卫：isUnmounted 已置位，在飞轮次结束后不再补跑 dirty 轮
+  streamMermaidDirty = false
   if (fullscreenVisible.value) {
     document.body.style.overflow = ''
   }
@@ -900,9 +1065,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="containerRef" class="markdown-body" @click="handleMarkdownClick">
-    <VueMarkdown :source="renderedSource" :plugins="mdPlugins" :options="{ breaks: true }" />
-  </div>
+  <div ref="containerRef" class="markdown-body" @click="handleMarkdownClick"></div>
 
   <Teleport to="body">
     <div v-if="fullscreenVisible" class="mermaid-fullscreen-mask">
@@ -1206,6 +1369,11 @@ onUnmounted(() => {
   border: 1px solid var(--paper-line);
   border-radius: 6px;
   overflow: hidden;
+  /* mermaid-container 可能由 pre 节点 morph 而来（morphdom 同标签复用），
+     需重置 UA pre 的 white-space/monospace 样式，避免布局污染 */
+  white-space: normal;
+  font-family: inherit;
+  font-size: inherit;
 }
 
 .markdown-body .mermaid-toolbar {

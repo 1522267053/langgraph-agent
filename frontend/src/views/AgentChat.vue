@@ -136,8 +136,26 @@ function scrollToLatest(): void {
  * 同样表达「滚聊天」的意图，外层 followPinned 应同步解除；thinking 块内
  * 的自动贴底由 AIMessageContent 自己的 thinkingFollowOff 控制，与外层
  * 独立——如果 short-circuit 外层，流式增长时外层 followPinned 仍为 1，
- * 会把视口拽回底部（用户感知「往上滚不会定住」） */
-function onUserScrollUpIntent(): void {
+ * 会把视口拽回底部（用户感知「往上滚不会定住」）
+ *
+ * touchmove 方向感知（移动端）：仅向上滑（scrollTop 减小）才解锁并刷新
+ * pinUnlockAt。手机惯性滚动会在手指抬起后继续运动且不再触发 touchmove——
+ * 若下滑回底也刷新 pinUnlockAt，惯性触底瞬间距上次手势 <300ms，syncAtEnd
+ * 的 ≤2px 重锁会被 PIN_RELOCK_GRACE_MS 抑制窗拦截，followPinned 停留
+ * false 导致流式跟随永久失效（表现为「回到底部后不再自动滚动」）。
+ * 下滑（回底方向）不解锁不刷新，让重锁判定照常生效 */
+let lastTouchScrollTop = -1
+function onUserScrollUpIntent(event?: Event): void {
+  if (event?.type === 'touchmove') {
+    const el = messagesContainer.value
+    if (!el) return
+    const movingUp = el.scrollTop < lastTouchScrollTop - 1
+    lastTouchScrollTop = el.scrollTop
+    if (!movingUp) return
+  } else if (event?.type === 'touchstart') {
+    // 新手势起点：重置方向基准
+    lastTouchScrollTop = messagesContainer.value?.scrollTop ?? -1
+  }
   followPinned.value = false
   pinUnlockAt = performance.now()
 }
@@ -1872,6 +1890,7 @@ const minimizedWaits = computed(() => {
       @scroll="syncAtEnd"
       @end-reached="onEndReached"
       @wheel.passive="onWheel"
+      @touchstart.passive="onUserScrollUpIntent"
       @touchmove.passive="onUserScrollUpIntent"
       @pointerdown.capture="handleScrollbarPointerDown"
     >
