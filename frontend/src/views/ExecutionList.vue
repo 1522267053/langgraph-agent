@@ -2,8 +2,10 @@
 import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { executionApi } from '@/api/execution'
-import type { FlowExecution, ExecutionStatus } from '@/types/execution'
-import { EXECUTION_STATUS_TEXT } from '@/types/execution'
+import type { FlowExecution } from '@/types/execution'
+// ExecutionStatus 是枚举：isActiveStatus 里当值用（.Running），必须值导入而非 import type
+// （import type 编译后被剥除，运行时 ReferenceError）
+import { ExecutionStatus, EXECUTION_STATUS_TEXT } from '@/types/execution'
 import type { PaginatedResponse } from '@/types/common'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { View, VideoPlay, Close } from '@element-plus/icons-vue'
