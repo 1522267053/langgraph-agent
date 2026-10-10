@@ -44,6 +44,8 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
 
 Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router`、`wait` 及工具节点（`mcp` / `skill` / `memory` / `todo` / `python` / `shell` / `api` / `knowledge` / `sub_agent` / `agenda` / `ssh` / `question`），并且只能各有一个 `start`、`end`、`llm`。典型主链为 `start -> llm -> end`，能力节点通过 `tools -> tools` 连接到 LLM。注意：`mcp` / `knowledge` / `api` / `python` 同时支持 `default -> default` 主干连接（Workflow 模式的直接执行节点）。
 
+`flow` 类型同样支持 LLM 自主调用工具：通过 `tools -> tools` 边把带工具的节点（`mcp` / `skill` / `python` / `shell` / `api` / `knowledge` 等）挂到 LLM 节点上（纯工具形态，不进主图、无执行记录），LLM 节点内部以 ReAct 循环自主多轮调用（轮次上限 `max_tool_iterations`，默认 200），模型不再发起工具调用后输出最终结果，主图继续向下执行。已挂载工具以 `GET /ai/flow/{id}/node/{llm_node_key}/connected-tools` 返回为准。
+
 `question` 是工具节点，与 `skill` / `memory` 同形态（同一 LLM 仅能连接一个实例），但交互行为不同：LLM 调用 `ask_user_question` 工具时由后端 `question_service` 推送 `question_request` SSE 事件，前端弹窗展示选项，用户提交后通过 `POST /agent/{id}/sessions/{session_id}/question/resolve` 唤醒 Future，工具返回 `answers` 给 LLM。完整工具节点列表见 [节点配置](references/node-config.md)。
 
 ## 标准流程
@@ -163,7 +165,7 @@ LLM 节点开启 `json_output_enabled: true` 后绑定 `structured_output` 虚�
       # last_result: str LLM 最后输出的文本内容
       return {'need_retry': bool, 'hint': str}  # need_retry 为真时以 hint 提醒 LLM 重试
   ```
-- 工具调用通常还需要 `tools -> tools` 边；遗漏后 LLM 看不到工具。
+- 工具调用通常还需要 `tools -> tools` 边；遗漏后 LLM 看不到工具。**flow 类型同理**：flow 模式 LLM 节点挂 `tools -> tools` 边后同样获得 ReAct 自主多轮调用能力，不要误以为只有 agent 类型支持。
 - 条件节点分支使用 `true` / `false` handle；意图路由使用动态 intent key。
 - 卡片输入、循环变量、Python 包装和媒体文件有专门规则，修改前读取 [节点配置](references/node-config.md)。
 - `json_fields` 的 `array` 缺 `item_type` 时按字符串数组处理；元素要带子字段必须 `item_type: "object"` 且提供 `children`，否则元素只能是自由 dict。
