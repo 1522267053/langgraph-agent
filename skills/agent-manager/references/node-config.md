@@ -399,12 +399,15 @@ MCP 节点支持两种工作模式（由连线拓扑决定，可共存）：
   "mcp_server_ids": [13],
   "tool_name": "mcp__chrome-devtools__new_page",
   "tool_args": {"url": "{{input.target_url}}"},
-  "input_variables": [{"name": "target_url", "source": "input.url", "type": "string"}],
-  "output_variables": [{"name": "result"}]
+  "input_variables": [{"name": "target_url", "source": "input.url", "type": "string"}]
 }
 ```
 
 参数名与类型来自工具的 args_schema（前端逐参数表单；API 侧 connected-tools / resolve 接口的 `tools[].parameters` 返回 `name/type/description/required`）。
+
+### 输出变量命名规则（重要）
+
+非 end 节点的输出变量名**唯一来源是各类型 ConfigClass 的预设定义**（如 python=`result`、shell=`stdout/stderr/exit_code`、api=`body/status_code/headers`、llm=`result/thinking`），**保存时 `base_config.output_variables` 会被剥离**，执行时由 ConfigClass 重新初始化填回预设——配置自定义名不会生效。仅当某节点类型开启 `output_variables_editable` 元开关时才保留显式配置。下游引用一律用实际写入名：`nodes.<key>.<预设名>`。
 
 ### 双模式共存语义
 
