@@ -140,6 +140,7 @@ watch(
     :title="file?.original_name || '文档预览'"
     width="90%"
     top="4vh"
+    append-to-body
     destroy-on-close
     class="doc-preview-dialog"
     @update:model-value="v => emit('update:visible', v)"
