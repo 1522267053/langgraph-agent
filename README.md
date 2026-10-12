@@ -44,7 +44,7 @@ Dify 仅有短期对话记忆，DeerFlow 尚未实现分层记忆。本项目的
 
 - **双模式** — Flow 模式（可视化工作流编排）和 Agent 模式（对话式 AI 助手），共享执行引擎
 - **可视化流程编排** — 拖拽式流程设计，支持条件分支、循环、嵌套子流程
-- **多模型支持** — 6 个 AI Provider：DeepSeek、OpenAI 兼容、Anthropic、通义千问、智谱AI、MiniMax
+- **多模型支持** — 双协议适配器：OpenAI 兼容 / Anthropic 兼容，供应商清单自动同步 models.dev，任意兼容服务均可接入
 - **流程复用** — 能力卡片机制，支持流程嵌套和组合
 - **三层记忆** — 热/温/冷分层记忆，自动升降温、AI 总结整理、访问衰减
 - **知识库** — 三层导航 + AI 知识沉淀，渐进式文献浏览
@@ -206,7 +206,7 @@ langgraph-agent/
 │   │   │   ├── common.py       #     文件类工具共享原语（路径校验/编码读取/大小上限）
 │   │   │   ├── file_read.py    #     file_read 工具（多模态注入 + xlsx/docx 转文本 + 分段读取）
 │   │   │   └── structured_output.py # structured_output 工具（JSON 结构化输出，字段树动态模型）
-│   │   ├── ai_provider/        #   AI 模型提供商（6 种，自动注册）
+│   │   ├── ai_provider/        #   AI 模型提供商（OpenAI 兼容 / Anthropic 双适配器，按 adapter_type 分发）
 │   │   ├── flow_context.py     #   FlowState 状态定义 + reducer
 │   │   ├── graph_builder.py    #   StateGraph 构建器
 │   │   ├── edge_router.py      #   通用边路由（condition/expression/普通边/循环守卫）
