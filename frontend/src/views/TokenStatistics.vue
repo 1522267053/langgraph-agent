@@ -29,6 +29,27 @@ const queryParams = reactive<TokenStatisticsQuery>({
   time_grain: 'day'
 })
 
+/** 最近 N 天日期范围（YYYY-MM-DD），默认查询窗口与后端 DEFAULT_QUERY_DAYS 对齐 */
+function recentRange(days: number): { start: string; end: string } {
+  const fmt = (d: Date) => {
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  }
+  const end = new Date()
+  const start = new Date()
+  start.setDate(start.getDate() - (days - 1))
+  return { start: fmt(start), end: fmt(end) }
+}
+
+/** 重置/初始为默认窗口（最近 7 天）并刷新数据 */
+function applyDefaultRange(): void {
+  const { start, end } = recentRange(7)
+  queryParams.start_date = start
+  queryParams.end_date = end
+}
+
 const grainOptions = [
   { label: '按天', value: 'day' },
   { label: '按周', value: 'week' },
@@ -63,8 +84,7 @@ function handleSearch() {
 }
 
 function handleReset() {
-  queryParams.start_date = ''
-  queryParams.end_date = ''
+  applyDefaultRange()
   queryParams.time_grain = 'day'
   handleSearch()
 }
@@ -207,6 +227,7 @@ function scheduleRender() {
 }
 
 onMounted(() => {
+  applyDefaultRange()
   loadData()
   window.addEventListener('resize', handleResize)
   setTimeout(() => {
