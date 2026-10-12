@@ -48,7 +48,12 @@ const emit = defineEmits<{
 <style scoped>
 .welcome-page {
   /* height:100% + 内部滚动兜底：welcome-wrapper 已钳制 height:100%（防进入
-     抖动），此容器若内容意外超出（如超长描述）可内部滚动而非裁切 */
+     抖动），此容器若内容意外超出（如超长描述）可内部滚动而非裁切。
+     width:100% 必需：父级 .welcome-wrapper 是 align-items:center 的 flex 列，
+     不撑满时本容器会收缩为内容宽度，overflow-y:auto 的滚动条贴在内容右缘
+     而非视口右侧（视觉上「滚动条在中间」）。box-sizing:border-box 全局生效，
+     padding 不会额外撑宽 */
+  width: 100%;
   height: 100%;
   overflow-y: auto;
   display: flex;

@@ -633,6 +633,14 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
+  function clearLastSessionPos(agentId: number): void {
+    try {
+      localStorage.removeItem(lastSessionPosKey(agentId))
+    } catch {
+      // 存储失败不影响功能
+    }
+  }
+
   /**
    * 恢复上次会话：先加载第 1 页兜底（保证列表总有数据），localStorage 有记录
    * 则经后端 /position 算页码后跳页选中。任一步失败返回 false，由调用方回退
@@ -648,7 +656,11 @@ export const useAgentStore = defineStore('agent', () => {
         sessionId,
         sessionPageSize.value
       )
-      if (res.data.code !== 1 || !res.data.data) return false
+      if (res.data.code !== 1 || !res.data.data) {
+        // 会话已被删除/失效：清除脏记录，避免每次进入都白发一次请求
+        clearLastSessionPos(agentId)
+        return false
+      }
       const page = res.data.data.page
       if (page !== 1) await loadSessions(agentId, page)
       const target = sessions.value.find(s => s.id === sessionId)
@@ -656,8 +668,10 @@ export const useAgentStore = defineStore('agent', () => {
         await selectSession(agentId, target)
         return true
       }
+      // 页码算出来了但列表里找不到（并发删除）：同样清理脏记录
+      clearLastSessionPos(agentId)
     } catch {
-      // 接口失败保持第 1 页走回退
+      // 网络/接口异常保持第 1 页走回退（不清除记录，待下次重试）
     }
     return false
   }
@@ -1072,13 +1086,18 @@ export const useAgentStore = defineStore('agent', () => {
     // 防线 B（防御性兜底）：即便防线 A 已保证 result 最多一条 context-summary，
     // 若旧数据 / 迁移期残留导致出现多条，仅保留「第一条 human 之前」的那一条；
     // 从后往前遍历 splice 避免下标错位。
-    const firstHumanIdx = result.findIndex(m => m.role === 'human')
+    // 合法位置是「在前」（i < firstHumanIdx）而非「紧邻」：摘要行与「[上下文已压缩]」
+    // 通知 human 之间可隔任意压缩后历史——会话继续跑多轮后上翻回看，窗口切片正切在
+    // 两者之间，紧邻假设会把合法摘要卡误判为残留裁掉（渲染成空白）。
+    const firstHumanIdx = result.findIndex(
+      m => m.role === 'human' && m.displayType !== 'context-summary'
+    )
     // 仅当确实存在 ≥1 条 human 时裁剪「位置错」的摘要；无 human 场景保持防线 A 的
     // 天然去重结果（最多 1 条，位于头部——这是防线 A 留下的首条，按业务语义可接受；
     // 真出现此场景说明该会话仅含摘要而无对话，渲染层会按 0 human 正常处理）。
     if (firstHumanIdx !== -1) {
       for (let i = result.length - 1; i >= 0; i--) {
-        if (result[i].displayType === 'context-summary' && i !== firstHumanIdx - 1) {
+        if (result[i].displayType === 'context-summary' && i >= firstHumanIdx) {
           result.splice(i, 1)
         }
       }

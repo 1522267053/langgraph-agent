@@ -252,10 +252,15 @@ export const agentApi = {
    * @param agentId Agent ID
    * @param sessionId 会话 ID
    * @param pageSize 每页条数（须与前端列表页大小一致）
+   *
+   * showError=false：该接口仅用于恢复上次浏览位置，会话已被删除/失效时
+   * 调用方静默回退到第 1 页，不应弹出「会话不存在」误导用户。
    */
   getSessionPosition(agentId: number, sessionId: number, pageSize: number = 20) {
     return get<{ page: number; total: number; page_size: number }>(
-      `/agent/${agentId}/sessions/${sessionId}/position?page_size=${pageSize}`
+      `/agent/${agentId}/sessions/${sessionId}/position?page_size=${pageSize}`,
+      undefined,
+      { showError: false }
     )
   },
 
