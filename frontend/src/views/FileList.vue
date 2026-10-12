@@ -11,12 +11,11 @@ import {
   formatDate,
   getFileTypeTag,
   isImage,
-  isVideo,
-  isPreviewableDoc
+  isPreviewableFile
 } from '@/utils/format'
 import ActionColumn from '@/components/common/ActionColumn.vue'
-import DocumentPreviewerDialog from '@/components/common/DocumentPreviewerDialog.vue'
-import type { DocumentPreviewFile } from '@/components/common/DocumentPreviewerDialog.vue'
+import FileViewerDialog from '@/components/common/FileViewerDialog.vue'
+import type { FileViewerFile } from '@/components/common/FileViewerDialog.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 
 const { isMobile } = useIsMobile()
@@ -25,11 +24,8 @@ const loading = ref(false)
 const tableData = ref<FileInfo[]>([])
 const total = ref(0)
 const selectedRows = ref<FileInfo[]>([])
-const previewVisible = ref(false)
-const previewUrl = ref('')
-const previewType = ref<'image' | 'video'>('image')
-const docPreviewVisible = ref(false)
-const docPreviewFile = ref<DocumentPreviewFile | null>(null)
+const viewerVisible = ref(false)
+const viewerFile = ref<FileViewerFile | null>(null)
 const uploadVisible = ref(false)
 const uploadFileList = ref<UploadUserFile[]>([])
 const uploadRef = ref<InstanceType<(typeof import('element-plus'))['ElUpload']>>()
@@ -148,7 +144,7 @@ function getRowActions(row: any) {
       label: '预览',
       icon: View,
       btnClass: 'action-view',
-      visible: isImage(row.mime_type) || isVideo(row.mime_type) || isPreviewableDoc(row.mime_type, row.original_name)
+      visible: isPreviewableFile(row.mime_type, row.original_name)
     },
     { key: 'download', label: '下载', icon: Download, btnClass: 'action-download' },
     { key: 'delete', label: '删除', icon: Delete, btnClass: 'action-delete', danger: true }
@@ -174,20 +170,8 @@ function handleDownload(row: FileInfo): void {
 }
 
 function handlePreview(row: FileInfo): void {
-  if (isPreviewableDoc(row.mime_type, row.original_name)) {
-    docPreviewFile.value = row
-    docPreviewVisible.value = true
-  } else if (isImage(row.mime_type)) {
-    previewUrl.value = row.preview_url || fileApi.download(row.id)
-    previewType.value = 'image'
-    previewVisible.value = true
-  } else if (isVideo(row.mime_type)) {
-    previewUrl.value = row.preview_url || fileApi.download(row.id)
-    previewType.value = 'video'
-    previewVisible.value = true
-  } else {
-    window.open(fileApi.download(row.id), '_blank')
-  }
+  viewerFile.value = row
+  viewerVisible.value = true
 }
 
 function handleSelectionChange(rows: FileInfo[]): void {
@@ -377,24 +361,7 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <el-dialog
-      v-model="previewVisible"
-      :title="previewType === 'video' ? '视频预览' : '图片预览'"
-      width="720px"
-      destroy-on-close
-    >
-      <div v-if="previewType === 'image'" class="preview-image-wrapper">
-        <el-image
-          :src="previewUrl"
-          fit="contain"
-          :preview-src-list="[previewUrl]"
-          preview-teleported
-        />
-      </div>
-      <video v-else :src="previewUrl" controls autoplay class="preview-video" />
-    </el-dialog>
-
-    <DocumentPreviewerDialog v-model:visible="docPreviewVisible" :file="docPreviewFile" />
+    <FileViewerDialog v-model:visible="viewerVisible" :file="viewerFile" />
   </div>
 </template>
 
@@ -409,12 +376,5 @@ onMounted(() => {
   height: 40px;
   object-fit: cover;
   border-radius: 4px;
-}
-
-.preview-video {
-  max-width: 100%;
-  max-height: 80vh;
-  display: block;
-  margin: 0 auto;
 }
 </style>

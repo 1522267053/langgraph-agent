@@ -222,6 +222,29 @@ export function isPreviewableDoc(mimeType: string, fileName?: string): boolean {
   return isPdf(mimeType, fileName) || isDocx(mimeType, fileName) || isXlsx(mimeType, fileName)
 }
 
+/** 是否为纯文本文件（txt），可前端 fetch 原文预览 */
+export function isPlainText(mimeType: string, fileName?: string): boolean {
+  return getExt(fileName) === 'txt' || mimeType === 'text/plain'
+}
+
+/** 是否为 Markdown 文件，前端用 MarkdownRenderer 渲染预览 */
+export function isMarkdown(mimeType: string, fileName?: string): boolean {
+  const ext = getExt(fileName)
+  return ext === 'md' || ext === 'markdown' || mimeType === 'text/markdown'
+}
+
+/** 是否为前端可统一查看的文件（图片/视频/音频/xlsx/docx/pdf/txt/md，走 FileViewerDialog） */
+export function isPreviewableFile(mimeType: string, fileName?: string): boolean {
+  return (
+    isImage(mimeType) ||
+    isVideo(mimeType) ||
+    isAudio(mimeType) ||
+    isPreviewableDoc(mimeType, fileName) ||
+    isPlainText(mimeType, fileName) ||
+    isMarkdown(mimeType, fileName)
+  )
+}
+
 /**
  * 根据文件扩展名获取Element Plus Tag类型
  * 注意：doc 类不能返回 ''，新版 el-tag 的 type 校验器不接受空串（custom validator 报警）
