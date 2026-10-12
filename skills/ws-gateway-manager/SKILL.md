@@ -1,15 +1,16 @@
 ---
 name: ws-gateway-manager
 description: |
-  创建、管理网关，通过 WebSocket 触发流程/智能体执行。
+  创建、管理网关，通过 WebSocket 触发流程/智能体执行，以及把外部平台（微信/飞书/钉钉等）接入本系统。
   适用场景：
   (1) 用户要求创建或管理网关
   (2) 外部系统通过 WebSocket 连接触发流程执行，实时接收流式结果
   (3) 注册远程工具，让 Agent 反向调用客户端函数
   (4) 管理会话（创建/切换/列表/删除）
   (5) 人工交互恢复（resume）、工具审批（tool_approval）、取消执行（cancel）、多会话并发（call_id 路由）
+  (6) 把 IM / 聊天平台接入本系统（微信、企业微信、飞书、钉钉、Slack 等），需要写桥接客户端
 
-  触发词：「创建网关」「管理网关」「websocket 触发」「远程工具」「网关会话」「注册工具」「人工交互」「工具审批」「取消执行」「并发会话」
+  触发词：「创建网关」「管理网关」「websocket 触发」「远程工具」「网关会话」「注册工具」「人工交互」「工具审批」「取消执行」「并发会话」「接入微信」「微信机器人」「让微信接入」「接入飞书」「接入钉钉」「消息平台接入」「IM 接入」
 ---
 
 # WebSocket 网关管理
@@ -25,10 +26,11 @@ description: |
 5. **Agent 专属功能**：远程工具注册、会话管理（创建/切换/列表/删除/消息查询）仅 Agent 类型支持。Flow 类型调用会收到 `error_code="NOT_AGENT_TYPE"` 错误
 6. **并发模型（会话级）**：Agent 类型同一 `session_id` 正在执行时新 execute 被拒绝（`error_code="SESSION_BUSY"`）；不同会话、新建会话、Flow 类型可并发执行。并发时事件流交错，**每个执行事件顶层携带 `call_id`**（调用记录 ID，`call_started` 事件首次下发），客户端按 `call_id` 路由
 7. **CRUD 需登录态**：管理接口（`/api/ws-gateway/page/create/update/delete`）需要 session cookie
-7. **输入合并**：`input_data = {**gateway.input_config, **客户端参数}`（排除 `action` 和 `session_id`），客户端参数覆盖默认模板
-8. **工具名**：远程工具直接使用客户端注册的原始名称，超时 120 秒
-9. **文件传输 token 鉴权**：上传（`POST /api/ws-gateway/upload`）/下载（`GET /api/ws-gateway/download/{file_id}`）由网关 token 自鉴权，**免登录**（已豁免认证白名单）。上传返回 `file_id`，可塞进 `execute` 的 `files` 字段；下载严格校验文件归属该网关关联的 flow
-10. **空闲超时**：连接空闲超过 `WS_TRIGGER_IDLE_TIMEOUT`（默认 120 秒，0 关闭）未收到任何消息（含 ping）时服务端以关闭码 `4408` 断开。客户端**必须周期发送 ping**（建议 30 秒间隔）
+8. **输入合并**：`input_data = {**gateway.input_config, **客户端参数}`（排除 `action` 和 `session_id`），客户端参数覆盖默认模板
+9. **工具名**：远程工具直接使用客户端注册的原始名称，超时 120 秒
+10. **文件传输 token 鉴权**：上传（`POST /api/ws-gateway/upload`）/下载（`GET /api/ws-gateway/download/{file_id}`）由网关 token 自鉴权，**免登录**（已豁免认证白名单）。上传返回 `file_id`，可塞进 `execute` 的 `files` 字段；下载严格校验文件归属该网关关联的 flow
+11. **空闲超时**：连接空闲超过 `WS_TRIGGER_IDLE_TIMEOUT`（默认 120 秒，0 关闭）未收到任何消息（含 ping）时服务端以关闭码 `4408` 断开。客户端**必须周期发送 ping**（建议 30 秒间隔）
+12. **平台接入走桥接客户端**：WS 网关是协议层，不绑定具体 IM。接入微信/飞书/钉钉等需写独立桥接进程（类型必须 `agent`、按用户复用 session、按 `error_code` 处理异常），详见「典型接入场景」
 
 ## 管理接口（HTTP）
 
@@ -79,6 +81,73 @@ POST /api/ws-gateway/create
   "is_enabled": 1
 }
 ```
+
+## 典型接入场景
+
+WS 网关是**协议层**（WebSocket + JSON 指令），本身不绑定任何具体 IM/平台。要让某个平台接入，需要写一个**桥接客户端**：把平台消息转成 `execute` 指令发给网关，再把网关返回的回复转回平台。
+
+下面用**微信**作为完整案例（已有可运行的参考实现），其他平台（飞书、钉钉、企业微信、Slack）同理替换最外层收发即可。
+
+### 接入前必须做的 3 个决策
+
+| 决策 | 要求 | 原因 |
+|---|---|---|
+| 网关类型 | **必须 `agent`**，不能是 `flow` | 远程工具注册、会话管理（多轮对话）仅 Agent 支持；`flow` 类型调用会收到 `NOT_AGENT_TYPE` |
+| 会话策略 | **按用户维度复用 session**（如 `user_id → session_id` 持久化到本地） | 每个微信用户要有多轮对话记忆；不复用会导致每句话都是新会话、无上下文 |
+| 多用户并发 | 不同用户不同 session（天然并发）；同一 session 内串行 | 同 session 并发会被拒（`SESSION_BUSY`），客户端需排队重试而非报错 |
+
+### 完整链路
+
+```
+微信用户 ──发消息──> 桥接客户端 ──execute──> WS 网关 ──> Agent 执行
+                          ↑                                   │
+                          └────── flow_done（回复） <──────────┘
+                          │
+                    回发微信（wechatbot-sdk）
+```
+
+**关键点**：桥接客户端是**独立进程**，跑在能连到网关的机器上；它同时持有两个连接——微信侧（`wechatbot-sdk`）和网关侧（WebSocket）。两者**必须共用同一个事件循环**（否则 ws 连接绑在已结束的 loop 上，下次 send 报 `ConnectionClosedError`）。
+
+### 桥接客户端要做 5 件事
+
+| # | 职责 | 要点 |
+|---|---|---|
+| 1 | **消息格式化** | 把平台消息组装成 `message` 字符串；用户连发多条时应**合并**成一条（标注"用户连续发送 N 条"），避免刷屏和浪费调用 |
+| 2 | **会话映射** | `user_id → session_id` 本地持久化（原子写入）；收到 `SESSION_INVALID` 时删除映射、重建会话、重试一次 |
+| 3 | **并发排队** | 同 session 收到 `SESSION_BUSY` → sleep 后重试（不可立即报错）；不同用户自然并发 |
+| 4 | **文件双向传输** | 用户发来的文件先下载到本地，路径塞进 message；Agent 产出文件用 `send_file_to_*` 远程工具回发 |
+| 5 | **断线重连 + 心跳** | 定时 `ping` 保活（防 4408 空闲断开）；断线后自动重连并**重新 register_tools**（工具不落库，断连即清空） |
+
+### Agent 侧配套要求
+
+桥接客户端只是管道，**能不能用取决于 Agent 怎么配**：
+
+- 网关关联的 Agent 必须有 `end` 节点（否则触发即失败）
+- 把平台相关的上下文做成 `input_schema` 字段，由客户端通过 `params` 传入。例如微信场景的字段示例（`bot_name` / `chat_type` / `sender_id`）见下方「传入 input_schema 字段」
+- 需要 Agent 反向操作客户端环境时（如读本地文件、查本地数据库），走**远程工具注册**
+- 风险操作（shell/ssh/python/api/mcp）建议开**工具审批**，把确认权交回给聊天里的用户
+
+### 远程工具的定位（这是 WS 网关最大的价值）
+
+远程工具让 Agent **反向调用客户端所在机器**的能力——这是纯云端平台做不到的：
+
+| 场景 | 客户端注册的工具 | Agent 能做什么 |
+|---|---|---|
+| 微信回发文件 | `send_file_to_wechat(path, caption)` | 用户说"把月报发我"→ Agent 读本地文件 → 工具回发到微信 |
+| 查本地数据库 | `query_database(sql)` | 用户问"上周订单多少"→ Agent 生成 SQL → 工具在本地库执行 → 结果回传 |
+| 控制本机软件 | `run_xxx(...)` | 让 Agent 操作只有本机才有的软件/硬件 |
+
+### 微信接入实测要点（来自参考实现的经验）
+
+- **类型必须 agent**：用 flow 类型网关会在连接后立刻收到类型错误
+- **session 失效自愈**：服务端删了会话/重启后，本地 `sessions.json` 里的 id 会失效，必须靠 `error_code=SESSION_INVALID` 判断并自动重建（**不要匹配 message 文本**——错误文案会变）
+- **症状 vs 根因**：连发消息时若客户端不排队，会出现"回复错位/丢消息"，根因是 `SESSION_BUSY` 被当成普通错误丢弃
+- **登录态持久化**：微信扫码凭证落盘后，桥接进程重启不用重新扫码
+- ⚠️ **风控风险**：第三方微信协议接入**存在被封号风险**，建议用测试号/小号，不要挂主力号
+
+### 参考实现
+
+微信桥接已有可运行的完整实现（独立于本仓库）：`wechatbot-sdk` 负责微信收发，本项目的 `ws-gateway-manager/references/ws_client_example.py` 提供了通用的 ws 客户端封装（心跳 + `tool_invoke` 自动处理 + 按 `call_id` 路由），可直接作为桥接客户端的底座。
 
 ## WebSocket 触发
 
@@ -160,7 +229,7 @@ Flow 类型（无 message，用 input_data 字段传递）：
 
 #### 传入 input_schema 字段
 
-Agent 类型 flow 通常有自定义 `input_schema`（如 `bot_name`、`chat_type` 等），需要通过 **`params`** 字段传递。`params` 的 keys 必须与 `input_schema.fields[].name` 一致：
+Agent 类型 flow 通常有自定义 `input_schema`（如微信接入场景的 `bot_name`、`chat_type`、`sender_id`），需要通过 **`params`** 字段传递。`params` 的 keys 必须与 `input_schema.fields[].name` 一致：
 
 ```json
 {
@@ -173,6 +242,8 @@ Agent 类型 flow 通常有自定义 `input_schema`（如 `bot_name`、`chat_typ
   }
 }
 ```
+
+> 上例即微信接入的典型形态：`message` 是格式化后的聊天文本（含发送者标识），`params` 提供 Agent 判断群聊/私聊、称呼等所需的上下文。详见「典型接入场景」。
 
 > **输入合并规则**：`input_data = {**gateway.input_config, **客户端参数}`（排除 `action` 和 `session_id`）。也就是说：
 > - 创建网关时设的 `input_config` 作为默认模板
@@ -235,10 +306,10 @@ Agent 类型 flow 通常有自定义 `input_schema`（如 `bot_name`、`chat_typ
 **tool_approval — 工具审批**（仅 Agent，工具节点开启「调用审批」时触发）：
 
 ```json
-{"action": "tool_approval", "session_id": 5, "result": "approved"}
+{"action": "tool_approval", "session_id": 5, "approval_id": "dd3dc382f0334d56", "result": "approved"}
 ```
 
-`result` 为 `approved`（放行）或 `rejected`（拒绝）。无待审批时返回 `{"type":"tool_approval_result","data":{"resolved":false}}`，可安全忽略。
+`result` 为 `approved`（放行）或 `rejected`（拒绝）。**`approval_id` 必填**——从 `tool_approval_required` 事件的 `data.approval_id` 取（服务端按 `(session_id, approval_id)` 精确路由到指定审批批次，缺失报 `INVALID_PARAMS`）。无待审批时返回 `{"type":"tool_approval_result","data":{"resolved":false}}`，可安全忽略；命中时 `resolved=true`。
 
 **cancel — 取消执行**：
 
@@ -336,7 +407,34 @@ Agent 调用工具时，服务端发送：
 > 5. 服务端把字符串结果传给 LLM，LLM 继续决策
 > 6. 整个执行完成后，服务端推 `flow_done` 事件
 
-## Python 客户端示例
+## Python 客户端
+
+**生产级标准底座：[references/ws_gateway_client.py](references/ws_gateway_client.py)** —— 写桥接客户端直接复制/导入这个文件，不要从零写。
+
+`WsGatewayWSClient` 类已内置（均为实测踩坑修复）：
+
+- **心跳保活**（30 秒 ping，防 4408 空闲断开）+ 单 `_loop` 独占 recv（websockets 只允许一个 recv 协程）
+- **call_id 路由**：并发 execute 各自 Future 解锁；无 call_id 的 error 路由 FIFO 头
+- **流式文本收集**：`execute()` 返回事件注入 `_collected_content`（node_content 累积，跳过 start/end）
+- **断线解锁**：`ConnectionClosed` 时解锁全部挂起 Future（否则永久挂起）
+- **`WsError` 异常**：携带 `error_code`，按错误码分支处理
+- **工具 result 序列化**：dict/list 自动 `json.dumps`（协议要求字符串）；async 工具函数自动 await
+- **`ConnectionError` vs `WsError` 分层**：外层重连循环只捕获前者
+
+API 一览：`connect()` → `tool()`*N → `register_tools()` → `execute()` / `create_session()` / `resume()` / `tool_approval()` / `cancel()` / `close()`。
+
+**教学示例：[references/ws_client_example.py](references/ws_client_example.py)** —— 11 个场景化示例（远程工具/文件传输/人工交互/审批/并发等），演示协议用法。注意示例 4 内嵌的简化类**不含上述修复**，集成项目时以 `ws_gateway_client.py` 为准。
+
+```python
+from ws_gateway_client import WsGatewayWSClient, WsError
+
+client = WsGatewayWSClient("ws://host/ws/trigger/TOKEN")
+info = await client.connect()          # {"flow_type": "agent", ...}
+client.tool("send_file", "发送文件给用户", {...schema...}, send_file_fn)
+await client.register_tools()          # 显式注册（Agent 类型）
+event = await client.execute("你好")
+reply = event.get("_collected_content")  # 流式累积的回复文本
+```
 
 ```python
 import asyncio
