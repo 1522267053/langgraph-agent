@@ -308,7 +308,7 @@ langgraph-agent/
 
 基于 session cookie 的简单密码认证（非 JWT），密码来源优先级：DB > `.env`。
 
-首次访问进入初始化向导 `/setup`，可设置登录密码（可选，留空不启用）。后续在 `/settings` 修改密码或关闭登录保护。
+首次访问进入初始化向导 `/setup`，必须设置登录用户名和密码。后续在 `/settings` 修改用户名或密码（登录保护不可关闭）。
 
 ## 环境变量配置
 
@@ -326,7 +326,7 @@ EMBEDDING_API_KEY=
 EMBEDDING_BASE_URL=
 EMBEDDING_MODEL=
 
-# 登录密码（可选，为空不启用。DB 中 global_config 优先级更高）
+# 登录密码兜底（仅 DB 未配置密码时生效。DB 中 global_config 优先级更高）
 LOGIN_PASSWORD=your_password
 
 # 工具输出截断（超过阈值时保存到临时文件，返回预览）

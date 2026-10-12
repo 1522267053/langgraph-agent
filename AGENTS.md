@@ -195,7 +195,7 @@ npm run format                          # Prettier 格式化
 
 基于 session cookie 的简单密码认证（非 JWT），仅拦截 `/api/*` 路径。
 
-密码来源: DB（`global_config.login_password_hash`）> `.env`（`LOGIN_PASSWORD`）
+密码来源: DB（`global_config.login_password_hash`）> `.env`（`LOGIN_PASSWORD`，仅 DB 未配置时兜底）。登录保护必须启用、不可关闭：`/setup` 初始化时用户名和密码必填，`/settings` 仅可修改、置空报"登录保护不可关闭"（`global_config_service.update_config`）。
 
 Session: cookie `auth_session`，httponly + samesite=lax，7 天有效，内容为 `base64(timestamp:hmac_sha256(timestamp, password_hash))`。
 
