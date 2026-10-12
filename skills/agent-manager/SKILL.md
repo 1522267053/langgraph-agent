@@ -37,12 +37,37 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
 
 ## 选择类型
 
+**核心判断：流程确定性 vs 自主性，二者权衡取舍。**
+
+| | `flow`（工作流） | `agent`（智能体） |
+|---|---|---|
+| 执行特征 | **强流程、弱自主** | **强自主、弱流程** |
+| 步骤控制 | 步骤固定、顺序确定，每一步都必须走到 | 由 LLM 自主决定下一步，可跳过/增添/重复步骤 |
+| 适合场景 | 流程确定、**不能漏步骤**的任务 | 需要**发散思维**、步骤可灵活取舍的任务 |
+| 典型例子 | 数据批处理、定时报表、审核流水线、固定编排（取数→清洗→校验→入库） | 对话问答、开放式研究、故障排查、多轮探索性任务 |
+
+选型启发式：
+- 问「**能否预先画出确定的执行步骤图，且漏掉任何一步都算失败**」→ 是则选 `flow`；否（步骤可能随情况变化、允许发散）则选 `agent`。
+- 用户明确要求「每次都按这个固定流程走 / 一步都不能少 / 要可追溯每步」→ `flow`。
+- 用户想要「像助手一样灵活应对、自己判断该做什么、可以探索」→ `agent`。
+- 拿不准时先澄清：把两类特征讲给用户（流程是否固定、是否允许漏步骤/发散），由用户确认后再创建。
+
+> 注意：`flow` 与 `agent` **不是二选一的两种节点，而是两种流程类型**（`flow_type`）。二者共享同一套节点体系，同一批节点类型在两种类型下都可使用；区别在**执行语义**（是否允许 LLM 自主取舍步骤）与**允许的节点子集**（见下表）。不要把"选 flow"误解为"不能用 LLM"。
+
 | 类型 | 适用场景 | 主要入口 |
 |---|---|---|
 | `flow` | 固定步骤、批处理、API/Python/Shell 编排 | `/execution/stream/{id}` |
 | `agent` | 对话、工具调用、记忆、知识库、子 Agent | `/agent/{id}/sessions` |
 
-Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router`、`wait` 及工具节点（`mcp` / `skill` / `memory` / `todo` / `python` / `shell` / `api` / `knowledge` / `sub_agent` / `agenda` / `ssh` / `question`），并且只能各有一个 `start`、`end`、`llm`。典型主链为 `start -> llm -> end`，能力节点通过 `tools -> tools` 连接到 LLM。注意：`mcp` / `knowledge` / `api` / `python` 同时支持 `default -> default` 主干连接（Workflow 模式的直接执行节点）。
+**节点可用性速查**（以 `GET /ai/flow/node-types` 返回为准，完整清单与连线规则见 [节点配置](references/node-config.md)）：
+
+| 维度 | `flow` | `agent` |
+|---|---|---|
+| 主链节点 | `start` / `end` / `llm` / `condition` / `intent_router` / `wait` 可用 | 同左，且 `start` / `end` / `llm` 各限一个 |
+| `card` / `loop` / `human` | 可用 | **不可用** |
+| 工具节点（`mcp` / `skill` / `memory` / `todo` / `python` / `shell` / `api` / `knowledge` / `sub_agent` / `agenda` / `ssh` / `question` / `flow_tool`） | 可用 | 可用 |
+
+`flow` 类型额外允许 `mcp` / `knowledge` / `api` / `python` 用 `default -> default` 作主干上的直接执行节点（`agent` 仅允许 `tools -> tools` 作 LLM 工具）。典型主链：`agent` 为 `start -> llm -> end`；`flow` 为 `start -> ... -> end` 任意 DAG。
 
 `flow` 类型同样支持 LLM 自主调用工具：通过 `tools -> tools` 边把带工具的节点（`mcp` / `skill` / `python` / `shell` / `api` / `knowledge` 等）挂到 LLM 节点上（纯工具形态，不进主图、无执行记录），LLM 节点内部以 ReAct 循环自主多轮调用（轮次上限 `max_tool_iterations`，默认 200），模型不再发起工具调用后输出最终结果，主图继续向下执行。已挂载工具以 `GET /ai/flow/{id}/node/{llm_node_key}/connected-tools` 返回为准。
 
@@ -50,7 +75,7 @@ Agent 仅允许 `start`、`end`、`llm`、`condition`、`intent_router`、`wait`
 
 ## 标准流程
 
-1. **澄清目标**：确定 `flow` 或 `agent`、输入字段、预期输出、外部依赖和是否需要人工交互。
+1. **先定类型再澄清目标**：按上方「选择类型」确定 `flow` 或 `agent`（拿不准先讲清两类区别让用户确认），再确定输入字段、预期输出、外部依赖和是否需要人工交互。
 2. **检查环境**：调用 `GET /config/check`；需要模型时再调用 `GET /config/providers`。
 3. **查找复用**：调用 `GET /ai/flow/list?keyword=...`，避免创建重复流程。
 4. **创建容器**：调用 `POST /ai/flow/create`，明确 `flow_type` 和 `input_schema`。
