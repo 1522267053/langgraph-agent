@@ -47,8 +47,12 @@ HINT_PRIORITY: dict[str, int] = {
     "memory": 2,
 }
 
-# doom loop 检测：相同工具+相同参数重复调用次数上限，超过则跳过执行
-DOOM_LOOP_THRESHOLD = 3
+# doom loop 检测（三级策略）：
+# - 无参工具（args 为空）：不检测（页面轮询等合法重复场景；总次数由 max_tool_iterations 兜底）
+# - 有参工具重复 ≤ SOFT：放行执行，从第 SOFT 次起在 ToolMessage 尾部注入警告（LLM 自我纠正）
+# - 有参工具重复 > HARD：跳过执行（真抽风最终闸门）
+DOOM_LOOP_SOFT_THRESHOLD = 3
+DOOM_LOOP_HARD_THRESHOLD = 8
 
 
 # ==== llm_stream.py ====

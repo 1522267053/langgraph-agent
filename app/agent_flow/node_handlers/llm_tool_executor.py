@@ -39,7 +39,8 @@ from app.agent_flow.tool_resolver import (
 from app.agent_flow.tools.structured_output import StructuredOutputService
 from app.agent_flow.tools.whoami import create_whoami_tool
 from app.constants.llm_constants import (
-    DOOM_LOOP_THRESHOLD as _DOOM_LOOP_THRESHOLD,
+    DOOM_LOOP_HARD_THRESHOLD as _DOOM_LOOP_HARD_THRESHOLD,
+    DOOM_LOOP_SOFT_THRESHOLD as _DOOM_LOOP_SOFT_THRESHOLD,
     HINT_PRIORITY as _HINT_PRIORITY,
     PLAN_DISABLED_TOOL_PREFIXES as _PLAN_DISABLED_TOOL_NAMES,
     REQUEST_HUMAN_HELP_TOOL as _REQUEST_HUMAN_HELP,
@@ -96,7 +97,9 @@ class ReactLoopContext:
     context_length: int = 0
     # 注意：工具审批已下沉到各工具节点内部（shell/ssh handler），
     # 本 ctx 不再承担审批配置（见 shell_handler._request_tool_approval）。
-    doom_loop_threshold: int = _DOOM_LOOP_THRESHOLD
+    doom_loop_soft_threshold: int = _DOOM_LOOP_SOFT_THRESHOLD
+    # 有参工具重复超过该次数则跳过执行（真抽风最终闸门）；无参工具不检测
+    doom_loop_threshold: int = _DOOM_LOOP_HARD_THRESHOLD
     # 必需工具校验
     required_tools: Optional[list[str]] = None
     tool_check_script: str = ""
@@ -527,17 +530,29 @@ async def handle_tool_calls(
             if not tool_calls:
                 return False, tool_call_count
 
-    # ---- doom loop 检测：相同工具+相同参数重复调用超过阈值则跳过 ----
+    # ---- doom loop 检测（三级策略）----
+    # 无参工具（args 为空）不检测：browser_snapshot 等页面轮询是合法重复；
+    # 有参工具：重复 ≤ soft 放行（从第 soft 次起执行后注入警告），> hard 跳过。
     if tool_fp_count is not None and doom_loop_threshold > 0:
+        soft_threshold = ctx.doom_loop_soft_threshold
         safe_calls: list[ToolCall] = []
+        # 本轮需要注入重复警告的调用（tool_call_id → 重复次数），执行后拼进 ToolMessage
+        warn_repeat_counts: dict[str, int] = {}
         for tc in tool_calls:
+            tc_name = tc.get("name", "")
+            tc_id = tc.get("id", "")
+            tc_args = tc.get("args")
+            # 无参豁免：args 为空 dict/None/空串时不计数不警告（合法轮询场景）
+            is_no_args = not tc_args or tc_args == {} or tc_args == ""
             fp = _tool_call_fingerprint(tc)
+            if is_no_args:
+                safe_calls.append(tc)
+                continue
             tool_fp_count[fp] = tool_fp_count.get(fp, 0) + 1
-            if tool_fp_count[fp] > doom_loop_threshold:
-                tc_name = tc.get("name", "")
-                tc_id = tc.get("id", "")
+            count = tool_fp_count[fp]
+            if count > doom_loop_threshold:
                 skip_msg = (
-                    f"检测到重复执行（{tc_name} 相同参数已第 {tool_fp_count[fp]} 次调用），"
+                    f"检测到重复执行（{tc_name} 相同参数已第 {count} 次调用），"
                     "已自动跳过。请回顾上一次执行结果，避免重复操作，更换思路或确认任务是否已完成。"
                 )
                 msg_buf.append(
@@ -554,6 +569,8 @@ async def handle_tool_calls(
                     )
             else:
                 safe_calls.append(tc)
+                if soft_threshold > 0 and count >= soft_threshold:
+                    warn_repeat_counts[tc_id] = count
         tool_calls = safe_calls
         if not tool_calls:
             return True, tool_call_count
@@ -729,6 +746,16 @@ async def handle_tool_calls(
         tool_status, content, _sse_result, artifact = _build_end_payload(
             tool_name, raw_result
         )
+
+        # doom loop 软警告：相同工具+相同参数达到软阈值的重复调用，在 ToolMessage
+        # 尾部追加提醒（仅进 LLM 上下文；sse_result/前端展示/state 变量均不含警告）
+        repeat_count = warn_repeat_counts.get(tool_id)
+        if repeat_count is not None:
+            content = (
+                f"{content}\n\n⚠️ 提示：这是相同工具+相同参数的第 {repeat_count} 次调用。"
+                "如果环境状态在变化（如页面轮询、等待任务完成），请忽略此提示；"
+                "否则请回顾上次结果，确认是否真的需要重复调用。"
+            )
 
         # file_read 媒体注入成功 → 记录待注入的媒体路径（解析后的绝对路径）
         if (
