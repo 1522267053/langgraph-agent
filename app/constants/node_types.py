@@ -259,6 +259,14 @@ NODE_REGISTRY: dict[str, NodeMeta] = {
         flow=True,
         agent=True,
     ),
+    "browser": NodeMeta(
+        label="浏览器",
+        source={"default", "tools"},
+        target={"default"},
+        flow=True,
+        agent=True,
+        agent_tool=True,
+    ),
 }
 
 

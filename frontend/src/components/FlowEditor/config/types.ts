@@ -351,6 +351,38 @@ export interface WaitConfig {
   wait_seconds: number
 }
 
+/** 浏览器节点配置 */
+export interface BrowserConfig {
+  connect_mode: 'launch' | 'remote'
+  browser_path: string
+  user_data_path: string
+  remote_host: string
+  remote_port: number
+  /** 本地调试端口（仅 launch 模式）：0=自动探测空闲端口（默认）；配置则固定使用便于外部 DevTools 接入 */
+  debug_port: number
+  action_timeout: number
+  /** 无头模式（仅 launch 模式）：true=后台不弹窗（默认）；false=弹出真实窗口便于调试 */
+  headless: boolean
+  flow_action:
+    | 'start'
+    | 'navigate'
+    | 'click'
+    | 'input'
+    | 'get_content'
+    | 'snapshot'
+    | 'screenshot'
+    | 'scroll'
+    | 'wait_for'
+    | 'evaluate'
+    | 'close'
+  /** 动作参数（逐参数绑定值，支持 {{变量}} 插值），键随 flow_action 变化 */
+  flow_args: Record<string, string>
+  input_variables: NodeVariable[]
+  output_variables: NodeVariable[]
+  approval_required_tools?: string[]
+  approval_required_patterns?: string[]
+}
+
 /** 开始节点配置 */
 export interface StartConfig {
   input_variables: FlowIOField[]

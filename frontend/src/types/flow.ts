@@ -25,6 +25,7 @@ export type CardNodeType =
   | 'agenda'
   | 'question'
   | 'flow_tool'
+  | 'browser'
 
 /** 所有节点类型 */
 export type AllNodeType = NodeType | CardNodeType

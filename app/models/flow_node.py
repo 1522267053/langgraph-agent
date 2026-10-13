@@ -45,6 +45,7 @@ class NodeType(str, Enum):
     QUESTION = "question"
     FLOW_TOOL = "flow_tool"
     WAIT = "wait"
+    BROWSER = "browser"
 
 
 # ---- 派生表：从 NODE_REGISTRY 自动生成 ----

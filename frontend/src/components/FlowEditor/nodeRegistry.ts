@@ -662,6 +662,35 @@ const registry: Record<string, NodeRegistryEntry> = {
     defaultConfig: () => ({ description: '' })
   },
 
+  browser: {
+    label: '浏览器',
+    description: 'AI 通过 CDP 操作浏览器（导航/点击/输入/截图），每流程独立实例',
+    category: 'tool',
+    icon: Monitor,
+    iconColor: '#0ea5e9',
+    iconBgColor: '#f0f9ff',
+    defaultConfig: () => ({
+      connect_mode: 'launch',
+      browser_path: '',
+      user_data_path: '',
+      remote_host: '',
+      remote_port: 9222,
+      debug_port: 0,
+      action_timeout: 30,
+      headless: true,
+      flow_action: 'navigate',
+      flow_args: {},
+      input_variables: [],
+      output_variables: [{ name: 'result', source: '', type: 'object' }]
+    }),
+    initConfig: (rawConfig, ctx) => {
+      const config = { ...rawConfig }
+      config.input_variables = resolveInputVars(rawConfig, 'browser', ctx)
+      config.output_variables = resolveOutputVars(rawConfig, 'browser', ctx)
+      return config
+    }
+  },
+
   flow_tool: {
     label: 'Flow工具',
     description: '将 Flow 作为工具调用，保留其中断/审批能力（单工具双模式）',
