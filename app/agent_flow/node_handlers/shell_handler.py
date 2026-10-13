@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import fnmatch
 import json
+import logging
 import os
 import platform
 import re
@@ -52,6 +53,9 @@ from app.config.build_utils import BASE_DIR, get_agent_work_dir, get_temp_dir
 from app.config.settings import settings
 from app.constants.timing import SHELL_TASK_EXPIRE_SECONDS
 from app.models.flow_node import FlowNode
+from app.utils.env_refresh import refresh_windows_env
+
+logger = logging.getLogger(__name__)
 
 
 class ShellNodeConfig(BaseNodeConfig):
@@ -569,6 +573,50 @@ def _classify_shell_error(
     if _SHELL_ERR_PERMISSION.search(stderr or ""):
         return "permission_denied"
     return "runtime_error"
+
+
+# 环境热刷新：进程内只自动刷新一次（Windows 安装器改注册表 PATH 后，
+# 已运行进程的 os.environ 不更新，导致刚安装的 node/python 找不到）。
+# 首次 not_found 时从注册表重读 PATH 并重试；置位后不再重复刷新重试。
+_env_refresh_attempted = False
+
+
+async def _retry_after_env_refresh(command: str) -> Optional[dict]:
+    """
+    命令未找到时尝试环境热刷新重试（仅首次、仅 Windows 生效）。
+
+    刷新注册表 PATH 后复检命令：若命令变为可用则重新执行一次并返回结果 dict；
+    否则返回 None（调用方沿用原错误输出）。非 Windows / 已刷新过 → 直接 None。
+    """
+    global _env_refresh_attempted
+    if _env_refresh_attempted:
+        return None
+    _env_refresh_attempted = True
+    if not refresh_windows_env():
+        return None
+    # 提取命令首词复检（cmd 场景 stderr 含 "xxx" 不是内部或外部命令）
+    first_word = command.strip().split(" ", 1)[0].strip('"')
+    if not shutil.which(first_word):
+        return None
+    logger.info("命令「%s」在环境刷新后可用，自动重试执行", first_word)
+    try:
+        process = await _create_subprocess(command, stdin=asyncio.subprocess.DEVNULL)
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
+    except Exception as e:
+        logger.warning("环境刷新后重试执行失败: %s", e)
+        return None
+    return {
+        "stdout": _decode_output(stdout),
+        "stderr": _decode_output(stderr),
+        "return_code": process.returncode,
+        "success": process.returncode == 0,
+        "command": command,
+        "note": (
+            "检测到命令在刚安装的运行环境中，已自动刷新 PATH 后重试成功"
+            if process.returncode == 0
+            else "已自动刷新 PATH 后重试（命令已找到，但执行出错）"
+        ),
+    }
 
 
 def _apply_shell_output_truncation(result: dict, task) -> None:
@@ -1296,6 +1344,13 @@ class ShellNodeHandler(BaseNodeHandler):
                 if note:
                     result["note"] = note
                 _apply_shell_output_truncation(result, task)
+                # 命令未找到 → 进程内首次时热刷新注册表 PATH 并重试一次
+                # （覆盖"运行中安装 Node/Python 后找不到命令"场景，无需重启）
+                if result.get("error_type") == "not_found":
+                    retried = await _retry_after_env_refresh(command)
+                    if retried is not None:
+                        retried["cwd"] = str(command_working_dir or Path.cwd())
+                        return retried
                 return result
 
             # 任务超过 async_wait 秒仍未完成 → 转为后台任务，通知前端

@@ -160,12 +160,20 @@ def check_command(command: str) -> dict:
     用于 MCP 启动前的真实检测：命令缺失时给出友好提示与依赖下载链接，
     避免底层 FileNotFoundError 等冗长异常直接暴露给用户。
 
+    Windows 下判定缺失时先做一次环境热刷新（覆盖"运行中刚安装 Node/Python
+    后注册表 PATH 已更新但进程 os.environ 未更新"的场景）再复检。
+
     Returns:
         {"command", "exists", "missing", "dependency_name?", "download_url?", "message"}
     """
     cmd = (command or "").strip()
     dep = COMMAND_DEPENDENCIES.get(cmd)
     exists = bool(cmd) and shutil.which(cmd) is not None
+    if not exists and cmd and sys.platform == "win32":
+        from app.utils.env_refresh import refresh_windows_env
+
+        refresh_windows_env()
+        exists = shutil.which(cmd) is not None
     result: dict = {
         "command": cmd,
         "exists": exists,
