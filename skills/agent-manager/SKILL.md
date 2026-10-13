@@ -33,7 +33,7 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
 | 子 Agent、会话复用、并发与审批 | [子 Agent](references/sub-agent.md) |
 | 让 Agent 在运行时修改自身 | [运行时自更新](references/runtime-self-update.md) |
 | Flow 作为 Agent 工具（含 interrupt/审批） | [Workflow as Tool](references/workflow-as-tool.md) |
-| 工具审批（shell/ssh/python/api/mcp 危险操作） | [工具审批](references/tool-approval.md) |
+| 工具审批（shell/ssh/python/api/mcp/browser 危险操作） | [工具审批](references/tool-approval.md) |
 
 ## 选择类型
 
@@ -65,7 +65,7 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
 |---|---|---|
 | 主链节点 | `start` / `end` / `llm` / `condition` / `intent_router` / `wait` 可用 | 同左，且 `start` / `end` / `llm` 各限一个 |
 | `card` / `loop` / `human` | 可用 | **不可用** |
-| 工具节点（`mcp` / `skill` / `memory` / `todo` / `python` / `shell` / `api` / `knowledge` / `sub_agent` / `agenda` / `ssh` / `question` / `flow_tool`） | 可用 | 可用 |
+| 工具节点（`mcp` / `skill` / `memory` / `todo` / `python` / `shell` / `api` / `knowledge` / `sub_agent` / `agenda` / `ssh` / `question` / `flow_tool` / `browser`） | 可用 | 可用 |
 
 `flow` 类型额外允许 `mcp` / `knowledge` / `api` / `python` 用 `default -> default` 作主干上的直接执行节点（`agent` 仅允许 `tools -> tools` 作 LLM 工具）。典型主链：`agent` 为 `start -> llm -> end`；`flow` 为 `start -> ... -> end` 任意 DAG。
 
@@ -210,7 +210,7 @@ LLM 节点开启 `json_output_enabled: true` 后绑定 `structured_output` 虚�
 
 ## 工具审批（Agent 模式）
 
-工具节点（shell / ssh / python / api / mcp）在执行危险操作前可触发用户审批。在 `base_config` 中配两个独立字段：
+工具节点（shell / ssh / python / api / mcp / browser）在执行危险操作前可触发用户审批。在 `base_config` 中配两个独立字段：
 
 - `approval_required_tools`：完整工具名白名单（与 connected-tools 返回的 `name` 完全一致，**不是 `node_key`**）
 - `approval_required_patterns`：对"内容字符串"做正则匹配，命中即触发

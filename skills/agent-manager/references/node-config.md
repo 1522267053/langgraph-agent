@@ -121,6 +121,7 @@ API 节点的请求体里嵌入上游变量：
 | `skill` / `memory` / `todo` | Agent 工具提供者 | `tools -> tools` |
 | `shell` / `sub_agent` / `agenda` | Agent 工具提供者 | `tools -> tools` |
 | `ssh` | Agent 工具提供者（远程命令与 SFTP） | `tools -> tools` |
+| `browser` | 浏览器自动化：Flow 主链单步动作 或 Agent 工具提供者（12 工具） | `default` 或 `tools` |
 | `question` | Agent 反问工具，LLM 调用 `ask_user_question` 时弹出结构化选项 | `tools -> tools` |
 
 `source_handle="tools"` 的边不加入 LangGraph 执行图。节点的「工具/直接执行」形态由**连线拓扑**决定：只有 tools 出边 = 纯工具节点（不进主图、无执行记录）；有 default 边 = 参与主干执行（有执行记录），两种形态可共存（见 [MCP 节点](#mcp-节点)）。
@@ -322,6 +323,40 @@ SSH 节点（`ssh`）是 Agent 专用工具提供者，仅支持工具边 `tools
 - 上传/下载/列目录之间没有会话保持，也互不知晓对方结果：传输前先用 `ssh_list_dir` 或 `ssh_executor ls <dir>` 确认远程路径真实存在。
 - 不支持目录递归传输；目标是目录时 `ssh_download` 会报 `is_directory` 错误。
 - 连接失败细分：认证错误为 `auth_failed`（检查用户名/凭据），超时为 `timeout`（调大 `connect_timeout` 重试），其余网络问题为 `connection_error`。
+
+## 浏览器工具
+
+浏览器节点（`browser`）基于 DrissionPage（CDP）实现浏览器自动化，双形态：Flow 模式作主链执行节点（`default -> default`，一个节点一个动作：start/navigate/click/input/get_content/snapshot/screenshot/scroll/wait_for/evaluate/close，参数经 `flow_args` 绑定）；Agent 模式经工具边提供 12 个工具（`browser_start` / `browser_snapshot` / `browser_navigate` / `browser_click` / `browser_input` / `browser_screenshot` / `browser_get_content` / `browser_evaluate` / `browser_tabs` / `browser_scroll` / `browser_wait_for` / `browser_close`）。同一 LLM 只能连接一个浏览器节点。
+
+```json
+{
+  "connect_mode": "launch",
+  "browser_path": "",
+  "user_data_path": "",
+  "headless": true,
+  "debug_port": 0,
+  "action_timeout": 30
+}
+```
+
+- `connect_mode=launch`（默认）每流程独立实例：`debug_port=0` 自动探测空闲端口；`user_data_path` 配置后按流程派生子目录持久化登录态（留空用临时目录，浏览器退出即清理）。
+- `connect_mode=remote` 连接远程主机已开调试端口的浏览器（`remote_host` + `remote_port`，默认 9222）；CDP 无认证，同地址多流程并发会互相干扰。
+- `headless=false` 弹出真实窗口，适合调试观察自动化过程。
+- 会话按 `flow_id` 缓存复用；空闲超过 600 秒自动回收（日志「浏览器会话空闲超时」），Agent 忘调 `browser_close` 也不会泄漏 Chromium 进程。
+
+### 工作循环与定位器规则
+
+标准工作循环 = `browser_snapshot`（提取可交互元素 + uid 编号，真 a11y 树）→ `browser_click` / `browser_input`（按 uid）→ `browser_snapshot` 确认。工具返回值带 `tab_id`，参数化的工具可传 `tab_id` 直达目标标签页（不传 = 当前活动标签页）。
+
+**定位器规则（重要）**：CSS 选择器必须加 `css:` 前缀（如 `css:h1`、`css:#b_results li.b_algo h2`）；按可见文本匹配用 `text:xxx`；裸写 `h1` / `#id` 会被 DrissionPage 误当文本/id 解释而失配。裸定位器会自动归一化兜底，但显式前缀最可靠。
+
+### 踩坑
+
+- `browser_click` 点 `target=_blank` 链接时新页在后台打开（当前页 URL 不变），工具会自动切换到新标签页并在返回值 `note` 说明，不要误判为点击无效。
+- `browser_wait_for` 是包含匹配（`text:xxx`），不是精确全文本匹配。
+- `browser_screenshot` 超时 30 秒返回 `error_type: "screenshot_timeout"`，成功返回含 `download_url`（前端渲染下载按钮）。
+- `browser_evaluate` 的脚本必须用 `return` 语句形态返回值（DrissionPage 4.x `run_js` 只认 return）。
+- 写操作（navigate/click/input/tabs/scroll）同流程串行（写锁），只读工具（snapshot/get_content/screenshot）可并行。
 
 ## 卡片
 

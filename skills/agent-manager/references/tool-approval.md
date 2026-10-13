@@ -16,6 +16,7 @@ Agent 模式下，工具节点在执行危险操作前可触发用户审批。�
 |---|---|---|
 | `shell` | ✅ | 已支持，shell_handler 历史实现 |
 | `ssh` | ✅ | 已支持，复刻 shell 模式 |
+| `browser` | ✅ | 12 工具统一走审批闭包；未配置白名单/正则时零开销 |
 | `python` | ✅ | 通用 + preset 两种模式都支持 |
 | `api` | ✅ | 通用 + preset 两种模式都支持 |
 | `mcp` | ✅ | 工具名依赖 server 连接过的缓存 |
@@ -50,6 +51,7 @@ needs_approval = (
 | Handler | content_for_pattern |
 |---|---|
 | `shell` / `ssh` | `command`（命令全文） |
+| `browser` | 按工具区分：navigate 传 `url`，click 传 `ref`，input 传 `text`（要输入的文本），evaluate 传 `script`，get_content 传 `selector`，wait_for 传 `text`；其余工具传空字符串 |
 | `python` 通用 / preset | `code`（代码全文） |
 | `api` 通用 / preset | `f"{method} {api_url} {body_text[:200]}"` |
 | `mcp` | `f"{tool_name} " + " ".join(str(v)[:200] for v in flat.values())` |
@@ -69,6 +71,7 @@ LLM 调用工具时使用的是 `name` 字段（不是节点的 `node_key`）。
 | `mcp` | — | `mcp__<server_name>__<tool_name>` | 下划线双段分隔（LangChain 标准） |
 | `shell` | — | `shell_executor_<node_key>` | — |
 | `ssh` | — | `ssh_executor_<node_key>` | — |
+| `browser` | — | `browser_<action>_<node_key>`（如 `browser_click_xxx`） | 12 个工具名固定 `browser_` 前缀 |
 
 > Python preset 工具名的 `python_executor_` 前缀容易漏写——必须从 connected-tools 复制，不要凭记忆。
 

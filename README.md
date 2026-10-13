@@ -40,6 +40,7 @@
 | **知识库** | 三层导航（文档→标题树→段落）+ AI 知识沉淀 + 向量/LIKE 回退 | RAG 知识库，多数据源，检索成熟 | 无内置 | 无内置 |
 | **人工交互** | LangGraph 原生 interrupt()，多轮交互，前端弹窗恢复 | 人工审核节点 | Wait for Input | 无 |
 | **MCP 集成** | 持久化会话 + 自愈重连 + 工具缓存 + DB 状态持久化 | 支持 | 工具函数调用 | 支持 |
+| **浏览器自动化** | DrissionPage（CDP）浏览器节点，snapshot ref 范式 + 空闲回收 + 登录态持久化 | 无内置 | 内置浏览器控制 | 无内置 |
 
 ### 核心优势
 
@@ -65,6 +66,7 @@ Dify 仅有短期对话记忆，DeerFlow 尚未实现分层记忆。本项目的
 - **知识库** — 三层导航 + AI 知识沉淀，渐进式文献浏览
 - **人工交互** — LangGraph 原生 `interrupt()` 实现 Human-in-the-loop
 - **MCP 集成** — 持久化会话、工具名前缀、自愈重连、工具缓存
+- **浏览器操作** — 基于 DrissionPage（CDP）的浏览器节点：页面导航、元素快照（a11y 树 + ref 编号）、点击/输入、截图、取内容，支持流程编排与 Agent 工具双形态
 - **Python 沙箱** — AST 级安全隔离，50+ 黑名单模块
 - **Skill 系统** — Markdown 技能文档，LLM 自主理解并执行
 - **流式推理** — 支持 DeepSeek thinking、Anthropic thinking 推理过程流式输出
@@ -215,11 +217,15 @@ langgraph-agent/
 │   ├── services/               # 业务逻辑层（BaseService 泛型 CRUD）
 │   ├── middleware/              # 全局异常处理器 + 认证中间件 + 安全头中间件
 │   ├── agent_flow/             # LangGraph 流程执行引擎
-│   │   ├── node_handlers/      #   节点处理器（20 种，自动注册）
+│   │   ├── node_handlers/      #   节点处理器（23 种，自动注册）
 │   │   │   ├── llm_*.py        #     LLM 节点模块化拆分（主入口 + factory + stream + message + executor）
 │   │   ├── tools/              #   LLM 工具实现（非自动扫描，显式导入）
 │   │   │   ├── common.py       #     文件类工具共享原语（路径校验/编码读取/大小上限）
 │   │   │   ├── file_read.py    #     file_read 工具（多模态注入 + xlsx/docx 转文本 + 分段读取）
+│   │   │   ├── browser_toolkit.py # 浏览器 12 工具 + 会话管理（DrissionPage CDP，snapshot ref 范式）
+│   │   │   ├── shell_toolkit.py   # Shell 5 工具 + 后台任务表（REST 与 Agent 共享）
+│   │   │   ├── ssh_toolkit.py     # SSH 5 工具（远程命令 + SFTP）
+│   │   │   ├── file_toolkit.py    # 文件 6 工具（per-file 锁 + 备份链路）
 │   │   │   └── structured_output.py # structured_output 工具（JSON 结构化输出，字段树动态模型）
 │   │   ├── ai_provider/        #   AI 模型提供商（OpenAI 兼容 / Anthropic 双适配器，按 adapter_type 分发）
 │   │   ├── flow_context.py     #   FlowState 状态定义 + reducer
@@ -261,7 +267,7 @@ langgraph-agent/
 
 | 模式 | 说明 | 允许的节点 |
 |------|------|-----------|
-| **Flow** | 可视化工作流编排，Start → End 完整流程 | 全部 20 种节点 |
+| **Flow** | 可视化工作流编排，Start → End 完整流程 | 全部 23 种节点 |
 | **Agent** | 对话式 AI 助手，单 LLM + 工具节点 | 排除 card/loop/human，memory 和 agenda 仅 Agent 可用 |
 
 ### 节点类型
@@ -288,6 +294,9 @@ langgraph-agent/
 | **sub_agent** | 子 Agent 调用，引用 Agent 作为子任务执行器 | Flow / Agent |
 | **question** | 问题反问，Agent 向用户抛出结构化选项（1-4 项 + Other 自填） | Flow / Agent |
 | **wait** | 延时等待，等待指定秒数后继续执行（宽限期/重试退避/节奏控制） | Flow / Agent |
+| **ssh** | SSH 远程执行（命令/SFTP 传文件），Agent 工具节点 | Flow / Agent |
+| **flow_tool** | Flow 工具，把普通 Flow 作为 Agent 工具调用（保留中断/审批） | Flow / Agent |
+| **browser** | 浏览器操作（DrissionPage/CDP）：Flow 单步动作 + Agent 12 工具集（snapshot ref 范式） | Flow / Agent |
 
 ### 变量引用
 

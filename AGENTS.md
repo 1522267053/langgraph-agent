@@ -167,11 +167,17 @@ npm run format                          # Prettier 格式化
 ### agent_flow/tools/ 目录（LLM 工具实现）
 - **定位**: 存放以 `StructuredTool` 形式提供给 LLM 的工具实现，handler 只负责注册与依赖注入；与 node_handlers 内拆分子模块（llm_*）不同——tools 是独立工具实体，handler 是图的编排单元
 - **不参与自动扫描**：`tools/` 不在 loader 三个扫描目录内，全部显式 import
-- **现有成员**: `common.py`（文件类工具共享原语：路径校验/编码读取/大小上限）、`file_read.py`（FileReadService：媒体多模态注入 + xlsx/docx 转文本 + 行/字符分段读取）、`structured_output.py`（StructuredOutputService：JSON 结构化输出虚拟工具，字段树递归构建 Pydantic 模型）
+- **现有成员**: `common.py`（文件类工具共享原语：路径校验/编码读取/大小上限）、`file_read.py`（FileReadService：媒体多模态注入 + xlsx/docx 转文本 + 行/字符分段读取）、`structured_output.py`（StructuredOutputService：JSON 结构化输出虚拟工具，字段树递归构建 Pydantic 模型）、`{shell,file,ssh,browser}_toolkit.py`（四节点工具集，见下）
 - **依赖方向（强制单向）**: `tools/* → app/utils/*`，`node_handlers/* → tools/*`，禁止反向或 tools 之间互引
 - **新工具入目录规则**: 一个工具一个文件；共享原语进 `common.py`；工具返回模型友好的 dict 协议（error/truncated_hint/media_type 等），不返回裸字符串
 - **编码探测**: `common.detect_and_read` 探测顺序 UTF-16 BOM（FF FE/FE FF，PowerShell 重定向产物）→ utf-8-sig → GBK；二进制拦截对带 UTF-16 BOM 的文本白名单放行
 - **Windows 子进程注意**: 工具内如需创建子进程，必须带 `_SUBPROCESS_WINDOW_FLAGS`（shell_handler.py 定义），否则 GUI/托盘宿主下每次调用弹出黑框
+
+### 四节点工具集（tools/*_toolkit.py）
+- shell（5 工具 + `_background_tasks` 后台任务表，REST API 与 Agent 共享）/ file（6 文件工具）/ ssh（5 工具）/ browser（12 工具 + `browser_session_manager` 会话单例，Flow 与 Agent 共享）
+- **两个模块级单例必须保持**：`_background_tasks`、`browser_session_manager`——REST API 直接 import，改名即断
+- **审批回调注入**：tools 禁止 import node_handlers，审批以 `approval_cb(tool_name, tool_args, content_for_pattern)` 回调注入（三节点统一闭包模式）；未配置白名单/正则时零开销
+- **浏览器节点（DrissionPage 4.1.1.4，CDP）**：双形态——Flow 主链单步动作（flow_action + flow_args）或 Agent 12 工具集；会话按 flow_id 缓存，空闲 600s 自动回收；launch 模式 `set_local_port(socket 探测)` + 显式数据目录（`auto_port()` 与 `set_user_data_path` 互斥）；`run_js` 只认 `return` 语句形态；`ele()` 裸字符串按 DP 自有语法解释（纯字符串=文本匹配、#开头=id），标准 CSS 必须带 `css:` 前缀（`_normalize_locator` 自动归一化兜底）；snapshot 走 CDP `Accessibility.getFullAXTree` 真 a11y 树，uid 锚定 `data-agent-ref` 属性
 
 ### 工具输出截断
 - 入口: `smart_truncate_output(result, prefix="tool_output")`，返回 JSON 字符串
