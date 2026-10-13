@@ -972,13 +972,32 @@ export default {
   white-space: nowrap;
 }
 
+/* 供应商分组头：视觉强化（用户经常漏看供应商），滚动时粘性置顶保持上下文 */
 .model-menu-group-label {
-  padding: 6px 10px 3px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--paper-ink-4);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--vermilion);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  background: var(--paper-card);
+}
+
+/* 组间分隔线（首个分组头不画，避免与标题重复） */
+.model-menu-group-label:not(:first-child)::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 10px;
+  right: 10px;
+  height: 1px;
+  background: var(--paper-line-soft);
 }
 
 .model-menu-item {
