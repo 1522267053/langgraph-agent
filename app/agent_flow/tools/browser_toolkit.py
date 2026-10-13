@@ -394,7 +394,20 @@ def _build_ax_snapshot(tab, max_nodes: int = 400) -> str:
 
 
 class _NoArgsInput(BaseModel):
-    """无参工具的空 schema（browser_start/close/snapshot）"""
+    """无参工具的空 schema（browser_close/snapshot）"""
+
+
+class StartInput(BaseModel):
+    """browser_start 输入"""
+
+    browser_path: Optional[str] = Field(
+        None,
+        description=(
+            "浏览器可执行文件路径（如 C:\\Program Files (x86)\\Microsoft\\Edge\\"
+            "Application\\msedge.exe）。不传=节点配置或自动探测 Chrome/Edge；"
+            "仅在首次启动浏览器时生效，会话已存在时忽略"
+        ),
+    )
 
 
 class NavigateInput(BaseModel):
@@ -1301,13 +1314,23 @@ class BrowserToolKit:
 
         # ---- browser_start ----
 
-        async def browser_start() -> str | dict:
-            approval = await _approval("browser_start", {}, "")
+        async def browser_start(browser_path: Optional[str] = None) -> str | dict:
+            approval = await _approval(
+                "browser_start", {"browser_path": browser_path or ""}, ""
+            )
             if approval not in (None, "approved"):
                 return {"error": f"用户未批准（{approval}）", "success": False}
             try:
+                # AI 探测到非默认浏览器时直接传 browser_path（如 Edge 路径）：
+                # 对节点配置副本覆写后建会话，不污染原 cfg；会话已存在时忽略
+                start_cfg = cfg
+                override = (browser_path or "").strip()
+                if override:
+                    start_cfg = cfg.model_copy(update={"browser_path": override})
                 # get_or_create 幂等：已存在直接复用（返回已就绪状态）
-                session = await _get_session()
+                session = await browser_session_manager.get_or_create(
+                    start_cfg, flow_id
+                )
 
                 def run():
                     tab = session.active_tab or session.browser.latest_tab
@@ -1353,9 +1376,11 @@ class BrowserToolKit:
                 name="browser_start",
                 description=(
                     "开启浏览器（每流程独立实例，幂等：已开启则直接复用）。"
-                    "操作浏览器的第一步；不调用直接用其他工具也会自动启动"
+                    "操作浏览器的第一步；不调用直接用其他工具也会自动启动。"
+                    "本机未装 Chrome 或自动探测失败时，可传 browser_path 指定"
+                    "浏览器可执行文件路径（如 Edge 的 msedge.exe）"
                 ),
-                args_schema=_NoArgsInput,
+                args_schema=StartInput,
                 func=None,
                 coroutine=browser_start,
             ),

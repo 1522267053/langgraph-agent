@@ -358,6 +358,8 @@ Flow 模式每个动作的参数 schema（`flow_args` 该填什么）**唯一事
 
 标准工作循环 = `browser_snapshot`（提取可交互元素 + uid 编号，真 a11y 树）→ `browser_click` / `browser_input`（按 uid）→ `browser_snapshot` 确认。工具返回值带 `tab_id`，参数化的工具可传 `tab_id` 直达目标标签页（不传 = 当前活动标签页）。
 
+`browser_start` 支持可选 `browser_path` 参数：自动探测失败或本机未装 Chrome 时，AI 可自行探测浏览器路径（如 Edge 的 `msedge.exe`）后传入启动；仅在首次建会话时生效，会话已存在时忽略（需先 `browser_close` 再 start）。
+
 **定位器规则（重要）**：CSS 选择器必须加 `css:` 前缀（如 `css:h1`、`css:#b_results li.b_algo h2`）；按可见文本匹配用 `text:xxx`；裸写 `h1` / `#id` 会被 DrissionPage 误当文本/id 解释而失配。裸定位器会自动归一化兜底，但显式前缀最可靠。
 
 ### 踩坑
