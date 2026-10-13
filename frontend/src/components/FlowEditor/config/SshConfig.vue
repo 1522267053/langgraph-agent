@@ -39,11 +39,11 @@ function ensureApprovalArrays(): void {
 }
 ensureApprovalArrays()
 
+// 审批白名单仅列有副作用的工具；ssh_list_dir 只读，无需审批（与 shell 节点 file_read 不列选项同惯例）
 const sshAvailableTools = [
   { label: 'ssh_executor', value: 'ssh_executor' },
   { label: 'ssh_upload', value: 'ssh_upload' },
-  { label: 'ssh_download', value: 'ssh_download' },
-  { label: 'ssh_list_dir', value: 'ssh_list_dir' }
+  { label: 'ssh_download', value: 'ssh_download' }
 ]
 
 function onApprovalUpdate(val: ApprovalConfig): void {
@@ -66,7 +66,12 @@ function onApprovalUpdate(val: ApprovalConfig): void {
           />
         </el-form-item>
         <el-form-item label="端口">
-          <el-input-number v-model="localConfig.port" :min="1" :max="65535" @change="updateConfig" />
+          <el-input-number
+            v-model="localConfig.port"
+            :min="1"
+            :max="65535"
+            @change="updateConfig"
+          />
         </el-form-item>
         <el-form-item label="用户名">
           <el-input v-model="localConfig.username" placeholder="登录用户名" @blur="updateConfig" />

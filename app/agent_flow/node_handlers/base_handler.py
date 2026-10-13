@@ -480,6 +480,8 @@ class BaseNodeHandler(ABC):
             approval_needed=[tool_name],
         )
         try:
+            if self._writer is None:
+                raise RuntimeError("StreamWriter 未注入，无法发送审批事件")
             self._writer(
                 ToolApprovalEvent(
                     node_key=node_key,

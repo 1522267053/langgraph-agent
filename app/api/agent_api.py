@@ -724,7 +724,7 @@ class AgentApi:
         )
         async def get_running_tools():
             """获取所有运行中和最近完成的后台 Shell 任务"""
-            from app.agent_flow.node_handlers.shell_handler import get_running_tasks
+            from app.agent_flow.tools.shell_toolkit import get_running_tasks
 
             return ApiResponse.success(data=get_running_tasks())
 
@@ -735,7 +735,7 @@ class AgentApi:
         )
         async def get_tool_status(task_id: str):
             """获取单个后台任务的详细状态和输出（任务不存在或已过期时 data 为 None）"""
-            from app.agent_flow.node_handlers.shell_handler import get_task_by_id
+            from app.agent_flow.tools.shell_toolkit import get_task_by_id
 
             return ApiResponse.success(data=get_task_by_id(task_id))
 
@@ -746,7 +746,7 @@ class AgentApi:
         )
         async def cancel_tool(task_id: str):
             """取消正在运行的后台 Shell 任务"""
-            from app.agent_flow.node_handlers.shell_handler import cancel_task_by_id
+            from app.agent_flow.tools.shell_toolkit import cancel_task_by_id
 
             result = await cancel_task_by_id(task_id)
             if result.get("success"):
