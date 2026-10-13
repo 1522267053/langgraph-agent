@@ -523,12 +523,16 @@ class BrowserSession:
         data_dir: Optional[Path],
         persistent: bool,
         flow_id: int = 0,
+        launch_cfg: Optional[dict] = None,
     ):
         self.browser = browser
         self.port = port
         self.data_dir = data_dir
         self.persistent = persistent  # True=用户配置的数据目录（quit 不删）；False=临时目录（quit 删）
         self.flow_id = flow_id
+        # 首建会话的启动配置快照（headless/debug_port/browser_path/user_data_path）：
+        # 同流程后续节点的同类配置不一致时告警（会话按 flow_id 复用，后到配置不生效）
+        self.launch_cfg: dict = launch_cfg or {}
         self.active_tab = None
         # 空闲回收基准：每次工具调用刷新（monotonic，不受系统时钟跳变影响）
         self.last_used = time.monotonic()
@@ -597,10 +601,37 @@ class BrowserSessionManager:
             session = self._sessions.get(flow_id)
             if session is not None:
                 session.last_used = time.monotonic()
+                self._warn_cfg_drift(session, cfg, flow_id)
                 return session
             session = await asyncio.to_thread(self._create_session_sync, cfg, flow_id)
             self._sessions[flow_id] = session
             return session
+
+    def get_existing(self, flow_id: int) -> Optional[BrowserSession]:
+        """取已存在会话（不创建、不刷新 last_used，供 close 动作判空）"""
+        return self._sessions.get(flow_id)
+
+    @staticmethod
+    def _warn_cfg_drift(session: BrowserSession, cfg, flow_id: int) -> None:
+        """后续节点启动类配置与会话首建配置不一致时告警（后到配置不生效）"""
+        if not session.launch_cfg:
+            return
+        current = {
+            "headless": bool(getattr(cfg, "headless", True)),
+            "debug_port": int(getattr(cfg, "debug_port", 0) or 0),
+            "browser_path": (getattr(cfg, "browser_path", "") or "").strip(),
+            "user_data_path": (getattr(cfg, "user_data_path", "") or "").strip(),
+        }
+        diff = [k for k, v in current.items() if v != session.launch_cfg.get(k)]
+        if diff:
+            logger.warning(
+                "浏览器节点配置与会话首建配置不一致（flow_id=%s，会话按 flow_id 复用，"
+                "本次配置不生效）: 字段=%s 首建=%s 当前节点=%s",
+                flow_id,
+                diff,
+                session.launch_cfg,
+                current,
+            )
 
     def _find_free_port(self) -> int:
         with socket.socket() as s:
@@ -660,6 +691,12 @@ class BrowserSessionManager:
             data_dir=data_dir,
             persistent=persistent,
             flow_id=flow_id,
+            launch_cfg={
+                "headless": bool(getattr(cfg, "headless", True)),
+                "debug_port": port,
+                "browser_path": (cfg.browser_path or "").strip(),
+                "user_data_path": (cfg.user_data_path or "").strip(),
+            },
         )
 
     async def release(self, flow_id: int) -> None:

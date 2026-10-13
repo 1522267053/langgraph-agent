@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import type { BrowserConfig } from './types'
 import { fieldTypeOptions } from './types'
 import { useConfigBase } from '@/composables/useConfigBase'
 import { useInputVariables } from '@/composables/useInputVariables'
+import { flowApi, type BrowserActionMeta, type BrowserActionParam } from '@/api/flow'
 import VariableSelector from '../components/VariableSelector.vue'
 import ApprovalConfigSection, { type ApprovalConfig } from './ApprovalConfigSection.vue'
 
@@ -62,85 +63,32 @@ function onApprovalUpdate(val: ApprovalConfig): void {
   updateConfig()
 }
 
-// ---- Flow 模式：选动作带出参数表单（MCP 直接执行同款交互）----
+// ---- Flow 模式：选动作带出参数表单（后端单源，MCP 同款动态拉取）----
 
-interface ActionParam {
-  name: string
-  type: string
-  description: string
-  required: boolean
+const browserActions = ref<BrowserActionMeta[]>([])
+
+/** 拉取失败时置空数组：参数表单不渲染、下拉退化仅显示 action 值，不会白屏 */
+async function fetchBrowserActions(): Promise<void> {
+  try {
+    const res = await flowApi.getBrowserActions()
+    if (res.data.code === 1 && Array.isArray(res.data.data)) {
+      browserActions.value = res.data.data
+    } else {
+      browserActions.value = []
+    }
+  } catch {
+    browserActions.value = []
+  }
 }
 
-// 与后端 BrowserNodeHandler.FLOW_ACTION_PARAMS 保持一致
-const ACTION_PARAMS: Record<string, ActionParam[]> = {
-  start: [],
-  close: [],
-  navigate: [{ name: 'url', type: 'string', description: '要访问的页面 URL', required: true }],
-  click: [
-    {
-      name: 'selector',
-      type: 'string',
-      description: '元素定位符：CSS 选择器或 DrissionPage 文本定位符（如 t:登录）',
-      required: true
-    }
-  ],
-  input: [
-    {
-      name: 'selector',
-      type: 'string',
-      description: '输入框定位符：CSS 选择器或文本定位符',
-      required: true
-    },
-    { name: 'text', type: 'string', description: '要输入的文本', required: true },
-    {
-      name: 'clear',
-      type: 'boolean',
-      description: '输入前是否清空已有内容（默认 true）',
-      required: false
-    }
-  ],
-  get_content: [
-    {
-      name: 'selector',
-      type: 'string',
-      description: '可选元素定位符，留空取整个页面文本',
-      required: false
-    }
-  ],
-  snapshot: [],
-  screenshot: [
-    {
-      name: 'full_page',
-      type: 'boolean',
-      description: '是否截取整个页面（默认 false 只截可视区域）',
-      required: false
-    }
-  ],
-  scroll: [
-    {
-      name: 'direction',
-      type: 'string',
-      description: '滚动方向: down（默认）/ up',
-      required: false
-    },
-    { name: 'amount', type: 'number', description: '滚动像素（默认 600）', required: false }
-  ],
-  wait_for: [
-    { name: 'text', type: 'string', description: '要等待出现的页面文本', required: true },
-    { name: 'timeout', type: 'number', description: '超时秒数（默认 10）', required: false }
-  ],
-  evaluate: [
-    {
-      name: 'script',
-      type: 'string',
-      description: '要执行的 JavaScript（用 return 返回值）',
-      required: true
-    }
-  ]
-}
+onMounted(fetchBrowserActions)
 
-const selectedActionParams = computed<ActionParam[]>(
-  () => ACTION_PARAMS[localConfig.value.flow_action] || []
+const currentActionMeta = computed<BrowserActionMeta | undefined>(() =>
+  browserActions.value.find(a => a.action === localConfig.value.flow_action)
+)
+
+const selectedActionParams = computed<BrowserActionParam[]>(
+  () => currentActionMeta.value?.params || []
 )
 
 /** 切换动作时重置参数绑定（保留同名参数旧值，MCP onToolNameChange 同款） */
@@ -234,14 +182,14 @@ function onActionChange(): void {
           <el-form-item label="浏览器路径">
             <el-input
               v-model="localConfig.browser_path"
-              placeholder="留空自动探测 Chrome/Edge；或填 chrome.exe 绝对路径"
+              placeholder="留空自动探测 Chrome/Edge；或填 chrome.exe 绝对路径，支持 {{path}} 变量"
               @blur="updateConfig"
             />
           </el-form-item>
           <el-form-item label="数据目录">
             <el-input
               v-model="localConfig.user_data_path"
-              placeholder="留空=临时目录（退出清理）；填写则登录态按流程持久化"
+              placeholder="留空=临时目录（退出清理）；填写则登录态按流程持久化，支持 {{变量}} 插值"
               @blur="updateConfig"
             />
           </el-form-item>
@@ -284,17 +232,7 @@ function onActionChange(): void {
               style="width: 100%"
               @change="onActionChange"
             >
-              <el-option label="开启浏览器 (start)" value="start" />
-              <el-option label="访问页面 (navigate)" value="navigate" />
-              <el-option label="点击元素 (click)" value="click" />
-              <el-option label="输入文本 (input)" value="input" />
-              <el-option label="获取页面文本 (get_content)" value="get_content" />
-              <el-option label="元素快照 (snapshot)" value="snapshot" />
-              <el-option label="页面截图 (screenshot)" value="screenshot" />
-              <el-option label="滚动页面 (scroll)" value="scroll" />
-              <el-option label="等待文本出现 (wait_for)" value="wait_for" />
-              <el-option label="执行 JS (evaluate)" value="evaluate" />
-              <el-option label="关闭浏览器 (close)" value="close" />
+              <el-option v-for="a in browserActions" :key="a.action" :label="a.label" :value="a.action" />
             </el-select>
           </el-form-item>
           <el-form-item
@@ -309,7 +247,7 @@ function onActionChange(): void {
                 :content="`[${param.type}] ${param.description}`"
                 placement="top"
               >
-                <el-icon class="param-tip-icon"><QuestionFilled /></el-icon>
+                <el-icon class="param-tip-icon" @click.prevent.stop><QuestionFilled /></el-icon>
               </el-tooltip>
             </template>
             <el-input

@@ -550,14 +550,22 @@ class FlowExecutorService(BaseExecutorService):
 
             # ---- 流程完成 ----
             is_interrupted = self._check_interrupted(execution_id, context.state)
+            has_node_errors = False
             async with AsyncSessionLocal() as db:
                 execution = await self.get_execution(db, execution_id)
                 if execution:
+                    # 节点级错误（state.errors 非空）→ 最终状态标 FAILED：
+                    # 引擎 fail-continue 不中断后续节点（画布仍可看到全部步骤），
+                    # 但执行列表不能把带错误的运行误报为「成功」
+                    has_node_errors = bool(context.state.errors)
                     if (
                         not is_interrupted
+                        and not has_node_errors
                         and execution.status != ExecutionStatus.CANCELLED.value
                     ):
                         execution.status = ExecutionStatus.SUCCESS.value
+                    if not is_interrupted and has_node_errors:
+                        execution.status = ExecutionStatus.FAILED.value
                     if not execution.end_time:
                         execution.end_time = datetime.now()
                     execution.output_data = context.state.output_data
@@ -573,7 +581,14 @@ class FlowExecutorService(BaseExecutorService):
 
             interrupt_service.clear_flow_interrupted(execution_id)
 
-            status = "cancelled" if is_interrupted else "success"
+            # 广播/收尾事件状态与 DB 状态一致：有节点错误 → failed（fail-continue
+            # 下后续节点仍已执行，仅最终状态不再误报成功）
+            if is_interrupted:
+                status = "cancelled"
+            elif has_node_errors:
+                status = "failed"
+            else:
+                status = "success"
             try:
                 from app.services.ws_manager import ws_manager
 

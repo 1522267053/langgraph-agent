@@ -62,6 +62,17 @@ class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
         """注册自定义路由"""
 
         @self.router.get(
+            "/browser-actions",
+            response_model=ApiResponse[list[dict]],
+            summary="获取浏览器节点 Flow 动作元数据",
+        )
+        async def get_browser_actions():
+            """浏览器 flow_action 列表 + 中文 label + 参数 schema（后端单源下发）"""
+            from app.agent_flow.node_handlers.browser_handler import BrowserNodeHandler
+
+            return ApiResponse.success(data=BrowserNodeHandler.get_action_meta())
+
+        @self.router.get(
             "/get/{id}/vue-flow",
             response_model=ApiResponse[VueFlowGraph],
             summary="获取Vue Flow格式数据",

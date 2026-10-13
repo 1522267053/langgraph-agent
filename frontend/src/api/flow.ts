@@ -29,6 +29,20 @@ export interface ConnectedToolNodeInput {
   base_config: Record<string, unknown>
 }
 
+/** 浏览器节点 Flow 动作元数据（GET /flow/browser-actions，后端单源下发） */
+export interface BrowserActionParam {
+  name: string
+  type: string
+  description: string
+  required: boolean
+}
+
+export interface BrowserActionMeta {
+  action: string
+  label: string
+  params: BrowserActionParam[]
+}
+
 export const flowApi = {
   page(params: PaginationParams<Flow>) {
     return request.post<ApiResponse<PaginatedResponse<Flow>>>('/flow/page', params)
@@ -99,6 +113,10 @@ export const flowApi = {
       `/flow/${flowId}/connected-tools/resolve`,
       nodes
     )
+  },
+
+  getBrowserActions() {
+    return request.get<ApiResponse<BrowserActionMeta[]>>('/flow/browser-actions')
   },
 
   // ---- 版本快照 ----

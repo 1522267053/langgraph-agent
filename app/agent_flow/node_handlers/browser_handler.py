@@ -20,7 +20,7 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
@@ -130,7 +130,8 @@ class BrowserNodeHandler(BaseNodeHandler):
             return None
         return None
 
-    # 各 flow_action 的参数 schema（供前端动态渲染参数表单，MCP parameters 同结构）
+    # 各 flow_action 的参数 schema（唯一事实源：前端经 GET /flow/browser-actions
+    # 动态拉取本表渲染参数表单，勿在前端再维护副本）
     FLOW_ACTION_PARAMS: dict[str, list[dict]] = {
         "start": [],
         "close": [],
@@ -223,7 +224,53 @@ class BrowserNodeHandler(BaseNodeHandler):
                 "required": True,
             }
         ],
+        "tabs": [
+            {
+                "name": "tab_action",
+                "type": "string",
+                "description": "标签页操作: new（新建并激活）/ list（列标签页）/ select（按 index 切换）/ close（关闭活动标签页）",
+                "required": True,
+            },
+            {
+                "name": "index",
+                "type": "number",
+                "description": "tab_action=select 时的目标标签页下标（0 起，来自 list 返回的 tab_id）",
+                "required": False,
+            },
+        ],
     }
+
+    # 各 flow_action 的中文 label（前端动作下拉展示文案，与参数表同源下发）
+    FLOW_ACTION_LABELS: dict[str, str] = {
+        "start": "开启浏览器 (start)",
+        "navigate": "访问页面 (navigate)",
+        "click": "点击元素 (click)",
+        "input": "输入文本 (input)",
+        "get_content": "获取页面文本 (get_content)",
+        "snapshot": "元素快照 (snapshot)",
+        "screenshot": "页面截图 (screenshot)",
+        "scroll": "滚动页面 (scroll)",
+        "wait_for": "等待文本出现 (wait_for)",
+        "evaluate": "执行 JS (evaluate)",
+        "tabs": "标签页管理 (tabs)",
+        "close": "关闭浏览器 (close)",
+    }
+
+    @classmethod
+    def get_action_meta(cls) -> list[dict]:
+        """合成动作元数据 [{action, label, params}]（纯静态，无 IO）
+
+        Flow 模式前端配置面板的单一事实源：GET /flow/browser-actions 下发，
+        前端渲染动作下拉 + 逐参数表单，与 MCP 节点 parameters 同构。
+        """
+        return [
+            {
+                "action": action,
+                "label": cls.FLOW_ACTION_LABELS.get(action, action),
+                "params": cls.FLOW_ACTION_PARAMS[action],
+            }
+            for action in cls.FLOW_ACTION_PARAMS
+        ]
 
     async def execute(
         self,
@@ -248,7 +295,7 @@ class BrowserNodeHandler(BaseNodeHandler):
             state.add_error(
                 node.node_key,
                 f"未知 flow_action: {action}（支持 start/navigate/click/input/"
-                "get_content/snapshot/screenshot/scroll/wait_for/evaluate/close）",
+                "get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/close）",
             )
             return state
 
@@ -257,7 +304,25 @@ class BrowserNodeHandler(BaseNodeHandler):
         args = self._resolver.resolve_config(cfg.flow_args or {}, state, context)
         args = args if isinstance(args, dict) else {}
 
-        def arg(name: str, default=""):
+        # 1.5 browser_path/user_data_path 同样支持 {{变量}} 插值（如浏览器路径
+        #     / 登录态目录来自上游节点输出）。对副本插值，不污染原配置对象；
+        #     会话已存在时插值结果不生效（复用按 flow_id，与首次创建一致）
+        resolved_cfg = cfg
+        raw_path = (cfg.browser_path or "").strip()
+        raw_data_dir = (cfg.user_data_path or "").strip()
+        if ("{{" in raw_path or "{{" in raw_data_dir) and action != "close":
+            resolved_cfg = cfg.model_copy(
+                update={
+                    "browser_path": self._resolver.render_template(
+                        raw_path, state, context
+                    ),
+                    "user_data_path": self._resolver.render_template(
+                        raw_data_dir, state, context
+                    ),
+                }
+            )
+
+        def arg(name: str, default: Any = "") -> Any:
             v = args.get(name, default)
             return default if v is None else v
 
@@ -273,20 +338,36 @@ class BrowserNodeHandler(BaseNodeHandler):
             )
             return state
 
-        # start/close 不需要提前建会话（close 可能无会话；start 在动作内建）
-        if action not in ("start", "close"):
-            try:
-                session = await browser_session_manager.get_or_create(cfg, flow_id)
-            except Exception as e:
-                state.add_error(node.node_key, f"浏览器启动/连接失败: {e}")
-                return state
+        # start 也必须真正建会话（get_or_create 是启动浏览器的唯一入口）：
+        # 否则 headless=false 的 start 节点不弹窗，实际以下一个节点（常为
+        # headless=true 默认值）的配置建会话——首建配置漂移。close 无会话时跳过。
+        session = None
+        try:
+            if action == "close":
+                session = browser_session_manager.get_existing(flow_id)
+                if session is None:
+                    result = {"note": "浏览器已关闭（无活动会话）"}
+                    output_names = self._resolve_output_var_names(node)
+                    state.set_node_variable(node.node_key, output_names[0], result)
+                    return state
+            else:
+                session = await browser_session_manager.get_or_create(
+                    resolved_cfg, flow_id
+                )
+        except Exception as e:
+            state.add_error(node.node_key, f"浏览器启动/连接失败: {e}")
+            return state
 
         def _run() -> dict:
             if action == "start":
-                return {"note": "浏览器已开启"}
+                return {
+                    "note": "浏览器已开启",
+                    "url": session.active_tab.url if session.active_tab else "",
+                }
             if action == "close":
                 return {"note": "浏览器已关闭"}
-
+            if session is None:
+                raise RuntimeError("浏览器实例没有初始化")
             tab = session.active_tab or session.browser.latest_tab
             session.active_tab = tab
             result: dict = {"url": tab.url, "title": tab.title}
@@ -295,6 +376,10 @@ class BrowserNodeHandler(BaseNodeHandler):
                 url = str(arg("url", "")).strip()
                 if not url:
                     raise ValueError("navigate 需要配置 url 参数")
+                # 宽容处理：裸域名（www.baidu.com）自动补 https://，否则
+                # DrissionPage 4.x 会直接报「无效的url」拒绝执行
+                if "://" not in url:
+                    url = f"https://{url}"
                 tab.get(url)
                 result.update(url=tab.url, title=tab.title, note=f"已访问 {tab.url}")
             elif action == "click":
@@ -359,10 +444,65 @@ class BrowserNodeHandler(BaseNodeHandler):
                 if "return" not in script:
                     script = f"return ({script})"
                 result["result"] = tab.run_js(script)
+            elif action == "tabs":
+                # 标签页管理（语义对齐 toolkit.browser_tabs）：new/list/select/close
+                # new/select 返回 tab_id 写入输出变量，下游节点可 {{nodes.key.result.tab_id}} 插值
+                tab_action = str(arg("tab_action", "list")).strip()
+                browser = session.browser
+
+                def _current_tab_id() -> int:
+                    tabs_now = browser.get_tabs()
+                    return next(
+                        (i for i, t in enumerate(tabs_now) if t is session.active_tab),
+                        -1,
+                    )
+
+                if tab_action == "new":
+                    new_tab = browser.new_tab()
+                    session.active_tab = new_tab
+                    result.update(
+                        tab_action="new",
+                        url=new_tab.url,
+                        tab_id=_current_tab_id(),
+                        note="新标签页已创建并激活",
+                    )
+                elif tab_action == "select":
+                    tabs_now = browser.get_tabs()
+                    idx = int(arg("index", 0))
+                    if not 0 <= idx < len(tabs_now):
+                        raise ValueError(
+                            f"标签页索引超出范围 0~{len(tabs_now) - 1}（可用 list 查看当前标签页）"
+                        )
+                    session.active_tab = tabs_now[idx]
+                    result.update(
+                        tab_action="select",
+                        tab_id=_current_tab_id(),
+                        url=tabs_now[idx].url,
+                        note=(
+                            "已切换标签页；元素定位符只对切换前页面有效，"
+                            "建议后续接 snapshot 重新获取"
+                        ),
+                    )
+                elif tab_action == "list":
+                    result.update(
+                        tab_action="list",
+                        tabs=[
+                            {"tab_id": i, "url": t.url, "title": t.title}
+                            for i, t in enumerate(browser.get_tabs())
+                        ],
+                    )
+                elif tab_action == "close":
+                    session.active_tab.close()
+                    session.active_tab = None
+                    result.update(tab_action="close", note="活动标签页已关闭")
+                else:
+                    raise ValueError(
+                        f"未知 tab_action: {tab_action}（支持 new/list/select/close）"
+                    )
             else:
                 raise ValueError(
                     f"未知 flow_action: {action}（支持 start/navigate/click/input/"
-                    "get_content/snapshot/screenshot/scroll/wait_for/evaluate/close）"
+                    "get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/close）"
                 )
             return result
 

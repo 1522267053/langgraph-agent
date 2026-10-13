@@ -344,6 +344,16 @@ SSH 节点（`ssh`）是 Agent 专用工具提供者，仅支持工具边 `tools
 - `headless=false` 弹出真实窗口，适合调试观察自动化过程。
 - 会话按 `flow_id` 缓存复用；空闲超过 600 秒自动回收（日志「浏览器会话空闲超时」），Agent 忘调 `browser_close` 也不会泄漏 Chromium 进程。
 
+### Flow 动作参数元数据（后端单源）
+
+Flow 模式每个动作的参数 schema（`flow_args` 该填什么）**唯一事实源在后端** `BrowserNodeHandler.FLOW_ACTION_PARAMS` + `FLOW_ACTION_LABELS`，经 `GET /api/flow/browser-actions` 下发 `[{action, label, params: [{name, type, description, required}]}]`。前端 `BrowserConfig.vue` 动态拉取渲染动作下拉与逐参数表单（拉取失败时退化为仅显示动作名，不渲染参数表单）。新增/修改动作参数只改后端一处，前端自动跟随；禁止在前端再维护参数副本。
+
+### Flow 多标签页（tabs 动作）与路径插值
+
+- Flow 动作集含 `tabs`：`tab_action` 必填（new 新建并激活 / list 列标签页 / select 按 index 切换 / close 关活动标签页），`index` 仅 select 时必传（来自 list 返回的 `tab_id`，0 起）。
+- **tab_id 流转**：tabs 的 new/select 结果带 `tab_id` 写入输出变量，下游节点用 `{{nodes.节点key.result.tab_id}}` 插值引用（如传给 JS 拼接、条件分支判断）；注意 `tab_id` 只在同一次运行内有效（关闭中间标签页后编号漂移），跨运行引用需先 `tabs(list)` 重新获取。
+- `browser_path` / `user_data_path` 支持 `{{变量}}` 插值（如上游节点输出浏览器路径），仅在**首次创建会话**时生效——会话按 `flow_id` 复用，后续节点插值结果不影响已存在实例。
+
 ### 工作循环与定位器规则
 
 标准工作循环 = `browser_snapshot`（提取可交互元素 + uid 编号，真 a11y 树）→ `browser_click` / `browser_input`（按 uid）→ `browser_snapshot` 确认。工具返回值带 `tab_id`，参数化的工具可传 `tab_id` 直达目标标签页（不传 = 当前活动标签页）。
