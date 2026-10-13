@@ -506,7 +506,7 @@ watch(
             >
               {{ getTierLabel(item.memory.memory_type) }}
             </el-tag>
-            <span class="memory-title">{{ item.memory.title }}</span>
+            <span class="memory-title" :title="item.memory.title">{{ item.memory.title }}</span>
             <span v-if="item.score > 0" class="score-badge">
               {{ (item.score * 100).toFixed(0) }}%
             </span>
