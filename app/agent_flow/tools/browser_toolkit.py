@@ -48,6 +48,42 @@ _ELE_FIND_TIMEOUT = 3
 # 防 Chromium 进程泄漏（Agent 忘调 close 时兜底）
 _BROWSER_IDLE_TIMEOUT = 600
 
+
+def _normalize_locator(sel: str) -> str:
+    """裸定位器归一化：像 CSS/XPath 的自动加 DrissionPage 前缀。
+
+    DrissionPage ele() 对裸字符串按自有语法解释：纯字符串=文本匹配、
+    # 开头=id 定位，导致 get_content/click/input 传标准 CSS 选择器
+    （如 h1、#b_results li.b_algo h2）静默失配。已带前缀或明显的
+    文本/id 定位器则原样返回。
+    """
+    s = sel.strip()
+    if not s:
+        return s
+    # 已是 DrissionPage 显式语法（css:/xpath:/text:/t:/@/#/tag: 等）→ 不动
+    if ":" in s:
+        head = s.split(":", 1)[0]
+        if head in ("css", "xpath", "text", "t", "tag", "text:", "@") or head in (
+            "id",
+            "class",
+        ):
+            return s
+    # XPath：/ 或 // 或 ( 开头
+    if s.startswith(("/", "(")):
+        return f"xpath:{s}"
+    # CSS：.class、tag[attr]、tag.class、tag#id、*、伪类等特征
+    if s.startswith((".", "*")) or ("[" in s and "]" in s) or " " in s:
+        return f"css:{s}"
+    # tag#id / tag.class（无空格单标签）
+    if "#" in s or "." in s:
+        return f"css:{s}"
+    # 纯 ASCII 单词（h1、button、li）：DP 会按文本匹配，语义歧义 → 按 CSS 标签处理。
+    # 注意 isidentifier() 对中文也返回 True，须限定 ASCII，否则破坏文本匹配
+    if s.isascii() and s.isidentifier():
+        return f"css:{s}"
+    return s
+
+
 # snapshot 提取 JS：必须用 return 语句形态（DrissionPage 4.x run_js 只认 return）
 _SNAPSHOT_JS = f"""
 var out = [];
@@ -275,7 +311,10 @@ def _build_ax_snapshot(tab, max_nodes: int = 400) -> str:
                 ref_to_backend[uid] = node.get("backendDOMNodeId")
 
             indent = "  " * depth
-            parts = [f"uid={uid}" if uid is not None else None, "ignored" if role == "none" else role]
+            parts = [
+                f"uid={uid}" if uid is not None else None,
+                "ignored" if role == "none" else role,
+            ]
             if name:
                 text = str(name).strip()
                 if len(text) > _SNAPSHOT_TEXT_MAX:
@@ -375,7 +414,11 @@ class RefInput(BaseModel):
     """browser_click 输入"""
 
     ref: str = Field(
-        ..., description="browser_snapshot 返回的元素 uid 编号，或 CSS/文本定位符"
+        ...,
+        description=(
+            "browser_snapshot 返回的元素 uid 编号（优先），或定位符：CSS 选择器须加 css: 前缀"
+            "（如 css:button.submit），文本匹配用 text:xxx；裸写 h1/#id 会失配"
+        ),
     )
     tab_id: Optional[int] = Field(
         None,
@@ -387,7 +430,11 @@ class InputInput(BaseModel):
     """browser_input 输入"""
 
     ref: str = Field(
-        ..., description="browser_snapshot 返回的输入框 uid 编号，或 CSS/文本定位符"
+        ...,
+        description=(
+            "browser_snapshot 返回的输入框 uid 编号（优先），或定位符：CSS 选择器须加 css: 前缀"
+            "（如 css:#kw），文本匹配用 text:xxx；裸写 h1/#id 会失配"
+        ),
     )
     text: str = Field(..., description="要输入的文本")
     clear: bool = Field(True, description="输入前是否清空已有内容，默认清空")
@@ -410,7 +457,14 @@ class ScreenshotInput(BaseModel):
 class GetContentInput(BaseModel):
     """browser_get_content 输入"""
 
-    selector: str = Field("", description="可选 CSS/文本定位器，留空取整个 body 文本")
+    selector: str = Field(
+        "",
+        description=(
+            "可选元素定位器，留空取整个 body 文本。规则：CSS 选择器必须加 css: 前缀"
+            "（如 css:h1、css:#b_results li.b_algo h2）；按可见文本匹配用 text:xxx；"
+            "裸写 h1/#id 会被误当文本/id 解释而失配"
+        ),
+    )
     tab_id: Optional[int] = Field(
         None,
         description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
@@ -601,7 +655,11 @@ class BrowserSessionManager:
         )
         browser = Chromium(co)
         return BrowserSession(
-            browser, port=port, data_dir=data_dir, persistent=persistent, flow_id=flow_id
+            browser,
+            port=port,
+            data_dir=data_dir,
+            persistent=persistent,
+            flow_id=flow_id,
         )
 
     async def release(self, flow_id: int) -> None:
@@ -706,9 +764,7 @@ class BrowserToolKit:
                 def _tab_id() -> dict:
                     tabs = session.browser.get_tabs()
                     current = session.active_tab
-                    index = next(
-                        (i for i, t in enumerate(tabs) if t is current), -1
-                    )
+                    index = next((i for i, t in enumerate(tabs) if t is current), -1)
                     return {
                         "tab_id": index,
                         "tab_count": len(tabs),
@@ -823,7 +879,9 @@ class BrowserToolKit:
                         if ok != "clicked":
                             return {"error": str(ok), "success": False}
                     else:
-                        ele = tab.ele(raw, timeout=_ELE_FIND_TIMEOUT)
+                        ele = tab.ele(
+                            _normalize_locator(raw), timeout=_ELE_FIND_TIMEOUT
+                        )
                         if not ele:
                             return {"error": f"未找到元素: {raw}", "success": False}
                         ele.click()
@@ -902,7 +960,9 @@ class BrowserToolKit:
                             tab.actions.key_down("Backspace").key_up("Backspace")
                         tab.actions.type(text)
                     else:
-                        ele = tab.ele(raw, timeout=_ELE_FIND_TIMEOUT)
+                        ele = tab.ele(
+                            _normalize_locator(raw), timeout=_ELE_FIND_TIMEOUT
+                        )
                         if not ele:
                             return {"error": f"未找到元素: {raw}", "success": False}
                         ele.clear() if clear else None
@@ -925,7 +985,7 @@ class BrowserToolKit:
             full_page: bool = False, tab_id: Optional[int] = None
         ) -> str | dict:
             approval = await _approval(
-                "browser_screenshot", {"full_page": full_page, "tab_id": tab_id},""
+                "browser_screenshot", {"full_page": full_page, "tab_id": tab_id}, ""
             )
             if approval not in (None, "approved"):
                 return {"error": f"用户未批准（{approval}）", "success": False}
@@ -985,7 +1045,8 @@ class BrowserToolKit:
             selector: str = "", tab_id: Optional[int] = None
         ) -> str | dict:
             approval = await _approval(
-                "browser_get_content", {"selector": selector, "tab_id": tab_id},
+                "browser_get_content",
+                {"selector": selector, "tab_id": tab_id},
                 selector,
             )
             if approval not in (None, "approved"):
@@ -1001,12 +1062,19 @@ class BrowserToolKit:
                             "success": False,
                         }
                     session.active_tab = tab
-                    sel = selector.strip()
+                    sel = _normalize_locator(selector)
                     if sel:
-                        ele = tab.ele(sel)
+                        ele = tab.ele(sel, timeout=_ELE_FIND_TIMEOUT)
+                        if not ele:
+                            return {
+                                "success": False,
+                                "content": "",
+                                "error": f"未找到元素: {selector}",
+                                "tab_id": _current_tab_id(session),
+                            }
                         return {
                             "success": True,
-                            "content": (ele.text if ele else ""),
+                            "content": ele.text,
                             "url": tab.url,
                             "tab_id": _current_tab_id(session),
                         }
@@ -1060,7 +1128,7 @@ class BrowserToolKit:
 
         async def browser_tabs(action: str = "list", index: int = 0) -> str | dict:
             approval = await _approval(
-                "browser_tabs", {"action": action, "index": index},""
+                "browser_tabs", {"action": action, "index": index}, ""
             )
             if approval not in (None, "approved"):
                 return {"error": f"用户未批准（{approval}）", "success": False}
@@ -1120,7 +1188,7 @@ class BrowserToolKit:
             tab_id: Optional[int] = None,
         ) -> str | dict:
             approval = await _approval(
-                "browser_scroll", {"direction": direction, "tab_id": tab_id},""
+                "browser_scroll", {"direction": direction, "tab_id": tab_id}, ""
             )
             if approval not in (None, "approved"):
                 return {"error": f"用户未批准（{approval}）", "success": False}
@@ -1197,7 +1265,7 @@ class BrowserToolKit:
         # ---- browser_start ----
 
         async def browser_start() -> str | dict:
-            approval = await _approval("browser_start", {},"")
+            approval = await _approval("browser_start", {}, "")
             if approval not in (None, "approved"):
                 return {"error": f"用户未批准（{approval}）", "success": False}
             try:
@@ -1227,7 +1295,7 @@ class BrowserToolKit:
         # ---- browser_close ----
 
         async def browser_close() -> str | dict:
-            approval = await _approval("browser_close", {},"")
+            approval = await _approval("browser_close", {}, "")
             if approval not in (None, "approved"):
                 return {"error": f"用户未批准（{approval}）", "success": False}
             try:

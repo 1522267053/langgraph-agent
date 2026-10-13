@@ -38,6 +38,8 @@ from app.agent_flow.node_handlers.base_handler import (
 from app.agent_flow.tools.browser_toolkit import (
     SNAPSHOT_JSON_JS,
     BrowserToolKit,
+    _ELE_FIND_TIMEOUT,
+    _normalize_locator,
     browser_session_manager,
     get_flow_id,
 )
@@ -299,7 +301,7 @@ class BrowserNodeHandler(BaseNodeHandler):
                 sel = str(arg("selector", "")).strip()
                 if not sel:
                     raise ValueError("click 需要配置 selector 参数")
-                ele = tab.ele(sel)
+                ele = tab.ele(_normalize_locator(sel), timeout=_ELE_FIND_TIMEOUT)
                 if not ele:
                     raise ValueError(f"未找到元素: {sel}")
                 ele.click()
@@ -308,7 +310,7 @@ class BrowserNodeHandler(BaseNodeHandler):
                 sel = str(arg("selector", "")).strip()
                 if not sel:
                     raise ValueError("input 需要配置 selector 参数")
-                ele = tab.ele(sel)
+                ele = tab.ele(_normalize_locator(sel), timeout=_ELE_FIND_TIMEOUT)
                 if not ele:
                     raise ValueError(f"未找到元素: {sel}")
                 text = str(arg("text", ""))
@@ -317,10 +319,10 @@ class BrowserNodeHandler(BaseNodeHandler):
                 ele.input(text)
                 result["note"] = f"已向 {sel} 输入文本"
             elif action == "get_content":
-                sel = str(arg("selector", "")).strip()
+                sel = _normalize_locator(str(arg("selector", "")))
                 content = (
                     ele.text
-                    if sel and (ele := tab.ele(sel))
+                    if sel and (ele := tab.ele(sel, timeout=_ELE_FIND_TIMEOUT))
                     else tab.ele("t:body").text
                 )
                 result["content"] = content
