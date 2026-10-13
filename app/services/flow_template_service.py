@@ -98,7 +98,8 @@ _SYSTEM_PROMPT_FULL_AGENT = (
     "- 记忆管理：存储和检索长期记忆\n"
     "- 任务计划：创建和管理待办任务\n"
     "- 日程管理：管理日程安排\n"
-    "- 子Agent：委派任务给其他智能体\n\n"
+    "- 子Agent：委派任务给其他智能体\n"
+    "- 浏览器：通过 CDP 操作浏览器（导航、点击、输入、截图），适合网页读取与操作\n\n"
     "请根据用户需求选择最合适的工具完成任务。请用中文回复。"
 )
 
@@ -681,7 +682,7 @@ _register(
         id="full_agent",
         name="全能助手",
         description="集成全部工具能力的对话智能体：知识库、Python、Shell、SSH、API、MCP、"
-        "技能、记忆、任务计划、日程、子Agent"
+        "技能、记忆、任务计划、日程、子Agent、浏览器、问题反问"
         "（mcp/skill/sub_agent/ssh 需创建后配置引用）",
         flow_type="agent",
         nodes=[
@@ -813,6 +814,18 @@ _register(
                 base_config={"auth_type": "password", "command_timeout": 300},
             ),
             TemplateNode(
+                node_type="browser",
+                node_key="browser",
+                node_name="浏览器",
+                position_x=350,
+                position_y=-200,
+                base_config={
+                    "connect_mode": "launch",
+                    "headless": True,
+                    "action_timeout": 30,
+                },
+            ),
+            TemplateNode(
                 node_type="question",
                 node_key="question",
                 node_name="问题反问",
@@ -907,6 +920,12 @@ _register(
             ),
             TemplateEdge(
                 source_node_key="ssh",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="browser",
                 target_node_key="llm",
                 source_handle="tools",
                 target_handle="tools",
@@ -1096,6 +1115,18 @@ _register(
                 position_x=1250,
                 position_y=-150,
                 base_config={"agent_id": 0},
+            ),
+            TemplateNode(
+                node_type="browser",
+                node_key="browser",
+                node_name="浏览器",
+                position_x=850,
+                position_y=-250,
+                base_config={
+                    "connect_mode": "launch",
+                    "headless": True,
+                    "action_timeout": 30,
+                },
             ),
             # ---- 数据处理分支 ----
             TemplateNode(
@@ -1328,6 +1359,12 @@ _register(
             ),
             TemplateEdge(
                 source_node_key="sub_agent",
+                target_node_key="llm",
+                source_handle="tools",
+                target_handle="tools",
+            ),
+            TemplateEdge(
+                source_node_key="browser",
                 target_node_key="llm",
                 source_handle="tools",
                 target_handle="tools",

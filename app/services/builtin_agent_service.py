@@ -225,6 +225,7 @@ class BuiltinAgentTemplate:
         ("mcp_tool", NodeType.MCP.value, "MCP 工具", 700, 600),
         ("sub_agent_tool", NodeType.SUB_AGENT.value, "子 Agent", 900, 600),
         ("question_tool", NodeType.QUESTION.value, "问题反问", 100, 750),
+        ("browser_tool", NodeType.BROWSER.value, "浏览器", 300, 750),
     )
 
     @classmethod
