@@ -24,6 +24,7 @@ from langgraph.types import Command
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent_flow.node_handlers.llm_tool_handler import LLM_MAX_TOKENS
 from app.models.flow import Flow, FlowType
 from app.models.flow_node import NodeType
 from app.models.agent_session import AgentSession
@@ -1278,9 +1279,17 @@ class AgentExecutorService(BaseExecutorService):
             logger.warning(f"清理checkpoint失败: {e}")
 
     async def delete_session(self, db: AsyncSession, session_id: int) -> bool:
+        """软删会话及其消息、checkpoint、文件变更备份。
+
+        会话正在运行（执行/等待人工输入/压缩上下文/补存消息）时抛 ValueError，
+        拦截发生在任何 DB 写入之前，避免删除后后台 run 继续回填消息形成幽灵会话。
+        """
         session = await self._get_session(db, session_id)
         if not session:
             return False
+        busy_reason = self.get_session_busy_reason(session_id)
+        if busy_reason:
+            raise ValueError(busy_reason)
         session.is_delete = 1
         await db.execute(
             update(AgentMessage)
@@ -1299,6 +1308,24 @@ class AgentExecutorService(BaseExecutorService):
         await agent_file_change_service.delete_session_changes(db, session_id)
 
         return True
+
+    async def delete_sessions(
+        self, db: AsyncSession, session_ids: list[int]
+    ) -> tuple[int, list[int]]:
+        """批量删除会话（软删），返回 (实际删除数量, 因运行中被跳过的会话ID)
+
+        单项忙碌只跳过该项而不中断整批：批量删除是顺手清理场景，
+        不应因一个正在执行的会话导致其余会话都删不掉。
+        """
+        deleted = 0
+        skipped: list[int] = []
+        for session_id in session_ids:
+            if self.get_session_busy_reason(session_id):
+                skipped.append(session_id)
+                continue
+            if await self.delete_session(db, session_id):
+                deleted += 1
+        return deleted, skipped
 
     async def delete_messages_from(
         self,
@@ -2538,6 +2565,28 @@ class AgentExecutorService(BaseExecutorService):
         """检查指定会话是否正在执行（用于刷新后前端检测并显示停止按钮）"""
         return bool(self.get_run_status(session_id)["running"])
 
+    def get_session_busy_reason(self, session_id: int) -> Optional[str]:
+        """返回会话忙碌原因（可直接展示给用户）；空闲返回 None。
+
+        纯内存查询，零 IO 成本。覆盖全部「后台任务仍持有该会话」的形态：
+        执行中 / 托管 run 未结束 / 等待人工输入（审批、反问）/ 压缩上下文中 /
+        取消后补存消息中。任一形态下删除都会让后台任务继续回填已软删会话，
+        形成幽灵会话，故统一拦截。
+        """
+        self._prune_agent_runs()
+        if session_id in self._compressing_sessions:
+            return "会话正在压缩上下文，请稍后再删除"
+        if session_id in self._running_sessions:
+            return "会话正在执行中，请先停止后再删除"
+        if session_id in self._waiting_sessions:
+            return "会话正在等待人工输入，请先停止后再删除"
+        if session_id in self._pending_save_sessions:
+            return "会话正在保存消息，请稍后再删除"
+        run = self._agent_runs.get(session_id)
+        if run and not run.done:
+            return "会话正在执行中，请先停止后再删除"
+        return None
+
     async def _run_compress_background(
         self, session_id: int, custom_prompt: str = ""
     ) -> None:
@@ -2725,7 +2774,7 @@ class AgentExecutorService(BaseExecutorService):
             llm = provider.create_chat_model(
                 model=llm_config.get("model", ""),
                 temperature=0.3,
-                max_tokens=llm_config.get("max_tokens") or 8192,
+                max_tokens=llm_config.get("max_tokens") or LLM_MAX_TOKENS,
             )
             summary_prompt = (
                 "你是对话上下文压缩助手。请将以下对话历史压缩为结构化摘要，"
@@ -2946,9 +2995,10 @@ class AgentExecutorService(BaseExecutorService):
                     "api_key": config.get("api_key", ""),
                     "base_url": config.get("base_url", ""),
                     "context_length": config.get("context_length", 0) or 0,
-                    # 与对话链路同源（llm_factory：node_config.get("max_tokens", 8192)）；
+                    # 与对话链路同源（llm_factory：node_config.get("max_tokens", LLM_MAX_TOKENS)）；
                     # 0/None 视为未配置回退默认
-                    "max_tokens": config.get("max_tokens", 8192) or 8192,
+                    "max_tokens": config.get("max_tokens", LLM_MAX_TOKENS)
+                    or LLM_MAX_TOKENS,
                 }
         return {}
 

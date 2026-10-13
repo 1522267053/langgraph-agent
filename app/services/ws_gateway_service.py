@@ -410,21 +410,29 @@ class WsGatewayService(
 
     async def delete_session_by_token(
         self, db: AsyncSession, token: str, session_id: int
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, str]:
         """通过 token 删除会话（含消息和 checkpoint）
 
+        忙碌判定放在归属校验之后：避免持有 token 的调用方用任意 session_id
+        探测会话运行状态。
+
         Returns:
-            (success, msg)：(False, "网关不存在") / (False, "会话不存在或不属于该网关") / (True, "")
+            (success, msg, error_code)：
+                (False, "网关不存在", "") / (False, "会话不存在或不属于该网关", "")
+                / (False, 忙碌原因, "SESSION_BUSY") / (True, "", "")
         """
         from app.services.agent_executor_service import agent_executor_service
 
         gateway, session = await self.get_session_by_token(db, token, session_id)
         if not gateway:
-            return False, "网关不存在"
+            return False, "网关不存在", ""
         if not session:
-            return False, "会话不存在或不属于该网关"
-        await agent_executor_service.delete_session(db, session_id)
-        return True, ""
+            return False, "会话不存在或不属于该网关", ""
+        try:
+            await agent_executor_service.delete_session(db, session_id)
+        except ValueError as exc:
+            return False, str(exc), "SESSION_BUSY"
+        return True, "", ""
 
     async def get_session_messages_by_token(
         self,

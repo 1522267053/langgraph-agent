@@ -37,6 +37,13 @@ from app.agent_flow.tool_resolver import (
     get_connected_tool_edges,
 )
 from app.agent_flow.tools.structured_output import StructuredOutputService
+from app.agent_flow.tools.whoami import create_whoami_tool
+from app.constants.llm_constants import (
+    DOOM_LOOP_THRESHOLD as _DOOM_LOOP_THRESHOLD,
+    HINT_PRIORITY as _HINT_PRIORITY,
+    PLAN_DISABLED_TOOL_PREFIXES as _PLAN_DISABLED_TOOL_NAMES,
+    REQUEST_HUMAN_HELP_TOOL as _REQUEST_HUMAN_HELP,
+)
 from app.config.build_utils import get_agent_work_dir
 from app.models.flow import FlowType
 from app.models.flow_node import FlowNode
@@ -51,40 +58,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 人工协助工具名（LLM 通过此工具名触发 interrupt）
-_REQUEST_HUMAN_HELP = "request_human_help"
-
-# 计划模式下禁用的工具名前缀（写操作 / 有副作用；python_executor 与 call_sub_agent_
-# 的实际注册名带动态后缀 _{node_key}，统一按前缀匹配）
-# 注：2026-09-13 起 file_write 单独放开（仅用于让 AI 写入脚本骨架文件，
-# 解决多行命令硬拒绝后无法创建 .py 临时文件的死锁问题）；text_editor /
-# file_delete 仍保持禁用，避免计划阶段对现有业务代码做局部改写 / 删除。
-_PLAN_DISABLED_TOOL_NAMES = (
-    "python_executor",
-    "text_editor",
-    "file_delete",
-    "call_sub_agent_",
-)
-
 
 def _is_plan_disabled_tool(tool_name: str) -> bool:
     """判断工具是否为计划模式禁用工具（前缀匹配，覆盖动态名后缀）"""
     return any(tool_name.startswith(prefix) for prefix in _PLAN_DISABLED_TOOL_NAMES)
-
-
-# system_prompt hint 优先级：值越小越靠前，静态内容放前面有利于 LLM 缓存命中
-_HINT_PRIORITY: dict[str, int] = {
-    "todo": 0,
-    "human": 0,
-    "knowledge": 1,
-    "shell": 1,
-    "agenda": 1,
-    "ssh": 1,
-    "memory": 2,
-}
-
-# doom loop 检测：相同工具+相同参数重复调用次数上限，超过则跳过执行
-_DOOM_LOOP_THRESHOLD = 3
 
 
 @dataclass
@@ -342,6 +319,15 @@ async def setup_tool_handlers(
             for tool_def in ws_conn.registered_tools:
                 if isinstance(tool_def, dict) and tool_def.get("name"):
                     tools.append(create_remote_tool(tool_def, ws_conn))
+
+    # whoami 自我认知工具：仅系统内置 AI 助手（flow.is_builtin=1）注入。
+    # 静默注入不依赖节点存在，故不进入 connected-tools（工具列表以运行时为准）
+    if (
+        flow_type == FlowType.AGENT.value
+        and flow_id is not None
+        and getattr(flow, "is_builtin", 0) == 1
+    ):
+        tools.append(create_whoami_tool(flow, session_id))
 
     # 去重：同名工具只保留第一个（子 Agent 等节点可能产生重复的通用工具）
     seen_names = set()

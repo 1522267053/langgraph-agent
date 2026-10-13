@@ -59,6 +59,11 @@ from app.agent_flow.node_handlers.base_handler import (
 )
 from app.agent_flow.node_handlers.knowledge_handler import KNOWLEDGE_CITATION_PROMPT
 from app.agent_flow.message_buffer import MessageBuffer
+from app.constants.llm_constants import (
+    COMPRESS_THRESHOLD_RATIO,
+    LLM_MAX_TOKENS,
+    MAX_REACT_COMPRESSIONS as _MAX_REACT_COMPRESSIONS,
+)
 from app.utils.message_utils import extract_token_usage
 from app.utils.knowledge_reference import (
     KNOWLEDGE_CITATIONS_KEY,
@@ -75,7 +80,6 @@ from app.agent_flow.node_handlers.llm_message_builder import (
 )
 from app.agent_flow.node_handlers.llm_stream import stream_llm_response
 from app.agent_flow.node_handlers.llm_tool_executor import (
-    _PLAN_DISABLED_TOOL_NAMES,
     _is_plan_disabled_tool,
     handle_tool_calls,
     setup_tool_handlers,
@@ -85,15 +89,12 @@ from app.agent_flow.tools.structured_output import (
     OUTPUT_TOOL_NAME,
     StructuredOutputService,
 )
+from app.constants.llm_constants import PLAN_DISABLED_TOOL_PREFIXES
 
 if TYPE_CHECKING:
     from app.agent_flow.tool_resolver import FlowLike
 
 logger = logging.getLogger(__name__)
-
-# 自动压缩阈值比例：已用 token 超过 context_length 的此比例时触发压缩
-COMPRESS_THRESHOLD_RATIO = 0.83
-_MAX_REACT_COMPRESSIONS = 3
 
 
 def _build_mode_prompt(
@@ -109,13 +110,13 @@ def _build_mode_prompt(
 
     工具名相关的硬编码（shell_executor / todowrite）一律按实际工具集条件渲染。
     """
-    # 按 _is_plan_disabled_tool 的前缀匹配逻辑反向：从 _PLAN_DISABLED_TOOL_NAMES
+    # 按 _is_plan_disabled_tool 的前缀匹配逻辑反向：从 PLAN_DISABLED_TOOL_PREFIXES
     # 中筛出"实际存在于 tools 列表"的项
     available_tool_names = {t.name for t in (tools or [])}
     has_tools = bool(available_tool_names)
     actually_disabled = [
         name
-        for name in _PLAN_DISABLED_TOOL_NAMES
+        for name in PLAN_DISABLED_TOOL_PREFIXES
         if any(
             tool_name == name or tool_name.startswith(name)
             for tool_name in available_tool_names
@@ -293,7 +294,7 @@ class LlmNodeConfig(BaseNodeConfig):
         default="", description="API 地址（为空则使用供应商默认地址）"
     )
     temperature: float = Field(default=0.7, description="温度参数（0-2），越高越随机")
-    max_tokens: int = Field(default=8192, description="最大生成 token 数")
+    max_tokens: int = Field(default=LLM_MAX_TOKENS, description="最大生成 token 数")
     max_tool_iterations: int = Field(default=200, description="最大工具调用轮次")
     history_mode: str = Field(
         default="node",

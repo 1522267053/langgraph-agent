@@ -79,7 +79,7 @@ const reasoningEffortTip = computed(() =>
 
 /**
  * Max Tokens 防呆告警：推理模型（已选推理深度，或附加参数带 thinking）+
- * 未配置/默认 8192 时，思考会与正文共享该预算，长思考导致输出安静截断。
+ * 未配置/默认 16384 时，思考会与正文共享该预算，长思考导致输出安静截断。
  * 只提示不改值（对齐「附加参数冲突不静默改写」约定）。
  */
 const maxTokensWarn = computed(() => {
@@ -87,10 +87,10 @@ const maxTokensWarn = computed(() => {
     !!reasoningEffort.value ||
     !!(extraBody.value && 'thinking' in extraBody.value)
   if (!thinkingEnabled) return ''
-  if (maxTokens.value !== undefined && maxTokens.value !== null && maxTokens.value > 8192) {
+  if (maxTokens.value !== undefined && maxTokens.value !== null && maxTokens.value > 16384) {
     return ''
   }
-  return '已开启推理：思考 token 与正文共享 Max Tokens 预算，默认 8192 易被长思考耗尽导致输出截断，建议 ≥16384'
+  return '已开启推理：思考 token 与正文共享 Max Tokens 预算，预算太小易被长思考耗尽导致输出截断，建议 ≥16384'
 })
 
 // undefined 视为开启（默认 true 语义），未配置的老节点显示为开

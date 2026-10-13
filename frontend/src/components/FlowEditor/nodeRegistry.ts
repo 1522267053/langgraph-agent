@@ -341,7 +341,7 @@ const registry: Record<string, NodeRegistryEntry> = {
       user_prompt: '',
       temperature: 0.7,
       max_tool_iterations: 200,
-      max_tokens: 8192,
+      max_tokens: 16384,
       history_mode: 'node',
       max_history_turns: 10,
       // approval_required_tools 已下沉到 shell/ssh 节点，老 rawConfig 里若有此字段

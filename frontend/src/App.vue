@@ -518,6 +518,57 @@ async function handleDeleteSession(session: (typeof store.sessions)[0]): Promise
   }
 }
 
+// ---- 会话多选删除 ----
+const multiSelectMode = ref(false)
+const selectedSessionIds = ref<Set<number>>(new Set())
+
+const isAllSelected = computed(
+  () =>
+    store.sessions.length > 0 &&
+    store.sessions.every(s => selectedSessionIds.value.has(s.id))
+)
+
+function toggleMultiSelectMode(): void {
+  multiSelectMode.value = !multiSelectMode.value
+  if (!multiSelectMode.value) selectedSessionIds.value = new Set()
+}
+
+function toggleSessionSelected(sessionId: number): void {
+  const next = new Set(selectedSessionIds.value)
+  if (next.has(sessionId)) {
+    next.delete(sessionId)
+  } else {
+    next.add(sessionId)
+  }
+  selectedSessionIds.value = next
+}
+
+function toggleSelectAll(): void {
+  selectedSessionIds.value = isAllSelected.value
+    ? new Set()
+    : new Set(store.sessions.map(s => s.id))
+}
+
+async function handleDeleteSelected(): Promise<void> {
+  if (!chatAgentId.value || selectedSessionIds.value.size === 0) return
+  const count = selectedSessionIds.value.size
+  try {
+    await ElMessageBox.confirm(`确定删除所选的 ${count} 个会话吗？`, '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await store.deleteSessionsBatch(chatAgentId.value, [...selectedSessionIds.value])
+    // 删除后当前页剩余会话继续保留多选状态，便于连续批量删除
+    const remaining = new Set(
+      [...selectedSessionIds.value].filter(id => store.sessions.some(s => s.id === id))
+    )
+    selectedSessionIds.value = remaining
+  } catch {
+    // cancelled
+  }
+}
+
 function handleSessionPageChange(page: number): void {
   if (!chatAgentId.value) return
   store.loadSessions(chatAgentId.value, page)
@@ -590,6 +641,14 @@ function handleSessionPageChange(page: number): void {
                   placeholder="搜索历史对话..."
                   type="text"
                 />
+                <button
+                  v-if="!isSearchMode"
+                  class="multi-select-btn"
+                  :class="{ active: multiSelectMode }"
+                  @click="toggleMultiSelectMode"
+                >
+                  {{ multiSelectMode ? '完成' : '多选' }}
+                </button>
               </div>
 
               <div
@@ -642,9 +701,24 @@ function handleSessionPageChange(page: number): void {
                   <div
                     v-for="session in store.sessions"
                     :key="session.id"
-                    :class="['session-item', { active: store.currentSession?.id === session.id }]"
-                    @click="handleSelectSession(session)"
+                    :class="[
+                      'session-item',
+                      {
+                        active: !multiSelectMode && store.currentSession?.id === session.id,
+                        selecting: multiSelectMode && selectedSessionIds.has(session.id)
+                      }
+                    ]"
+                    @click="
+                      multiSelectMode ? toggleSessionSelected(session.id) : handleSelectSession(session)
+                    "
                   >
+                    <el-checkbox
+                      v-if="multiSelectMode"
+                      :model-value="selectedSessionIds.has(session.id)"
+                      class="session-check"
+                      @click.stop
+                      @change="toggleSessionSelected(session.id)"
+                    />
                     <el-icon
                       :class="[
                         'session-icon',
@@ -667,6 +741,7 @@ function handleSessionPageChange(page: number): void {
                       <div class="session-time">{{ session.create_time || '' }}</div>
                     </div>
                     <el-button
+                      v-if="!multiSelectMode"
                       :icon="Delete"
                       link
                       size="small"
@@ -677,7 +752,21 @@ function handleSessionPageChange(page: number): void {
                 </template>
               </div>
 
-              <div v-if="store.sessionTotal > store.sessionPageSize" class="session-pagination">
+              <!-- 多选模式：底部操作栏替换换页 -->
+              <div v-if="multiSelectMode" class="session-batch-bar">
+                <button class="batch-btn" @click="toggleSelectAll">
+                  {{ isAllSelected ? '取消全选' : '全选' }}
+                </button>
+                <button
+                  :class="['batch-btn', 'danger', { disabled: selectedSessionIds.size === 0 }]"
+                  :disabled="selectedSessionIds.size === 0"
+                  @click="handleDeleteSelected"
+                >
+                  删除所选({{ selectedSessionIds.size }})
+                </button>
+                <button class="batch-btn" @click="toggleMultiSelectMode">取消</button>
+              </div>
+              <div v-else-if="store.sessionTotal > store.sessionPageSize" class="session-pagination">
                 <el-pagination
                   v-model:current-page="store.sessionPage"
                   :page-size="store.sessionPageSize"
@@ -706,9 +795,17 @@ function handleSessionPageChange(page: number): void {
                 <el-icon :size="14" class="user-avatar"><User /></el-icon>
                 <span class="user-name">{{ currentUser }}</span>
               </div>
-              <button class="logout-btn" @click="handleLogout">
-                <el-icon :size="14"><SwitchButton /></el-icon>
-              </button>
+              <el-tooltip
+                class="box-item"
+                effect="dark"
+                content="退出登录"
+                placement="top"
+              >
+                <button class="drawer-logout-btn" @click="handleLogout">
+                  <el-icon :size="14"><SwitchButton /></el-icon>
+                </button>
+              </el-tooltip>
+              
             </div>
           </aside>
 
@@ -782,6 +879,14 @@ function handleSessionPageChange(page: number): void {
                     placeholder="搜索历史对话..."
                     type="text"
                   />
+                  <button
+                    v-if="!isSearchMode"
+                    class="multi-select-btn"
+                    :class="{ active: multiSelectMode }"
+                    @click="toggleMultiSelectMode"
+                  >
+                    {{ multiSelectMode ? '完成' : '多选' }}
+                  </button>
                 </div>
 
                 <div
@@ -794,10 +899,22 @@ function handleSessionPageChange(page: number): void {
                     :key="session.id"
                     :class="[
                       'drawer-session-item',
-                      { active: store.currentSession?.id === session.id }
+                      {
+                        active: !multiSelectMode && store.currentSession?.id === session.id,
+                        selecting: multiSelectMode && selectedSessionIds.has(session.id)
+                      }
                     ]"
-                    @click="handleSelectSession(session)"
+                    @click="
+                      multiSelectMode ? toggleSessionSelected(session.id) : handleSelectSession(session)
+                    "
                   >
+                    <el-checkbox
+                      v-if="multiSelectMode"
+                      :model-value="selectedSessionIds.has(session.id)"
+                      class="session-check"
+                      @click.stop
+                      @change="toggleSessionSelected(session.id)"
+                    />
                     <el-icon
                       :class="[
                         'session-icon',
@@ -820,6 +937,7 @@ function handleSessionPageChange(page: number): void {
                       <div class="session-time">{{ session.create_time || '' }}</div>
                     </div>
                     <el-button
+                      v-if="!multiSelectMode"
                       :icon="Delete"
                       link
                       size="small"
@@ -829,8 +947,22 @@ function handleSessionPageChange(page: number): void {
                   </div>
                 </div>
 
+                <!-- 多选模式：底部操作栏替换换页 -->
+                <div v-if="multiSelectMode" class="drawer-session-batch-bar">
+                  <button class="batch-btn" @click="toggleSelectAll">
+                    {{ isAllSelected ? '取消全选' : '全选' }}
+                  </button>
+                  <button
+                    :class="['batch-btn', 'danger', { disabled: selectedSessionIds.size === 0 }]"
+                    :disabled="selectedSessionIds.size === 0"
+                    @click="handleDeleteSelected"
+                  >
+                    删除所选({{ selectedSessionIds.size }})
+                  </button>
+                  <button class="batch-btn" @click="toggleMultiSelectMode">取消</button>
+                </div>
                 <div
-                  v-if="store.sessionTotal > store.sessionPageSize"
+                  v-else-if="store.sessionTotal > store.sessionPageSize"
                   class="drawer-session-pagination"
                 >
                   <el-pagination
@@ -862,9 +994,17 @@ function handleSessionPageChange(page: number): void {
                 <el-icon :size="14" class="user-avatar"><User /></el-icon>
                 <span class="drawer-user-name">{{ currentUser }}</span>
               </div>
-              <button class="drawer-logout-btn" @click="handleLogout">
-                <el-icon :size="14"><SwitchButton /></el-icon>
-              </button>
+              <el-tooltip
+                class="box-item"
+                effect="dark"
+                content="退出登录"
+                placement="top"
+              >
+                <button class="drawer-logout-btn" @click="handleLogout">
+                  <el-icon :size="14"><SwitchButton /></el-icon>
+                </button>
+              </el-tooltip>
+              
             </div>
           </el-drawer>
         </template>
@@ -950,7 +1090,7 @@ function handleSessionPageChange(page: number): void {
 
 /* ---- Sidebar ---- */
 .app-sidebar {
-  width: 260px;
+  width: 300px;
   flex-shrink: 0;
   background: var(--paper);
   border-right: 1px solid var(--paper-line);
@@ -1081,6 +1221,11 @@ function handleSessionPageChange(page: number): void {
 
 .session-search {
   position: relative;
+  /* flex 横向排布：搜索框占满剩余宽度，「多选」按钮贴右。
+     缺 display:flex 时 width:100% 的 input 独占一行，按钮被挤到第二行 */
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 8px 12px;
   flex-shrink: 0;
 }
@@ -1096,7 +1241,8 @@ function handleSessionPageChange(page: number): void {
 }
 
 .search-input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 8px 12px 8px 32px;
   background: var(--paper-card);
   border: 1px solid var(--paper-line);
@@ -1338,6 +1484,97 @@ function handleSessionPageChange(page: number): void {
   color: var(--paper-ink-5);
 }
 
+/* ---- 会话多选删除 ---- */
+.multi-select-btn {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--paper-ink-3);
+  font-size: 12px;
+  cursor: pointer;
+  /* 与 .search-input 等高：输入框实测 8px×2 padding + 12px 行高 + 1.6px 边框
+     ≈ 31.2px；此处无边框，直接定高 31px + inline-flex 垂直居中，避免按钮比
+     输入框矮一截（原先仅 24.8px，差 6.4px） */
+  display: inline-flex;
+  align-items: center;
+  height: 31px;
+  padding: 0 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.multi-select-btn:hover {
+  background: var(--paper-warm);
+  color: var(--paper-ink);
+}
+
+.multi-select-btn.active {
+  background: var(--paper-ink);
+  color: var(--paper);
+}
+
+.session-item.selecting,
+.drawer-session-item.selecting {
+  background: var(--paper-warm);
+}
+
+.session-check {
+  /* Element Plus 的 .el-checkbox 默认 height:32px，比同行的图标(18px)/标题(16.8px)
+     高出一截：既把 .session-item 撑高（44.8px→56px），又因内部方框在 32px 里
+     垂直居中而比图标低约 8px。压平到 18px 与 .session-icon 等高，margin-top
+     与 .session-icon 的 1px 对齐，方框随之与图标、标题首行齐平 */
+  flex-shrink: 0;
+  height: 18px;
+  margin-top: 1px;
+  margin-right: 2px;
+}
+
+.session-check :deep(.el-checkbox__input) {
+  /* 内层方框(14px)在 18px 容器内居中，与图标视觉中线一致 */
+  display: flex;
+  align-items: center;
+}
+
+.session-batch-bar,
+.drawer-session-batch-bar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--paper-line-soft);
+  flex-shrink: 0;
+}
+
+.batch-btn {
+  flex: 1;
+  border: 1px solid var(--paper-line);
+  background: transparent;
+  color: var(--paper-ink-2);
+  font-size: 12px;
+  padding: 6px 0;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.batch-btn:hover {
+  background: var(--paper-warm);
+  color: var(--paper-ink);
+}
+
+.batch-btn.danger {
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+
+.batch-btn.danger:hover {
+  background: #fef2f2;
+}
+
+.batch-btn.danger.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* ---- Nav ---- */
 .sidebar-nav {
   flex: 1;
@@ -1442,6 +1679,10 @@ function handleSessionPageChange(page: number): void {
 
 .drawer-session-search {
   position: relative;
+  /* 同 .session-search：flex 横排，搜索框自适应 + 多选按钮贴右 */
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 8px 12px;
   flex-shrink: 0;
 }

@@ -14,13 +14,14 @@ from langchain_core.runnables import Runnable
 
 from app.agent_flow.ai_provider import create_provider
 from app.agent_flow.flow_context import FlowState
+from app.constants.llm_constants import LLM_MAX_TOKENS
 
 
 def create_llm(
     api_key: str,
     model: str,
     base_url: str = "",
-    max_tokens: int = 8192,
+    max_tokens: int = LLM_MAX_TOKENS,
     provider_name: str = "",
     temperature: float = 0.7,
     extra_body: Optional[dict] = None,
@@ -83,7 +84,7 @@ def prepare_llm(
     api_key = node_config.get("api_key")
     model = node_config.get("model", "")
     base_url = node_config.get("base_url")
-    max_tokens = node_config.get("max_tokens", 8192)
+    max_tokens = node_config.get("max_tokens", LLM_MAX_TOKENS)
     temperature = node_config.get("temperature", 0.7)
     provider_name = node_config.get("provider", "")
     extra_body = node_config.get("extra_body")

@@ -79,6 +79,10 @@ class AgentRunEventsRequest(BaseModel):
     )
 
 
+class DeleteSessionsRequest(BaseModel):
+    session_ids: list[int] = Field(..., description="要删除的会话 ID 列表")
+
+
 class AgentApi:
     """Agent API"""
 
@@ -307,11 +311,45 @@ class AgentApi:
         async def delete_session(
             id: int, session_id: int, db: AsyncSession = Depends(get_db)
         ):
-            """删除会话"""
-            success = await agent_executor_service.delete_session(db, session_id)
+            """删除会话（运行中的会话会被拒绝）"""
+            try:
+                success = await agent_executor_service.delete_session(db, session_id)
+            except ValueError as exc:
+                return ApiResponse.error(msg=str(exc))
             if not success:
                 return ApiResponse.error(msg="会话不存在")
             return ApiResponse.success(msg="删除成功")
+
+        @self.router.post(
+            "/{id}/deleteSessions",
+            response_model=ApiResponse,
+            summary="批量删除会话",
+        )
+        async def delete_sessions(
+            id: int, req: DeleteSessionsRequest, db: AsyncSession = Depends(get_db)
+        ):
+            """批量删除会话（软删）；运行中的会话跳过不删，明细见 data"""
+            if not req.session_ids:
+                return ApiResponse.error(msg="session_ids 不能为空")
+            deleted, skipped = await agent_executor_service.delete_sessions(
+                db, req.session_ids
+            )
+            if skipped:
+                if deleted:
+                    msg = (
+                        f"已删除 {deleted} 个会话，{len(skipped)} 个会话正在运行已跳过"
+                    )
+                else:
+                    msg = f"{len(skipped)} 个会话正在运行中，请先停止后再删除"
+                # 有跳过即返回 code=0：前端 axios 拦截器只在 code!=1 时弹提示，
+                # 这是"后端提示、前端零改动"前提下唯一能让用户看到跳过结果的通道；
+                # data 仍带明细供 API 调用方读取具体删除/跳过数量
+                return ApiResponse(
+                    code=0, msg=msg, data={"deleted": deleted, "skipped": skipped}
+                )
+            return ApiResponse.success(
+                data={"deleted": deleted, "skipped": []}, msg="删除成功"
+            )
 
         @self.router.get(
             "/{id}/sessions/{session_id}/revertPreview/{message_id}",

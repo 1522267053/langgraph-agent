@@ -14,6 +14,23 @@ interface RequestOptions {
   timeout?: number
 }
 
+/**
+ * 业务失败（code !== 1）时 reject 的错误对象
+ * @description 在标准 Error 之外携带后端响应体 data，
+ * 使调用方在 catch 中仍能读取结构化明细（如批量删除的 deleted/skipped），
+ * 避免依赖 msg 文案做分支判断。
+ */
+export class ApiError<T = unknown> extends Error {
+  /** 后端响应体 data（原始结构） */
+  data?: T
+
+  constructor(message: string, data?: T) {
+    super(message)
+    this.name = 'ApiError'
+    this.data = data
+  }
+}
+
 /** 创建axios实例 */
 const request: AxiosInstance = axios.create({
   baseURL: '/api',
@@ -32,7 +49,7 @@ request.interceptors.response.use(
       if ((response.config as Record<string, unknown>).showError !== false) {
         ElMessage.error({ message: res.msg || '请求失败', duration: 5000 })
       }
-      return Promise.reject(new Error(res.msg || '请求失败'))
+      return Promise.reject(new ApiError(res.msg || '请求失败', res.data))
     }
     return response
   },

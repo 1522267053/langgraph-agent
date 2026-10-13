@@ -4,7 +4,7 @@
 
 ## 前提
 
-- 已确认当前 Agent 的 `flow_id`；建议写入 system prompt，不确定时用 `/api/ai/flow/list?flow_type=agent&keyword=...` 查询并核对名称与描述。
+- 已确认当前 Agent 的 `flow_id`；内置助手直接调用 **`whoami` 工具**获取（返回 id / 类型 / 名称 / 描述 / 时间 / 是否内置 / 当前会话 id），不要猜测；其他 Agent 用 `/api/ai/flow/list?flow_type=agent&keyword=...` 查询并核对名称与描述。
 - 当前 Agent 已连接能发起本地 HTTP 请求的 API、Python 或 Shell 工具。
 - 已加载本 Skill，并按需读取 [API 参考](api.md) 和 [节点配置](node-config.md)。
 - 用户明确要求或批准这次修改；不能因一次工具失败擅自永久改变自身权限。

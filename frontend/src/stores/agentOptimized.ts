@@ -20,6 +20,7 @@ import type {
   TodoItem
 } from '@/composables/useStreamingMessage'
 import { agentApi } from '@/api/agent'
+import { ApiError } from '@/api/index'
 import { savePlanModeForAgent } from '@/utils/planmode'
 import { USER_RESPONSE_COUNTDOWN_SECONDS } from '@/constants/timing'
 import { createOnToolCallLimitHandler, createOnLlmRetryHandler } from '@/composables/useSSEHandlers'
@@ -602,6 +603,40 @@ export const useAgentStore = defineStore('agent', () => {
       }
     } catch {
       // error handled by interceptor
+    }
+  }
+
+  /**
+   * 批量删除会话
+   */
+  async function deleteSessionsBatch(agentId: number, sessionIds: number[]) {
+    if (sessionIds.length === 0) return
+
+    // 删除后停留在当前页；当前页被删空则回退一页（第 1 页除外）
+    async function reloadList() {
+      const page = sessionPage.value
+      await loadSessions(agentId, page)
+      if (page > 1 && sessions.value.length === 0) {
+        await loadSessions(agentId, page - 1)
+      }
+    }
+
+    try {
+      await agentApi.deleteSessions(agentId, sessionIds)
+      if (currentSession.value && sessionIds.includes(currentSession.value.id)) {
+        currentSession.value = null
+        messages.value = []
+        clearMessages()
+        streamBaseMsgId = 0
+      }
+      await reloadList()
+    } catch (e) {
+      // 含运行中会话时后端返回 code=0（运行中会话跳过不删，拦截器已弹提示），
+      // data 携带明细 { deleted, skipped }，经拦截器 ApiError 透传到这里。
+      // 刷新策略：真的删掉过（deleted > 0）就必须刷新，让已删会话从列表消失；
+      // 全被跳过（deleted === 0）时列表未变，无需刷新。
+      const deleted = e instanceof ApiError ? (e.data as { deleted?: number })?.deleted : 0
+      if (deleted) await reloadList()
     }
   }
 
@@ -2564,6 +2599,7 @@ export const useAgentStore = defineStore('agent', () => {
     loadSessions,
     createSession,
     deleteSession,
+    deleteSessionsBatch,
     selectSession,
     restoreLastSession,
     loadMoreMessages,

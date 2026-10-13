@@ -628,11 +628,11 @@ async def _handle_delete_session(conn: WSConnection, cmd: WsDeleteSessionCommand
         return
     session_id = cmd.session_id
     async with AsyncSessionLocal() as db:
-        success, msg = await ws_gateway_service.delete_session_by_token(
+        success, msg, error_code = await ws_gateway_service.delete_session_by_token(
             db, conn.token, session_id
         )
     if not success:
-        await _send_error(conn, msg, error_code="INTERNAL_ERROR")
+        await _send_error(conn, msg, error_code=error_code or "INTERNAL_ERROR")
         return
     if conn.current_session_id == session_id:
         conn.current_session_id = None

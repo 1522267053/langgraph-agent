@@ -341,6 +341,22 @@ export const agentApi = {
   },
 
   /**
+   * 批量删除会话
+   * @param agentId Agent ID
+   * @param sessionIds 会话ID列表
+   * @description 存在运行中会话时后端返回 code=0（跳过不删），
+   * 失败分支的明细经拦截器 ApiError.data 透出：{ deleted, skipped }
+   */
+  deleteSessions(agentId: number, sessionIds: number[]) {
+    return post<{ deleted: number; skipped: number[] }>(
+      `/agent/${agentId}/deleteSessions`,
+      {
+        session_ids: sessionIds
+      }
+    )
+  },
+
+  /**
    * 清除会话执行完成未读标记（用户打开会话时调用，列表红点熄灭）
    * @param agentId Agent ID
    * @param sessionId 会话ID

@@ -24,6 +24,7 @@ from app.agent_flow.flow_event import (
     NodeContentEvent,
     NodeThinkingEvent,
 )
+from app.constants.llm_constants import RETRY_DELAYS_SECONDS
 from langgraph.types import StreamWriter
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ _RETRYABLE_ERRORS = (
 )
 
 # 重试间隔（秒），最多重试 len(_RETRY_DELAYS) 次
-_RETRY_DELAYS = [1, 2, 4]
+_RETRY_DELAYS = RETRY_DELAYS_SECONDS
 
 
 async def stream_llm_response(
