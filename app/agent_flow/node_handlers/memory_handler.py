@@ -185,6 +185,7 @@ class MemoryNodeHandler(BaseNodeHandler):
                 f"工具: get(ID)查详情|search(关键词)搜记忆(默认warm/cold,可指定tier=hot)|"
                 f"save(保存,category:{valid_cats},importance=5→hot,3-4→warm,1-2→cold)\n"
                 f"主动保存用户偏好、重要决策、关键信息。\n"
+                f"单条content硬上限600字符，内容多时拆成多条保存，不要反复微调字数重试。\n"
             )
             parts = [static_prefix]
             if stable_index:
@@ -681,6 +682,8 @@ class MemoryNodeHandler(BaseNodeHandler):
                     f"保存记忆。importance=5→hot,3-4→warm,1-2→cold，也可指定tier。"
                     f"category: {','.join(MemoryNodeConfig.VALID_CATEGORIES)}，"
                     f"默认category={default_category},importance={default_importance}。"
+                    f"单条content硬上限600字符，超限报错；内容多时拆成多条（memories数组），"
+                    f"禁止反复微调字数重试。"
                 ),
                 func=None,
                 coroutine=save_memory,
@@ -739,7 +742,13 @@ class MemoryNodeHandler(BaseNodeHandler):
 class MemoryItem(BaseModel):
     model_config = {"extra": "ignore"}
     title: str = Field(..., description="记忆标题（必填,70字以内）")
-    content: str = Field(..., description="记忆内容（必填，建议500字左右，上限600字）")
+    content: str = Field(
+        ...,
+        description=(
+            "记忆内容（必填，硬上限600字符，超限直接报错）。内容较长时拆成多条记忆"
+            "（memories 数组同次传多条），不要反复微调字数重试"
+        ),
+    )
     category: Optional[str] = Field(default=None, description="分类")
     importance: int = Field(default=3, description="重要程度1-5")
     tier: Optional[str] = Field(default=None, description="hot/warm/cold")
