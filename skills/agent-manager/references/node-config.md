@@ -326,7 +326,7 @@ SSH 节点（`ssh`）是 Agent 专用工具提供者，仅支持工具边 `tools
 
 ## 浏览器工具
 
-浏览器节点（`browser`）基于 DrissionPage（CDP）实现浏览器自动化，双形态：Flow 模式作主链执行节点（`default -> default`，一个节点一个动作：start/navigate/click/input/get_content/snapshot/screenshot/scroll/wait_for/evaluate/close，参数经 `flow_args` 绑定）；Agent 模式经工具边提供 12 个工具（`browser_start` / `browser_snapshot` / `browser_navigate` / `browser_click` / `browser_input` / `browser_screenshot` / `browser_get_content` / `browser_evaluate` / `browser_tabs` / `browser_scroll` / `browser_wait_for` / `browser_close`）。同一 LLM 只能连接一个浏览器节点。
+浏览器节点（`browser`）基于 DrissionPage（CDP）实现浏览器自动化，双形态：Flow 模式作主链执行节点（`default -> default`，一个节点一个动作：start/navigate/click/input/get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/close，参数经 `flow_args` 绑定）；Agent 模式经工具边提供 12 个工具（`browser_start` / `browser_snapshot` / `browser_navigate` / `browser_click` / `browser_input` / `browser_screenshot` / `browser_get_content` / `browser_evaluate` / `browser_tabs` / `browser_scroll` / `browser_wait_for` / `browser_close`）。同一 LLM 只能连接一个浏览器节点。
 
 ```json
 {
