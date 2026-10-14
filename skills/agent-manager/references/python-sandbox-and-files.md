@@ -156,13 +156,29 @@ def main(files):
 ## 6. 典型场景：图片目标检测 + 绘框（端到端范式）
 
 沙箱内用 `fitz` 实现「读原图 → 比例换算 → 画框 → 导出」的完整写法。
-**关键点**：`fitz` 不能在图片页上直接 `draw_rect`（抛 `ValueError: is no PDF`），必须走"新建 PDF 页 + 贴图 + 绘制"。
+
+**三个必须遵守的关键点，任一处违反都会产出错位/缩小的结果**：
+
+1. **原图真实尺寸必须用 `fitz.Pixmap` 取，不能用 `page.rect`**。
+   `fitz.open(图片)` 会按 `image_ppi=96` 建立图片页，`page.rect` 只有真实尺寸的 **0.75**
+   （实测 1245×786 → `Rect(0,0,933.75,589.5)`）。若用它建输出页，**整张图会被缩到 75%**，
+   所有框随之整体缩小。
+2. **页面按「真实像素」建立，1 点 = 1 像素**：`new_page(width=ow, height=oh)` + `insert_image(page.rect)`
+   + `get_pixmap(dpi=72)`，这样输出与原图逐像素对齐。`dpi=72` 是尺寸对齐的关键（`zoom = dpi/72`）。
+3. **`fitz` 不能在图片页上直接 `draw_rect`**（抛 `ValueError: is no PDF`），
+   必须走「新建 PDF 页 + `insert_image` + 绘制」。
 
 ```python
 import base64
 import os
 import requests
 import fitz
+
+
+def true_size(raw):
+    """图片真实像素尺寸（不要用 page.rect：它是 PIP 96dpi 下的 0.75 倍）"""
+    pm = fitz.Pixmap(raw)
+    return int(pm.width), int(pm.height)
 
 
 def parse_size(text):
@@ -190,26 +206,28 @@ def main(files, img_size, objects):
     raw = requests.get('http://localhost:8000/api/file/download/%d' % fid,
                        timeout=120).content
 
-    # 2) 原图真实像素尺寸
-    doc = fitz.open(stream=raw, filetype='png')
-    rect = doc.load_page(0).rect
-    ow = int(round(rect.x1))
-    oh = int(round(rect.y1))
+    # 2) 原图真实像素尺寸（必须用 Pixmap，不能用 page.rect）
+    ow, oh = true_size(raw)
 
-    # 3) 比例 = 原图尺寸 / AI 实际看到的尺寸（模型常压缩/缩放图片）
+    # 3) 比例 = 原图尺寸 / AI 实际看到的尺寸（模型常缩放图片）
+    #    纵横比明显不符（>8%）说明是模型误读尺寸 → 忽略比例，按原尺寸处理
     ai_w, ai_h = parse_size(img_size)
-    if ai_w <= 0 or ai_h <= 0:
-        ai_w, ai_h = ow, oh
-    rx = float(ow) / float(ai_w)
-    ry = float(oh) / float(ai_h)
+    rx = 1.0
+    ry = 1.0
+    if ai_w > 0 and ai_h > 0:
+        true_ar = float(ow) / float(oh)
+        ai_ar = float(ai_w) / float(ai_h)
+        if abs(ai_ar - true_ar) / true_ar <= 0.08:
+            rx = float(ow) / float(ai_w)
+            ry = float(oh) / float(ai_h)
 
-    # 4) 新建 PDF 页贴原图，再按比例画框（图片页不能直接绘制）
+    # 4) 输出页按真实像素建立（1点=1像素），贴原图后绘制
     out_doc = fitz.open()
     page = out_doc.new_page(width=ow, height=oh)
     page.insert_image(page.rect, stream=raw)
 
-    lw = max(2, int(round(ow / 300.0)))
-    fs = max(12, int(round(ow / 60.0)))
+    lw = max(2, int(round(ow / 400.0)))
+    fs = max(11, min(26, int(round(ow / 90.0))))
     for b in objects:
         x1 = min(b['x1'], b['x2']) * rx
         y1 = min(b['y1'], b['y2']) * ry
@@ -217,11 +235,15 @@ def main(files, img_size, objects):
         y2 = max(b['y1'], b['y2']) * ry
         page.draw_rect(fitz.Rect(x1, y1, x2, y2), color=(1, 0, 0), width=lw)
         if b.get('name'):
-            # 'china-s' 内置简体中文字体，缺省字体画中文会报错
-            page.insert_text(fitz.Point(x1, max(fs, y1 - 4)), b['name'],
-                             fontsize=fs, color=(1, 0, 0), fontname='china-s')
+            th = fs + 6
+            ty0 = y1 - th - 2 if y1 - th - 2 >= 0 else y1 + 2
+            # 先垫白底再写字，避免标签压在图上看不清
+            page.draw_rect(fitz.Rect(x1, ty0, x1 + len(b['name']) * fs + 8, ty0 + th),
+                           color=None, fill=(1, 1, 1), width=0)
+            page.insert_text(fitz.Point(x1 + 4, ty0 + th - 5), b['name'],
+                             fontsize=fs, color=(0.85, 0, 0), fontname='china-s')
 
-    # 5) dpi=72 导出 → 输出尺寸与原图一致
+    # 5) dpi=72 导出 → 输出尺寸与原图逐像素一致（zoom = dpi/72）
     png = page.get_pixmap(dpi=72).tobytes('png')
 
     # 6) 落盘（生产路径会用 __save_file__ 再保存进文件管理）
@@ -236,11 +258,17 @@ def main(files, img_size, objects):
 
 **要点回顾**：
 
-1. `fitz.open(stream=raw, filetype='png')` 读图 → `page.rect` 拿真实尺寸。
-2. **比例校正**必须做：模型报的尺寸常与原图不同（实测 934×590 被报成 1240×788），直接画会偏移。
-3. 绘制必须"新建 PDF 页 + `insert_image` + `draw_rect`"，不能在图片页上画。
-4. 中文标签用 `fontname='china-s'`。
+1. `true_size(raw)` 用 `fitz.Pixmap` 取真实像素——**这是最容易踩的坑**，用 `page.rect` 会让输出整体缩到 75%。
+2. **比例校正**必须做：模型报的尺寸常与原图不同（实测 1240×788 vs 真实 1245×786），
+   不校正会累积偏移；同时加纵横比守卫，防止模型报出离谱尺寸时把框画飞。
+3. 绘制必须「新建 PDF 页 + `insert_image` + `draw_rect`」，不能在图片页上画。
+4. 中文标签用 `fontname='china-s'`，并垫白底避免压字。
 5. `get_pixmap(dpi=72)` 保证输出与原图像素一一对应。
+
+**关于定位精度**：以上只保证「坐标 → 像素」的映射忠实无偏移，**不保证模型框得准**。
+实测模型对文字类目标的框常有 5%~15% 边长偏差（有时会把相邻字符一起框进去）。
+要收紧就在 LLM 节点提示词里明确「不要用 0~1 归一化坐标、不要用 0~1000 刻度、框只贴字形本身」，
+并把 `temperature` 设 0（实测仍会偏差，属模型能力上限，必要时应换更强的视觉模型）。
 
 ### 保存产出文件
 
