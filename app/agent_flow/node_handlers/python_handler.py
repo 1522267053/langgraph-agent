@@ -1,7 +1,7 @@
 """
 Python代码执行节点处理器
 基于 RestrictedPython 提供安全的沙箱环境执行Python代码
-要求定义 main 函数，参数名与输入变量名对应
+main 函数可选：有 main 时按参数注入调用并取返回值，无 main 时按脚本模式执行
 """
 
 import asyncio
@@ -333,9 +333,11 @@ async def _run_python_in_sandbox(code: str, input_vars: dict, timeout: float) ->
             if compile_result.code:
                 exec(compile_result.code, restricted_globals)
 
-            # 检查 main 函数是否存在
+            # main 可选：无 main 时按脚本模式执行（顶层代码已在 exec 中跑完，
+            # stdout/stderr 照常捕获返回）——工具模式下 LLM 常写脚本式代码，
+            # 强制 main 会让已成功执行的代码被误报失败
             if "main" not in restricted_globals:
-                raise RuntimeError("必须定义 main 函数")
+                return None
 
             main_func = restricted_globals["main"]
             sig = inspect.signature(main_func)
@@ -382,7 +384,8 @@ class PythonNodeHandler(BaseNodeHandler):
     3. 禁止 str.format() 攻击
     4. 白名单模块导入（math, json, re, datetime 等安全模块）
     5. 保留 open 函数（配合超时控制）
-    6. 要求定义 main 函数，参数与输入变量对应
+    6. main 函数可选：有 main 时按参数注入调用并取返回值；无 main 时按脚本
+       模式执行（顶层代码跑完即成功，stdout/stderr 照常返回，result=None）
     7. 支持超时控制
     8. 捕获标准输出和标准错误
     """
@@ -557,7 +560,12 @@ class PythonNodeHandler(BaseNodeHandler):
 
         class PythonToolInput(BaseModel):
             code: str = Field(
-                ..., description=f"Python代码，必须定义 main 函数，参数: {params_desc}"
+                ...,
+                description=(
+                    f"Python代码。推荐定义 main 函数（参数: {params_desc}），"
+                    "返回值作为执行结果；脚本式代码（无 main，顶层直接执行+print）也可，"
+                    "此时以 stdout 为结果"
+                ),
             )
             input_data: dict[str, Any] = Field(
                 default_factory=dict,
@@ -567,8 +575,10 @@ class PythonNodeHandler(BaseNodeHandler):
         description = f"""在 Agent 主机上执行 Python 代码，进行数据处理、文件读写或流程中间计算。
 这是一个给后端补 Python 解释器能力的工具（不需要主机预装 Python），代码运行在后端 Python 环境，可读写本地文件系统，并非隔离沙箱。
 
-必须定义 main 函数，参数签名:
+推荐定义 main 函数（返回值将作为执行结果），参数签名:
   def main({params_desc}):
+
+脚本式代码也可以：不定义 main，顶层直接执行（配合 print 输出结果），此时以 stdout 为结果。
 
 参数类型说明:
 {param_list}
