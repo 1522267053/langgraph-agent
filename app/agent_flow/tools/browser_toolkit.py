@@ -429,7 +429,7 @@ class RefInput(BaseModel):
     ref: str = Field(
         ...,
         description=(
-            "browser_snapshot 返回的元素 uid 编号（优先），或定位符：CSS 选择器须加 css: 前缀"
+            "browser_snapshot 返回的元素 uid 编号（如 1 或 uid=1），或定位符：CSS 选择器须加 css: 前缀"
             "（如 css:button.submit），文本匹配用 text:xxx；裸写 h1/#id 会失配"
         ),
     )
@@ -445,7 +445,7 @@ class InputInput(BaseModel):
     ref: str = Field(
         ...,
         description=(
-            "browser_snapshot 返回的输入框 uid 编号（优先），或定位符：CSS 选择器须加 css: 前缀"
+            "browser_snapshot 返回的输入框 uid 编号（如 1 或 uid=1），或定位符：CSS 选择器须加 css: 前缀"
             "（如 css:#kw），文本匹配用 text:xxx；裸写 h1/#id 会失配"
         ),
     )
@@ -753,6 +753,20 @@ def get_flow_id() -> int:
     return 0
 
 
+def _parse_ref(ref: str) -> Optional[int]:
+    """解析 snapshot 元素引用为 1-based 编号；非引用形态返回 None。
+
+    兼容两种形态：snapshot 输出的「uid=N」（LLM 常原样回传）与裸数字「N」。
+    """
+    s = ref.strip()
+    if s.isdigit():
+        return int(s)
+    low = s.lower()
+    if low.startswith("uid=") and low[4:].isdigit():
+        return int(low[4:])
+    return None
+
+
 def _current_tab_id(session: "BrowserSession") -> int:
     """当前活动标签页的 tab_id（get_tabs() 顺序下标；找不到返回 -1）。
 
@@ -921,8 +935,9 @@ class BrowserToolKit:
                         }
                     raw = ref.strip()
                     tabs_before = len(session.browser.get_tabs())
-                    if raw.isdigit():
-                        idx = int(raw) - 1
+                    ref_num = _parse_ref(raw)
+                    if ref_num is not None:
+                        idx = ref_num - 1
                         # 优先按 snapshot 锚定的 data-agent-ref 属性精确查找
                         # （与 DOM 顺序变化解耦，动态页面不再"ref 不存在"）；
                         # 属性未命中（旧快照/页面重渲染）回退按下标对齐。
@@ -995,8 +1010,9 @@ class BrowserToolKit:
                             "success": False,
                         }
                     raw = ref.strip()
-                    if raw.isdigit():
-                        idx = int(raw) - 1
+                    ref_num = _parse_ref(raw)
+                    if ref_num is not None:
+                        idx = ref_num - 1
                         # 优先按 data-agent-ref 属性精确查找（与 snapshot 锚定一致，
                         # 修复枚举选择器不一致导致的"ref 不存在"/错位聚焦）；
                         # 属性未命中回退按全量可交互元素下标对齐。
