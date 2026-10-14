@@ -740,6 +740,15 @@ async def _monitor_process(
         raise
     finally:
         task.end_time = datetime.now()
+        # 正常退出路径（streams.result() 后 break）此前漏设终态，status 停在默认
+        # "running"、return_code 停在 None：同步完成的命令会向 LLM 报 status=running
+        # 且 stdout 看似为空，误导模型去调 shell_task_status 追查（而任务已被
+        # execute_shell 从表中 pop → 报"不存在或已过期"）。此处统一补齐：
+        # 仅当仍是 running 且进程确已退出时按返回码落终态，避免覆盖 timeout/
+        # cancelled 分支已设的状态，也避免进程未退出（CancelledError）时误判。
+        if task.status == "running" and process.returncode is not None:
+            task.return_code = process.returncode
+            task.status = "completed" if process.returncode == 0 else "failed"
         task.stdout = _decode_output(bytes(task._stdout_bytes))
         task.stderr = _decode_output(bytes(task._stderr_bytes))
         await _notify_tool_end(task)
