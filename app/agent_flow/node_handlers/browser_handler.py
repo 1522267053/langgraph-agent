@@ -252,13 +252,19 @@ class BrowserNodeHandler(BaseNodeHandler):
             {
                 "name": "tab_action",
                 "type": "string",
-                "description": "标签页操作: new（新建并激活）/ list（列标签页）/ select（按 index 切换）/ close（关闭活动标签页）",
+                "description": "标签页操作: new（新建并激活）/ list（列标签页）/ select（切换）/ close（关闭标签页）",
                 "required": True,
+            },
+            {
+                "name": "tab_id",
+                "type": "string",
+                "description": "目标标签页 id（CDP targetId 字符串，list 返回的 tab_id，生命周期内稳定）：select=切换目标，close=关闭目标（不传=活动标签页）",
+                "required": False,
             },
             {
                 "name": "index",
                 "type": "number",
-                "description": "tab_action=select 时的目标标签页下标（0 起，来自 list 返回的 tab_id）",
+                "description": "（已废弃，改用 tab_id）旧版下标方式 select 时的标签页索引（最新在前，0 起）",
                 "required": False,
             },
         ],
@@ -566,16 +572,37 @@ class BrowserNodeHandler(BaseNodeHandler):
                 result["result"] = tab.run_js(script)
             elif action == "tabs":
                 # 标签页管理（语义对齐 toolkit.browser_tabs）：new/list/select/close
+                # tab_id = CDP targetId 字符串（标签页生命周期内稳定，关其他页不漂移）
                 # new/select 返回 tab_id 写入输出变量，下游节点可 {{nodes.key.result.tab_id}} 插值
                 tab_action = str(arg("tab_action", "list")).strip()
                 browser = session.browser
 
-                def _current_tab_id() -> int:
+                def _current_tab_id():
+                    tab = session.active_tab
+                    if tab is None:
+                        return None
+                    try:
+                        return tab.tab_id
+                    except Exception:
+                        return None
+
+                def _find_by_ref(ref):
+                    """按 targetId 查找标签页；纯数字兼容旧下标（最新在前）"""
+                    if ref is None or str(ref).strip() == "":
+                        return None
                     tabs_now = browser.get_tabs()
-                    return next(
-                        (i for i, t in enumerate(tabs_now) if t is session.active_tab),
-                        -1,
-                    )
+                    for t in tabs_now:
+                        try:
+                            if t.tab_id == ref or str(t.tab_id) == str(ref):
+                                return t
+                        except Exception:
+                            continue
+                    s = str(ref).strip()
+                    if s.isdigit():
+                        idx = int(s)
+                        if 0 <= idx < len(tabs_now):
+                            return tabs_now[idx]
+                    return None
 
                 if tab_action == "new":
                     new_tab = browser.new_tab()
@@ -587,17 +614,22 @@ class BrowserNodeHandler(BaseNodeHandler):
                         note="新标签页已创建并激活",
                     )
                 elif tab_action == "select":
-                    tabs_now = browser.get_tabs()
-                    idx = int(arg("index", 0))
-                    if not 0 <= idx < len(tabs_now):
-                        raise ValueError(
-                            f"标签页索引超出范围 0~{len(tabs_now) - 1}（可用 list 查看当前标签页）"
-                        )
-                    session.active_tab = tabs_now[idx]
+                    sel_ref = arg("tab_id", None)
+                    target = _find_by_ref(sel_ref)
+                    if target is None:
+                        # 兼容旧 index 下标用法
+                        tabs_now = browser.get_tabs()
+                        idx = int(arg("index", 0))
+                        if not 0 <= idx < len(tabs_now):
+                            raise ValueError(
+                                f"tab_id={sel_ref} 不存在（可用 list 查看当前标签页）"
+                            )
+                        target = tabs_now[idx]
+                    session.active_tab = target
                     result.update(
                         tab_action="select",
                         tab_id=_current_tab_id(),
-                        url=tabs_now[idx].url,
+                        url=target.url,
                         note=(
                             "已切换标签页；元素定位符只对切换前页面有效，"
                             "建议后续接 snapshot 重新获取"
@@ -607,14 +639,33 @@ class BrowserNodeHandler(BaseNodeHandler):
                     result.update(
                         tab_action="list",
                         tabs=[
-                            {"tab_id": i, "url": t.url, "title": t.title}
-                            for i, t in enumerate(browser.get_tabs())
+                            {"tab_id": t.tab_id, "url": t.url, "title": t.title}
+                            for t in browser.get_tabs()
                         ],
                     )
                 elif tab_action == "close":
-                    session.active_tab.close()
-                    session.active_tab = None
-                    result.update(tab_action="close", note="活动标签页已关闭")
+                    # 传 tab_id（targetId）关指定标签页；不传关活动标签页。
+                    # 注意关掉活动页自身后 active_tab 成死对象
+                    # （后续 CDP 调用抛 PageDisconnectedError），需同步置空
+                    close_ref = arg("tab_id", None)
+                    if close_ref is not None and str(close_ref).strip() != "":
+                        closing = _find_by_ref(close_ref)
+                        if closing is None:
+                            raise ValueError(
+                                f"tab_id={close_ref} 不存在（可用 list 查看当前标签页）"
+                            )
+                        closing.close()
+                        if session.active_tab is closing:
+                            session.active_tab = None
+                        result.update(
+                            tab_action="close",
+                            closed_tab_id=str(close_ref),
+                            note="标签页已关闭",
+                        )
+                    else:
+                        session.active_tab.close()
+                        session.active_tab = None
+                        result.update(tab_action="close", note="活动标签页已关闭")
                 else:
                     raise ValueError(
                         f"未知 tab_action: {tab_action}（支持 new/list/select/close）"

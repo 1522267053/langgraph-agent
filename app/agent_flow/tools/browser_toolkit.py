@@ -467,9 +467,9 @@ class NavigateInput(BaseModel):
     action: str = Field(
         "goto", description="导航动作: goto（默认）/ back / forward / reload"
     )
-    tab_id: Optional[int] = Field(
+    tab_id: Optional[str] = Field(
         None,
-        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+        description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
     )
 
 
@@ -483,9 +483,9 @@ class RefInput(BaseModel):
             "（如 css:button.submit），文本匹配用 text:xxx；裸写 h1/#id 会失配"
         ),
     )
-    tab_id: Optional[int] = Field(
+    tab_id: Optional[str] = Field(
         None,
-        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+        description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
     )
 
 
@@ -501,9 +501,9 @@ class InputInput(BaseModel):
     )
     text: str = Field(..., description="要输入的文本")
     clear: bool = Field(True, description="输入前是否清空已有内容，默认清空")
-    tab_id: Optional[int] = Field(
+    tab_id: Optional[str] = Field(
         None,
-        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+        description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
     )
 
 
@@ -517,9 +517,9 @@ class ScreenshotInput(BaseModel):
     height: Optional[int] = Field(
         None, description="临时窗口高度（像素），控制截图分辨率；不传=当前窗口高"
     )
-    tab_id: Optional[int] = Field(
+    tab_id: Optional[str] = Field(
         None,
-        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+        description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
     )
 
 
@@ -534,9 +534,9 @@ class GetContentInput(BaseModel):
             "裸写 h1/#id 会被误当文本/id 解释而失配"
         ),
     )
-    tab_id: Optional[int] = Field(
+    tab_id: Optional[str] = Field(
         None,
-        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+        description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
     )
 
 
@@ -544,9 +544,9 @@ class EvaluateInput(BaseModel):
     """browser_evaluate 输入"""
 
     script: str = Field(..., description="要执行的 JavaScript，用 return 返回值")
-    tab_id: Optional[int] = Field(
+    tab_id: Optional[str] = Field(
         None,
-        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+        description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
     )
 
 
@@ -554,7 +554,17 @@ class TabsInput(BaseModel):
     """browser_tabs 输入"""
 
     action: str = Field("list", description="动作: list（默认）/ select / new / close")
-    index: int = Field(0, description="action=select 时的标签页索引（从 0 开始）")
+    tab_id: Optional[str] = Field(
+        None,
+        description=(
+            "目标标签页 id（CDP targetId 字符串，list 返回的 tab_id）。"
+            "close=关闭该标签页（不传关活动页）；select=切换到该标签页（替代旧 index）"
+        ),
+    )
+    index: int = Field(
+        0,
+        description="（已废弃，改用 tab_id）旧版下标方式 select 时的标签页索引（最新在前）",
+    )
 
 
 class ScrollInput(BaseModel):
@@ -562,9 +572,9 @@ class ScrollInput(BaseModel):
 
     direction: str = Field("down", description="滚动方向: down（默认）/ up")
     amount: int = Field(600, description="滚动像素距离，默认 600")
-    tab_id: Optional[int] = Field(
+    tab_id: Optional[str] = Field(
         None,
-        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+        description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
     )
 
 
@@ -573,9 +583,9 @@ class WaitForInput(BaseModel):
 
     text: str = Field(..., description="要等待出现的页面文本")
     timeout: int = Field(10, description="超时秒数，默认 10")
-    tab_id: Optional[int] = Field(
+    tab_id: Optional[str] = Field(
         None,
-        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+        description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
     )
 
 
@@ -594,9 +604,9 @@ class ConsoleInput(BaseModel):
     )
     page_size: int = Field(50, description="每页条数（默认 50）")
     page_idx: int = Field(0, description="页码（0 起，默认第一页）")
-    tab_id: Optional[int] = Field(
+    tab_id: Optional[str] = Field(
         None,
-        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+        description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
     )
 
 
@@ -634,9 +644,9 @@ class NetworkInput(BaseModel):
     )
     page_size: int = Field(50, description="action=list 时每页条数（默认 50）")
     page_idx: int = Field(0, description="action=list 时页码（0 起）")
-    tab_id: Optional[int] = Field(
+    tab_id: Optional[str] = Field(
         None,
-        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+        description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
     )
 
 
@@ -1043,33 +1053,63 @@ def _parse_ref(ref: str) -> Optional[int]:
     return None
 
 
-def _current_tab_id(session: "BrowserSession") -> int:
-    """当前活动标签页的 tab_id（get_tabs() 顺序下标；找不到返回 -1）。
+def _current_tab_id(session: "BrowserSession") -> Optional[str]:
+    """当前活动标签页的 tab_id（CDP targetId 字符串，标签页生命周期内稳定）。
 
     各工具返回 dict 里带 tab_id 字段，让 LLM 始终知道操作发生在哪个标签页
     （uid 只对当前 tab 有效，切 tab 后需重新 snapshot）。
+    死对象坑：active_tab 被关闭后访问 .tab_id 抛 PageDisconnectedError，
+    兜底返回 None。
     """
-    if session.active_tab is None:
-        return -1
+    tab = session.active_tab
+    if tab is None:
+        return None
+    try:
+        return tab.tab_id
+    except Exception:
+        return None
+
+
+def _find_tab_by_ref(session: "BrowserSession", tab_id) -> Optional["object"]:
+    """按 tab_id（CDP targetId 字符串）查找标签页对象；不改变 active_tab。
+
+    targetId 在标签页生命周期内恒定，关闭其他标签页不漂移。
+    兼容期：纯数字入参按旧版 get_tabs() 下标解释（最新在前，已废弃；
+    targetId 恒为 32 位 hex，与短数字下标无歧义）。找不到返回 None。
+    tab 对象已断连时访问 .tab_id 抛异常，跳过该对象。
+    """
+    if tab_id is None or tab_id == "":
+        return None
     tabs = session.browser.get_tabs()
-    return next((i for i, t in enumerate(tabs) if t is session.active_tab), -1)
+    for t in tabs:
+        try:
+            if t.tab_id == tab_id:
+                return t
+        except Exception:
+            continue
+    s = str(tab_id)
+    if s.isdigit():
+        idx = int(s)
+        if 0 <= idx < len(tabs):
+            return tabs[idx]
+    return None
 
 
-def _resolve_tab(session: "BrowserSession", tab_id: Optional[int]):
+def _resolve_tab(session: "BrowserSession", tab_id: Optional[str]):
     """按工具入参 tab_id 定位标签页（None=当前活动 tab）。
 
-    tab_id 合法时切换 session.active_tab 并返回该 tab；非法返回 None
+    tab_id 为 CDP targetId 字符串（browser_tabs list 返回的 tab_id），
+    合法时切换 session.active_tab 并返回该 tab；非法返回 None
     （由调用方报错）。LLM 可直接传 snapshot/browser_tabs 返回的 tab_id
     操作指定标签页，无需先 browser_tabs(select)。
     """
     tabs = session.browser.get_tabs()
-    if tab_id is None or tab_id < 0:
+    if tab_id is None or tab_id == "":
         return session.active_tab or (tabs[-1] if tabs else None)
-    if tab_id < len(tabs):
-        tab = tabs[tab_id]
+    tab = _find_tab_by_ref(session, tab_id)
+    if tab is not None:
         session.active_tab = tab
-        return tab
-    return None
+    return tab
 
 
 class BrowserToolKit:
@@ -1115,19 +1155,20 @@ class BrowserToolKit:
                 def _tab_id() -> dict:
                     tabs = session.browser.get_tabs()
                     current = session.active_tab
-                    index = next((i for i, t in enumerate(tabs) if t is current), -1)
+                    try:
+                        cur_id = current.tab_id if current is not None else None
+                    except Exception:
+                        cur_id = None
                     return {
-                        "tab_id": index,
+                        "tab_id": cur_id,
                         "tab_count": len(tabs),
-                        "tab_urls": [
-                            {"tab_id": i, "url": t.url} for i, t in enumerate(tabs)
-                        ],
+                        "tab_urls": [{"tab_id": t.tab_id, "url": t.url} for t in tabs],
                     }
 
                 tab_info = await asyncio.to_thread(_tab_id)
                 tab_line = (
                     f"tab_id: {tab_info['tab_id']}（共 {tab_info['tab_count']} 个标签页，"
-                    "browser_tabs(action=select, index=N) 切换）"
+                    "browser_tabs(action=select, tab_id='...') 切换）"
                 )
                 other_tabs = [
                     t for t in tab_info["tab_urls"] if t["tab_id"] != tab_info["tab_id"]
@@ -1152,7 +1193,7 @@ class BrowserToolKit:
         # ---- browser_navigate ----
 
         async def browser_navigate(
-            url: str, action: str = "goto", tab_id: Optional[int] = None
+            url: str, action: str = "goto", tab_id: Optional[str] = None
         ) -> str | dict:
             approval = await _approval(
                 "browser_navigate", {"url": url, "tab_id": tab_id}, url
@@ -1193,7 +1234,7 @@ class BrowserToolKit:
 
         # ---- browser_click ----
 
-        async def browser_click(ref: str, tab_id: Optional[int] = None) -> str | dict:
+        async def browser_click(ref: str, tab_id: Optional[str] = None) -> str | dict:
             approval = await _approval(
                 "browser_click", {"ref": ref, "tab_id": tab_id}, ref
             )
@@ -1268,7 +1309,7 @@ class BrowserToolKit:
         # ---- browser_input ----
 
         async def browser_input(
-            ref: str, text: str, clear: bool = True, tab_id: Optional[int] = None
+            ref: str, text: str, clear: bool = True, tab_id: Optional[str] = None
         ) -> str | dict:
             approval = await _approval(
                 "browser_input", {"ref": ref, "text": text, "tab_id": tab_id}, text
@@ -1338,7 +1379,7 @@ class BrowserToolKit:
             full_page: bool = False,
             width: Optional[int] = None,
             height: Optional[int] = None,
-            tab_id: Optional[int] = None,
+            tab_id: Optional[str] = None,
         ) -> str | dict:
             approval = await _approval(
                 "browser_screenshot",
@@ -1431,7 +1472,7 @@ class BrowserToolKit:
         # ---- browser_get_content ----
 
         async def browser_get_content(
-            selector: str = "", tab_id: Optional[int] = None
+            selector: str = "", tab_id: Optional[str] = None
         ) -> str | dict:
             approval = await _approval(
                 "browser_get_content",
@@ -1484,7 +1525,7 @@ class BrowserToolKit:
         # ---- browser_evaluate ----
 
         async def browser_evaluate(
-            script: str, tab_id: Optional[int] = None
+            script: str, tab_id: Optional[str] = None
         ) -> str | dict:
             approval = await _approval(
                 "browser_evaluate", {"script": script, "tab_id": tab_id}, script
@@ -1515,9 +1556,11 @@ class BrowserToolKit:
 
         # ---- browser_tabs ----
 
-        async def browser_tabs(action: str = "list", index: int = 0) -> str | dict:
+        async def browser_tabs(
+            action: str = "list", index: int = 0, tab_id: Optional[str] = None
+        ) -> str | dict:
             approval = await _approval(
-                "browser_tabs", {"action": action, "index": index}, ""
+                "browser_tabs", {"action": action, "index": index, "tab_id": tab_id}, ""
             )
             if approval not in (None, "approved"):
                 return {"error": f"用户未批准（{approval}）", "success": False}
@@ -1536,30 +1579,63 @@ class BrowserToolKit:
                             "tab_id": _current_tab_id(session),
                         }
                     if action == "close":
+                        # 传 tab_id（targetId）关指定标签页；不传关活动标签页。
+                        # 注意关掉活动页自身后 active_tab 成死对象
+                        # （后续 CDP 调用抛 PageDisconnectedError），需同步置空
+                        if tab_id is not None:
+                            closing = _find_tab_by_ref(session, tab_id)
+                            if closing is None:
+                                return {
+                                    "error": f"tab_id={tab_id} 不存在，请先 browser_tabs(action='list') 查看可用标签页",
+                                    "success": False,
+                                }
+                            closing.close()
+                            if session.active_tab is closing:
+                                session.active_tab = None
+                            return {
+                                "success": True,
+                                "closed_tab_id": tab_id,
+                                "note": "标签页已关闭",
+                            }
                         if session.active_tab is not None:
                             session.active_tab.close()
                             session.active_tab = None
                         return {"success": True, "note": "活动标签页已关闭"}
                     tabs = browser.get_tabs()
+                    # tab_id = CDP targetId（标签页生命周期内稳定，关其他页不漂移）
                     items = [
-                        {"tab_id": i, "url": t.url, "title": t.title}
-                        for i, t in enumerate(tabs)
+                        {"tab_id": t.tab_id, "url": t.url, "title": t.title}
+                        for t in tabs
                     ]
                     if action == "select":
-                        if 0 <= index < len(tabs):
-                            session.active_tab = tabs[index]
+                        target = None
+                        if tab_id:
+                            target = _find_tab_by_ref(session, tab_id)
+                            if target is None:
+                                return {
+                                    "error": f"tab_id={tab_id} 不存在，请先 browser_tabs(action='list') 查看可用标签页",
+                                    "success": False,
+                                }
+                        elif 0 <= index < len(tabs):
+                            target = tabs[index]  # 兼容旧 index 用法（最新在前）
+                        else:
                             return {
-                                "success": True,
-                                "selected": items[index],
-                                "tab_id": _current_tab_id(session),
-                                "note": (
-                                    "已切换标签页；uid 只对切换前页面有效，"
-                                    "请重新 browser_snapshot"
-                                ),
+                                "error": f"索引超出范围 0~{len(tabs) - 1}",
+                                "success": False,
                             }
+                        session.active_tab = target
                         return {
-                            "error": f"索引超出范围 0~{len(tabs) - 1}",
-                            "success": False,
+                            "success": True,
+                            "selected": {
+                                "tab_id": target.tab_id,
+                                "url": target.url,
+                                "title": target.title,
+                            },
+                            "tab_id": _current_tab_id(session),
+                            "note": (
+                                "已切换标签页；uid 只对切换前页面有效，"
+                                "请重新 browser_snapshot"
+                            ),
                         }
                     return {"success": True, "tabs": items}
 
@@ -1574,7 +1650,7 @@ class BrowserToolKit:
         async def browser_scroll(
             direction: str = "down",
             amount: int = 600,
-            tab_id: Optional[int] = None,
+            tab_id: Optional[str] = None,
         ) -> str | dict:
             approval = await _approval(
                 "browser_scroll", {"direction": direction, "tab_id": tab_id}, ""
@@ -1609,7 +1685,7 @@ class BrowserToolKit:
         # ---- browser_wait_for ----
 
         async def browser_wait_for(
-            text: str, timeout: int = 10, tab_id: Optional[int] = None
+            text: str, timeout: int = 10, tab_id: Optional[str] = None
         ) -> str | dict:
             approval = await _approval(
                 "browser_wait_for", {"text": text, "tab_id": tab_id}, text
@@ -1718,7 +1794,7 @@ class BrowserToolKit:
             include_preserved: bool = False,
             page_size: int = 50,
             page_idx: int = 0,
-            tab_id: Optional[int] = None,
+            tab_id: Optional[str] = None,
         ) -> str | dict:
             approval = await _approval(
                 "browser_console_logs", {"action": action, "level": level}, ""
@@ -1783,7 +1859,7 @@ class BrowserToolKit:
             include_preserved: bool = False,
             page_size: int = 50,
             page_idx: int = 0,
-            tab_id: Optional[int] = None,
+            tab_id: Optional[str] = None,
         ) -> str | dict:
             approval = await _approval(
                 "browser_network",
@@ -2023,7 +2099,7 @@ class BrowserToolKit:
             ),
             StructuredTool(
                 name="browser_tabs",
-                description="标签页管理（action: list/select/new/close，select 时用 index）",
+                description="标签页管理（action: list/select/new/close，tab_id 为 CDP targetId 字符串，生命周期内稳定；close/select 传 tab_id 指定目标）",
                 args_schema=TabsInput,
                 func=None,
                 coroutine=browser_tabs,

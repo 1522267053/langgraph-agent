@@ -354,13 +354,13 @@ Flow 模式每个动作的参数 schema（`flow_args` 该填什么）**唯一事
 
 ### Flow 多标签页（tabs 动作）与路径插值
 
-- Flow 动作集含 `tabs`：`tab_action` 必填（new 新建并激活 / list 列标签页 / select 按 index 切换 / close 关活动标签页），`index` 仅 select 时必传（来自 list 返回的 `tab_id`，0 起）。
-- **tab_id 流转**：tabs 的 new/select 结果带 `tab_id` 写入输出变量，下游节点用 `{{nodes.节点key.result.tab_id}}` 插值引用（如传给 JS 拼接、条件分支判断）；注意 `tab_id` 只在同一次运行内有效（关闭中间标签页后编号漂移），跨运行引用需先 `tabs(list)` 重新获取。
+- Flow 动作集含 `tabs`：`tab_action` 必填（new 新建并激活 / list 列标签页 / select 切换 / close 关闭标签页），`tab_id` 可选传（CDP targetId 字符串：select=切换目标，close=关闭目标，不传=活动标签页）；旧 `index` 下标方式已废弃但兼容。
+- **tab_id 流转**：tabs 的 new/select 结果带 `tab_id` 写入输出变量，下游节点用 `{{nodes.节点key.result.tab_id}}` 插值引用（如传给 JS 拼接、条件分支判断）；close 传 `tab_id` 时结果带 `closed_tab_id`。**tab_id = CDP targetId（32 位 hex 字符串）**，标签页生命周期内稳定，关闭其他标签页不漂移，跨工具调用可放心复用（浏览器会话关闭后失效）。旧版「数字下标（最新在前，关 tab 漂移）」已废弃，纯数字入参仍按下标兼容解释。
 - `browser_path` / `user_data_path` 支持 `{{变量}}` 插值（如上游节点输出浏览器路径），仅在**首次创建会话**时生效——会话按 `flow_id` 复用，后续节点插值结果不影响已存在实例。
 
 ### 工作循环与定位器规则
 
-标准工作循环 = `browser_snapshot`（提取可交互元素 + uid 编号，真 a11y 树）→ `browser_click` / `browser_input`（按 uid）→ `browser_snapshot` 确认。工具返回值带 `tab_id`，参数化的工具可传 `tab_id` 直达目标标签页（不传 = 当前活动标签页）。
+标准工作循环 = `browser_snapshot`（提取可交互元素 + uid 编号，真 a11y 树）→ `browser_click` / `browser_input`（按 uid）→ `browser_snapshot` 确认。工具返回值带 `tab_id`（CDP targetId 字符串，生命周期内稳定），参数化的工具可传 `tab_id` 直达目标标签页（不传 = 当前活动标签页）。`browser_tabs(action='close', tab_id='...')` 可直接关闭指定标签页（无需先 select；不传 `tab_id` 关当前活动标签页，返回 `closed_tab_id`）。
 
 `browser_start` 支持可选 `browser_path` 参数：自动探测失败或本机未装 Chrome 时，AI 可自行探测浏览器路径（如 Edge 的 `msedge.exe`）后传入启动；仅在首次建会话时生效，会话已存在时忽略（需先 `browser_close` 再 start）。
 
