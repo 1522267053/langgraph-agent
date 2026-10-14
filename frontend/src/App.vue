@@ -1538,7 +1538,7 @@ function handleSessionPageChange(page: number): void {
 .session-batch-bar,
 .drawer-session-batch-bar {
   display: flex;
-  gap: 8px;
+  gap: 20px;
   padding: 8px 12px;
   border-top: 1px solid var(--paper-line-soft);
   flex-shrink: 0;
@@ -1550,7 +1550,7 @@ function handleSessionPageChange(page: number): void {
   background: transparent;
   color: var(--paper-ink-2);
   font-size: 12px;
-  padding: 6px 0;
+  padding: 3px 0;
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
