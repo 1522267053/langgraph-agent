@@ -73,6 +73,79 @@ def set_version(version: str) -> None:
     print(f"  Version set to {version}")
 
 
+def _hash_deps(data) -> str:
+    """依赖段内容哈希（排序序列化后 sha256，字段顺序无关）"""
+    import hashlib
+
+    return hashlib.sha256(
+        json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def _python_deps_hash() -> str:
+    """pyproject.toml 依赖段哈希（version/description 等非依赖字段不参与）"""
+    import tomllib
+
+    with open(PROJECT_ROOT / "pyproject.toml", "rb") as f:
+        data = tomllib.load(f)
+    deps = {
+        "project": data.get("project", {}).get("dependencies", []),
+        "optional": data.get("project", {}).get("optional-dependencies", {}),
+        "groups": data.get("dependency-groups", {}),
+        "poetry": data.get("tool", {}).get("poetry", {}).get("dependencies", {}),
+    }
+    return _hash_deps(deps)
+
+
+def _frontend_deps_hash() -> str:
+    """package.json 依赖段哈希（scripts/description 等非依赖字段不参与）"""
+    pkg = json.loads(
+        (PROJECT_ROOT / "frontend" / "package.json").read_text(encoding="utf-8")
+    )
+    return _hash_deps(
+        {"deps": pkg.get("dependencies", {}), "dev": pkg.get("devDependencies", {})}
+    )
+
+
+def _deps_stale(marker: Path, current_hash: str) -> bool:
+    """标记文件缺失或哈希与 manifest 依赖段不一致 → 需要安装。
+
+    哈希判定不受 set_version 重写 pyproject.toml 影响（version 字段不参与
+    哈希）；标记放在安装目录内，随环境删除重建，不会跨环境误判。
+    """
+    if not marker.exists():
+        return True
+    return marker.read_text(encoding="utf-8").strip() != current_hash
+
+
+def _write_marker(marker: Path, deps_hash: str) -> None:
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(deps_hash + "\n", encoding="utf-8")
+
+
+def ensure_python_deps() -> None:
+    """pyproject.toml 依赖段变化或 venv 未安装时执行 poetry install"""
+    marker = PROJECT_ROOT / ".venv" / ".build_deps_hash"
+    deps_hash = _python_deps_hash()
+    if _deps_stale(marker, deps_hash):
+        run(["poetry", "install"], "poetry install")
+        _write_marker(marker, deps_hash)
+    else:
+        print("  Python deps up to date, skip poetry install")
+
+
+def ensure_frontend_deps() -> None:
+    """package.json 依赖段变化或 node_modules 未安装时执行 npm install"""
+    frontend = PROJECT_ROOT / "frontend"
+    marker = frontend / "node_modules" / ".build_deps_hash"
+    deps_hash = _frontend_deps_hash()
+    if _deps_stale(marker, deps_hash):
+        run([NPM, "install"], "npm install", cwd=frontend)
+        _write_marker(marker, deps_hash)
+    else:
+        print("  Frontend deps up to date, skip npm install")
+
+
 def build_frontend() -> None:
     frontend_dir = PROJECT_ROOT / "frontend"
     dist_index = frontend_dir / "dist" / "index.html"
@@ -273,6 +346,8 @@ def main() -> int:
     start_time = datetime.now()
 
     steps: list[tuple[str, Callable[[], None]]] = [
+        ("Ensuring Python dependencies", ensure_python_deps),
+        ("Ensuring frontend dependencies", ensure_frontend_deps),
         ("Setting version", lambda: set_version(args.version)),
         ("Checking frontend build", build_frontend),
         ("Generating static imports", generate_static_imports),
