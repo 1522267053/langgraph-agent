@@ -302,7 +302,6 @@ export interface MemoryConfig {
   consolidate_threshold: number
   hot_decay_days: number
   warm_decay_days: number
-  consolidate_interval_days: number
 }
 
 /** 任务计划节点配置 */

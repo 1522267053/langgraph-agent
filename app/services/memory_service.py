@@ -84,15 +84,15 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         self,
         db: AsyncSession,
         agent_id: int,
-        hot_decay_days: int = 30,
-        warm_decay_days: int = 60,
+        hot_decay_days: int = 25,
+        warm_decay_days: int = 35,
     ) -> int:
         """将久未访问的记忆自动降级
 
         衰减规则（基于 last_access_time，无访问记录时退化为 modify_time）：
         - hot → warm：超过 hot_decay_days 天未被访问
         - warm → cold：超过 warm_decay_days 天未被访问
-        - importance 加成：(importance - 1) * 10 天，高重要度记忆衰减更慢
+        - importance 加成：(importance - 1) * 1 天，高重要度记忆衰减略慢
 
         同一 agent 在 DECAY_DEDUP_INTERVAL（30s）内不重复执行。
 
@@ -129,7 +129,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
             if not access_time:
                 continue
 
-            bonus = ((memory.importance or 1) - 1) * 10
+            bonus = (memory.importance or 1) - 1
 
             if (
                 memory.memory_type == MemoryType.HOT.value
@@ -168,8 +168,8 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         importance: int = 3,
         keywords: Optional[str] = None,
         source_session_id: Optional[str] = None,
-        hot_decay_days: int = 30,
-        warm_decay_days: int = 60,
+        hot_decay_days: int = 25,
+        warm_decay_days: int = 35,
         skip_decay: bool = False,
         skip_vectorize: bool = False,
     ) -> Memory:
@@ -443,28 +443,6 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         )
         return self.truncate_index(raw_index, max_lines, max_bytes)
 
-    async def get_last_consolidate_time(
-        self, db: AsyncSession, agent_id: int
-    ) -> Optional[float]:
-        """获取该 agent 热记忆的最大 modify_time 作为上次整理时间的近似值
-
-        consolidate 会全量替换热记忆，新记忆的 modify_time 就是整理时间。
-        如果没有热记忆返回 None。
-        """
-        from sqlalchemy import func
-
-        stmt = select(func.max(Memory.modify_time)).where(
-            and_(
-                Memory.agent_id == agent_id,
-                Memory.memory_type == MemoryType.HOT.value,
-            )
-        )
-        result = await db.execute(stmt, execution_options={"include_deleted": False})
-        max_time = result.scalar()
-        if not max_time:
-            return None
-        return max_time.timestamp()
-
     async def get_hot_count(self, db: AsyncSession, agent_id: int) -> int:
         """获取热记忆数量"""
         from sqlalchemy import func
@@ -495,134 +473,162 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
                 stats[memory_type] = count
         return stats
 
-    async def get_all_hot_memories_full(
-        self, db: AsyncSession, agent_id: int
-    ) -> List[dict]:
-        """获取所有热记忆的完整内容，用于交给 LLM 总结"""
-        memories = await self.get_hot_memories(db, agent_id)
-        return [
-            {
-                "id": m.id,
-                "title": m.title,
-                "content": m.content,
-                "category": m.category,
-                "importance": m.importance,
-                "keywords": m.keywords,
-            }
-            for m in memories
-        ]
-
-    async def consolidate_hot_memories(
+    async def batch_consolidate(
         self,
         db: AsyncSession,
         agent_id: int,
-        new_memories: List[dict],
-        protected_ids: Optional[List[int]] = None,
-        demote_target: Optional[int] = None,
+        items: List[dict],
     ) -> dict:
-        """全量替换热记忆：先降级 → 软删除旧热记忆 → 批量保存新热记忆
+        """按主 agent 给出的处置决策批量整理热记忆（前台 agent 自整理）
 
-        新记忆的 importance/keywords 优先从 LLM 输出中取，
-        缺失时从旧记忆按 title 匹配兜底继承。
-        向量化在同一个事务完成后批量执行。
+        四种 action：
+        - keep: 不动
+        - demote: hot→warm（信息不丢，温记忆仍可向量检索，后续由时间衰减继续降冷）
+        - delete: 软删 + 删向量（仅过时/矛盾/错误条目）
+        - merge: 软删原条 → 新建 1 条 hot（importance 默认取原记忆最高值，
+          keywords/category 缺失时按第一条原记忆继承）
+
+        原子性：任一 id 无效（不存在/不属于该 agent/非热记忆）整批拒绝。
+        同一事务完成校验+处理，commit 后向量化 merge 新建条目。
 
         Args:
-            protected_ids: 受保护的热记忆 ID（新保存的），不参与软删除
-            demote_target: 降级目标数量，超过此数量的低价值热记忆先降级为 warm
+            items: [{"id": int, "action": str, "title"?, "content"?,
+                     "category"?, "importance"?, "keywords"?}]
+
+        Returns:
+            {"before", "after", "actions": {各action计数}, "results": merge新建明细}
         """
-        # ---- 降级低价值热记忆（同一事务） ----
-        if demote_target is not None:
-            await self._demote_to_target(db, agent_id, demote_target)
+        # ---- 校验：全部 id 必须是本 agent 的热记忆（任一无效整批拒绝） ----
+        raw_ids = [it.get("id") for it in items]
+        if any(not isinstance(i, int) or isinstance(i, bool) for i in raw_ids):
+            raise ValueError("所有条目必须包含整数 id")
+        ids: List[int] = raw_ids
+        if len(set(ids)) != len(ids):
+            raise ValueError("id 存在重复，请检查整理决策")
+        memories = await self.get_by_ids(db, agent_id, ids)
+        id_to_memory = {m.id: m for m in memories}
+        invalid = [
+            it["id"]
+            for it in items
+            if it["id"] not in id_to_memory
+            or id_to_memory[it["id"]].memory_type != MemoryType.HOT.value
+        ]
+        if invalid:
+            raise ValueError(
+                f"以下 id 不存在或不是该 agent 的热记忆: {invalid}；"
+                "请先 memory_list(tier=hot) 获取有效列表"
+            )
+        for it in items:
+            action = (it.get("action") or "").strip().lower()
+            if action not in ("keep", "demote", "delete", "merge"):
+                raise ValueError(
+                    f"未知 action: {it.get('action')!r}（支持 keep/demote/delete/merge）"
+                )
+            if action == "merge" and (
+                not (it.get("title") or "").strip()
+                or not (it.get("content") or "").strip()
+            ):
+                raise ValueError(f"merge 条目 id={it['id']} 缺少合并后的 title/content")
 
-        old_memories = await self.get_hot_memories(db, agent_id)
-        old_count = len(old_memories)
-
-        protected_set = set(protected_ids or [])
-        to_delete = [m for m in old_memories if m.id not in protected_set]
-        protected = [m for m in old_memories if m.id in protected_set]
-
-        title_to_old = {m.title: m for m in old_memories}
-        old_vector_ids = [m.vector_id for m in to_delete if m.vector_id]
-
-        # 软删除旧记忆（保留 protected 记忆）
-        for old_m in to_delete:
-            old_m.is_delete = 1
-            self._set_modifier_fields(old_m)
-
-        await db.flush()
-
-        now = datetime.now()
+        before = await self.get_hot_count(db, agent_id)
+        actions = {"keep": 0, "demote": 0, "delete": 0, "merge": 0}
+        to_delete_vector_ids: List[str] = []
         new_memory_objects: List[Memory] = []
-        results = []
-        for item in new_memories:
-            title = (item.get("title") or "").strip()
-            content = (item.get("content") or "").strip()
-            if not title or not content:
-                logger.warning(
-                    f"整理时跳过缺少标题或内容的条目: "
-                    f"title={title[:50]!r}, content_len={len(content)}"
-                )
+
+        # merge 分组：多条 merge 决策带相同 (title, content) 视为聚合为一组，
+        # 只新建 1 条热记忆（agent 想把 m4+m5 合并时传两个条目、同一 title/content）
+        merge_groups: dict[tuple, dict] = {}
+        for it in items:
+            action = it["action"].strip().lower()
+            memory = id_to_memory[it["id"]]
+            actions[action] += 1
+            if action == "keep":
                 continue
-            if len(title) > self.TITLE_MAX_LENGTH:
-                logger.warning(
-                    f"整理时标题超长已截断: title={title[:50]}, "
-                    f"len={len(title)}, max={self.TITLE_MAX_LENGTH}"
+            if action == "demote":
+                memory.memory_type = MemoryType.WARM.value
+                memory.access_count = 0
+                self._set_modifier_fields(memory)
+                continue
+            # delete / merge 都要软删原条目
+            memory.is_delete = 1
+            self._set_modifier_fields(memory)
+            if memory.vector_id:
+                to_delete_vector_ids.append(memory.vector_id)
+            if action == "merge":
+                key = (it["title"].strip(), it["content"].strip())
+                group = merge_groups.setdefault(
+                    key,
+                    {
+                        "title": it["title"].strip(),
+                        "content": it["content"].strip(),
+                        "importance": 0,
+                        "keywords": "",
+                        "category": "",
+                    },
                 )
-                title = title[: self.TITLE_MAX_LENGTH]
-            if len(content) > self.CONTENT_MAX_LENGTH:
-                logger.warning(
-                    f"整理时内容超长已截断: title={title[:50]}, "
-                    f"content_len={len(content)}, max={self.CONTENT_MAX_LENGTH}"
-                )
-                content = content[: self.CONTENT_MAX_LENGTH]
+                # 组内元数据聚合：importance 取最高，keywords/category 取第一个非空
+                it_imp = it.get("importance")
+                if isinstance(it_imp, int) and 1 <= it_imp <= 5:
+                    group["importance"] = max(group["importance"], it_imp)
+                elif group["importance"] == 0:
+                    group["importance"] = memory.importance or 3
+                group["importance"] = max(group["importance"], memory.importance or 3)
+                if not group["keywords"]:
+                    group["keywords"] = (it.get("keywords") or "").strip() or (
+                        memory.keywords or ""
+                    )
+                if not group["category"]:
+                    group["category"] = (it.get("category") or "").strip() or (
+                        memory.category or ""
+                    )
 
-            importance = item.get("importance", 5)
-            if not isinstance(importance, int) or importance < 1 or importance > 5:
-                importance = 5
-
-            keywords = item.get("keywords")
-            if not keywords and title in title_to_old:
-                keywords = title_to_old[title].keywords
-
-            memory = Memory(
+        # 每个merge组只新建1条热记忆
+        for group in merge_groups.values():
+            new_memory = Memory(
                 agent_id=agent_id,
-                title=title,
-                content=content,
+                title=group["title"][: self.TITLE_MAX_LENGTH],
+                content=group["content"][: self.CONTENT_MAX_LENGTH],
                 memory_type=MemoryType.HOT.value,
                 peak_tier=MemoryType.HOT.value,
-                category=item.get("category", "other"),
-                importance=importance,
-                keywords=keywords,
-                last_access_time=now,
+                category=group["category"] or "other",
+                importance=group["importance"] or 3,
+                keywords=group["keywords"] or None,
+                last_access_time=datetime.now(),
             )
-            self._set_creator_fields(memory)
-            memory.is_delete = 0
-            db.add(memory)
+            self._set_creator_fields(new_memory)
+            new_memory.is_delete = 0
+            db.add(new_memory)
             await db.flush()
-            new_memory_objects.append(memory)
-            results.append(
-                {"id": memory.id, "title": memory.title, "tier": memory.memory_type}
-            )
+            new_memory_objects.append(new_memory)
 
         await db.commit()
 
-        # 向量化新记忆
-        await self._vectorize_memories_batch(new_memory_objects, db=db)
+        # 向量化 merge 新建条目（commit 后，复用批量接口）
+        if new_memory_objects:
+            await self._vectorize_memories_batch(new_memory_objects, db=db)
 
-        # 向量化成功后删除旧向量（best-effort）
-        if old_vector_ids:
+        # 删除被 merge/delete 条目的旧向量（best-effort）
+        if to_delete_vector_ids:
             try:
                 vector_store = _get_vector_store()
-                await vector_store.delete(old_vector_ids)
+                await vector_store.delete(to_delete_vector_ids)
             except Exception:
-                logger.warning(f"删除旧记忆向量失败: agent_id={agent_id}")
+                logger.warning(f"整理删除旧记忆向量失败: agent_id={agent_id}")
 
+        after = await self.get_hot_count(db, agent_id)
         logger.info(
-            f"热记忆整理完成: agent_id={agent_id}, {old_count}条 → {len(results)}条"
-            f"（protected={len(protected)}条）"
+            f"热记忆整理完成（前台 agent 驱动）: agent_id={agent_id}, "
+            f"{before}条 → {after}条, actions={actions}"
         )
-
-        return {"old_count": old_count, "new_count": len(results), "results": results}
+        return {
+            "before": before,
+            "after": after,
+            "actions": actions,
+            "results": [
+                {"id": m.id, "title": m.title, "tier": m.memory_type}
+                for m in new_memory_objects
+            ],
+        }
 
     # ---- 自动升温 ----
 
@@ -786,22 +792,6 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         )
         return demote_count
 
-    async def demote_low_value_hot_memories(
-        self, db: AsyncSession, agent_id: int, target_count: int
-    ) -> int:
-        """选择性降级低价值热记忆（独立事务，外部调用用）
-
-        按 importance ASC、access_count ASC、create_time ASC 排序，
-        将末尾低价值记忆降为 warm，直到热记忆总数 <= target_count。
-
-        Returns:
-            降级的记忆数量
-        """
-        count = await self._demote_to_target(db, agent_id, target_count)
-        if count > 0:
-            await db.commit()
-        return count
-
     async def get_warm_for_promote(
         self,
         db: AsyncSession,
@@ -852,8 +842,8 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         categories: Optional[List[str]] = None,
         max_results: int = 5,
         min_score: Optional[float] = None,
-        hot_decay_days: int = 30,
-        warm_decay_days: int = 60,
+        hot_decay_days: int = 25,
+        warm_decay_days: int = 35,
     ) -> List[Tuple[Memory, float]]:
         """搜索记忆：向量可用时用向量搜索，否则降级为 SQL 关键词匹配
 

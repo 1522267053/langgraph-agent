@@ -149,15 +149,6 @@ const categoryOptions = [
           />
           <span class="unit-label">条</span>
         </el-form-item>
-        <el-form-item label="整理间隔">
-          <el-input-number
-            v-model="localConfig.consolidate_interval_days"
-            :min="0"
-            :max="90"
-            @change="updateConfig"
-          />
-          <span class="unit-label">天</span>
-        </el-form-item>
         <el-form-item label="热记忆衰减">
           <el-input-number
             v-model="localConfig.hot_decay_days"
@@ -181,11 +172,10 @@ const categoryOptions = [
         <el-text size="small" type="info">
           记忆被搜索命中时访问计数+1，达到升温阈值后自动升温（cold→warm→hot）。
           <br />
-          热记忆超过整理阈值时，保存新热记忆会自动触发 AI 总结整理，合并重复、压缩冗余。
+          热记忆接近整理阈值时保存会预警，超过阈值后保存被拒绝——
+          AI 会收到提示并调用 memory_consolidate 自主整理（合并重复、降级低价值、删除过时）。
           <br />
           久未访问的记忆会自动降温（hot→warm→cold），重要程度越高衰减越慢。
-          <br />
-          整理间隔设为 0 表示仅按数量触发整理，不按时间触发。
         </el-text>
       </div>
     </div>
@@ -195,9 +185,9 @@ const categoryOptions = [
         <el-text size="small" type="info">
           记忆节点需通过工具连接到LLM节点使用。
           <br />
-          LLM将获得 memory_save、memory_search、memory_list、memory_delete 工具。
+          LLM将获得 memory_save、memory_consolidate、memory_search、memory_list、memory_delete 工具。
           <br />
-          温度管理完全自动（升温+降温+整理），无需LLM手动干预。
+          温度管理自动（升温+降温），热记忆超限时由 LLM 调用 memory_consolidate 自主整理。
         </el-text>
       </div>
     </div>

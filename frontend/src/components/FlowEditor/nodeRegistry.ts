@@ -600,9 +600,8 @@ const registry: Record<string, NodeRegistryEntry> = {
       system_prompt_categories: ['profile', 'preference', 'instruction'],
       auto_promote_threshold: 5,
       consolidate_threshold: 25,
-      hot_decay_days: 30,
-      warm_decay_days: 60,
-      consolidate_interval_days: 7
+      hot_decay_days: 25,
+      warm_decay_days: 35
     }),
     // 旧节点配置缺少 system_prompt_categories 时回填默认值（已保存的值优先）
     initConfig: rawConfig => ({

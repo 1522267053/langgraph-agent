@@ -9,24 +9,20 @@
 - cold（冷）：低优先级记忆，搜索命中后自动升温
 
 为 Agent 提供的 LLM 工具：
-1. memory_save - 保存记忆（tier 由 importance 自动推断）
-2. memory_search - 向量搜索记忆（支持 hot/warm/cold）
-3. memory_list - 列出最近记忆
-4. memory_get - 通过 ID 精确获取记忆完整内容
-5. memory_delete - 删除记忆
+1. memory_save - 保存记忆（tier 由 importance 自动推断；热记忆接近上限预警、超限拒绝）
+2. memory_consolidate - 整理热记忆（agent 自主决策 keep/demote/delete/merge，无内部 LLM）
+3. memory_search - 向量搜索记忆（支持 hot/warm/cold）
+4. memory_list - 列出最近记忆
+5. memory_get - 通过 ID 精确获取记忆完整内容
+6. memory_delete - 删除记忆
 
 温度管理完全自动：
-- 搜索命中自动升温，热记忆超限自动 AI 总结整理
+- 搜索命中自动升温；热记忆超限由 agent 调 memory_consolidate 自主整理
 - 久未访问的记忆自动降温（hot→warm→cold），importance 越高衰减越慢
 """
 
-import asyncio
-import json
 import logging
-import re
-import time
 from typing import ClassVar, Optional, TYPE_CHECKING
-from langchain_core.messages import SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool, BaseTool
 from langgraph.types import StreamWriter
@@ -38,9 +34,7 @@ from app.agent_flow.flow_context import FlowState
 from app.agent_flow.node_handlers.base_handler import BaseNodeHandler
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.config.database import AsyncSessionLocal
-from app.constants.timing import MEMORY_CONSOLIDATION_COOLDOWN_SECONDS
 from app.services.memory_service import memory_service
-from app.utils.message_utils import extract_text_content
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +66,8 @@ class MemoryNodeConfig(BaseModel):
     warm_recent_count: int = 10
     auto_promote_threshold: int = 5
     consolidate_threshold: int = 25
-    hot_decay_days: int = 30
-    warm_decay_days: int = 60
-    consolidate_interval_days: int = 7
+    hot_decay_days: int = 25
+    warm_decay_days: int = 35
     system_prompt_categories: list[str] = Field(
         default_factory=lambda: ["profile", "preference", "instruction"],
         description="注入 system_prompt 的热记忆分类（用户画像/长期指令），其余分类注入消息层 reminder",
@@ -107,10 +100,10 @@ class MemoryNodeHandler(BaseNodeHandler):
       - warm_recent_count: 并入消息层记忆索引的温记忆最新条数（带预览、
       "| 温" 标记；默认10，0=关闭）
     - auto_promote_threshold: 自动升温阈值（默认5次访问）
-    - consolidate_threshold: 热记忆超过此数量时触发 AI 总结整理（默认25）
-    - hot_decay_days: 热记忆衰减天数（默认30），超过此天数未更新则降为温记忆
-    - warm_decay_days: 温记忆衰减天数（默认60），超过此天数未更新则降为冷记忆
-    - consolidate_interval_days: 时间触发整理间隔（默认7），距上次整理超过此天数且 hot>0 时强制整理
+    - consolidate_threshold: 热记忆上限（默认25）：保存后 20~25 条预警、
+      本次保存将导致超过 25 条时拒绝保存，agent 需调 memory_consolidate 自主整理
+    - hot_decay_days: 热记忆衰减天数（默认25），超过此天数未访问则降为温记忆
+    - warm_decay_days: 温记忆衰减天数（默认35），超过此天数未访问则降为冷记忆
     - system_prompt_categories: 注入 system_prompt 的热记忆分类（默认 profile/preference/instruction），
       其余分类的热索引与温记忆标题注入消息层 <system-reminder>
     """
@@ -122,15 +115,6 @@ class MemoryNodeHandler(BaseNodeHandler):
         self._agent_id: Optional[int] = None
         self._llm_config: Optional[dict] = None
         self._hot_index_cache: Optional[str] = None
-        self._last_consolidate_time: float = 0.0
-        self._consolidate_cooldown: float = MEMORY_CONSOLIDATION_COOLDOWN_SECONDS
-        self._consolidate_locks: dict[int, asyncio.Lock] = {}
-        self._last_consolidate_times: dict[int, float] = {}
-
-    def _get_consolidate_lock(self, agent_id: int) -> asyncio.Lock:
-        if agent_id not in self._consolidate_locks:
-            self._consolidate_locks[agent_id] = asyncio.Lock()
-        return self._consolidate_locks[agent_id]
 
     def _get_agent_id(self, config: Optional[RunnableConfig] = None) -> Optional[int]:
         if self._agent_id is not None:
@@ -183,9 +167,13 @@ class MemoryNodeHandler(BaseNodeHandler):
             static_prefix = (
                 "\n\n## 记忆系统\n"
                 f"工具: get(ID)查详情|search(关键词)搜记忆(默认warm/cold,可指定tier=hot)|"
-                f"save(保存,category:{valid_cats},importance=5→hot,3-4→warm,1-2→cold)\n"
+                f"save(保存,category:{valid_cats},importance=5→hot,3-4→warm,1-2→cold)|"
+                f"consolidate(整理热记忆)\n"
                 f"主动保存用户偏好、重要决策、关键信息。\n"
                 f"单条content硬上限600字符，内容多时拆成多条保存，不要反复微调字数重试。\n"
+                f"热记忆上限{self._get_config(node).consolidate_threshold}条：接近上限会预警、"
+                "超限保存被拒——收到预警/拒绝时先 memory_list(tier=hot) 查看，"
+                "再调 memory_consolidate 整理（合并重复、demote低价值到温记忆、删除过时）\n"
             )
             parts = [static_prefix]
             if stable_index:
@@ -241,193 +229,6 @@ class MemoryNodeHandler(BaseNodeHandler):
         consolidate_threshold = cfg.consolidate_threshold
         hot_decay_days = cfg.hot_decay_days
         warm_decay_days = cfg.warm_decay_days
-        consolidate_interval_days = cfg.consolidate_interval_days
-
-        async def _consolidate_hot_memories(
-            agent_id: int,
-            target_count: int,
-            protected_ids: Optional[list[int]] = None,
-            skip_cooldown: bool = False,
-        ) -> Optional[dict]:
-            """热记忆超限时调用 LLM 全量总结整理
-
-            最多重试 3 次，失败后按 importance 排序截断降级兜底。
-            """
-            if not handler._llm_config:
-                logger.warning("无法整理热记忆：未注入 LLM 配置")
-                return None
-
-            # 并发锁
-            lock = handler._get_consolidate_lock(agent_id)
-            if lock.locked():
-                logger.info(f"热记忆整理已在执行中，跳过（agent_id={agent_id}）")
-                return None
-            async with lock:
-                return await _do_consolidate(
-                    agent_id, target_count, protected_ids, skip_cooldown
-                )
-
-        async def _do_consolidate(
-            agent_id: int,
-            target_count: int,
-            protected_ids: Optional[list[int]],
-            skip_cooldown: bool,
-        ) -> Optional[dict]:
-            # 冷却检查（时间触发不受冷却限制）
-            now = time.time()
-            if not skip_cooldown:
-                if now - handler._last_consolidate_time < handler._consolidate_cooldown:
-                    logger.info(f"热记忆整理冷却中，跳过（agent_id={agent_id}）")
-                    return None
-
-            async with AsyncSessionLocal() as db:
-                all_hot = await memory_service.get_all_hot_memories_full(db, agent_id)
-
-            if not all_hot:
-                return None
-
-            # 按 importance 降序排列，取前 target_count*2 条传给 LLM（避免 prompt 过大）
-            all_hot.sort(key=lambda x: x.get("importance", 0), reverse=True)
-            hot_for_llm = all_hot[: max(target_count * 2, 30)]
-
-            hot_json = json.dumps(hot_for_llm, ensure_ascii=False, indent=2)
-            system_msg = (
-                "你是一个记忆管理系统。以下是一个 Agent 的所有热记忆，请进行整理。\n\n"
-                "## 整理规则\n"
-                "1. 合并重复或相似的记忆\n"
-                "2. 压缩冗长的描述为简洁摘要（标题不超过70字，内容不超过200字）\n"
-                "3. 优先保留高重要性的记忆，尤其是用户的明确偏好和关键决策\n"
-                "4. 删除过时、矛盾或不再相关的信息\n"
-                "5. 每条记忆必须包含 title(标题) 和 content(内容)\n"
-                "6. 每条记忆应包含 importance(重要程度1-5)，尽量保留原始重要程度\n"
-                "7. 可选 category 和 keywords，尽量保留原始分类和关键词\n"
-                "8. 分类只能是：decision/preference/lesson/relation/event/task/profile/other\n\n"
-                f"## 重要：尽量精简到 {target_count} 条以内，但如果信息都很重要，可以适当超出。\n\n"
-                "## 当前热记忆\n"
-                f"{hot_json}\n\n"
-                "## 输出格式\n"
-                '返回纯 JSON 数组，每个元素: {"title":"...","content":"...","category":"...","importance":5,"keywords":"..."}\n'
-                "不要输出任何其他内容，不要用 markdown 代码块包裹。"
-            )
-            llm_config = handler._llm_config
-            if not llm_config:
-                raise Exception("llm配置为空，记忆压缩失败")
-            provider_name = llm_config.get("provider", "")
-            from app.agent_flow.ai_provider import create_provider
-
-            provider = create_provider(
-                provider_name,
-                llm_config.get("api_key", ""),
-                llm_config.get("base_url", ""),
-            )
-            llm = provider.create_chat_model(
-                model=llm_config.get("model", ""),
-                temperature=0.3,
-                streaming=False,
-            )
-
-            # ---- 最多重试 3 次 ----
-            max_retries = 3
-            last_error = None
-            new_memories = None
-
-            for attempt in range(1, max_retries + 1):
-                try:
-                    prompt = system_msg
-                    if attempt > 1 and last_error:
-                        prompt = (
-                            f"{system_msg}\n\n"
-                            "## 上次输出格式错误\n"
-                            f"错误: {last_error}\n"
-                            "请严格按以下格式输出 JSON 数组，不要包含任何额外文字或代码块：\n"
-                            '[{"title":"...","content":"...","category":"...","importance":5}]\n'
-                        )
-
-                    response = await llm.ainvoke([SystemMessage(content=prompt)])
-                    text = extract_text_content(response.content).strip()
-                    text = re.sub(r"^```(?:json)?\s*\n?", "", text)
-                    text = re.sub(r"\n?```\s*$", "", text)
-                    parsed = json.loads(text)
-
-                    if not isinstance(parsed, list):
-                        last_error = f"输出不是数组，而是 {type(parsed).__name__}"
-                        logger.warning(
-                            f"热记忆整理第{attempt}次尝试格式异常: {last_error}"
-                        )
-                        continue
-
-                    # 条目级校验
-                    valid_items = []
-                    invalid_count = 0
-                    for idx, item in enumerate(parsed):
-                        title = (item.get("title") or "").strip()
-                        content = (item.get("content") or "").strip()
-                        if not title or not content:
-                            invalid_count += 1
-                            continue
-                        valid_items.append(item)
-
-                    if not valid_items:
-                        last_error = "所有条目均缺少 title 或 content"
-                        logger.warning(f"热记忆整理第{attempt}次尝试: {last_error}")
-                        continue
-
-                    # 无效条目占比 > 50% 时触发重试
-                    if invalid_count > len(parsed) * 0.5:
-                        last_error = f"无效条目占比过高: {invalid_count}/{len(parsed)}"
-                        logger.warning(f"热记忆整理第{attempt}次尝试: {last_error}")
-                        continue
-
-                    new_memories = valid_items
-                    break
-
-                except json.JSONDecodeError as e:
-                    last_error = f"JSON 解析失败: {e}"
-                    logger.warning(f"热记忆整理第{attempt}次尝试: {last_error}")
-                except Exception as e:
-                    last_error = str(e)
-                    logger.warning(f"热记忆整理第{attempt}次尝试异常: {last_error}")
-                    if attempt < max_retries:
-                        await asyncio.sleep(1)
-
-            # ---- 结果处理 ----
-            if new_memories:
-                async with AsyncSessionLocal() as db:
-                    result = await memory_service.consolidate_hot_memories(
-                        db,
-                        agent_id,
-                        new_memories,
-                        protected_ids=protected_ids,
-                    )
-                logger.info(
-                    f"热记忆 AI 整理完成: agent_id={agent_id}, "
-                    f"{result['old_count']}条 → {result['new_count']}条"
-                )
-                handler._last_consolidate_time = time.time()
-                handler._last_consolidate_times[agent_id] = time.time()
-                return result
-
-            # ---- LLM 全部失败，降级兜底 ----
-            logger.warning(
-                f"热记忆 AI 整理全部失败（{max_retries}次），"
-                f"回退到截断降级模式: agent_id={agent_id}"
-            )
-            async with AsyncSessionLocal() as db:
-                # 先降级到目标数量
-                await memory_service._demote_to_target(db, agent_id, target_count)
-                # 再截断到 consolidate_threshold - 10
-                hard_limit = max(target_count - 10, 5)
-                await memory_service._demote_to_target(db, agent_id, hard_limit)
-                await db.commit()
-
-            handler._last_consolidate_time = time.time()
-            handler._last_consolidate_times[agent_id] = time.time()
-            return {
-                "old_count": len(all_hot),
-                "new_count": 0,
-                "fallback": True,
-                "message": f"LLM 整理失败，已按重要性降级到 {hard_limit} 条",
-            }
 
         async def save_memory(
             memories: list[MemoryItem],
@@ -436,18 +237,48 @@ class MemoryNodeHandler(BaseNodeHandler):
             if not agent_id:
                 return {"error": "无法获取Agent ID"}
 
-            now_ts = time.time()
-
             items = memories
 
             if not items:
                 return {"error": "memories 不能为空"}
 
+            # ---- 预判式超限检查：本次保存将导致热记忆超过上限时整批拒绝 ----
+            # （先查数再落库，不先写后删；本次 items 中 tier=hot 的条数计入）
+            hot_items_count = 0
+            for item in items:
+                title = (item.title or "").strip()
+                content = (item.content or "").strip()
+                if not title or not content:
+                    continue
+                importance = item.importance or default_importance
+                tier = item.tier or memory_service.infer_tier(importance)
+                if tier == "hot":
+                    hot_items_count += 1
+
+            async with AsyncSessionLocal() as db:
+                current_hot = await memory_service.get_hot_count(db, agent_id)
+
+            warn_threshold = max(consolidate_threshold - 5, 1)
+            if current_hot + hot_items_count > consolidate_threshold:
+                return {
+                    "success": False,
+                    "error": (
+                        f"热记忆已达 {consolidate_threshold} 条上限"
+                        f"（当前 {current_hot} 条，本次再存 {hot_items_count} 条将超限），"
+                        "无法继续保存。请先 memory_list(tier=hot) 查看全部热记忆，"
+                        "再调用 memory_consolidate 整理"
+                        f"（合并重复/降级低价值到温记忆/删除过时条目，"
+                        f"目标压到 {max(consolidate_threshold - 10, 10)} 条以内），"
+                        "整理后再保存"
+                    ),
+                    "hot_count": current_hot,
+                    "action": "consolidate",
+                }
+
             async with AsyncSessionLocal() as db:
                 results = []
-                has_hot = False
-                protected_ids: list[int] = []
                 skipped = []
+                new_hot_count = 0
                 for idx, item in enumerate(items):
                     title = (item.title or "").strip()
                     content = (item.content or "").strip()
@@ -472,8 +303,6 @@ class MemoryNodeHandler(BaseNodeHandler):
                         category = default_category
                     importance = item.importance or default_importance
                     tier = item.tier or memory_service.infer_tier(importance)
-                    if tier == "hot":
-                        has_hot = True
                     memory = await memory_service.save_memory(
                         db=db,
                         agent_id=agent_id,
@@ -488,7 +317,7 @@ class MemoryNodeHandler(BaseNodeHandler):
                         skip_decay=True,
                     )
                     if tier == "hot":
-                        protected_ids.append(memory.id)
+                        new_hot_count += 1
                     results.append(
                         {
                             "id": memory.id,
@@ -497,19 +326,7 @@ class MemoryNodeHandler(BaseNodeHandler):
                         }
                     )
 
-                need_consolidate = False
-                skip_cooldown = False
-                if has_hot:
-                    hot_count = await memory_service.get_hot_count(db, agent_id)
-                    if hot_count > consolidate_threshold:
-                        need_consolidate = True
-                    elif hot_count > 0 and consolidate_interval_days > 0:
-                        last_ts = handler._last_consolidate_times.get(agent_id, 0)
-                        if last_ts > 0:
-                            interval_secs = consolidate_interval_days * 86400
-                            if now_ts - last_ts > interval_secs:
-                                need_consolidate = True
-                                skip_cooldown = True
+                hot_count_after = await memory_service.get_hot_count(db, agent_id)
 
             response_data = {
                 "success": len(results) > 0 or not skipped,
@@ -525,35 +342,73 @@ class MemoryNodeHandler(BaseNodeHandler):
                         f"请为每条记忆提供 title（简短标题，≤70字符）"
                     )
 
-            if need_consolidate:
-                target_count = max(consolidate_threshold - 10, 10)
-                consolidated = await _consolidate_hot_memories(
-                    agent_id,
-                    target_count,
-                    protected_ids=protected_ids if protected_ids else None,
-                    skip_cooldown=skip_cooldown,
+            # ---- 预警：热记忆接近上限（保存成功但提示 agent 尽快整理） ----
+            if new_hot_count > 0 and hot_count_after >= warn_threshold:
+                response_data["warning"] = (
+                    f"热记忆已达 {hot_count_after} 条，接近上限 {consolidate_threshold}，"
+                    "达到上限后将无法继续保存；建议尽快调用 memory_consolidate 整理"
+                    f"（目标压到 {max(consolidate_threshold - 10, 10)} 条以内）"
                 )
-                if consolidated:
-                    msg = consolidated.get("message", "")
-                    if consolidated.get("fallback"):
-                        response_data["consolidated"] = {
-                            "triggered": True,
-                            "fallback": True,
-                            "message": msg,
-                        }
-                    else:
-                        response_data["consolidated"] = {
-                            "triggered": True,
-                            "old_count": consolidated["old_count"],
-                            "new_count": consolidated["new_count"],
-                            "message": f"热记忆已整理：{consolidated['old_count']}条 → {consolidated['new_count']}条",
-                        }
-                else:
-                    response_data["consolidated"] = {
-                        "triggered": False,
-                        "message": "热记忆整理失败，将在下次保存时重试",
-                    }
+                response_data["hot_count"] = hot_count_after
 
+            return response_data
+
+        async def consolidate_memory(memories: list[ConsolidateItem]) -> dict:
+            """按主 agent 的处置决策批量整理热记忆（前台自整理，无内部 LLM 调用）"""
+            agent_id = handler._get_agent_id()
+            if not agent_id:
+                return {"error": "无法获取Agent ID"}
+            if not memories:
+                return {"error": "memories 不能为空"}
+
+            items = [
+                {
+                    "id": it.id,
+                    "action": it.action,
+                    "title": it.title,
+                    "content": it.content,
+                    "category": it.category,
+                    "importance": it.importance,
+                    "keywords": it.keywords,
+                }
+                for it in memories
+            ]
+
+            try:
+                async with AsyncSessionLocal() as db:
+                    result = await memory_service.batch_consolidate(db, agent_id, items)
+            except ValueError as e:
+                return {"success": False, "error": str(e)}
+            except Exception as e:
+                logger.warning(f"热记忆整理失败: agent_id={agent_id}, {e}")
+                return {
+                    "success": False,
+                    "error": f"整理执行失败: {e}；可稍后重试，或用 memory_delete "
+                    "删除少量低价值记忆腾出空间",
+                }
+
+            response_data = {
+                "success": True,
+                "before": result["before"],
+                "after": result["after"],
+                "actions": result["actions"],
+                "merged": result["results"],
+                "note": (
+                    f"整理完成：{result['before']}条 → {result['after']}条"
+                    f"（keep={result['actions']['keep']} "
+                    f"demote={result['actions']['demote']} "
+                    f"delete={result['actions']['delete']} "
+                    f"merge={result['actions']['merge']}）；"
+                    "demote 的记忆降为温记忆仍可被 memory_search 检索到"
+                ),
+            }
+            # 压力提示：整理后仍超目标数量
+            soft_target = max(consolidate_threshold - 10, 10)
+            if result["after"] > soft_target:
+                response_data["warning"] = (
+                    f"整理后仍有 {result['after']} 条热记忆，超过建议目标 {soft_target} 条；"
+                    "建议继续合并重复条目或将低价值记忆 demote"
+                )
             return response_data
 
         async def search_memory(
@@ -684,10 +539,31 @@ class MemoryNodeHandler(BaseNodeHandler):
                     f"默认category={default_category},importance={default_importance}。"
                     f"单条content硬上限600字符，超限报错；内容多时拆成多条（memories数组），"
                     f"禁止反复微调字数重试。"
+                    f"热记忆上限{consolidate_threshold}条：达到"
+                    f"{max(consolidate_threshold - 5, 1)}条时返回预警，"
+                    f"超限时保存被拒绝——此时先 memory_list(tier=hot) 查看，"
+                    f"再调 memory_consolidate 整理后重试"
                 ),
                 func=None,
                 coroutine=save_memory,
                 args_schema=MemorySaveInput,
+            ),
+            StructuredTool(
+                name="memory_consolidate",
+                description=(
+                    f"整理热记忆（热记忆接近/达到上限{consolidate_threshold}条时调用）。"
+                    "先用 memory_list(tier=hot) 查看全部热记忆，再对每条输出处置决策："
+                    "keep保留 / demote降为温记忆（信息不丢，仍可检索） / "
+                    "delete删除（仅过时矛盾错误条目） / merge合并为一条新热记忆"
+                    "（需提供合并后的title/content）。"
+                    "整理规则：合并重复相似、压缩冗长描述（标题≤70字内容≤200字）、"
+                    "优先保留用户偏好与关键决策、删除过时矛盾信息、"
+                    f"低价值条目demote，目标压到{max(consolidate_threshold - 10, 10)}条以内。"
+                    "任一id无效整批拒绝，覆盖全部热记忆逐条给出决策"
+                ),
+                func=None,
+                coroutine=consolidate_memory,
+                args_schema=ConsolidateInput,
             ),
             StructuredTool(
                 name="memory_search",
@@ -729,6 +605,7 @@ class MemoryNodeHandler(BaseNodeHandler):
     def get_tool_info(cls, node: FlowNode) -> list[dict]:
         return [
             {"name": "memory_save", "description": "保存记忆"},
+            {"name": "memory_consolidate", "description": "整理热记忆"},
             {"name": "memory_search", "description": "语义搜索记忆"},
             {"name": "memory_list", "description": "列出最近记忆"},
             {"name": "memory_delete", "description": "批量删除记忆"},
@@ -759,6 +636,43 @@ class MemorySaveInput(BaseModel):
     memories: list[MemoryItem] = Field(
         ...,
         description="记忆数组",
+    )
+
+
+class ConsolidateItem(BaseModel):
+    model_config = {"extra": "ignore"}
+    id: int = Field(..., description="热记忆 ID（memory_list(tier=hot) 返回的 id）")
+    action: str = Field(
+        ...,
+        description=(
+            "处置动作: keep（保留）/ demote（降为温记忆，信息不丢）/ "
+            "delete（删除，仅过时矛盾错误条目）/ merge（合并为一条新热记忆，"
+            "需提供 title/content）"
+        ),
+    )
+    title: Optional[str] = Field(
+        default=None, description="merge 必填：合并后的标题（70字以内）"
+    )
+    content: Optional[str] = Field(
+        default=None, description="merge 必填：合并后的内容（硬上限600字符）"
+    )
+    category: Optional[str] = Field(
+        default=None, description="merge 可选：分类，默认继承原记忆"
+    )
+    importance: Optional[int] = Field(
+        default=None, description="merge 可选：重要程度1-5，默认继承原记忆"
+    )
+    keywords: Optional[str] = Field(
+        default=None, description="merge 可选：关键词，默认继承原记忆"
+    )
+
+
+class ConsolidateInput(BaseModel):
+    memories: list[ConsolidateItem] = Field(
+        ...,
+        description=(
+            "整理决策数组，覆盖全部热记忆（每条一个决策）。任一 id 无效整批拒绝"
+        ),
     )
 
 
