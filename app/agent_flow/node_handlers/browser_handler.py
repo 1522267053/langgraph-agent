@@ -51,13 +51,14 @@ class BrowserNodeConfig(BaseNodeConfig):
 
     connect_mode: str = Field(
         "launch",
-        description="连接模式: launch（默认，每流程独立实例）或 remote（高级，连接远程主机已开调试端口的浏览器）",
+        description='连接模式: launch（默认，每流程独立实例）或 remote（高级，连接远程主机已开调试端口的浏览器）。仅 flow_action="start" 的节点生效',
     )
     browser_path: str = Field(
         "",
         description=(
             "浏览器可执行文件路径（仅 launch 模式）。"
-            "留空=自动探测（注册表→常见安装路径→PATH 搜索 Chrome/Edge）；配置则直接启动"
+            "留空=自动探测（注册表→常见安装路径→PATH 搜索 Chrome/Edge）；配置则直接启动。"
+            '仅 flow_action="start" 的节点生效'
         ),
     )
     user_data_path: str = Field(
@@ -65,7 +66,8 @@ class BrowserNodeConfig(BaseNodeConfig):
         description=(
             "浏览器数据保存位置（仅 launch 模式，可选）。"
             "留空=使用临时目录（浏览器退出自动清理，登录态不保留）；"
-            "配置则按流程派生子目录持久化，登录态/Cookie 跨运行保留"
+            "配置则按流程派生子目录持久化，登录态/Cookie 跨运行保留。"
+            '仅 flow_action="start" 的节点生效'
         ),
     )
     remote_host: str = Field(
@@ -80,7 +82,8 @@ class BrowserNodeConfig(BaseNodeConfig):
         0,
         description=(
             "本地调试端口（仅 launch 模式）。0=自动探测空闲端口（默认，推荐）；"
-            "配置具体端口（如 9333）则固定使用，便于外部 DevTools/CDP 客户端接入调试"
+            "配置具体端口（如 9333）则固定使用，便于外部 DevTools/CDP 客户端接入调试。"
+            '仅 flow_action="start" 的节点生效'
         ),
     )
     action_timeout: int = Field(
@@ -91,7 +94,8 @@ class BrowserNodeConfig(BaseNodeConfig):
         True,
         description=(
             "无头模式（仅 launch 模式）：true=后台运行不弹窗口（默认）；"
-            "false=弹出真实浏览器窗口，适合调试观察自动化过程"
+            "false=弹出真实浏览器窗口，适合调试观察自动化过程。"
+            '仅 flow_action="start" 的节点生效'
         ),
     )
     # Flow 主节点动作配置：一个节点执行一个具体动作，同流程多个浏览器节点
@@ -306,11 +310,11 @@ class BrowserNodeHandler(BaseNodeHandler):
 
         # 1.5 browser_path/user_data_path 同样支持 {{变量}} 插值（如浏览器路径
         #     / 登录态目录来自上游节点输出）。对副本插值，不污染原配置对象；
-        #     会话已存在时插值结果不生效（复用按 flow_id，与首次创建一致）
+        #     连接配置仅 start 节点生效，插值也只对 start 有意义
         resolved_cfg = cfg
         raw_path = (cfg.browser_path or "").strip()
         raw_data_dir = (cfg.user_data_path or "").strip()
-        if ("{{" in raw_path or "{{" in raw_data_dir) and action != "close":
+        if action == "start" and ("{{" in raw_path or "{{" in raw_data_dir):
             resolved_cfg = cfg.model_copy(
                 update={
                     "browser_path": self._resolver.render_template(
@@ -338,9 +342,11 @@ class BrowserNodeHandler(BaseNodeHandler):
             )
             return state
 
-        # start 也必须真正建会话（get_or_create 是启动浏览器的唯一入口）：
-        # 否则 headless=false 的 start 节点不弹窗，实际以下一个节点（常为
-        # headless=true 默认值）的配置建会话——首建配置漂移。close 无会话时跳过。
+        # 会话语义：连接配置（connect_mode/browser_path/user_data_path/
+        # headless/debug_port）仅 start 动作节点生效——start 是唯一建会话
+        # 入口（get_or_create）；其他动作只复用已有会话（reuse），缺会话
+        # 报错引导加 start 节点，不再隐式首建（避免"谁先跑谁配置生效"的
+        # 漂移歧义）。close 无会话时幂等跳过。
         session = None
         try:
             if action == "close":
@@ -350,10 +356,19 @@ class BrowserNodeHandler(BaseNodeHandler):
                     output_names = self._resolve_output_var_names(node)
                     state.set_node_variable(node.node_key, output_names[0], result)
                     return state
-            else:
+            elif action == "start":
                 session = await browser_session_manager.get_or_create(
                     resolved_cfg, flow_id
                 )
+            else:
+                session = browser_session_manager.reuse(flow_id)
+                if session is None:
+                    state.add_error(
+                        node.node_key,
+                        '浏览器未启动：请在流程中先添加 flow_action="start" 的浏览器节点'
+                        "（浏览器连接配置仅在 start 节点生效）",
+                    )
+                    return state
         except Exception as e:
             state.add_error(node.node_key, f"浏览器启动/连接失败: {e}")
             return state

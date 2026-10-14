@@ -344,6 +344,8 @@ SSH 节点（`ssh`）是 Agent 专用工具提供者，仅支持工具边 `tools
 - `headless=false` 弹出真实窗口，适合调试观察自动化过程。
 - 会话按 `flow_id` 缓存复用；空闲超过 600 秒自动回收（日志「浏览器会话空闲超时」），Agent 忘调 `browser_close` 也不会泄漏 Chromium 进程。
 
+**连接配置生效范围（重要）**：浏览器连接配置（`connect_mode` / `browser_path` / `user_data_path` / `headless` / `debug_port`）**仅在 `flow_action="start"` 的节点生效**——start 是唯一建会话入口。同流程后续浏览器节点（navigate/click/…）的这些配置**不生效**，且不会隐式启动浏览器：流程中没有 start 节点时，非 start 动作直接报错「浏览器未启动：请先添加 flow_action="start" 的浏览器节点」。编排多浏览器节点流程时，把连接配置集中在 start 节点上，后续节点只配动作参数（`flow_action` / `flow_args`）。
+
 ### Flow 动作参数元数据（后端单源）
 
 Flow 模式每个动作的参数 schema（`flow_args` 该填什么）**唯一事实源在后端** `BrowserNodeHandler.FLOW_ACTION_PARAMS` + `FLOW_ACTION_LABELS`，经 `GET /api/flow/browser-actions` 下发 `[{action, label, params: [{name, type, description, required}]}]`。前端 `BrowserConfig.vue` 动态拉取渲染动作下拉与逐参数表单（拉取失败时退化为仅显示动作名，不渲染参数表单）。新增/修改动作参数只改后端一处，前端自动跟随；禁止在前端再维护参数副本。

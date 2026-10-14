@@ -624,6 +624,17 @@ class BrowserSessionManager:
         """取已存在会话（不创建、不刷新 last_used，供 close 动作判空）"""
         return self._sessions.get(flow_id)
 
+    def reuse(self, flow_id: int) -> Optional[BrowserSession]:
+        """取已存在会话并刷新 last_used（不创建）；未存在返回 None。
+
+        Flow 编排非 start 动作专用：连接配置仅 start 节点生效（唯一建会话
+        入口是 get_or_create），后续动作只复用，缺会话由调用方报错引导。
+        """
+        session = self._sessions.get(flow_id)
+        if session is not None:
+            session.last_used = time.monotonic()
+        return session
+
     @staticmethod
     def _warn_cfg_drift(session: BrowserSession, cfg, flow_id: int) -> None:
         """后续节点启动类配置与会话首建配置不一致时告警（后到配置不生效）"""
