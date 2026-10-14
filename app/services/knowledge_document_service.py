@@ -689,6 +689,13 @@ class KnowledgeDocumentService(
         from app.services.vector_store_service import get_vector_store_service
 
         embedding_service = await get_embedding_service_async()
+        # 向量模型未配置时 embed_texts 会静默返回 []，与 texts 长度不一致
+        # （Chroma add_texts 报「长度必须一致」）——提前拦截并给出明确引导
+        if not embedding_service.is_available():
+            raise ValueError(
+                "向量模型未配置，无法向量化；请在系统设置中配置 Embedding "
+                "API（api_key/base_url/model）后重试"
+            )
         vector_store = get_vector_store_service()
 
         texts = [s.content for s in unvectorized]
