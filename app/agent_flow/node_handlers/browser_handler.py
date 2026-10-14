@@ -98,6 +98,14 @@ class BrowserNodeConfig(BaseNodeConfig):
             '仅 flow_action="start" 的节点生效'
         ),
     )
+    window_size: str = Field(
+        "800,600",
+        description=(
+            "浏览器窗口大小（宽,高），如 1920,1080。headless 模式下视口即此尺寸，"
+            "决定截图分辨率；launch 启动参数 --window-size。"
+            '仅 flow_action="start" 的节点生效'
+        ),
+    )
     # Flow 主节点动作配置：一个节点执行一个具体动作，同流程多个浏览器节点
     # 串联时按 flow_id 复用同一浏览器实例（start → navigate → click → ...）。
     # 参数经 flow_args 逐参数绑定（支持 {{变量}} 插值），与 MCP 节点 tool_args 同模式
@@ -190,7 +198,19 @@ class BrowserNodeHandler(BaseNodeHandler):
                 "type": "boolean",
                 "description": "是否截取整个页面（默认 false 只截可视区域）",
                 "required": False,
-            }
+            },
+            {
+                "name": "width",
+                "type": "number",
+                "description": "临时窗口宽度（像素），控制截图分辨率；不传=当前窗口宽",
+                "required": False,
+            },
+            {
+                "name": "height",
+                "type": "number",
+                "description": "临时窗口高度（像素），控制截图分辨率；不传=当前窗口高",
+                "required": False,
+            },
         ],
         "scroll": [
             {
@@ -242,6 +262,64 @@ class BrowserNodeHandler(BaseNodeHandler):
                 "required": False,
             },
         ],
+        "console_logs": [
+            {
+                "name": "level",
+                "type": "string",
+                "description": "按级别过滤: all（默认）/ error / warning / info / debug",
+                "required": False,
+            },
+            {
+                "name": "include_preserved",
+                "type": "boolean",
+                "description": "是否包含前几次导航的日志（默认 false 仅当前页面）",
+                "required": False,
+            },
+            {
+                "name": "limit",
+                "type": "number",
+                "description": "最多返回条数（默认 50）",
+                "required": False,
+            },
+        ],
+        "network": [
+            {
+                "name": "network_action",
+                "type": "string",
+                "description": "网络查看操作: list（列已捕获请求简表）/ get（按 reqid 查详情含响应体）/ start（覆盖监听过滤）/ stop（暂停收集）/ performance（资源时间线兜底）",
+                "required": True,
+            },
+            {
+                "name": "reqid",
+                "type": "number",
+                "description": "network_action=get 时的请求编号（来自 list 返回的 reqid）",
+                "required": False,
+            },
+            {
+                "name": "resource_types",
+                "type": "string",
+                "description": "list 时按资源类型过滤（逗号分隔如 XHR,Fetch，空=默认 Document/XHR/Fetch）；start 时覆盖监听过滤（空=全部）",
+                "required": False,
+            },
+            {
+                "name": "url_filter",
+                "type": "string",
+                "description": "list 时按 URL 子串过滤；start 时覆盖监听 URL 过滤（空=全部）",
+                "required": False,
+            },
+            {
+                "name": "include_preserved",
+                "type": "boolean",
+                "description": "list 时是否包含前几次导航的请求（默认 false 仅当前页面）",
+                "required": False,
+            },
+            {
+                "name": "limit",
+                "type": "number",
+                "description": "list 时最多返回条数（默认 50）",
+                "required": False,
+            },
+        ],
     }
 
     # 各 flow_action 的中文 label（前端动作下拉展示文案，与参数表同源下发）
@@ -257,6 +335,8 @@ class BrowserNodeHandler(BaseNodeHandler):
         "wait_for": "等待文本出现 (wait_for)",
         "evaluate": "执行 JS (evaluate)",
         "tabs": "标签页管理 (tabs)",
+        "console_logs": "控制台日志 (console_logs)",
+        "network": "网络请求监听 (network)",
         "close": "关闭浏览器 (close)",
     }
 
@@ -299,7 +379,8 @@ class BrowserNodeHandler(BaseNodeHandler):
             state.add_error(
                 node.node_key,
                 f"未知 flow_action: {action}（支持 start/navigate/click/input/"
-                "get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/close）",
+                "get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/"
+                "console_logs/network/close）",
             )
             return state
 
@@ -433,9 +514,33 @@ class BrowserNodeHandler(BaseNodeHandler):
                     json.loads(raw) if isinstance(raw, str) else (raw or [])
                 )
             elif action == "screenshot":
-                result["screenshot_bytes"] = tab.get_screenshot(
-                    as_bytes="png", full_page=bool(arg("full_page", False))
-                )
+                # width/height 临时视口覆盖控制截图分辨率（截完恢复，与 Agent 工具同语义）
+                _w = arg("width", None)
+                _h = arg("height", None)
+                old_metrics = None
+                if _w or _h:
+                    vp = tab.rect.viewport_size
+                    old_metrics = (vp[0], vp[1])
+                    tab.run_cdp(
+                        "Emulation.setDeviceMetricsOverride",
+                        width=int(_w or old_metrics[0]),
+                        height=int(_h or old_metrics[1]),
+                        deviceScaleFactor=1,
+                        mobile=False,
+                    )
+                try:
+                    result["screenshot_bytes"] = tab.get_screenshot(
+                        as_bytes="png", full_page=bool(arg("full_page", False))
+                    )
+                finally:
+                    if old_metrics:
+                        tab.run_cdp(
+                            "Emulation.setDeviceMetricsOverride",
+                            width=int(old_metrics[0]),
+                            height=int(old_metrics[1]),
+                            deviceScaleFactor=1,
+                            mobile=False,
+                        )
             elif action == "scroll":
                 direction = str(arg("direction", "down"))
                 amount = int(arg("amount", 600))
@@ -514,10 +619,133 @@ class BrowserNodeHandler(BaseNodeHandler):
                     raise ValueError(
                         f"未知 tab_action: {tab_action}（支持 new/list/select/close）"
                     )
+            elif action == "console_logs":
+                # 控制台日志：drain 进分段缓冲后按级别过滤（Agent 工具同语义，
+                # 常驻收集，默认仅当前导航段）
+                session.drain_console(tab)
+                lv = str(arg("level", "all")).strip().lower()
+                items = session.collected_console(bool(arg("include_preserved", False)))
+                if lv and lv != "all":
+                    items = [m for m in items if (m["level"] or "").lower() == lv]
+                items = items[-max(1, int(arg("limit", 50))) :]
+                result.update(
+                    logs=items,
+                    total=len(items),
+                    note=f"共返回 {len(items)} 条（level={lv}）",
+                )
+            elif action == "network":
+                # 网络查看：list/get/start/stop/performance（Agent 工具同语义，
+                # 建会话即常驻收集默认 Document/XHR/Fetch，跨导航持续）
+                from app.agent_flow.tools.browser_toolkit import (
+                    _NETWORK_BODY_MAX,
+                    _PERFORMANCE_JS,
+                    _packet_summary,
+                )
+
+                network_action = str(arg("network_action", "list")).strip()
+                if network_action == "get":
+                    packet = session.find_network_packet(int(arg("reqid", 0) or 0))
+                    if packet is None:
+                        raise ValueError(
+                            f"reqid={arg('reqid', 0)} 不存在：先用 network_action=list 获取有效编号"
+                        )
+                    detail = dict(_packet_summary(packet))
+                    try:
+                        if packet.is_failed:
+                            detail["fail_reason"] = getattr(
+                                packet.fail_info, "errorText", None
+                            )
+                        else:
+                            body = packet.response.raw_body
+                            if body is None:
+                                detail["body"] = "<not available anymore>"
+                            elif not isinstance(body, str):
+                                detail["body"] = "<binary data>"
+                            elif len(body) > _NETWORK_BODY_MAX:
+                                detail["body"] = (
+                                    body[:_NETWORK_BODY_MAX] + "... <truncated>"
+                                )
+                            else:
+                                detail["body"] = body
+                    except Exception as e:
+                        detail["body"] = f"<parse error: {e}>"
+                    result.update(network_action="get", request=detail)
+                elif network_action == "start":
+                    # 覆盖监听过滤（显式全量传参：DP start() 空参数不重置过滤）
+                    url_filter = str(arg("url_filter", "")).strip()
+                    rt = str(arg("resource_types", "")).strip()
+                    tab.listen.start(
+                        targets=url_filter or True,
+                        method=str(arg("method", "")).strip().upper() or True,
+                        res_type=(
+                            [t.strip().upper() for t in rt.split(",") if t.strip()]
+                            or True
+                        ),
+                    )
+                    result.update(
+                        network_action="start",
+                        note=f"监听过滤已覆盖: url={url_filter or '全部'} type={rt or '全部'}",
+                    )
+                elif network_action == "stop":
+                    tab.listen.stop()
+                    result.update(
+                        network_action="stop",
+                        note="网络收集已暂停（缓冲存量仍可 list/get；恢复用 start）",
+                    )
+                elif network_action == "performance":
+                    raw = tab.run_js(_PERFORMANCE_JS)
+                    entries = json.loads(raw) if isinstance(raw, str) else (raw or [])
+                    result.update(
+                        network_action="performance",
+                        resources=entries,
+                        total=len(entries),
+                        note="资源时间线（全量 URL+耗时，无状态码；仅当前文档）",
+                    )
+                elif network_action == "list":
+                    session.drain_network(tab)
+                    items = session.collected_network(
+                        bool(arg("include_preserved", False))
+                    )
+                    rt = {
+                        t.strip().upper()
+                        for t in str(arg("resource_types", "")).split(",")
+                        if t.strip()
+                    }
+                    if rt:
+                        items = [
+                            it
+                            for it in items
+                            if (it["summary"].get("resource_type") or "").upper() in rt
+                        ]
+                    uf = str(arg("url_filter", "")).strip()
+                    if uf:
+                        items = [it for it in items if uf in it["summary"]["url"]]
+                    base = session.collected_network(
+                        bool(arg("include_preserved", False))
+                    )
+                    offset_map = {id(it["packet"]): i + 1 for i, it in enumerate(base)}
+                    out = []
+                    for it in items[-max(1, int(arg("limit", 50))) :]:
+                        out.append(
+                            it["summary"]
+                            | {"reqid": offset_map.get(id(it["packet"]), 0)}
+                        )
+                    result.update(
+                        network_action="list",
+                        requests=out,
+                        total=len(items),
+                        note=f"共 {len(items)} 条；network_action=get + reqid 查详情（含响应体）",
+                    )
+                else:
+                    raise ValueError(
+                        f"未知 network_action: {network_action}"
+                        "（支持 list/get/start/stop/performance）"
+                    )
             else:
                 raise ValueError(
                     f"未知 flow_action: {action}（支持 start/navigate/click/input/"
-                    "get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/close）"
+                    "get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/"
+                    "console_logs/network/close）"
                 )
             return result
 
@@ -557,7 +785,7 @@ class BrowserNodeHandler(BaseNodeHandler):
         return False
 
     async def get_tool(self, node: FlowNode) -> Sequence[BaseTool]:
-        """Agent 工具集：组装 BrowserToolKit（12 个工具，实现见 tools/browser_toolkit.py）"""
+        """Agent 工具集：组装 BrowserToolKit（14 个工具，实现见 tools/browser_toolkit.py）"""
         cfg: BrowserNodeConfig = self._get_config(node)
         flow_id = get_flow_id()
 

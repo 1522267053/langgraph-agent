@@ -2,8 +2,8 @@
 浏览器操作工具集（BrowserToolKit，DrissionPage / CDP，chrome-devtools snapshot 范式）
 
 从 browser_handler 抽出：会话管理器（BrowserSessionManager，按 flow_id 缓存）+
-12 个 Agent 工具（browser_start/snapshot/navigate/click/input/screenshot/
-get_content/evaluate/tabs/scroll/wait_for/close）。
+14 个 Agent 工具（browser_start/snapshot/navigate/click/input/screenshot/
+get_content/evaluate/tabs/scroll/wait_for/console_logs/network/close）。
 
 工作循环 = browser_snapshot（提取可交互元素+ref 编号）→ click/input(按 ref) →
 snapshot 确认。
@@ -47,6 +47,17 @@ _ELE_FIND_TIMEOUT = 3
 # 浏览器空闲回收（秒）：超过该时长无任何工具调用的会话被后台协程自动 quit，
 # 防 Chromium 进程泄漏（Agent 忘调 close 时兜底）
 _BROWSER_IDLE_TIMEOUT = 600
+# 调试收集（console/network）按导航分段常驻缓冲，保留最近 N 次导航
+# （对齐 chrome-devtools-mcp PageCollector.maxNavigationSaved=3 语义）
+_NAV_SEGMENTS_MAX = 3
+# 单段 console/网络条数上限（防单页请求爆炸撑爆内存）
+_CONSOLE_SEG_MAX = 200
+_NETWORK_SEG_MAX = 200
+# 建会话自动网络监听的默认资源类型：主文档+接口（排除图片/字体/CSS 降开销，
+# DP Listener 对命中包自动拉响应体）；显式 start 可覆盖为任意范围
+_NETWORK_DEFAULT_RES_TYPES = ("DOCUMENT", "XHR", "FETCH")
+# 网络详情响应体内联上限（对齐 chrome-devtools-mcp BODY_CONTEXT_SIZE_LIMIT）
+_NETWORK_BODY_MAX = 10000
 
 
 def _normalize_locator(sel: str) -> str:
@@ -82,6 +93,45 @@ def _normalize_locator(sel: str) -> str:
     if s.isascii() and s.isidentifier():
         return f"css:{s}"
     return s
+
+
+def _packet_summary(p) -> dict:
+    """DataPacket → 轻量摘要（不碰响应体，get 详情时按需取）。
+
+    状态三态对齐 chrome-devtools-mcp：有响应=状态码 / 失败=errorText /
+    都没有=pending。任何字段解析失败都降级占位，不让单包异常毁掉整批收集。
+    """
+    item = {"url": "", "method": "", "status": "pending", "failed": False}
+    try:
+        item["url"] = (p.url or "")[:500]
+        item["method"] = p.method or ""
+        if p.is_failed:
+            item["failed"] = True
+            item["status"] = getattr(p.fail_info, "errorText", None) or "failed"
+        else:
+            item["status"] = p.response.status
+            item["resource_type"] = p.resourceType
+    except Exception as e:
+        item["status"] = f"pending({e.__class__.__name__})"
+    return item
+
+
+# performance 资源时间线 JS（action=performance 轻量兜底：全量 URL+耗时，
+# 无状态码；只反映当前文档，导航后清空）。必须用 return 语句形态。
+_PERFORMANCE_JS = """
+var entries = performance.getEntriesByType('resource');
+var out = [];
+for (var i = 0; i < entries.length; i++) {
+    var e = entries[i];
+    out.push({
+        url: String(e.name).slice(0, 500),
+        type: e.initiatorType,
+        duration_ms: Math.round(e.duration),
+        size_kb: e.transferSize ? Math.round(e.transferSize / 1024) : 0
+    });
+}
+return JSON.stringify(out);
+"""
 
 
 # snapshot 提取 JS：必须用 return 语句形态（DrissionPage 4.x run_js 只认 return）
@@ -461,6 +511,12 @@ class ScreenshotInput(BaseModel):
     """browser_screenshot 输入"""
 
     full_page: bool = Field(False, description="是否截取整个页面（默认只截可视区域）")
+    width: Optional[int] = Field(
+        None, description="临时窗口宽度（像素），控制截图分辨率；不传=当前窗口宽"
+    )
+    height: Optional[int] = Field(
+        None, description="临时窗口高度（像素），控制截图分辨率；不传=当前窗口高"
+    )
     tab_id: Optional[int] = Field(
         None,
         description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
@@ -523,6 +579,67 @@ class WaitForInput(BaseModel):
     )
 
 
+class ConsoleInput(BaseModel):
+    """browser_console_logs 输入"""
+
+    action: str = Field(
+        "list", description="操作: list（返回捕获的控制台日志）/ clear（清空缓冲）"
+    )
+    level: str = Field(
+        "all", description="按级别过滤: all（默认）/ error / warning / info / debug 等"
+    )
+    include_preserved: bool = Field(
+        False,
+        description="是否包含前几次导航的日志（默认 false 仅当前页面；true 回看最近 3 次导航）",
+    )
+    page_size: int = Field(50, description="每页条数（默认 50）")
+    page_idx: int = Field(0, description="页码（0 起，默认第一页）")
+    tab_id: Optional[int] = Field(
+        None,
+        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+    )
+
+
+class NetworkInput(BaseModel):
+    """browser_network 输入"""
+
+    action: str = Field(
+        "list",
+        description=(
+            "操作: list（列已捕获请求简表）/ get（按 reqid 查单条详情，含响应体）/ "
+            "start（覆盖监听过滤条件）/ stop（暂停收集）/ performance"
+            "（读资源时间线：全量 URL+耗时，无状态码的轻量兜底）"
+        ),
+    )
+    reqid: Optional[int] = Field(
+        None,
+        description="action=get 时的请求编号（来自 list 返回的 reqid，1 起）",
+    )
+    resource_types: str = Field(
+        "",
+        description=(
+            "action=list 时按资源类型过滤（逗号分隔如 XHR,Fetch，空=默认 "
+            "Document/XHR/Fetch）；action=start 时覆盖监听过滤（空=全部类型）"
+        ),
+    )
+    url_filter: str = Field(
+        "", description="action=list 时按 URL 子串过滤（空=不过滤）"
+    )
+    method: str = Field(
+        "", description="action=list 时按 HTTP 方法过滤（如 GET/POST，空=全部）"
+    )
+    include_preserved: bool = Field(
+        False,
+        description="action=list 时是否包含前几次导航的请求（默认 false 仅当前页面；true 回看最近 3 次导航）",
+    )
+    page_size: int = Field(50, description="action=list 时每页条数（默认 50）")
+    page_idx: int = Field(0, description="action=list 时页码（0 起）")
+    tab_id: Optional[int] = Field(
+        None,
+        description="目标标签页 id（snapshot/browser_tabs 返回的 tab_id），不传=当前活动标签页",
+    )
+
+
 # ---- 会话管理器（按 flow_id 缓存，解决多流程并发互不干扰） ----
 
 
@@ -554,9 +671,127 @@ class BrowserSession:
         # 竞态、截图通道卡死连带）。只读工具（snapshot/get_content/screenshot/
         # wait_for/evaluate）不加锁，保持可并行。
         self.write_lock = asyncio.Lock()
+        # 调试收集缓冲（console/network 常驻，参考 chrome-devtools-mcp
+        # PageCollector 的按导航分段语义）：[{url, items}]，最新段在前，
+        # 最多 _NAV_SEGMENTS_MAX 段；drain 时惰性比对 tab.url 封段开新段
+        # （DP 无公开导航事件，不挂私有 _driver 回调）。network 段 items
+        # 存 {summary, packet}（packet 保留引用供 action=get 按需取详情）
+        self.nav_segments: list[dict] = [{"url": "", "console": [], "network": []}]
+
+    def _ensure_segment(self, tab) -> dict:
+        """返回当前导航段；tab.url 与段 url 不一致时封段开新段（超限截断）"""
+        try:
+            cur_url = (tab.url or "")[:500]
+        except Exception:
+            cur_url = ""
+        seg = self.nav_segments[0]
+        if cur_url and seg["url"] and cur_url != seg["url"]:
+            self.nav_segments.insert(0, {"url": cur_url, "console": [], "network": []})
+            self.nav_segments[:] = self.nav_segments[:_NAV_SEGMENTS_MAX]
+            seg = self.nav_segments[0]
+        elif not seg["url"]:
+            seg["url"] = cur_url
+        return seg
+
+    def drain_console(self, tab) -> list[dict]:
+        """把 tab.console 队列已捕获日志排空进当前导航段（未监听则自动开启）
+
+        返回本次新收集的条目。坑：DP console.messages 是 drain 语义
+        （取出即清空队列），必须由本方法统一收进分段缓冲。
+        """
+        new_items: list[dict] = []
+        try:
+            if not tab.console.listening:
+                tab.console.start()
+            for m in tab.console.messages:
+                new_items.append(
+                    {
+                        "level": m.level or "info",
+                        "text": str(m.text)[:2000],
+                        "source": m.source,
+                        "url": (m.url or "")[:300],
+                        "line": m.line,
+                    }
+                )
+            if new_items:
+                seg = self._ensure_segment(tab)
+                seg["console"].extend(new_items)
+                seg["console"][:] = seg["console"][-_CONSOLE_SEG_MAX:]
+        except Exception as e:
+            logger.warning("收集 console 日志失败: %s", e)
+        return new_items
+
+    def drain_network(self, tab, timeout: float = 0.3) -> list[dict]:
+        """非阻塞排空 tab.listen 已捕获的网络包进当前导航段
+
+        每包转轻量摘要 + 保留 DataPacket 引用（action=get 按需取详情，
+        响应体不在此处内联）。未监听时自动按默认资源类型开启（常驻收集）。
+
+        坑1：listen.steps() 无 timeout 是无限阻塞生成器，不能用于排空。
+        坑2：wait(count=1) 命中时返回单个 DataPacket 而非列表（DP 源码
+        `if count == 1: return get_nowait()`），须循环逐个取直到超时返回 False。
+        """
+        try:
+            if not tab.listen.listening:
+                tab.listen.start(res_type=list(_NETWORK_DEFAULT_RES_TYPES))
+        except Exception as e:
+            logger.warning("开启网络监听失败: %s", e)
+            return []
+        packets = []
+        try:
+            while True:
+                r = tab.listen.wait(count=1, timeout=timeout, fit_count=False)
+                if not r:
+                    break
+                if isinstance(r, list):
+                    packets.extend(r)
+                    break
+                packets.append(r)
+        except Exception as e:
+            logger.warning("收集网络包失败: %s", e)
+        new_items: list[dict] = []
+        for p in packets:
+            new_items.append({"summary": _packet_summary(p), "packet": p})
+        if new_items:
+            seg = self._ensure_segment(tab)
+            seg["network"].extend(new_items)
+            seg["network"][:] = seg["network"][-_NETWORK_SEG_MAX:]
+        return new_items
+
+    def collected_console(self, include_preserved: bool) -> list[dict]:
+        """收集缓冲里的 console 条目（默认仅当前导航段）"""
+        segs = self.nav_segments if include_preserved else self.nav_segments[:1]
+        items: list[dict] = []
+        for seg in reversed(segs):  # 旧段在前，时间序输出
+            items.extend(seg["console"])
+        return items
+
+    def collected_network(self, include_preserved: bool) -> list[dict]:
+        """收集缓冲里的网络条目（默认仅当前导航段），带全局递增 reqid"""
+        segs = self.nav_segments if include_preserved else self.nav_segments[:1]
+        items: list[dict] = []
+        for seg in reversed(segs):  # 旧段在前，时间序输出
+            items.extend(seg["network"])
+        return items
+
+    def find_network_packet(self, reqid: int):
+        """按 reqid（collected_network 的 1-based 序号）找 DataPacket"""
+        items = self.collected_network(include_preserved=True)
+        if 1 <= reqid <= len(items):
+            return items[reqid - 1]["packet"]
+        return None
 
     def quit(self) -> None:
         try:
+            if self.active_tab is not None:
+                try:
+                    self.active_tab.listen.stop()
+                except Exception:
+                    pass
+                try:
+                    self.active_tab.console.stop()
+                except Exception:
+                    pass
             self.browser.quit(del_data=not self.persistent)
         except Exception as e:
             logger.warning("浏览器会话退出异常: %s", e)
@@ -645,6 +880,7 @@ class BrowserSessionManager:
             "debug_port": int(getattr(cfg, "debug_port", 0) or 0),
             "browser_path": (getattr(cfg, "browser_path", "") or "").strip(),
             "user_data_path": (getattr(cfg, "user_data_path", "") or "").strip(),
+            "window_size": (getattr(cfg, "window_size", "") or "").strip(),
         }
         diff = [k for k, v in current.items() if v != session.launch_cfg.get(k)]
         if diff:
@@ -672,13 +908,15 @@ class BrowserSessionManager:
             co.set_timeouts(base=_BROWSER_CONNECT_TIMEOUT)
             logger.info("浏览器节点连接远程浏览器: %s (flow_id=%s)", address, flow_id)
             browser = Chromium(co)
-            return BrowserSession(
+            session = BrowserSession(
                 browser,
                 port=cfg.remote_port,
                 data_dir=None,
                 persistent=True,
                 flow_id=flow_id,
             )
+            _start_debug_collectors(session)
+            return session
 
         # launch 模式：调试端口（0=自动探测空闲端口；配置具体端口则固定使用）
         # + 按流程派生数据目录
@@ -699,6 +937,24 @@ class BrowserSessionManager:
         co.set_user_data_path(str(data_dir))
         # 无头模式按节点配置（默认 True 后台运行；False 弹出真实窗口便于调试观察）
         co.headless(bool(getattr(cfg, "headless", True)))
+        # 窗口大小（默认 800,600）：headless 下视口即此尺寸，决定视口截图分辨率；
+        # 解析失败静默用浏览器默认（配置字段是自由字符串，容错优先）。
+        # 注意 --window-size 是窗口外框尺寸（headless 下视口会因边框略小），
+        # 截图时的精确分辨率由 Emulation.setDeviceMetricsOverride 保证
+        win_size = (getattr(cfg, "window_size", "") or "").strip()
+        parts = (
+            win_size.replace("×", ",").replace("*", ",").replace("x", ",").split(",")
+        )
+        if (
+            len(parts) == 2
+            and parts[0].strip().isdigit()
+            and parts[1].strip().isdigit()
+        ):
+            co.set_argument("--window-size", f"{parts[0].strip()},{parts[1].strip()}")
+        elif win_size:
+            logger.warning(
+                "window_size 格式无效（期望 宽,高）: %r，使用浏览器默认", win_size
+            )
         co.set_timeouts(base=_BROWSER_CONNECT_TIMEOUT)
         if cfg.browser_path.strip():
             co.set_browser_path(cfg.browser_path.strip())
@@ -709,7 +965,7 @@ class BrowserSessionManager:
             flow_id,
         )
         browser = Chromium(co)
-        return BrowserSession(
+        session = BrowserSession(
             browser,
             port=port,
             data_dir=data_dir,
@@ -720,8 +976,14 @@ class BrowserSessionManager:
                 "debug_port": port,
                 "browser_path": (cfg.browser_path or "").strip(),
                 "user_data_path": (cfg.user_data_path or "").strip(),
+                "window_size": (getattr(cfg, "window_size", "") or "").strip(),
             },
         )
+        # 建会话即开启 console+network 常驻收集（参考 chrome-devtools-mcp
+        # PageCollector 语义）：否则页面加载期（首次工具调用前）的 JS 报错
+        # 与初始化请求全部丢失（enable 之前产生的事件收不到）
+        _start_debug_collectors(session)
+        return session
 
     async def release(self, flow_id: int) -> None:
         """flow 结束时释放会话（quit 浏览器进程）"""
@@ -739,6 +1001,20 @@ class BrowserSessionManager:
                 await asyncio.to_thread(s.quit)
             except Exception:
                 pass
+
+
+def _start_debug_collectors(session: "BrowserSession") -> None:
+    """建会话时对初始 tab 开启 console+network 常驻收集（失败不阻断建会话）"""
+    try:
+        session.browser.latest_tab.console.start()
+    except Exception as e:
+        logger.warning("开启 console 收集失败（console_logs 将无数据）: %s", e)
+    try:
+        session.browser.latest_tab.listen.start(
+            res_type=list(_NETWORK_DEFAULT_RES_TYPES)
+        )
+    except Exception as e:
+        logger.warning("开启 network 收集失败（可用 action=start 重试）: %s", e)
 
 
 # 模块级单例：Flow 编排与 Agent 工具共享同一会话表（按 flow_id 隔离）
@@ -797,7 +1073,7 @@ def _resolve_tab(session: "BrowserSession", tab_id: Optional[int]):
 
 
 class BrowserToolKit:
-    """浏览器 Agent 工具集（12 个工具，snapshot 范式）
+    """浏览器 Agent 工具集（14 个工具，snapshot 范式）
 
     由 browser_handler.get_tool 构造，注入 cfg / flow_id / 审批回调。
     """
@@ -1059,10 +1335,20 @@ class BrowserToolKit:
         # ---- browser_screenshot ----
 
         async def browser_screenshot(
-            full_page: bool = False, tab_id: Optional[int] = None
+            full_page: bool = False,
+            width: Optional[int] = None,
+            height: Optional[int] = None,
+            tab_id: Optional[int] = None,
         ) -> str | dict:
             approval = await _approval(
-                "browser_screenshot", {"full_page": full_page, "tab_id": tab_id}, ""
+                "browser_screenshot",
+                {
+                    "full_page": full_page,
+                    "width": width,
+                    "height": height,
+                    "tab_id": tab_id,
+                },
+                "",
             )
             if approval not in (None, "approved"):
                 return {"error": f"用户未批准（{approval}）", "success": False}
@@ -1077,7 +1363,33 @@ class BrowserToolKit:
                             "success": False,
                         }
                     session.active_tab = tab
-                    png = tab.get_screenshot(as_bytes="png", full_page=full_page)
+                    # 临时视口覆盖控制截图分辨率（Emulation.setDeviceMetricsOverride，
+                    # 精确像素；--window-size/Browser.setWindowBounds 是外框语义，
+                    # 视口会因边框略小）。仅本次截图生效，截完恢复，避免影响元素定位
+                    old_metrics = None
+                    if width or height:
+                        vp = tab.rect.viewport_size
+                        old_metrics = (vp[0], vp[1])
+                        new_w = width or old_metrics[0]
+                        new_h = height or old_metrics[1]
+                        tab.run_cdp(
+                            "Emulation.setDeviceMetricsOverride",
+                            width=int(new_w),
+                            height=int(new_h),
+                            deviceScaleFactor=1,
+                            mobile=False,
+                        )
+                    try:
+                        png = tab.get_screenshot(as_bytes="png", full_page=full_page)
+                    finally:
+                        if old_metrics:
+                            tab.run_cdp(
+                                "Emulation.setDeviceMetricsOverride",
+                                width=int(old_metrics[0]),
+                                height=int(old_metrics[1]),
+                                deviceScaleFactor=1,
+                                mobile=False,
+                            )
                     return png
 
                 try:
@@ -1398,6 +1710,241 @@ class BrowserToolKit:
             except Exception as e:
                 return {"error": f"浏览器关闭失败: {e}", "success": False}
 
+        # ---- browser_console_logs ----
+
+        async def browser_console_logs(
+            action: str = "list",
+            level: str = "all",
+            include_preserved: bool = False,
+            page_size: int = 50,
+            page_idx: int = 0,
+            tab_id: Optional[int] = None,
+        ) -> str | dict:
+            approval = await _approval(
+                "browser_console_logs", {"action": action, "level": level}, ""
+            )
+            if approval not in (None, "approved"):
+                return {"error": f"用户未批准（{approval}）", "success": False}
+            try:
+                session = await _get_session()
+
+                def run():
+                    tab = _resolve_tab(session, tab_id)
+                    if tab is None:
+                        return {
+                            "error": f"tab_id={tab_id} 不存在，请先 browser_tabs(action='list') 查看可用标签页",
+                            "success": False,
+                        }
+                    session.active_tab = tab
+                    if action == "clear":
+                        session.nav_segments = [
+                            {"url": (tab.url or "")[:500], "console": [], "network": []}
+                        ]
+                        try:
+                            tab.console.clear()
+                        except Exception:
+                            pass
+                        return {"success": True, "note": "控制台日志缓冲已清空"}
+                    # list：排空队列进分段缓冲后按级别过滤 + 分页
+                    # （默认仅当前导航段，include_preserved 回看最近 3 次导航）
+                    session.drain_console(tab)
+                    lv = (level or "all").strip().lower()
+                    items = session.collected_console(include_preserved)
+                    if lv and lv != "all":
+                        items = [m for m in items if (m["level"] or "").lower() == lv]
+                    ps = max(1, int(page_size))
+                    pi = max(0, int(page_idx))
+                    page = items[pi * ps : (pi + 1) * ps]
+                    return {
+                        "success": True,
+                        "logs": page,
+                        "total": len(items),
+                        "page_idx": pi,
+                        "page_size": ps,
+                        "note": (
+                            f"当前导航段共 {len(session.nav_segments[0]['console'])} 条，"
+                            f"过滤后 {len(items)} 条，本页 {len(page)} 条（level={lv}）；"
+                            "浏览器启动后全程捕获，navigate 后调用可看页面加载期报错"
+                        ),
+                    }
+
+                return await asyncio.to_thread(run)
+            except Exception as e:
+                return {"error": f"读取控制台日志失败: {e}", "success": False}
+
+        # ---- browser_network ----
+
+        async def browser_network(
+            action: str = "list",
+            reqid: Optional[int] = None,
+            resource_types: str = "",
+            url_filter: str = "",
+            method: str = "",
+            include_preserved: bool = False,
+            page_size: int = 50,
+            page_idx: int = 0,
+            tab_id: Optional[int] = None,
+        ) -> str | dict:
+            approval = await _approval(
+                "browser_network",
+                {"action": action, "reqid": reqid, "url_filter": url_filter},
+                url_filter,
+            )
+            if approval not in (None, "approved"):
+                return {"error": f"用户未批准（{approval}）", "success": False}
+            try:
+                session = await _get_session()
+
+                def run():
+                    tab = _resolve_tab(session, tab_id)
+                    if tab is None:
+                        return {
+                            "error": f"tab_id={tab_id} 不存在，请先 browser_tabs(action='list') 查看可用标签页",
+                            "success": False,
+                        }
+                    session.active_tab = tab
+
+                    if action == "get":
+                        packet = session.find_network_packet(int(reqid or 0))
+                        if packet is None:
+                            return {
+                                "success": False,
+                                "error": f"reqid={reqid} 不存在：请先用 action=list 获取有效编号"
+                                "（缓冲保留最近 3 次导航，更早的请求已被截断）",
+                            }
+                        detail = dict(_packet_summary(packet))
+                        try:
+                            if packet.is_failed:
+                                detail["fail_reason"] = getattr(
+                                    packet.fail_info, "errorText", None
+                                )
+                            else:
+                                resp = packet.response
+                                detail["response_headers"] = dict(
+                                    list((resp.headers or {}).items())[:40]
+                                )
+                                body = resp.raw_body
+                                if body is None:
+                                    detail["body"] = "<not available anymore>"
+                                elif not isinstance(body, str):
+                                    detail["body"] = "<binary data>"
+                                elif len(body) == 0:
+                                    detail["body"] = "<empty response>"
+                                elif len(body) > _NETWORK_BODY_MAX:
+                                    detail["body"] = (
+                                        body[:_NETWORK_BODY_MAX] + "... <truncated>"
+                                    )
+                                else:
+                                    detail["body"] = body
+                        except Exception as e:
+                            detail["body"] = f"<parse error: {e}>"
+                        return {"success": True, "request": detail}
+
+                    if action == "start":
+                        # 覆盖监听过滤条件。坑：DP start() 空参数不重置过滤
+                        # （`if targets or ... or res_type:` 全空跳过 set_targets），
+                        # 须显式传全量：空串=True（不过滤）
+                        kw = {
+                            "targets": url_filter.strip() or True,
+                            "method": method.strip().upper() or True,
+                            "res_type": (
+                                [
+                                    t.strip().upper()
+                                    for t in resource_types.split(",")
+                                    if t.strip()
+                                ]
+                                or True
+                            ),
+                        }
+                        tab.listen.start(**kw)
+                        return {
+                            "success": True,
+                            "note": (
+                                "监听过滤已覆盖为: "
+                                f"url={url_filter or '全部'} method={method or '全部'} "
+                                f"type={resource_types or '全部'}；"
+                                "之后触发的请求按新条件捕获"
+                            ),
+                        }
+
+                    if action == "stop":
+                        tab.listen.stop()
+                        return {
+                            "success": True,
+                            "note": "网络收集已暂停（缓冲存量仍可 list/get；恢复用 action=start）",
+                        }
+
+                    if action == "performance":
+                        raw = tab.run_js(_PERFORMANCE_JS)
+                        entries = (
+                            json.loads(raw) if isinstance(raw, str) else (raw or [])
+                        )
+                        return {
+                            "success": True,
+                            "resources": entries,
+                            "total": len(entries),
+                            "note": (
+                                "资源时间线（全量 URL+耗时，无状态码；仅当前文档，"
+                                "导航后清空）。需要状态码/响应体用 action=list + get"
+                            ),
+                        }
+
+                    # list：排空进分段缓冲后过滤 + 分页（默认仅当前导航段）。
+                    # 常驻收集下永远可用，无需先 start
+                    session.drain_network(tab)
+                    items = session.collected_network(include_preserved)
+                    rt = {
+                        t.strip().upper()
+                        for t in (resource_types or "").split(",")
+                        if t.strip()
+                    }
+                    if rt:
+                        items = [
+                            it
+                            for it in items
+                            if (it["summary"].get("resource_type") or "").upper() in rt
+                        ]
+                    if url_filter.strip():
+                        items = [
+                            it
+                            for it in items
+                            if url_filter.strip() in it["summary"]["url"]
+                        ]
+                    if method.strip():
+                        items = [
+                            it
+                            for it in items
+                            if it["summary"]["method"].upper() == method.strip().upper()
+                        ]
+                    # reqid 基于过滤前的全量序号（1 起，与 get 对齐）
+                    base = session.collected_network(include_preserved)
+                    offset_map = {id(it["packet"]): i + 1 for i, it in enumerate(base)}
+                    ps = max(1, int(page_size))
+                    pi = max(0, int(page_idx))
+                    page = items[pi * ps : (pi + 1) * ps]
+                    return {
+                        "success": True,
+                        "requests": [
+                            {
+                                **it["summary"],
+                                "reqid": offset_map.get(id(it["packet"]), 0),
+                            }
+                            for it in page
+                        ],
+                        "total": len(items),
+                        "page_idx": pi,
+                        "page_size": ps,
+                        "note": (
+                            f"共 {len(items)} 条，本页 {len(page)} 条；"
+                            "action=get + reqid 查单条详情（含响应体）；"
+                            "include_preserved=true 回看最近 3 次导航"
+                        ),
+                    }
+
+                return await asyncio.to_thread(run)
+            except Exception as e:
+                return {"error": f"网络查看操作失败: {e}", "success": False}
+
         return [
             StructuredTool(
                 name="browser_start",
@@ -1452,8 +1999,9 @@ class BrowserToolKit:
                 name="browser_screenshot",
                 description=(
                     "截取当前页面（full_page=True 全页），返回可预览的图片链接。"
-                    "注意：全页截图在内容较重的页面经常超时，优先用默认视口截图，"
-                    "需要长页面时用 browser_scroll 滚动后分段截图"
+                    "width/height 可临时调整窗口控制截图分辨率（如 1920x1080 高清截图），"
+                    "仅本次截图生效。注意：全页截图在内容较重的页面经常超时，"
+                    "优先用默认视口截图，需要长页面时用 browser_scroll 滚动后分段截图"
                 ),
                 args_schema=ScreenshotInput,
                 func=None,
@@ -1503,6 +2051,31 @@ class BrowserToolKit:
                 args_schema=_NoArgsInput,
                 func=None,
                 coroutine=browser_close,
+            ),
+            StructuredTool(
+                name="browser_console_logs",
+                description=(
+                    "查看页面控制台（console）日志：error/warning/info 等，"
+                    "浏览器启动后自动全程捕获（含页面加载期报错）。"
+                    "action: list（默认，仅当前导航）/ clear；level 过滤级别，"
+                    "include_preserved=true 回看最近 3 次导航"
+                ),
+                args_schema=ConsoleInput,
+                func=None,
+                coroutine=browser_console_logs,
+            ),
+            StructuredTool(
+                name="browser_network",
+                description=(
+                    "查看页面网络请求（Network 面板）。浏览器启动后自动捕获"
+                    "（默认 Document/XHR/Fetch，跨导航持续）。action: list"
+                    "（简表，默认当前导航，含 reqid）/ get（reqid 查详情含响应体）/ "
+                    "start（覆盖过滤条件）/ stop（暂停）/ performance（资源时间线"
+                    "全量 URL+耗时兜底）。排查接口报错：list 找 reqid → get 看响应体"
+                ),
+                args_schema=NetworkInput,
+                func=None,
+                coroutine=browser_network,
             ),
         ]
 

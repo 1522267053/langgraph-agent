@@ -326,7 +326,7 @@ SSH 节点（`ssh`）是 Agent 专用工具提供者，仅支持工具边 `tools
 
 ## 浏览器工具
 
-浏览器节点（`browser`）基于 DrissionPage（CDP）实现浏览器自动化，双形态：Flow 模式作主链执行节点（`default -> default`，一个节点一个动作：start/navigate/click/input/get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/close，参数经 `flow_args` 绑定）；Agent 模式经工具边提供 12 个工具（`browser_start` / `browser_snapshot` / `browser_navigate` / `browser_click` / `browser_input` / `browser_screenshot` / `browser_get_content` / `browser_evaluate` / `browser_tabs` / `browser_scroll` / `browser_wait_for` / `browser_close`）。同一 LLM 只能连接一个浏览器节点。
+浏览器节点（`browser`）基于 DrissionPage（CDP）实现浏览器自动化，双形态：Flow 模式作主链执行节点（`default -> default`，一个节点一个动作：start/navigate/click/input/get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/console_logs/network/close，参数经 `flow_args` 绑定）；Agent 模式经工具边提供 14 个工具（`browser_start` / `browser_snapshot` / `browser_navigate` / `browser_click` / `browser_input` / `browser_screenshot` / `browser_get_content` / `browser_evaluate` / `browser_tabs` / `browser_scroll` / `browser_wait_for` / `browser_console_logs` / `browser_network` / `browser_close`）。同一 LLM 只能连接一个浏览器节点。
 
 ```json
 {
@@ -335,11 +335,13 @@ SSH 节点（`ssh`）是 Agent 专用工具提供者，仅支持工具边 `tools
   "user_data_path": "",
   "headless": true,
   "debug_port": 0,
+  "window_size": "800,600",
   "action_timeout": 30
 }
 ```
 
 - `connect_mode=launch`（默认）每流程独立实例：`debug_port=0` 自动探测空闲端口；`user_data_path` 配置后按流程派生子目录持久化登录态（留空用临时目录，浏览器退出即清理）。
+- `window_size` 启动窗口大小（默认 800,600），headless 下决定视口与默认截图分辨率；注意 `--window-size` 是窗口外框语义，视口会因边框略小（约 782x504）。需要精确分辨率截图时用 `browser_screenshot` 的 `width`/`height` 参数（CDP 视口覆盖，精确像素，仅本次截图生效）。
 - `connect_mode=remote` 连接远程主机已开调试端口的浏览器（`remote_host` + `remote_port`，默认 9222）；CDP 无认证，同地址多流程并发会互相干扰。
 - `headless=false` 弹出真实窗口，适合调试观察自动化过程。
 - 会话按 `flow_id` 缓存复用；空闲超过 600 秒自动回收（日志「浏览器会话空闲超时」），Agent 忘调 `browser_close` 也不会泄漏 Chromium 进程。
@@ -361,6 +363,19 @@ Flow 模式每个动作的参数 schema（`flow_args` 该填什么）**唯一事
 标准工作循环 = `browser_snapshot`（提取可交互元素 + uid 编号，真 a11y 树）→ `browser_click` / `browser_input`（按 uid）→ `browser_snapshot` 确认。工具返回值带 `tab_id`，参数化的工具可传 `tab_id` 直达目标标签页（不传 = 当前活动标签页）。
 
 `browser_start` 支持可选 `browser_path` 参数：自动探测失败或本机未装 Chrome 时，AI 可自行探测浏览器路径（如 Edge 的 `msedge.exe`）后传入启动；仅在首次建会话时生效，会话已存在时忽略（需先 `browser_close` 再 start）。
+
+### 控制台日志与网络查看（调试利器，常驻收集）
+
+两个调试工具采用 chrome-devtools-mcp 同款「**常驻收集 + 只读查询**」语义：建会话即自动开启 console 与 network 收集（network 默认只抓 Document/XHR/Fetch，排除图片/字体降开销），跨导航持续有效，**无需任何 start 前置**。收集缓冲按导航分段，保留最近 3 次导航。
+
+- `browser_console_logs`：查看页面 console 输出。`action: list`（默认，仅当前导航段）/ `clear`；`level` 过滤级别（如 `level=error` 只看报错）；`include_preserved=true` 回看最近 3 次导航；`page_size`/`page_idx` 分页。排查「页面白屏/按钮点了没反应」时优先调它看 JS 报错。
+- `browser_network`：查看页面网络请求（Network 面板）。`action`:
+  - `list`（默认）：请求简表（reqid/method/url/status/failed），`resource_types`（逗号分隔，空=默认三类）/`url_filter`/`method` 过滤，`include_preserved=true` 回看旧导航段，分页同上；
+  - `get` + `reqid`：单条详情——响应头、响应体（上限 10000 字符，二进制标 `<binary data>`，过期标 `<not available anymore>`）、失败原因；
+  - `start`：覆盖监听过滤条件（如 `url_filter=api/data` 只抓接口）；
+  - `stop`：暂停收集（缓冲存量仍可 list/get）；
+  - `performance`：读资源时间线（全量 URL+耗时，无状态码；仅当前文档），零监听成本的轻量兜底。
+- 排查接口报错的标准链路：navigate → `list` 找到目标请求的 reqid → `get` 看响应体/状态码。刷新页面后直接 `list` 即页面初始化请求。
 
 **定位器规则（重要）**：CSS 选择器必须加 `css:` 前缀（如 `css:h1`、`css:#b_results li.b_algo h2`）；按可见文本匹配用 `text:xxx`；裸写 `h1` / `#id` 会被 DrissionPage 误当文本/id 解释而失配。裸定位器会自动归一化兜底，但显式前缀最可靠。
 

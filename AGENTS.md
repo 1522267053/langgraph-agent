@@ -174,10 +174,10 @@ npm run format                          # Prettier 格式化
 - **Windows 子进程注意**: 工具内如需创建子进程，必须带 `_SUBPROCESS_WINDOW_FLAGS`（shell_handler.py 定义），否则 GUI/托盘宿主下每次调用弹出黑框
 
 ### 四节点工具集（tools/*_toolkit.py）
-- shell（5 工具 + `_background_tasks` 后台任务表，REST API 与 Agent 共享）/ file（6 文件工具）/ ssh（5 工具）/ browser（12 工具 + `browser_session_manager` 会话单例，Flow 与 Agent 共享）
+- shell（5 工具 + `_background_tasks` 后台任务表，REST API 与 Agent 共享）/ file（6 文件工具）/ ssh（5 工具）/ browser（14 工具 + `browser_session_manager` 会话单例，Flow 与 Agent 共享）
 - **两个模块级单例必须保持**：`_background_tasks`、`browser_session_manager`——REST API 直接 import，改名即断
 - **审批回调注入**：tools 禁止 import node_handlers，审批以 `approval_cb(tool_name, tool_args, content_for_pattern)` 回调注入（三节点统一闭包模式）；未配置白名单/正则时零开销
-- **浏览器节点（DrissionPage 4.1.1.4，CDP）**：双形态——Flow 主链单步动作（flow_action + flow_args）或 Agent 12 工具集；会话按 flow_id 缓存，空闲 600s 自动回收；**Flow 模式连接配置（connect_mode/browser_path/user_data_path/headless/debug_port）仅 flow_action="start" 节点生效**（start 是唯一建会话入口 get_or_create，非 start 动作走 reuse、缺会话报错引导，不隐式首建；Agent 工具路径不受影响，仍幂等建会话）；launch 模式 `set_local_port(socket 探测)` + 显式数据目录（`auto_port()` 与 `set_user_data_path` 互斥）；`run_js` 只认 `return` 语句形态；`ele()` 裸字符串按 DP 自有语法解释（纯字符串=文本匹配、#开头=id），标准 CSS 必须带 `css:` 前缀（`_normalize_locator` 自动归一化兜底）；snapshot 走 CDP `Accessibility.getFullAXTree` 真 a11y 树，uid 锚定 `data-agent-ref` 属性
+- **浏览器节点（DrissionPage 4.1.1.4，CDP）**：双形态——Flow 主链单步动作（flow_action + flow_args）或 Agent 14 工具集；会话按 flow_id 缓存，空闲 600s 自动回收；**Flow 模式连接配置（connect_mode/browser_path/user_data_path/headless/debug_port）仅 flow_action="start" 节点生效**（start 是唯一建会话入口 get_or_create，非 start 动作走 reuse、缺会话报错引导，不隐式首建；Agent 工具路径不受影响，仍幂等建会话）；launch 模式 `set_local_port(socket 探测)` + 显式数据目录（`auto_port()` 与 `set_user_data_path` 互斥）；`run_js` 只认 `return` 语句形态；`ele()` 裸字符串按 DP 自有语法解释（纯字符串=文本匹配、#开头=id），标准 CSS 必须带 `css:` 前缀（`_normalize_locator` 自动归一化兜底）；snapshot 走 CDP `Accessibility.getFullAXTree` 真 a11y 树，uid 锚定 `data-agent-ref` 属性；console/network 调试收集采用 chrome-devtools-mcp 同款「常驻收集+按导航分段」（建会话即自动开启，network 默认 Document/XHR/Fetch，缓冲保留最近 3 次导航，DP 无公开导航事件用惰性 tab.url 比对封段；`listen.wait(count=1)` 返回单个 DataPacket 非列表、`console.messages` 是 drain 语义、`listen.start()` 空参数不重置过滤——三个坑均已封装在 drain/collect 辅助方法内）
 - **浏览器动作元数据后端单源**：Flow 模式动作下拉 label（`FLOW_ACTION_LABELS`）+ 参数 schema（`FLOW_ACTION_PARAMS`）唯一事实源在 `BrowserNodeHandler`，经 `GET /api/flow/browser-actions` 下发（`flow_api.py` 注册在 `/get/{id}/...` 动态路由之前）；前端 `BrowserConfig.vue` onMounted 动态拉取渲染（失败兜底=不渲染参数表单），**禁止在前端再硬编码参数副本**。新增动作只改后端两表 + 重跑 ruff
 
 ### 工具输出截断
