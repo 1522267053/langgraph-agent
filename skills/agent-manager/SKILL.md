@@ -30,6 +30,7 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
 |---|---|
 | API 请求、响应、SSE、恢复执行 | [API 参考](references/api.md) |
 | 节点字段、变量路径、边与常见配置 | [节点配置](references/node-config.md) |
+| Python 节点沙箱限制、file_list/多模态附件流转、绘图标注范式 | [Python 沙箱与文件](references/python-sandbox-and-files.md) |
 | 子 Agent、会话复用、并发与审批 | [子 Agent](references/sub-agent.md) |
 | 让 Agent 在运行时修改自身 | [运行时自更新](references/runtime-self-update.md) |
 | Flow 作为 Agent 工具（含 interrupt/审批） | [Workflow as Tool](references/workflow-as-tool.md) |
@@ -179,6 +180,9 @@ LLM 节点开启 `json_output_enabled: true` 后绑定 `structured_output` 虚�
 
 ## 高频陷阱
 
+- **写 Python 节点前先读 [Python 沙箱与文件](references/python-sandbox-and-files.md)**：沙箱仅放行 43 个模块（**无 PIL/numpy/importlib/sqlite3**），标识符不能以 `_` 开头，**不支持 `+=`**。
+- **流程输入 `file_list` 在节点里是文件 ID 列表**（如 `[79]`），不是路径。LLM 节点 `file_inputs` **只认 file_info 字典，裸 ID 会被静默丢弃**（无报错，模型只会说"没看到图片"）。需要先用 python 节点查 `/api/file/page` 换成 file_info。
+- 找文件类接口读源码 `app/api/file_api.py` 或前端产物，不要猜端点。
 - `input_schema` 不是说明文档，它决定 `{{变量}}` 能否从输入解析。
 - LLM 必须有 `user_prompt`；引用变量用 `{{input.<field>}}`、`{{nodes.<key>.<output>}}`、`{{variables.<name>}}` 或裸名 `{{<field>}}`（走 input_variables 别名映射）。完整路径表见 [节点配置 - 通用变量模型](references/node-config.md#通用变量模型)。
 - `source` 字段写裸路径（不加花括号）：`"source": "input.message"`；模板里才写 `{{input.message}}`。

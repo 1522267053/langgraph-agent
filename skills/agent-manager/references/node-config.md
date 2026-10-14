@@ -138,7 +138,7 @@ API 节点的请求体里嵌入上游变量：
 | `temperature/max_tokens` | 采样和单次输出限制 |
 | `history_mode` | `node`、`flow` 或 `none` |
 | `max_history_turns` | 注入的最大历史轮数 |
-| `file_inputs` | 作为多模态附件发送的文件变量路径 |
+| `file_inputs` | 作为多模态附件发送的文件变量路径。**只接受 file_info 字典**（含 `id`/`file_id`/`file_path`），裸文件 ID 会被静默丢弃导致模型「看不到图片」，见 [Python 沙箱与文件](python-sandbox-and-files.md#4-多模态文件变量流转核心链路) |
 | `output_variables` | 默认包含 `result` 和 `thinking` |
 | `required_tools` | 本轮必须调用的实际工具名列表 |
 | `tool_check_script` | 自定义必需工具检查脚本 |
@@ -245,6 +245,10 @@ API 节点的请求体里嵌入上游变量：
 - 如果确实需要 `true` 但又没有业务参数，加一个 `dummy` 占位字段：`{"name": "dummy", "type": "string", "required": false}`。
 
 ## Python 节点
+
+> 沙箱可用模块白名单、语法限制（标识符不能以 `_` 开头、不支持 `+=`）、文件变量流转与绘图标注范式，
+> 见 [Python 沙箱与文件](python-sandbox-and-files.md)。写代码前务必先读，否则极易踩 `ImportError` /
+> `_inplacevar_` / 图片静默不注入三类坑。
 
 代码必须定义 `main`，形参与 `input_variables[].name` 对应：
 

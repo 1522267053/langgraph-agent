@@ -19,6 +19,19 @@
 | GET | `/ai/flow/node-types/{node_type}/config-schema` | 获取单类节点实时配置 Schema |
 | GET | `/ai/flow/config-schemas` | 一次获取全部节点配置 Schema |
 
+## 文件操作
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| POST | `/file/page` | 按条件分页查文件；body `{"page":1,"page_size":10,"condition":{"id":79}}`，返回含 `file_path`/`download_url`/`preview_url` |
+| GET | `/file/download/{file_id}` | 下载/预览文件（`?inline=true` 浏览器内联） |
+| POST | `/file/upload` | 上传文件（multipart，字段 `file`） |
+| GET | `/file/delete/{file_id}` | 删除文件 |
+
+Python 节点内可用 `requests` 直接调用这些接口——流程输入的 `file_list` 是**文件 ID**，
+需要用它换成 file_info 才能喂给 LLM 的多模态附件，详见
+[Python 沙箱与文件](python-sandbox-and-files.md#4-多模态文件变量流转核心链路)。
+
 创建或修改节点时，以实时 Schema 为准；参考文档只解释用法，不替代 Schema。
 
 ## 流程生命周期
