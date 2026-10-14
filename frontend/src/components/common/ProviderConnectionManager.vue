@@ -7,14 +7,16 @@ import {
   type AIProviderConnectionInfo,
   type AIProviderConnectionPayload
 } from '@/api/aiProviderConnection'
-import { aiProviderApi, type ProviderInfo, type ModelInfo } from '@/api/ai_provider'
+import { aiProviderApi, isMultimodalModel, type ProviderInfo, type ModelInfo } from '@/api/ai_provider'
 import { CONTEXT_LENGTH_PRESETS, parseContextLength } from '@/components/FlowEditor/config/types'
 
 const loading = ref(false)
 const connections = ref<AIProviderConnectionInfo[]>([])
 
 const providerList = ref<ProviderInfo[]>([])
-const dialogModelOptions = ref<{ value: string; label: string; contextLength?: number }[]>([])
+const dialogModelOptions = ref<
+  { value: string; label: string; multimodal: boolean; contextLength?: number }[]
+>([])
 
 const dialogVisible = ref(false)
 const saving = ref(false)
@@ -89,6 +91,8 @@ async function onProviderChange(providerId: string, keepCurrent = false) {
     dialogModelOptions.value = (res.data.data || []).map((m: ModelInfo) => ({
       value: m.model_id,
       label: m.name,
+      // 下拉项「多模态」标签：判定口径见 ai_provider.isMultimodalModel
+      multimodal: isMultimodalModel(m.modalities?.input),
       contextLength: m.limits?.context ?? undefined
     }))
   } catch {
@@ -355,12 +359,18 @@ onMounted(async () => {
             :disabled="!form.provider_id"
             @change="onModelChange"
           >
+            <!-- 自定义插槽仅影响下拉项渲染；选中回显仍取 :label（EP 用 option.label 生成 selectedLabel） -->
             <el-option
               v-for="m in dialogModelOptions"
               :key="m.value"
               :label="m.label"
               :value="m.value"
-            />
+            >
+              <span class="model-opt">
+                <span class="model-opt-name">{{ m.label }}</span>
+                <span v-if="m.multimodal" class="model-opt-badge">多模态</span>
+              </span>
+            </el-option>
           </el-select>
         </el-form-item>
         <el-form-item label="Base URL">

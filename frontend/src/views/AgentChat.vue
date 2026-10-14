@@ -21,7 +21,12 @@ import {
 } from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
 import { flowApi } from '@/api/flow'
-import { aiProviderApi, type ReasoningMeta, parseReasoningOptions } from '@/api/ai_provider'
+import {
+  aiProviderApi,
+  isMultimodalModel,
+  type ReasoningMeta,
+  parseReasoningOptions
+} from '@/api/ai_provider'
 import { providerConnectionApi } from '@/api/aiProviderConnection'
 import type { FlowIOField } from '@/types/flow'
 import type { AgentFileChangeInfo } from '@/types/agent'
@@ -218,9 +223,7 @@ function refreshModelSelectionIfStale(): void {
             options.push({
               value,
               label: m.name,
-              multimodal: (m.modalities?.input || []).some(t =>
-                ['image', 'video', 'audio', 'pdf'].includes(t)
-              ),
+              multimodal: isMultimodalModel(m.modalities?.input),
               provider: group.provider_id,
               providerLabel: group.provider_label,
               reasoningOptions: parseReasoningOptions(m.reasoning_options)
@@ -248,9 +251,7 @@ function refreshModelSelectionIfStale(): void {
                 options.push({
                   value,
                   label: m.name,
-                  multimodal: (m.modalities?.input || []).some(t =>
-                    ['image', 'video', 'audio', 'pdf'].includes(t)
-                  ),
+                  multimodal: isMultimodalModel(m.modalities?.input),
                   provider: nodeProvider,
                   providerLabel: nodeProvider,
                   reasoningOptions: parseReasoningOptions(m.reasoning_options)
@@ -1026,9 +1027,7 @@ async function loadModelSelection(id: number) {
           options.push({
             value,
             label: m.name,
-            multimodal: (m.modalities?.input || []).some(t =>
-              ['image', 'video', 'audio', 'pdf'].includes(t)
-            ),
+            multimodal: isMultimodalModel(m.modalities?.input),
             provider: group.provider_id,
             providerLabel: group.provider_label,
             reasoningOptions: parseReasoningOptions(m.reasoning_options)
@@ -1064,9 +1063,7 @@ async function loadModelSelection(id: number) {
           options.push({
             value,
             label: m.name,
-            multimodal: (m.modalities?.input || []).some(t =>
-              ['image', 'video', 'audio', 'pdf'].includes(t)
-            ),
+            multimodal: isMultimodalModel(m.modalities?.input),
             provider: nodeProvider,
             providerLabel: nodeProvider,
             reasoningOptions: parseReasoningOptions(m.reasoning_options)

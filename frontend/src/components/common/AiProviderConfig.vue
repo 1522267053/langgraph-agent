@@ -2,7 +2,14 @@
 import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import { QuestionFilled, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { aiProviderApi, type ProviderInfo, type ModelInfo, type ReasoningMeta, parseReasoningOptions } from '@/api/ai_provider'
+import {
+  aiProviderApi,
+  isMultimodalModel,
+  type ProviderInfo,
+  type ModelInfo,
+  type ReasoningMeta,
+  parseReasoningOptions
+} from '@/api/ai_provider'
 import type { ModelCapabilities } from '@/components/FlowEditor/config/types'
 import { CONTEXT_LENGTH_PRESETS, parseContextLength } from '@/components/FlowEditor/config/types'
 
@@ -108,6 +115,8 @@ const modelList = ref<
     value: string
     label: string
     capabilities?: ModelCapabilities
+    /** 模型原生多模态输入（图片/视频/音频/PDF 任一）——仅用于下拉项标签，不参与 capabilities 默认值判定 */
+    multimodal: boolean
     context_length?: number
     max_tokens?: number
     reasoning_meta?: ReasoningMeta | null
@@ -225,6 +234,8 @@ async function loadModels(providerId: string) {
           audio: inputModalities.includes('audio'),
           pdf: inputModalities.includes('pdf')
         },
+        // 下拉项「多模态」标签：判定口径见 ai_provider.isMultimodalModel
+        multimodal: isMultimodalModel(inputModalities),
         context_length: m.limits?.context,
         max_tokens: m.limits?.output,
         reasoning_meta: parseReasoningOptions(m.reasoning_options)
@@ -396,12 +407,18 @@ function handleExtraBodyBlur() {
         :clearable="modelClearable"
         @change="onModelSelectChange"
       >
+        <!-- 自定义插槽仅影响下拉项渲染；选中回显仍取 :label（EP 用 option.label 生成 selectedLabel） -->
         <el-option
           v-for="item in modelList"
           :key="item.value"
           :label="item.label"
           :value="item.value"
-        />
+        >
+          <span class="model-opt">
+            <span class="model-opt-name">{{ item.label }}</span>
+            <span v-if="item.multimodal" class="model-opt-badge">多模态</span>
+          </span>
+        </el-option>
       </el-select>
     </el-form-item>
     <el-form-item v-if="showCapabilities" label="支持内容">
@@ -591,12 +608,18 @@ function handleExtraBodyBlur() {
         :clearable="modelClearable"
         @change="onModelSelectChange"
       >
+        <!-- 自定义插槽仅影响下拉项渲染；选中回显仍取 :label（EP 用 option.label 生成 selectedLabel） -->
         <el-option
           v-for="item in modelList"
           :key="item.value"
           :label="item.label"
           :value="item.value"
-        />
+        >
+          <span class="model-opt">
+            <span class="model-opt-name">{{ item.label }}</span>
+            <span v-if="item.multimodal" class="model-opt-badge">多模态</span>
+          </span>
+        </el-option>
       </el-select>
     </el-form-item>
     <el-form-item label="Base URL">
@@ -703,6 +726,7 @@ function handleExtraBodyBlur() {
 </template>
 
 <style scoped>
+/* 模型下拉项「多模态」标签样式见全局 style.css 的 .model-opt*（选项 teleport 到 body） */
 .provider-with-sync {
   display: flex;
   gap: 8px;

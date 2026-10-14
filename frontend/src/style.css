@@ -318,6 +318,31 @@ body {
   color: #059669;
 }
 
+/* ---- 模型选择下拉项（节点配置 / 供应商连接共用的 .el-select 选项内容）----
+   选项由 Element Plus teleport 到 body，故样式放全局；下拉项行高 34px，靠 height:100% 垂直居中 */
+.model-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+}
+
+.model-opt-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-opt-badge {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--vermilion-soft);
+  color: var(--vermilion);
+  font-size: 10px;
+  line-height: 16px;
+}
+
 /* ================================================================
    el-button Overrides
    ================================================================ */

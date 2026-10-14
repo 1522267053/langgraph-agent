@@ -77,6 +77,15 @@ export function parseReasoningOptions(
   return null
 }
 
+/**
+ * 多模态模型判定：模型原生支持任一非文本输入（图片/视频/音频/PDF）。
+ * 模型选择下拉的「多模态」标签唯一事实源 —— 判定口径在此收口，
+ * 调用方（节点配置 / 供应商连接 / Agent 对话）只负责渲染，不得各自内联字面量。
+ */
+export function isMultimodalModel(inputModalities: string[] | null | undefined): boolean {
+  return ['image', 'video', 'audio', 'pdf'].some(t => (inputModalities || []).includes(t))
+}
+
 export const aiProviderApi = {
   list(): Promise<{ data: ApiResponse<ProviderInfo[]> }> {
     return get<ProviderInfo[]>('/ai-provider/list')
