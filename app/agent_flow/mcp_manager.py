@@ -697,11 +697,22 @@ class McpToolManager:
             finally:
                 try:
                     await session_ctx.__aexit__(None, None, None)
-                except Exception:
-                    logger.warning(
-                        f"关闭MCP连接失败: server_name={server.name}",
-                        exc_info=True,
-                    )
+                except BaseException as close_err:
+                    # 服务器已不可达时 __aexit__ 内的 terminate 请求必然失败
+                    # （如 httpx.ConnectError）——清理失败不影响功能，会话随
+                    # 服务端超时自然失效，降为 DEBUG 避免每次关闭刷堆栈；
+                    # 其余意外异常仍保留 WARNING 全堆栈便于排查
+                    if _is_transport_error(close_err):
+                        logger.debug(
+                            "MCP 服务器不可达，跳过会话终止请求: server_name=%s (%s)",
+                            server.name,
+                            type(close_err).__name__,
+                        )
+                    else:
+                        logger.warning(
+                            f"关闭MCP连接失败: server_name={server.name}",
+                            exc_info=True,
+                        )
 
         task = asyncio.create_task(_lifecycle(), name=f"mcp-lifecycle-{server.id}")
         try:
