@@ -47,6 +47,11 @@ export const skillApi = {
     return request.post<ApiResponse<Skill>>(`/skill/${id}/reload`)
   },
 
+  /** 重置内置技能：丢弃本地修改，从源码目录恢复（仅 is_system=1 可用） */
+  resetBuiltin(id: number) {
+    return request.post<ApiResponse<Skill>>(`/skill/${id}/reset-builtin`)
+  },
+
   reloadBatch(ids: number[]) {
     return request.post<ApiResponse<SkillBatchResult>>('/skill/reloadBatch', ids)
   }

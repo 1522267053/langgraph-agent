@@ -5,7 +5,6 @@
 内置 Agent 是系统的默认入口，用户首页直接与之对话。
 """
 
-import hashlib
 import logging
 import re
 import shutil
@@ -107,19 +106,6 @@ def _discover_builtin_skills() -> list[dict]:
             }
         )
     return result
-
-
-def _dir_signature(path: Path) -> str:
-    """计算目录签名（所有文件相对路径 + 内容的 MD5），用于检测目录内容变化"""
-    if not path.is_dir():
-        return ""
-    hasher = hashlib.md5()
-    for file_path in sorted(path.rglob("*")):
-        if file_path.is_file():
-            rel = file_path.relative_to(path).as_posix()
-            hasher.update(rel.encode())
-            hasher.update(file_path.read_bytes())
-    return hasher.hexdigest()
 
 
 BUILTIN_AGENT_SUGGESTED_PROMPTS = [
@@ -513,15 +499,21 @@ class BuiltinAgentService:
             logger.info("内置 Agent LLM 配置已同步: flow_id=%d", builtin_flow.id)
 
     async def sync_skills(self, db: AsyncSession) -> None:
-        """启动时同步 skills/ 目录，注册未入库的内置技能"""
+        """启动时同步 skills/ 目录，仅注册未入库的内置技能（不覆盖已存在的）"""
         await self._ensure_skill(db)
 
     async def _ensure_skill(self, db: AsyncSession) -> list[dict]:
         """
-        确保所有内置 Skill 已注册到 DB
+        确保所有内置 Skill 已注册到 DB（增量：只补新增，不覆盖已存在的）
 
         扫描 skills/ 目录，从每份 SKILL.md 的 front matter 读取 name/description，
-        复制到 uploads/skills/ 并创建 DB 记录。
+        仅当 DB 中不存在同名记录时才复制到 uploads/skills/ 并创建 DB 记录。
+
+        DB 已有记录时保持 uploads/ 现有内容不动——用户对内置技能的修改不会被
+        启动同步静默覆盖（旧实现在目录签名不一致时无条件从 skills/ 覆盖，
+        导致用户改动在重启后丢失）。需要回到源码版本时显式调用
+        reset_builtin_skill()（技能页「重置」按钮）。
+
         返回所有注册的 skill 信息列表 [{id, name}, ...]
         """
         builtin_skills = _discover_builtin_skills()
@@ -537,27 +529,11 @@ class BuiltinAgentService:
             existing = result.scalar_one_or_none()
 
             if existing:
-                # 检查源目录和目标目录内容是否不同，不同则覆盖
-                source_path = get_internal_dir() / source_dir
-                upload_dir = (
-                    settings.get_absolute_path(settings.upload_dir)
-                    / "skills"
-                    / skill_name
-                )
-                if source_path.is_dir():
-                    source_sig = _dir_signature(source_path)
-                    target_sig = _dir_signature(upload_dir)
-                    if source_sig != target_sig:
-                        shutil.rmtree(upload_dir, ignore_errors=True)
-                        shutil.copytree(source_path, upload_dir)
-                        if existing.description != description:
-                            existing.description = description
-                            await db.commit()
-                        logger.info("内置 Skill 已更新: name=%s", skill_name)
+                # 已注册：保留 uploads/ 现有内容，不覆盖（用户改动优先）
                 registered.append({"id": existing.id, "name": skill_name})
                 continue
 
-            # 从 skills/ 复制到 uploads/skills/
+            # 首次注册：从 skills/ 复制到 uploads/skills/
             source_path = get_internal_dir() / source_dir
             upload_dir = (
                 settings.get_absolute_path(settings.upload_dir) / "skills" / skill_name
@@ -587,6 +563,46 @@ class BuiltinAgentService:
             registered.append({"id": skill.id, "name": skill_name})
 
         return registered
+
+    async def reset_builtin_skill(self, db: AsyncSession, skill_id: int) -> Skill:
+        """
+        把单个内置技能从源码目录 skills/{name}/ 强制恢复到 uploads/skills/{name}/
+
+        启动同步已改为「只注册新增、不覆盖已存在」，用户对内置技能的改动会保留；
+        本方法用于显式丢弃改动、回到随程序分发的源码版本（技能页「重置」按钮）。
+
+        Raises:
+            ValueError: 技能不存在、非内置技能，或源码目录缺失
+        """
+        result = await db.execute(
+            select(Skill).where(Skill.id == skill_id, Skill.is_delete == 0)
+        )
+        skill = result.scalar_one_or_none()
+        if not skill:
+            raise ValueError("Skill 不存在")
+        if skill.is_system != 1:
+            raise ValueError(f"Skill「{skill.name}」不是内置技能，无需重置")
+
+        source_path = get_internal_dir() / "skills" / skill.name
+        if not source_path.is_dir():
+            raise ValueError(f"源码目录不存在，无法重置: skills/{skill.name}")
+
+        upload_dir = (
+            settings.get_absolute_path(settings.upload_dir) / "skills" / skill.name
+        )
+        if upload_dir.exists():
+            shutil.rmtree(upload_dir, ignore_errors=True)
+        shutil.copytree(source_path, upload_dir)
+
+        # description 一并回到源码版本（内容已回滚，元数据不能留着旧值）
+        parsed = _parse_skill_frontmatter(source_path / "SKILL.md")
+        if parsed:
+            skill.description = parsed["description"]
+        skill.skill_path = f"{settings.upload_dir}/skills/{skill.name}/SKILL.md"
+        await db.commit()
+        await db.refresh(skill)
+        logger.info("内置 Skill 已重置为源码版本: name=%s, id=%d", skill.name, skill.id)
+        return skill
 
     async def _create(self, db: AsyncSession, skills: list[dict]) -> Flow:
         """创建内置 Agent（Start → LLM → End + 全部工具节点）"""

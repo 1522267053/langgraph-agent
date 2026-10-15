@@ -89,16 +89,39 @@ scripts/init_skill.py <skill-name> --path <output-dir> [--resources scripts,refe
 | 操作 | 接口 | 说明 |
 |------|------|------|
 | 上传新技能 | `POST /api/skill/upload` | multipart/form-data, file=<skill.zip> |
-| 重载元数据 | `POST /api/skill/{id}/reload` | **修改已有技能后必须调用** |
+| 重载元数据 | `POST /api/skill/{id}/reload` | **修改技能内容后必须调用**（同步 name/description） |
+| 重置内置技能 | `POST /api/skill/{id}/reset-builtin` | 丢弃本地修改，从 `skills/` 源码恢复；仅内置技能可用 |
 | 获取内容 | `GET /api/skill/{id}/content` | 获取 SKILL.md 文件内容 |
 | 列表 | `GET /api/skill/list` | 所有启用技能 |
 
 ### 上传规则
 
-- **新建**：ZIP 包上传（内含 SKILL.md + 可选资源）
-- **修改已有**：直接改 `uploads/skills/{name}/` 下文件，然后调 reload
+- **新建**：ZIP 包上传（内含 SKILL.md + 可选资源），入库为非内置技能
+- **修改非内置技能**：直接改 `uploads/skills/{name}/` 下文件，然后调 reload
+- **修改内置技能**：同上，但见下方「内置技能」章节——改动会保留，可被显式重置
 
 ZIP 内 SKILL.md 必须有 YAML frontmatter（name + description）。
+
+## 内置技能（is_system=1）
+
+`skills/` 下的 7 个技能随程序分发，启动时自动注册到 DB（`is_system=1`）。
+
+**内容存放与读取**：注册时从 `skills/{name}/` 复制一份到 `uploads/skills/{name}/`，
+之后一律以 `uploads/` 为读取源（`skill_path` 指向它）。改 `skills/` 源码目录**不会生效**，
+除非去技能页点「重置」。
+
+**启动不再覆盖**：启动同步只注册「DB 里还没有的」技能。DB 已有记录时，`uploads/`
+内容原样保留——你改过的内置技能**不会**在重启或程序升级后被冲掉。
+
+| 你想做的事 | 正确做法 |
+|------|------|
+| 改内置技能内容 | 改 `uploads/skills/{name}/`，再调 `POST /api/skill/{id}/reload` |
+| 改回源码版本 | 技能页该行点「重置」→ `POST /api/skill/{id}/reset-builtin`（**丢弃本地修改**） |
+| 改 `skills/` 源码目录 | 仅开发场景，改完需点「重置」才生效；普通用户不要动 |
+| 想要一份可自由改的副本 | 复制成新名字的非内置技能（改 frontmatter 的 `name` 后重新上传 ZIP） |
+
+**注意**：`reset-builtin` 只作用于内置技能，且会无条件覆盖 `uploads/` 下的本地修改。
+改动过又不想丢，先自行备份。
 
 ## 本项目技能编写模板
 

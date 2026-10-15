@@ -15,6 +15,7 @@ from app.api.base_api import BaseApi
 from app.agent_flow.exceptions import FlowValidationError
 from app.models.skill import Skill
 from app.services.skill_service import skill_service
+from app.services.builtin_agent_service import builtin_agent_service
 from app.utils.skill_uploader import skill_uploader
 from app.schemas.skill_schema import (
     SkillBase,
@@ -147,6 +148,27 @@ class SkillApi(BaseApi[Skill, SkillBase, SkillQuery, SkillCreate, SkillUpdate]):
                 skill = await skill_service.reload_from_file(db, skill_id)
                 return ApiResponse.success(
                     data=SkillBase.model_validate(skill), msg="重新加载成功"
+                )
+            except ValueError as e:
+                raise FlowValidationError(str(e))
+
+        @self.router.post(
+            "/{skill_id}/reset-builtin",
+            response_model=ApiResponse[SkillBase],
+            summary="重置内置Skill为源码版本",
+        )
+        async def reset_builtin_skill(
+            skill_id: int, db: AsyncSession = Depends(get_db)
+        ):
+            """丢弃对内置 Skill 的本地修改，从 skills/ 源码目录恢复
+
+            启动同步只注册新增、不覆盖已存在，故本地修改会保留；
+            本接口是回到随程序分发版本的唯一显式入口（技能页「重置」按钮）。
+            """
+            try:
+                skill = await builtin_agent_service.reset_builtin_skill(db, skill_id)
+                return ApiResponse.success(
+                    data=SkillBase.model_validate(skill), msg="已重置为源码版本"
                 )
             except ValueError as e:
                 raise FlowValidationError(str(e))

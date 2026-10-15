@@ -20,6 +20,7 @@ class SkillBase(BaseView):
     tags: Optional[str] = Field(default=None, description="标签")
     icon: Optional[str] = Field(default=None, description="图标名称")
     is_enabled: int = Field(default=1, description="是否启用")
+    is_system: int = Field(default=0, description="是否系统预置：0=否，1=是")
     sort_order: int = Field(default=0, description="排序顺序")
 
 

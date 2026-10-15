@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed, nextTick } from 'vue'
-import { Upload, View, Refresh, Delete, Edit, Open } from '@element-plus/icons-vue'
+import { Upload, View, Refresh, RefreshLeft, Delete, Edit, Open } from '@element-plus/icons-vue'
 import axios from 'axios'
 import { skillApi } from '@/api/skill'
 import type { Skill, SkillQuery } from '@/types/skill'
@@ -69,6 +69,14 @@ function getRowActions(row: any) {
       btnClass: 'action-refresh',
       visible: !!row.skill_path
     },
+    {
+      key: 'reset',
+      label: '重置',
+      icon: RefreshLeft,
+      btnClass: 'action-warning',
+      // 仅内置技能：丢弃本地修改，从 skills/ 源码目录恢复
+      visible: row.is_system === 1
+    },
     { key: 'edit', label: '编辑', icon: Edit, btnClass: 'action-edit' },
     {
       key: 'toggle',
@@ -94,6 +102,9 @@ function onRowAction(row: any, key: string) {
       break
     case 'reload':
       handleReload(row)
+      break
+    case 'reset':
+      handleResetBuiltin(row)
       break
     case 'edit':
       handleEdit(row)
@@ -229,6 +240,25 @@ async function handleReload(row: Skill) {
   try {
     await skillApi.reload(row.id)
     ElMessage.success({ message: '重新加载成功', duration: 5000 })
+    loadData()
+  } catch {
+    // Error handled by interceptor
+  }
+}
+
+async function handleResetBuiltin(row: Skill) {
+  try {
+    await ElMessageBox.confirm(
+      `将丢弃对内置技能「${row.name}」的全部本地修改，恢复为随程序分发的源码版本。确定重置？`,
+      '重置内置技能',
+      { confirmButtonText: '重置', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await skillApi.resetBuiltin(row.id)
+    ElMessage.success({ message: '已重置为源码版本', duration: 5000 })
     loadData()
   } catch {
     // Error handled by interceptor
@@ -413,7 +443,14 @@ onMounted(() => {
       >
         <el-table-column type="selection" width="50" align="center" />
         <el-table-column prop="id" label="ID" width="80" />
-        <el-table-column prop="name" label="名称" min-width="100" />
+        <el-table-column prop="name" label="名称" min-width="100">
+          <template #default="{ row }">
+            <span>{{ row.name }}</span>
+            <el-tag v-if="row.is_system === 1" size="small" type="info" class="builtin-tag">
+              内置
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="description" label="描述" min-width="100" show-overflow-tooltip />
         <el-table-column prop="skill_path" label="文件路径" min-width="100" show-overflow-tooltip />
         <el-table-column prop="category" label="分类" width="100" />
@@ -535,6 +572,11 @@ onMounted(() => {
 .header-actions {
   display: flex;
   gap: 12px;
+}
+
+/* 内置技能标识：与操作列的「重置」按钮呼应，说明该行内容可被重置回源码版本 */
+.builtin-tag {
+  margin-left: 6px;
 }
 
 .skill-content {
