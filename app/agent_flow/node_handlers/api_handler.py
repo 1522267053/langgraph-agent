@@ -78,7 +78,7 @@ class ApiCallInput(BaseModel):
     )
     headers: dict[str, str] = Field(default_factory=dict, description="请求头")
     body: str | dict[str, Any] = Field(
-        default="", description="请求体，JSON对象或字符串"
+        default="", description="请求体，JSON对象(非json对象字符串)或字符串"
     )
     upload_fields: list[UploadFieldItem] = Field(
         default_factory=list,
