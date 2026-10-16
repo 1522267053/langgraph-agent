@@ -364,7 +364,7 @@ class ShellNodeHandler(BaseNodeHandler):
         from app.agent_flow.tools.file_read import FileReadService
 
         info = ShellToolKit.tool_info(node) + FileToolsKit.tool_info(node)
-        info.append(FileReadService.tool_info(node))
+        info.extend(FileReadService.tool_info(node))
         return info
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
