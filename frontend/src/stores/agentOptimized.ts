@@ -1759,9 +1759,23 @@ export const useAgentStore = defineStore('agent', () => {
         // ---- 数据就绪：以下全部同步执行，中间不让出主线程（关键） ----
         stopStreaming()
         // 定格计时：优先后端权威值（flow_done 携带，含取消轮），无则保留跳动值
-        stopElapsedTimer(
+        const finalDurationMs =
           typeof event.data.duration_ms === 'number' ? event.data.duration_ms : undefined
-        )
+        stopElapsedTimer(finalDurationMs)
+        // 权威值同步写入当前 AI 占位行：头部「耗时 X」立即显示，不等 DB 刷新回填
+        if (finalDurationMs !== undefined) {
+          for (let i = chatMessages.value.length - 1; i >= 0; i--) {
+            const m = chatMessages.value[i]
+            if (
+              m.role === 'ai' &&
+              m.displayType !== 'context-summary' &&
+              m.displayType !== 'execution-error'
+            ) {
+              if (!m.duration_ms) m.duration_ms = finalDurationMs
+              break
+            }
+          }
+        }
         isCompressing.value = false
         if (isWaitingToolApproval.value) {
           pendingApprovals.clear()
