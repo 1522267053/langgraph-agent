@@ -164,14 +164,32 @@ npm run format                          # Prettier 格式化
 - `llm_stream.py`: 流式调用 + 重试 + thinking 解析
 - `llm_tool_executor.py`: 工具执行（并行、人工交互、审批、截断）
 
+### 工具按需加载（deferred_tools.py，工具膨胀场景）
+- **机制/策略分离**: `ToolProvider` 协议（list_meta/search/materialize）对所有工具族通用；策略由三层优先级决定：节点 base_config.lazy_load > **handler.defer_policy** > 默认 "bind"
+- **族策略（defer_policy）**: 内置族默认 `"bind"`（shell/ssh/memory/todo/agenda/api/skill/sub_agent/question 等——高频核心能力，bind 的 token 成本低、调用零往返）；**mcp/knowledge/browser 为 `"auto"`**（外部服务器与多节点弹性膨胀源，参与阈值判定）。auto 族想强制全量配 lazy_load=false；bind 族想延迟配 lazy_load=true
+- **auto 阈值决策**: 仅 defer_policy=="auto" 的族参与计数——延迟候选 > `DEFERRED_TOOL_THRESHOLD`(20) 启用延迟域，≤20 回退全量注册（阈值不被内置工具数量污染）；节点配置 true/false 强制覆盖。判定数据零建连（MCP 走 McpToolCache）
+- **索引名一致性（强制）**: 延迟域索引的工具名必须与 bound 路径逐字节一致（MCP 需带 `mcp__{server_name}__` 前缀，同 mcp_manager）——bound 剔除与 materialize 定位都按名匹配，不一致会导致工具双份绑定且延迟域执行失败
+- **基类默认实现**: `BaseNodeHandler.get_provider` = get_tool_info（索引，零建连）+ get_tool（物化，取工具对象，按 node 缓存）；物化需建连/审批的族重写之（如 `McpToolProvider`）
+- **三元元工具**: `tool_info_list`（总览）/ `tool_search_tool_regex`（查 schema）/ `tool_execute`（执行，arguments 为 JSON 字符串）；物化在 tool_execute coroutine 内部，`handle_tool_calls` 零改动
+- **前缀缓存不变量（强制）**: 延迟域决策在 setup_tool_handlers 内一次性冻结；三元工具 description 纯静态；物化只进执行器永不回写 bound tools；违反即破坏 LLM 前缀缓存
+- **get_tool_info 双职责约束**: 兼任前端展示与延迟域索引，**必须保持同步、零建连、纯静态**；需要动态索引的族重写 get_provider 返回自定义 provider
+- **回退语义**: auto 判定未过阈值时全量注册（lazy 节点工具已在全量路径收集，无需重载）；索引全空 + 强制 lazy 时告警
+
 ### agent_flow/tools/ 目录（LLM 工具实现）
 - **定位**: 存放以 `StructuredTool` 形式提供给 LLM 的工具实现，handler 只负责注册与依赖注入；与 node_handlers 内拆分子模块（llm_*）不同——tools 是独立工具实体，handler 是图的编排单元
 - **不参与自动扫描**：`tools/` 不在 loader 三个扫描目录内，全部显式 import
-- **现有成员**: `common.py`（文件类工具共享原语：路径校验/编码读取/大小上限）、`file_read.py`（FileReadService：媒体多模态注入 + xlsx/docx 转文本 + 行/字符分段读取）、`structured_output.py`（StructuredOutputService：JSON 结构化输出虚拟工具，字段树递归构建 Pydantic 模型）、`{shell,file,ssh,browser}_toolkit.py`（四节点工具集，见下）
+- **现有成员**: `common.py`（文件类工具共享原语：路径校验/编码读取/大小上限）、`base_abs_tool.py`（BaseToolKit 统一契约，见下）、`file_read.py`（FileReadService：媒体多模态注入 + xlsx/docx 转文本 + 行/字符分段读取）、`structured_output.py`（StructuredOutputService：JSON 结构化输出虚拟工具，字段树递归构建 Pydantic 模型）、`{shell,file,ssh,browser,todo,agenda,question,knowledge,memory}_toolkit.py`（九个节点工具集）
 - **依赖方向（强制单向）**: `tools/* → app/utils/*`，`node_handlers/* → tools/*`，禁止反向或 tools 之间互引
-- **新工具入目录规则**: 一个工具一个文件；共享原语进 `common.py`；工具返回模型友好的 dict 协议（error/truncated_hint/media_type 等），不返回裸字符串
+- **新工具入目录规则**: 一个工具集一个文件（继承 `BaseToolKit`）；共享原语进 `common.py`；工具返回模型友好的 dict 协议（error/truncated_hint/media_type 等），不返回裸字符串
 - **编码探测**: `common.detect_and_read` 探测顺序 UTF-16 BOM（FF FE/FE FF，PowerShell 重定向产物）→ utf-8-sig → GBK；二进制拦截对带 UTF-16 BOM 的文本白名单放行
 - **Windows 子进程注意**: 工具内如需创建子进程，必须带 `_SUBPROCESS_WINDOW_FLAGS`（shell_handler.py 定义），否则 GUI/托盘宿主下每次调用弹出黑框
+
+### BaseToolKit 统一契约（tools/base_abs_tool.py，强制）
+- **两个入口**：`build_tools()`（无参签名，运行时依赖一律构造函数注入）+ `tool_info(node)`（classmethod，零建连元数据 `[{name, description}]`）；`tool_names(node)` 从 tool_info 派生
+- **tool_info 是 classmethod**：延迟域索引与前端展示都是零建连场景，不为拿元数据构造 Kit 实例
+- **描述单源（强制）**：tool_info 的 description 必须与 build_tools 产出的 StructuredTool description **逐字节一致**——从同一模块级常量/构建函数派生，禁止手抄短句；含运行时值的描述用 `_build_xxx_description(cfg)` 构建函数（tool_info 与 build_tools 共用同一函数）；`assert_consistency(kit, node)` 提供逐字节校验（e2e 已覆盖全部 9 个 Kit）
+- **handler 收敛**：`get_tool` = 组装 Kit（注入回调）+ `build_tools()`；`get_tool_info` = 一行委托 `XxxToolKit.tool_info(node)`
+- **豁免**：动态预设工具（python/api/sub_agent/flow_tool，name/schema 运行时生成）留 handler 构建器；skill（运行时拼技能清单描述）、mcp（DB 缓存即源）不走 tool_info 单源；FileReadService 单工具服务保留 `build_tool` 单数形态（已补 tool_info）
 
 ### 四节点工具集（tools/*_toolkit.py）
 - shell（5 工具 + `_background_tasks` 后台任务表，REST API 与 Agent 共享）/ file（6 文件工具）/ ssh（5 工具）/ browser（14 工具 + `browser_session_manager` 会话单例，Flow 与 Agent 共享）

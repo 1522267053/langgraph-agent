@@ -198,19 +198,10 @@ class SshNodeHandler(BaseNodeHandler):
 
     @classmethod
     def get_tool_info(cls, node: FlowNode) -> list[dict]:
-        return [
-            {"name": "ssh_executor", "description": "在远程主机上执行 Shell 命令"},
-            {"name": "ssh_upload", "description": "将本地文件通过 SFTP 上传到远程主机"},
-            {
-                "name": "ssh_download",
-                "description": "从远程主机下载文件到本地并生成下载链接",
-            },
-            {"name": "ssh_list_dir", "description": "列出远程主机目录内容"},
-            {
-                "name": "ssh_set_config",
-                "description": "设置或更新 SSH 节点的连接配置（主机/凭据），持久化到节点",
-            },
-        ]
+        """委托 toolkit 单源派生（描述与 get_tool 产出逐字节一致）"""
+        from app.agent_flow.tools.ssh_toolkit import SshToolKit
+
+        return SshToolKit.tool_info(node)
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
         """向 LLM 注入 SSH 工具使用说明（含连接目标、输出控制）"""

@@ -35,6 +35,8 @@ from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.constants.timing import SHELL_TASK_EXPIRE_SECONDS
 from app.utils.env_refresh import refresh_windows_env
 
+from app.agent_flow.tools.base_abs_tool import BaseToolKit
+
 logger = logging.getLogger(__name__)
 
 # 审批回调签名：(tool_name, tool_args, content_for_pattern) -> None/"approved"/"rejected"/"timeout"
@@ -874,7 +876,83 @@ async def _force_kill_process_tree(process: asyncio.subprocess.Process) -> None:
             pass
 
 
-class ShellToolKit:
+# ---- 描述单源（唯一维护点；tool_info 与 build_tools 共用）----
+# shell_executor 描述含运行时值，用构建函数；其余静态
+
+
+def _desc_shell_executor(
+    system_info: str = "当前系统: Windows",
+    async_wait: int = 8,
+    timeout: int = 300,
+    ps_hint: str = "",
+) -> str:
+    return (
+        f"在受限环境中执行Shell命令（{system_info}）。"
+        f"命令执行等待 {async_wait} 秒，未完成则转为后台任务并返回 task_id；"
+        f"后台任务支持并发，等待期间可继续其他工具调用或启动新任务。"
+        f"超时按空闲判定：连续 {timeout} 秒无任何输出才判超时并整树清杀"
+        f"（timeout_reason=idle_timeout），服务器/长驻进程持续输出不会被误杀；"
+        f"总时长硬上限默认 1800 秒（半小时，timeout_reason=max_duration），"
+        f"节点配置 max_duration=0 可解除限制。"
+        f"用 shell_task_status 的 wait_time 参数（8~120秒）阻塞等待结果。"
+        f"用 shell_task_input 向进程发送输入，用 shell_task_cancel 终止任务。"
+        f"可用 workdir 指定本次工作目录；返回的 cwd 字段是实际执行目录。"
+        f"每次调用均启动独立进程，cd不会影响后续调用，切换目录请传workdir。"
+        f"禁止危险命令: rm -rf /, format, Format-Volume, Clear-Disk, dd写入设备, fork炸弹等。"
+        f"{ps_hint}"
+    )
+
+
+def _desc_shell_task_status() -> str:
+    return (
+        "查询后台Shell任务的执行状态和输出。"
+        "当 shell_executor 返回 task_id 时使用此工具获取进度；支持多次调用与多个任务并发查询。"
+        "wait_time 参数指定阻塞等待秒数（8~120秒），长任务建议设置较大值一次性等待完成。"
+        "返回字段: status(running/completed/failed/timeout/cancelled), stdout, stderr, return_code, elapsed_seconds, "
+        "timeout_reason(timeout 时：idle_timeout=连续无输出超时 / max_duration=总时长到上限)。"
+        "失败时附带 error_type(timeout/not_found/permission_denied/runtime_error/empty_stdout)，可据此决定重试或换方案。"
+        "运行中（status=running）的 stdout/stderr 也会实时返回——若含交互提示（如"
+        "'Enter your name:'/'Password:'/'Continue? [y/n]'），应据此立即调用 shell_task_input 写入回复文本，"
+        "避免流程卡在等待输入而误判为超时。"
+    )
+
+
+def _desc_shell_task_input() -> str:
+    return (
+        "向正在运行的后台Shell任务发送输入（写入进程的stdin）。"
+        "典型用法：先用 shell_task_status 查询 task_id 拿到 stdout（含交互提示如"
+        "'Enter your name:'/'Password:'/'Are you sure? [y/n]'），"
+        "然后用本工具把 LLM 根据上下文生成的回复文本作为 input_text 写入进程 stdin。"
+        "input_text 会自动追加换行符（无需手写 \\n）；多个连续输入请分多次调用本工具。"
+        "仅当 shell_task_status 返回 status=running 时本工具才会真正写入 stdin。"
+    )
+
+
+def _desc_shell_task_cancel() -> str:
+    return "终止正在运行的后台Shell任务。当命令执行时间过长或不再需要时使用。"
+
+
+def _desc_shell_wait() -> str:
+    return (
+        "主动等待指定的秒数（1~120秒），期间不执行任何操作。"
+        "适用场景：后台任务/编译/下载需要时间推进、等待服务启动就绪、"
+        "等待文件生成、网络请求重试间隔等。"
+        "用主动等待代替高频空转轮询，减少无效工具调用；"
+        "等待结束后再用 shell_task_status / file_read 等工具确认结果。"
+        "等待后台任务时建议直接用 shell_task_status 的 wait_time 参数（可阻塞等待）。"
+    )
+
+
+_SHELL_DESCRIPTION_BUILDERS = {
+    "shell_executor": _desc_shell_executor,
+    "shell_task_status": _desc_shell_task_status,
+    "shell_task_input": _desc_shell_task_input,
+    "shell_task_cancel": _desc_shell_task_cancel,
+    "shell_wait": _desc_shell_wait,
+}
+
+
+class ShellToolKit(BaseToolKit):
     """Shell 命令执行工具集（5 个工具 + 后台任务状态机）
 
     由 shell_handler.get_tool 构造，注入运行时依赖（cfg / 工作目录 / 审批回调）。
@@ -889,6 +967,7 @@ class ShellToolKit:
         timeout: int,
         async_wait: int,
         system_info: str,
+        resolve_workdir: Optional[Callable] = None,
     ):
         self._cfg = cfg
         self._node_key = node_key
@@ -897,8 +976,9 @@ class ShellToolKit:
         self._timeout = timeout
         self._async_wait = async_wait
         self._system_info = system_info
+        self._resolve_workdir = resolve_workdir
 
-    async def build_tools(self, resolve_workdir: Callable) -> Sequence[StructuredTool]:
+    async def build_tools(self) -> Sequence[StructuredTool]:
         """构造工具列表。resolve_workdir(workdir, default_dir) 由 handler 注入
         （依赖 handler 的路径校验方法），返回单次调用的实际工作目录。"""
         timeout = self._timeout
@@ -907,6 +987,7 @@ class ShellToolKit:
         base_working_dir = self._base_working_dir
         cfg = self._cfg
         _approval = self._approval
+        resolve_workdir = self._resolve_workdir
 
         # ---- shell_executor ----
 
@@ -1058,21 +1139,7 @@ class ShellToolKit:
 
         shell_tool = StructuredTool(
             name="shell_executor",
-            description=(
-                f"在受限环境中执行Shell命令（{system_info}）。"
-                f"命令执行等待 {async_wait} 秒，未完成则转为后台任务并返回 task_id；"
-                f"后台任务支持并发，等待期间可继续其他工具调用或启动新任务。"
-                f"超时按空闲判定：连续 {timeout} 秒无任何输出才判超时并整树清杀"
-                f"（timeout_reason=idle_timeout），服务器/长驻进程持续输出不会被误杀；"
-                f"总时长硬上限默认 1800 秒（半小时，timeout_reason=max_duration），"
-                f"节点配置 max_duration=0 可解除限制。"
-                f"用 shell_task_status 的 wait_time 参数（8~120秒）阻塞等待结果。"
-                f"用 shell_task_input 向进程发送输入，用 shell_task_cancel 终止任务。"
-                f"可用 workdir 指定本次工作目录；返回的 cwd 字段是实际执行目录。"
-                f"每次调用均启动独立进程，cd不会影响后续调用，切换目录请传workdir。"
-                f"禁止危险命令: rm -rf /, format, Format-Volume, Clear-Disk, dd写入设备, fork炸弹等。"
-                f"{ps_hint}"
-            ),
+            description=_desc_shell_executor(system_info, async_wait, timeout, ps_hint),
             func=None,
             coroutine=execute_shell,
             args_schema=ShellToolInput,
@@ -1113,17 +1180,7 @@ class ShellToolKit:
 
         shell_task_status_tool = StructuredTool(
             name="shell_task_status",
-            description=(
-                "查询后台Shell任务的执行状态和输出。"
-                "当 shell_executor 返回 task_id 时使用此工具获取进度；支持多次调用与多个任务并发查询。"
-                "wait_time 参数指定阻塞等待秒数（8~120秒），长任务建议设置较大值一次性等待完成。"
-                "返回字段: status(running/completed/failed/timeout/cancelled), stdout, stderr, return_code, elapsed_seconds, "
-                "timeout_reason(timeout 时：idle_timeout=连续无输出超时 / max_duration=总时长到上限)。"
-                "失败时附带 error_type(timeout/not_found/permission_denied/runtime_error/empty_stdout)，可据此决定重试或换方案。"
-                "运行中（status=running）的 stdout/stderr 也会实时返回——若含交互提示（如"
-                "'Enter your name:'/'Password:'/'Continue? [y/n]'），应据此立即调用 shell_task_input 写入回复文本，"
-                "避免流程卡在等待输入而误判为超时。"
-            ),
+            description=_desc_shell_task_status(),
             func=None,
             coroutine=query_task_status,
             args_schema=ShellTaskStatusInput,
@@ -1155,14 +1212,7 @@ class ShellToolKit:
 
         shell_task_input_tool = StructuredTool(
             name="shell_task_input",
-            description=(
-                "向正在运行的后台Shell任务发送输入（写入进程的stdin）。"
-                "典型用法：先用 shell_task_status 查询 task_id 拿到 stdout（含交互提示如"
-                "'Enter your name:'/'Password:'/'Are you sure? [y/n]'），"
-                "然后用本工具把 LLM 根据上下文生成的回复文本作为 input_text 写入进程 stdin。"
-                "input_text 会自动追加换行符（无需手写 \\n）；多个连续输入请分多次调用本工具。"
-                "仅当 shell_task_status 返回 status=running 时本工具才会真正写入 stdin。"
-            ),
+            description=_desc_shell_task_input(),
             func=None,
             coroutine=send_task_input,
             args_schema=ShellTaskInputInput,
@@ -1210,7 +1260,7 @@ class ShellToolKit:
 
         shell_task_cancel_tool = StructuredTool(
             name="shell_task_cancel",
-            description="终止正在运行的后台Shell任务。当命令执行时间过长或不再需要时使用。",
+            description=_desc_shell_task_cancel(),
             func=None,
             coroutine=cancel_task,
             args_schema=ShellTaskCancelInput,
@@ -1231,14 +1281,7 @@ class ShellToolKit:
 
         shell_wait_tool = StructuredTool(
             name="shell_wait",
-            description=(
-                "主动等待指定的秒数（1~120秒），期间不执行任何操作。"
-                "适用场景：后台任务/编译/下载需要时间推进、等待服务启动就绪、"
-                "等待文件生成、网络请求重试间隔等。"
-                "用主动等待代替高频空转轮询，减少无效工具调用；"
-                "等待结束后再用 shell_task_status / file_read 等工具确认结果。"
-                "等待后台任务时建议直接用 shell_task_status 的 wait_time 参数（可阻塞等待）。"
-            ),
+            description=_desc_shell_wait(),
             func=None,
             coroutine=wait_seconds,
             args_schema=ShellWaitInput,
@@ -1250,4 +1293,37 @@ class ShellToolKit:
             shell_task_input_tool,
             shell_task_cancel_tool,
             shell_wait_tool,
+        ]
+
+    @classmethod
+    def tool_info(cls, node=None) -> list[dict]:
+        """从描述构建函数派生（单源：与 build_tools 产出逐字节一致）
+
+        shell_executor 描述含运行时值（system_info/async_wait/timeout/ps_hint），
+        按当前平台渲染 ps_hint（与 build_tools 内判定逻辑同源）；
+        其余 4 个为静态描述。
+        """
+        import platform
+
+        system_info = f"当前系统: {platform.system()}"
+        ps_hint = (
+            (
+                "Windows 上经 cmd.exe 执行：命令必须为单行（含换行会被拒绝），"
+                "多条独立命令用 && 连接；多行 Python 先写入 .py 文件再执行；"
+                "%VAR% 与 curl（Win10+ 自带）直接可用（无 wget，下载用 curl -o）；"
+                "无 head/tail，输出过滤用 findstr 或重定向文件。"
+                "禁止调用 powershell/pwsh（含链式与全路径写法，会被直接拦截）。"
+            )
+            if platform.system() == "Windows"
+            else ""
+        )
+        return [
+            {
+                "name": "shell_executor",
+                "description": _desc_shell_executor(system_info, 8, 300, ps_hint),
+            },
+            {"name": "shell_task_status", "description": _desc_shell_task_status()},
+            {"name": "shell_task_input", "description": _desc_shell_task_input()},
+            {"name": "shell_task_cancel", "description": _desc_shell_task_cancel()},
+            {"name": "shell_wait", "description": _desc_shell_wait()},
         ]

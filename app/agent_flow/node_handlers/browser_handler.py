@@ -851,3 +851,19 @@ class BrowserNodeHandler(BaseNodeHandler):
 
         kit = BrowserToolKit(cfg=cfg, flow_id=flow_id, approval_cb=_approval)
         return list(await kit.build_tools())
+
+    # get_provider：继承基类默认实现。索引走 get_tool_info（下方委托
+    # toolkit 描述常量派生），物化走 get_tool（组装 BrowserToolKit 含
+    # 审批回调）。auto 族由 setup_tool_handlers 按阈值判定登记进延迟域
+
+    # 浏览器族参与 auto 阈值判定：14 个工具 schema 较大（多 action 枚举），
+    # 是稳定膨胀源；索引名与 get_tool 工具名同源（BROWSER_TOOL_DESCRIPTIONS），
+    # 物化走基类默认实现（get_tool 组装 toolkit）
+    defer_policy = "auto"
+
+    @classmethod
+    def get_tool_info(cls, node: FlowNode) -> list[dict]:
+        """委托 toolkit 单源派生（描述与 get_tool 产出逐字节一致）"""
+        from app.agent_flow.tools.browser_toolkit import BrowserToolKit
+
+        return BrowserToolKit.tool_info(node)

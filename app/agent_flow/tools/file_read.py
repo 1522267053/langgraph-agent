@@ -446,6 +446,38 @@ class FileReadService:
         _apply_doc_hint(result, doc_meta)
         return result
 
+    @classmethod
+    def tool_info(cls, node=None) -> list[dict]:
+        """工具元数据（单源：与 build_tool 产出逐字节一致）
+
+        file_read 描述含全局配置值（行数/字节封顶），用默认值渲染。
+        """
+        return [
+            {
+                "name": "file_read",
+                "description": (
+                    "TL;DR: 图片/PDF/音频直接传本地路径即可查看（自动多模态注入，模型支持时）；"
+                    "常规文件（单行<2000字符）用 offset+limit 行模式；"
+                    "单行超长文件（minified JSON/压缩JS/长日志）用 start_char+end_char 字符模式；"
+                    "两种模式互斥。\n"
+                    "读取本地文件内容。图片/PDF/音频文件会自动以多模态形式注入下一轮对话"
+                    "（模型支持时）；xlsx/docx 自动转为文本（markdown 表格/标题）读取；"
+                    "不支持网络 URL、视频和 .xls/.doc 旧格式。\n"
+                    "xlsx/docx 读取时返回 full_content_file（全文落盘路径）与 sections"
+                    "（各章节目录：xlsx 的 sheet / docx 的标题，含 start_line 起始行号），"
+                    "超出单次封顶时可用 offset=<start_line> 直达目标章节/sheet，"
+                    "或对 full_content_file 分段读取。\n"
+                    "1. 行模式（默认）：返回带行号的文本(格式如 ```12: 文件内容的一行```)，"
+                    "单次默认读取 500 行、总字节封顶约 30KB，超限提前停止并提示续读 offset。\n"
+                    "2. 字符模式：传 start_char/end_char 按字符位置读取（0-indexed），"
+                    "适合读取单行大文件的特定片段，不传 end_char 则读取到文件末尾，"
+                    "超出封顶会在 truncated_hint 中提示续读的 start_char。\n"
+                    "两种模式互斥（offset 与 start_char 不能同时传）。"
+                    "超过 2000 字符的单行仅展示前缀。读取前无需校验文件是否存在。"
+                ),
+            }
+        ]
+
     def build_tool(self) -> StructuredTool:
         """构造 file_read StructuredTool（description 动态引用全局配置）"""
         return StructuredTool(

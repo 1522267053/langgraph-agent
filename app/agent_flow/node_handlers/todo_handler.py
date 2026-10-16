@@ -4,27 +4,25 @@
 为 Agent/Flow 提供 LLM 工具，使 LLM 能自主创建和更新任务列表。
 任务列表按会话（Agent）或执行（Flow）维度持久化存储到数据库。
 
-提供的工具：
+提供的工具（实现见 tools/todo_toolkit.py）：
 1. todowrite - 写入/更新任务计划列表（全量替换）
 2. todoread - 读取当前任务计划列表
+
+本 handler 只负责注册与依赖注入（resolve_context / writer 回调），
+工具实现与描述单源见 tools/todo_toolkit.py。
 """
 
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
+
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import StructuredTool, BaseTool
+from langchain_core.tools import BaseTool
 from langgraph.types import StreamWriter
-from pydantic import BaseModel, Field
 
 from app.models.flow_node import FlowNode
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.node_handlers.base_handler import BaseNodeHandler
 from app.agent_flow.handler_registry import NodeHandlerRegistry
-from app.agent_flow.flow_event import TodoUpdateEvent
-from app.config.database import AsyncSessionLocal
-from app.services.todo_service import todo_service
-
-if TYPE_CHECKING:
-    pass
+from app.agent_flow.tools.todo_toolkit import TodoToolKit
 
 
 @NodeHandlerRegistry.register("todo")
@@ -98,161 +96,18 @@ class TodoNodeHandler(BaseNodeHandler):
         )
 
     async def get_tool(self, node: FlowNode) -> list[BaseTool]:
-        handler = self
+        """组装 TodoToolKit（注入上下文解析与 writer 回调）"""
 
-        async def write_todos(todos: list[TodoItem]) -> dict:
-            """写入/更新任务计划列表"""
-            ref_type, ref_id = handler._resolve_context()
-            if not ref_type or not ref_id:
-                return {"error": "无法获取上下文信息"}
+        async def _resolve_context() -> tuple[Optional[str], Optional[int]]:
+            return self._resolve_context()
 
-            items = todos
+        def _get_writer():
+            return self._writer
 
-            valid_statuses = {"pending", "in_progress", "completed", "cancelled"}
-            valid_priorities = {"high", "medium", "low"}
-
-            validated = []
-            for item in items:
-                content = (item.content or "").strip()
-                if not content:
-                    continue
-                status = item.status
-                if status not in valid_statuses:
-                    status = "pending"
-                priority = item.priority
-                if priority not in valid_priorities:
-                    priority = "medium"
-                validated.append(
-                    {
-                        "content": content,
-                        "status": status,
-                        "priority": priority,
-                    }
-                )
-
-            if not validated:
-                return {"error": "任务列表不能为空"}
-
-            async with AsyncSessionLocal() as db:
-                result = await todo_service.update_ref_todos(
-                    db=db, ref_type=ref_type, ref_id=ref_id, todos=validated
-                )
-                await db.commit()
-
-            handler._last_todos = [
-                {**item, "id": r["id"]} for item, r in zip(validated, result)
-            ]
-            return {"success": True, "count": len(result), "todos": handler._last_todos}
-
-        async def read_todos() -> dict:
-            """读取当前任务计划列表"""
-            ref_type, ref_id = handler._resolve_context()
-            if not ref_type or not ref_id:
-                return {"error": "无法获取上下文信息"}
-
-            async with AsyncSessionLocal() as db:
-                items = await todo_service.get_by_ref(db, ref_type, ref_id)
-
-            result = [
-                {
-                    "id": item.id,
-                    "content": item.content,
-                    "status": item.status,
-                    "priority": item.priority,
-                    "position": item.position,
-                }
-                for item in items
-            ]
-            return {"todos": result, "total": len(result)}
-
-        # 保存 handler 引用，用于 writer 回调
-        self._write_todos_func = write_todos
-        self._last_todos = []
-
-        async def write_todos_with_event(todos: list[TodoItem]) -> dict:
-            """写入任务列表并通过 SSE 推送更新事件"""
-            result_str = await write_todos(todos)
-            if self._writer and self._last_todos:
-                try:
-                    self._writer(TodoUpdateEvent(todos=self._last_todos))
-                except Exception:
-                    pass
-            return result_str
-
-        async def read_todos_with_event() -> dict:
-            """读取任务列表并通过 SSE 推送更新事件"""
-            ref_type, ref_id = handler._resolve_context()
-            result_str = await read_todos()
-            if self._writer and ref_type and ref_id:
-                try:
-                    async with AsyncSessionLocal() as db:
-                        items = await todo_service.get_by_ref(db, ref_type, ref_id)
-                    todos = [
-                        {
-                            "id": item.id,
-                            "content": item.content,
-                            "status": item.status,
-                            "priority": item.priority,
-                            "position": item.position,
-                        }
-                        for item in items
-                    ]
-                    self._writer(TodoUpdateEvent(todos=todos))
-                except Exception:
-                    pass
-            return result_str
-
-        # 重新绑定 writer 引用的方法
-        self._write_todos_func = write_todos_with_event
-
-        tools: list[BaseTool] = [
-            StructuredTool(
-                name="todowrite",
-                description=(
-                    "创建或更新任务列表。"
-                    "参数 todos 为 JSON 数组，每条: content(必填), status, priority。"
-                    "每次调用替换整个列表，同一时间仅一个 in_progress。"
-                ),
-                func=None,
-                coroutine=write_todos_with_event,
-                args_schema=TodoWriteInput,
-            ),
-            StructuredTool(
-                name="todoread",
-                description=(
-                    "读取当前的任务计划列表。返回按排序位置排列的所有任务项。"
-                ),
-                func=None,
-                coroutine=read_todos_with_event,
-                args_schema=TodoReadInput,
-            ),
-        ]
-
-        return tools
+        kit = TodoToolKit(resolve_context=_resolve_context, get_writer=_get_writer)
+        return list(await kit.build_tools())
 
     @classmethod
     def get_tool_info(cls, node: FlowNode) -> list[dict]:
-        return [
-            {"name": "todowrite", "description": "创建或更新任务列表"},
-            {"name": "todoread", "description": "读取当前任务计划列表"},
-        ]
-
-
-class TodoItem(BaseModel):
-    model_config = {"extra": "ignore"}
-    content: str = Field(..., description="任务描述")
-    status: str = Field(
-        "pending", description="pending/in_progress/completed/cancelled"
-    )
-    priority: str = Field("medium", description="high/medium/low")
-
-
-class TodoWriteInput(BaseModel):
-    todos: list[TodoItem] = Field(
-        ...,
-        description="任务列表，每次调用替换整个列表",
-    )
-
-
-class TodoReadInput(BaseModel):
-    pass
+        """委托 toolkit 单源派生（描述与 get_tool 产出逐字节一致）"""
+        return TodoToolKit.tool_info(node)

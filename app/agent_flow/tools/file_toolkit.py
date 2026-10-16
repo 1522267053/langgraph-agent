@@ -44,6 +44,8 @@ from app.services.agent_file_change_service import (
     record_tool_file_change,
 )
 
+from app.agent_flow.tools.base_abs_tool import BaseToolKit
+
 logger = logging.getLogger(__name__)
 
 # 审批回调签名：(tool_name, tool_args, content_for_pattern) -> None/"approved"/"rejected"/"timeout"
@@ -204,7 +206,56 @@ _SUBPROCESS_WINDOW_FLAGS = (
 )
 
 
-class FileToolsKit:
+# ---- 描述单源（唯一维护点；tool_info 与 build_tools 共用）----
+FILE_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "text_editor": (
+        "精确替换文件中的文本。"
+        "传入 old_string（要替换的原始文本）和 new_string（替换后的新文本），必须精确匹配。"
+        "old_string 需与文件内容完全一致（包括缩进、空格和换行）。"
+        "old_string 与文件仅行尾不一致（CRLF/LF 混用）时会自动容错匹配并在结果中声明 match_mode。"
+        "如果 old_string 匹配多处且未设置 replace_all，会返回错误提示。"
+        "可传 dry_run=True 预览：只匹配不写入，返回 match_count、match_lines"
+        "（各匹配行号）和将产生的 diff，适合大范围替换前先确认。"
+        "new_string 会自动统一为文件的主导行尾，无需关心行尾风格。"
+        "编辑文件前建议先使用 file_read 读取文件内容，确认要替换的文本。"
+    ),
+    "file_write": (
+        "将内容写入文件。如果文件已存在则覆盖，不存在则新建。"
+        "父目录不存在时会自动创建。适用于创建新文件或完全重写文件内容。"
+        "如果只想修改文件中的部分文本，请使用 text_editor 工具。"
+        "行尾规则：line_ending=auto（默认）时已有文件自动跟随其主导行尾、"
+        "新建文件使用 LF；可显式传 lf 或 crlf 强制指定行尾。"
+    ),
+    "file_delete": (
+        "删除指定文件。删除前会自动备份原文件，因此该删除操作"
+        "可以随对话回退一起恢复（用户回退消息时文件会被还原）。"
+        "仅支持文件，不支持目录。"
+        "需要删除用户可能希望回退的文件时，务必使用此工具而不是 shell 命令"
+        "（del/rm 删除的文件无法回退）。"
+    ),
+    "file_search": (
+        "在指定路径（目录递归或单个文件）中搜索文件内容，使用正则表达式匹配。"
+        "返回匹配的文件路径、行号和行内容，按文件修改时间降序排列。"
+        "适用于在项目中查找特定模式（如函数定义、变量引用、错误信息等）。"
+        "查看文件完整内容请用 file_read。"
+        "搜索含特殊字符的纯文本时建议设置 literal_text=true。"
+    ),
+    "list_files": (
+        "按文件名 glob 模式递归匹配文件（而非内容搜索）。"
+        "适用于查找特定类型文件（如 **/*.py）、了解目录结构、定位配置文件等。"
+        "返回相对路径列表，自动跳过 .git/node_modules 等目录。"
+        "按文件内容搜索请改用 file_search。"
+    ),
+    "upload_to_file_manager": (
+        "将当前工作目录下已生成的文件导入文件管理系统，返回 download_url 供用户下载。"
+        "当你用 shell/file_write 等方式生成了需要交给用户的文件（报表、图片、视频、文档等），"
+        "调用此工具获取下载链接，并在回复中把 download_url 提供给用户。"
+        "file_path 支持相对工作目录或绝对路径。"
+    ),
+}
+
+
+class FileToolsKit(BaseToolKit):
     """通用文件操作工具集（6 个工具）
 
     由 shell_handler.get_tool 构造，注入审批回调与默认工作目录。
@@ -449,17 +500,7 @@ class FileToolsKit:
 
         text_editor_tool = StructuredTool(
             name="text_editor",
-            description=(
-                "精确替换文件中的文本。"
-                "传入 old_string（要替换的原始文本）和 new_string（替换后的新文本），必须精确匹配。"
-                "old_string 需与文件内容完全一致（包括缩进、空格和换行）。"
-                "old_string 与文件仅行尾不一致（CRLF/LF 混用）时会自动容错匹配并在结果中声明 match_mode。"
-                "如果 old_string 匹配多处且未设置 replace_all，会返回错误提示。"
-                "可传 dry_run=True 预览：只匹配不写入，返回 match_count、match_lines"
-                "（各匹配行号）和将产生的 diff，适合大范围替换前先确认。"
-                "new_string 会自动统一为文件的主导行尾，无需关心行尾风格。"
-                "编辑文件前建议先使用 file_read 读取文件内容，确认要替换的文本。"
-            ),
+            description=FILE_TOOL_DESCRIPTIONS["text_editor"],
             func=None,
             coroutine=text_editor,
             args_schema=TextEditInput,
@@ -537,13 +578,7 @@ class FileToolsKit:
 
         file_write_tool = StructuredTool(
             name="file_write",
-            description=(
-                "将内容写入文件。如果文件已存在则覆盖，不存在则新建。"
-                "父目录不存在时会自动创建。适用于创建新文件或完全重写文件内容。"
-                "如果只想修改文件中的部分文本，请使用 text_editor 工具。"
-                "行尾规则：line_ending=auto（默认）时已有文件自动跟随其主导行尾、"
-                "新建文件使用 LF；可显式传 lf 或 crlf 强制指定行尾。"
-            ),
+            description=FILE_TOOL_DESCRIPTIONS["file_write"],
             func=None,
             coroutine=file_write,
             args_schema=FileWriteInput,
@@ -594,13 +629,7 @@ class FileToolsKit:
 
         file_delete_tool = StructuredTool(
             name="file_delete",
-            description=(
-                "删除指定文件。删除前会自动备份原文件，因此该删除操作"
-                "可以随对话回退一起恢复（用户回退消息时文件会被还原）。"
-                "仅支持文件，不支持目录。"
-                "需要删除用户可能希望回退的文件时，务必使用此工具而不是 shell 命令"
-                "（del/rm 删除的文件无法回退）。"
-            ),
+            description=FILE_TOOL_DESCRIPTIONS["file_delete"],
             func=None,
             coroutine=file_delete,
             args_schema=FileDeleteInput,
@@ -849,13 +878,7 @@ class FileToolsKit:
 
         file_search_tool = StructuredTool(
             name="file_search",
-            description=(
-                "在指定路径（目录递归或单个文件）中搜索文件内容，使用正则表达式匹配。"
-                "返回匹配的文件路径、行号和行内容，按文件修改时间降序排列。"
-                "适用于在项目中查找特定模式（如函数定义、变量引用、错误信息等）。"
-                "查看文件完整内容请用 file_read。"
-                "搜索含特殊字符的纯文本时建议设置 literal_text=true。"
-            ),
+            description=FILE_TOOL_DESCRIPTIONS["file_search"],
             func=None,
             coroutine=file_search,
             args_schema=FileSearchInput,
@@ -920,12 +943,7 @@ class FileToolsKit:
 
         list_files_tool = StructuredTool(
             name="list_files",
-            description=(
-                "按文件名 glob 模式递归匹配文件（而非内容搜索）。"
-                "适用于查找特定类型文件（如 **/*.py）、了解目录结构、定位配置文件等。"
-                "返回相对路径列表，自动跳过 .git/node_modules 等目录。"
-                "按文件内容搜索请改用 file_search。"
-            ),
+            description=FILE_TOOL_DESCRIPTIONS["list_files"],
             func=None,
             coroutine=list_files,
             args_schema=ListFilesInput,
@@ -998,12 +1016,7 @@ class FileToolsKit:
 
         upload_to_file_manager_tool = StructuredTool(
             name="upload_to_file_manager",
-            description=(
-                "将当前工作目录下已生成的文件导入文件管理系统，返回 download_url 供用户下载。"
-                "当你用 shell/file_write 等方式生成了需要交给用户的文件（报表、图片、视频、文档等），"
-                "调用此工具获取下载链接，并在回复中把 download_url 提供给用户。"
-                "file_path 支持相对工作目录或绝对路径。"
-            ),
+            description=FILE_TOOL_DESCRIPTIONS["upload_to_file_manager"],
             func=None,
             coroutine=upload_to_file_manager,
             args_schema=UploadToFileManagerInput,
@@ -1016,4 +1029,11 @@ class FileToolsKit:
             file_search_tool,
             list_files_tool,
             upload_to_file_manager_tool,
+        ]
+
+    @classmethod
+    def tool_info(cls, node=None) -> list[dict]:
+        """从描述常量派生（单源：与 build_tools 产出逐字节一致）"""
+        return [
+            {"name": n, "description": d} for n, d in FILE_TOOL_DESCRIPTIONS.items()
         ]

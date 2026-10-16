@@ -38,6 +38,8 @@ from pydantic import BaseModel, Field
 from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.agent_flow.tools.shell_toolkit import validate_command
 
+from app.agent_flow.tools.base_abs_tool import BaseToolKit
+
 logger = logging.getLogger(__name__)
 
 # 审批回调签名：(tool_name, tool_args, content_for_pattern) -> None/"approved"/"rejected"/"timeout"
@@ -311,7 +313,60 @@ async def _run_with_client(cfg, job: Callable[[SSHClient], dict]) -> dict:
         return {"success": False, "error": f"未知错误: {e}", "error_type": "unknown"}
 
 
-class SshToolKit:
+# ---- 描述单源（唯一维护点；tool_info 与 build_tools 共用）----
+# ssh_executor/ssh_upload/ssh_download 描述含运行时值（主机/上限），用构建函数
+
+
+def _desc_ssh_executor(
+    target: str = "user@host:22",
+    command_timeout: int = 60,
+) -> str:
+    return (
+        f"在远程主机 {target} 上执行 Shell 命令。"
+        f"每次调用独立建连，cd 不影响后续调用；受超时限制（默认 {command_timeout} 秒）。"
+        "返回 exit_code/stdout/stderr；大量输出先过滤（| head、| grep 等），"
+        "否则会被自动截断。远程命令与本地 shell 同样经过危险模式审计"
+        "（rm -rf /、format、Format-Volume、dd 写入设备、curl|sh 等被直接拒绝）；"
+        "命令必须为单行，多行命令将被拒绝；删除/重启等未拦截操作务必先与用户确认。"
+    )
+
+
+def _desc_ssh_upload(transfer_limit_mb: int = 100) -> str:
+    return (
+        "将本地文件通过 SFTP 上传到远程主机。"
+        "自动检查本地文件存在性与大小上限（超限拒绝），远程父目录不存在时自动逐级创建。"
+        f"单文件上限 {transfer_limit_mb}MB。"
+        "建议先用本地工具确认文件存在（list_files/file_search）。"
+    )
+
+
+def _desc_ssh_download(transfer_limit_mb: int = 100) -> str:
+    return (
+        "从远程主机下载文件到本地（SFTP）。成功后自动导入文件管理系统并返回 download_url，"
+        f"需在回复中提供给用户。单文件上限 {transfer_limit_mb}MB；"
+        "不支持下载目录（先用 ssh_list_dir 确认类型）。"
+    )
+
+
+def _desc_ssh_list_dir() -> str:
+    return (
+        "列出远程主机目录内容（名称/类型/大小/修改时间），目录以 / 结尾标识。"
+        "用于确认远程路径存在性与定位上传下载位置。"
+    )
+
+
+def _desc_ssh_set_config() -> str:
+    return (
+        "设置/更新 SSH 节点的连接配置（主机、端口、用户名、密码、私钥）。"
+        "字段级合并，只覆盖传入的字段，未传入的保留原值；"
+        "认证方式不传时按提供的凭据自动推导。"
+        "未预设主机或需要更换目标主机时先调用本工具，"
+        "配置会持久化到节点，之后的 ssh_executor/ssh_upload/ssh_download/"
+        "ssh_list_dir 自动使用新配置，无需每次重复传入。"
+    )
+
+
+class SshToolKit(BaseToolKit):
     """SSH 远程执行工具集（5 个工具）
 
     由 ssh_handler.get_tool 构造，注入运行时依赖（cfg / 传输上限 / 审批回调 /
@@ -389,13 +444,8 @@ class SshToolKit:
 
         ssh_executor_tool = StructuredTool(
             name="ssh_executor",
-            description=(
-                f"在远程主机 {cfg.username}@{cfg.host}:{cfg.port} 上执行 Shell 命令。"
-                f"每次调用独立建连，cd 不影响后续调用；受超时限制（默认 {cfg.command_timeout} 秒）。"
-                "返回 exit_code/stdout/stderr；大量输出先过滤（| head、| grep 等），"
-                "否则会被自动截断。远程命令与本地 shell 同样经过危险模式审计"
-                "（rm -rf /、format、Format-Volume、dd 写入设备、curl|sh 等被直接拒绝）；"
-                "命令必须为单行，多行命令将被拒绝；删除/重启等未拦截操作务必先与用户确认。"
+            description=_desc_ssh_executor(
+                f"{cfg.username}@{cfg.host}:{cfg.port}", cfg.command_timeout
             ),
             func=None,
             coroutine=run_remote_command,
@@ -459,12 +509,7 @@ class SshToolKit:
 
         ssh_upload_tool = StructuredTool(
             name="ssh_upload",
-            description=(
-                "将本地文件通过 SFTP 上传到远程主机。"
-                "自动检查本地文件存在性与大小上限（超限拒绝），远程父目录不存在时自动逐级创建。"
-                f"单文件上限 {transfer_limit_bytes // 1024 // 1024}MB。"
-                "建议先用本地工具确认文件存在（list_files/file_search）。"
-            ),
+            description=_desc_ssh_upload(transfer_limit_bytes // 1024 // 1024),
             func=None,
             coroutine=upload_file,
             args_schema=SshUploadInput,
@@ -589,11 +634,7 @@ class SshToolKit:
 
         ssh_download_tool = StructuredTool(
             name="ssh_download",
-            description=(
-                "从远程主机下载文件到本地（SFTP）。成功后自动导入文件管理系统并返回 download_url，"
-                "需在回复中提供给用户。单文件上限 "
-                f"{transfer_limit_bytes // 1024 // 1024}MB；不支持下载目录（先用 ssh_list_dir 确认类型）。"
-            ),
+            description=_desc_ssh_download(transfer_limit_bytes // 1024 // 1024),
             func=None,
             coroutine=download_file,
             args_schema=SshDownloadInput,
@@ -652,10 +693,7 @@ class SshToolKit:
 
         ssh_list_dir_tool = StructuredTool(
             name="ssh_list_dir",
-            description=(
-                "列出远程主机目录内容（名称/类型/大小/修改时间），目录以 / 结尾标识。"
-                "用于确认远程路径存在性与定位上传下载位置。"
-            ),
+            description=_desc_ssh_list_dir(),
             func=None,
             coroutine=list_remote_dir,
             args_schema=SshListDirInput,
@@ -771,14 +809,7 @@ class SshToolKit:
 
         ssh_set_config_tool = StructuredTool(
             name="ssh_set_config",
-            description=(
-                "设置/更新 SSH 节点的连接配置（主机、端口、用户名、密码、私钥）。"
-                "字段级合并，只覆盖传入的字段，未传入的保留原值；"
-                "认证方式不传时按提供的凭据自动推导。"
-                "未预设主机或需要更换目标主机时先调用本工具，"
-                "配置会持久化到节点，之后的 ssh_executor/ssh_upload/ssh_download/"
-                "ssh_list_dir 自动使用新配置，无需每次重复传入。"
-            ),
+            description=_desc_ssh_set_config(),
             func=None,
             coroutine=set_ssh_config,
             args_schema=SshSetConfigInput,
@@ -790,4 +821,34 @@ class SshToolKit:
             ssh_download_tool,
             ssh_list_dir_tool,
             ssh_set_config_tool,
+        ]
+
+    @classmethod
+    def tool_info(cls, node=None) -> list[dict]:
+        """从描述构建函数派生（单源：与 build_tools 产出逐字节一致）
+
+        executor/upload/download 描述含运行时值（主机/上限/超时），
+        从 node.base_config 读取节点配置渲染（与 handler 组装同源）；
+        未配置时用 SshNodeConfig 默认值。
+        """
+        node_cfg = (getattr(node, "base_config", None) or {}) if node else {}
+        host = node_cfg.get("host") or "user@example.com"
+        port = node_cfg.get("port") or 22
+        username = node_cfg.get("username") or "user"
+        command_timeout = node_cfg.get("command_timeout") or 300
+        transfer_limit_mb = node_cfg.get("max_transfer_mb") or 100
+        return [
+            {
+                "name": "ssh_executor",
+                "description": _desc_ssh_executor(
+                    f"{username}@{host}:{port}", command_timeout
+                ),
+            },
+            {"name": "ssh_upload", "description": _desc_ssh_upload(transfer_limit_mb)},
+            {
+                "name": "ssh_download",
+                "description": _desc_ssh_download(transfer_limit_mb),
+            },
+            {"name": "ssh_list_dir", "description": _desc_ssh_list_dir()},
+            {"name": "ssh_set_config", "description": _desc_ssh_set_config()},
         ]

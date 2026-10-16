@@ -339,6 +339,7 @@ class ShellNodeHandler(BaseNodeHandler):
             timeout=cfg.timeout,
             async_wait=cfg.async_wait,
             system_info=f"当前系统: {platform.system()}",
+            resolve_workdir=self._resolve_tool_working_dir,
         )
         file_kit = FileToolsKit(
             approval_cb=_approval,
@@ -346,7 +347,7 @@ class ShellNodeHandler(BaseNodeHandler):
         )
 
         tools: list[BaseTool] = []
-        tools.extend(await shell_kit.build_tools(self._resolve_tool_working_dir))
+        tools.extend(await shell_kit.build_tools())
         tools.extend(await file_kit.build_tools())
 
         # ---- file_read（实现在 tools/file_read.py，此处仅构造服务并注册）----
@@ -357,29 +358,13 @@ class ShellNodeHandler(BaseNodeHandler):
 
     @classmethod
     def get_tool_info(cls, node: FlowNode) -> list[dict]:
-        info = [
-            {"name": "shell_executor", "description": "在受限环境中执行Shell命令"},
-            {"name": "shell_task_status", "description": "查询后台Shell任务状态"},
-            {"name": "shell_task_input", "description": "向后台Shell任务发送输入"},
-            {"name": "shell_task_cancel", "description": "取消后台Shell任务"},
-            {"name": "shell_wait", "description": "主动等待指定秒数（1~120秒）"},
-            {
-                "name": "file_read",
-                "description": "读取文件内容（图片/音频/PDF 多模态注入，xlsx/docx 转文本）",
-            },
-            {"name": "text_editor", "description": "编辑文件内容"},
-            {"name": "file_write", "description": "写入文件"},
-            {
-                "name": "file_delete",
-                "description": "删除文件",
-            },
-            {"name": "file_search", "description": "搜索文件"},
-            {"name": "list_files", "description": "按文件名查找文件"},
-            {
-                "name": "upload_to_file_manager",
-                "description": "将生成的文件导入文件管理并返回下载链接",
-            },
-        ]
+        """委托 toolkit 单源派生（描述与 get_tool 产出逐字节一致）"""
+        from app.agent_flow.tools.shell_toolkit import ShellToolKit
+        from app.agent_flow.tools.file_toolkit import FileToolsKit
+        from app.agent_flow.tools.file_read import FileReadService
+
+        info = ShellToolKit.tool_info(node) + FileToolsKit.tool_info(node)
+        info.append(FileReadService.tool_info(node))
         return info
 
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:

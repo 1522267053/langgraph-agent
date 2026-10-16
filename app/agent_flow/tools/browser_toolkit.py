@@ -27,6 +27,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.agent_flow.execution_context import get_execution_context
+from app.agent_flow.tools.base_abs_tool import BaseToolKit
 from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.config.build_utils import get_temp_dir
 
@@ -442,6 +443,62 @@ def _build_ax_snapshot(tab, max_nodes: int = 400) -> str:
 
 # ---- 工具输入 schema（StructuredTool 必需 args_schema；无参工具用空模型） ----
 
+# ---- 描述单源（唯一维护点；tool_info 与 build_tools 共用）----
+# name 与 build_tools 注册的 StructuredTool 一一对应，description 为完整
+# 描述（延迟域索引存完整描述，保 search 召回；展示端截断）
+BROWSER_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "browser_start": (
+        "开启浏览器（每流程独立实例，幂等：已开启则直接复用）。"
+        "操作浏览器的第一步；不调用直接用其他工具也会自动启动。"
+        "本机未装 Chrome 或自动探测失败时，可传 browser_path 指定"
+        "浏览器可执行文件路径（如 Edge 的 msedge.exe）"
+    ),
+    "browser_snapshot": (
+        "Take a text snapshot of the current page based on the a11y tree. "
+        "The snapshot lists page elements along with a unique identifier "
+        "(uid). Always use the latest snapshot. Prefer taking a snapshot "
+        "over taking a screenshot. 用 uid 引用元素进行 browser_click/browser_input。"
+    ),
+    "browser_navigate": "导航到 URL（action: goto/back/forward/reload）",
+    "browser_click": "点击页面元素。ref 为 browser_snapshot 返回的编号或 CSS/文本定位符",
+    "browser_input": (
+        "向输入框输入文本。ref 为 snapshot 编号或定位符；clear=True 先清空。"
+        "写操作同流程串行执行；输入后如需校验，请等本工具返回再单独调"
+        "browser_evaluate（并行发 evaluate 读到的是输入前的旧值）"
+    ),
+    "browser_screenshot": (
+        "截取当前页面（full_page=True 全页），返回可预览的图片链接。"
+        "width/height 可临时调整窗口控制截图分辨率（如 1920x1080 高清截图），"
+        "仅本次截图生效。注意：全页截图在内容较重的页面经常超时，"
+        "优先用默认视口截图，需要长页面时用 browser_scroll 滚动后分段截图"
+    ),
+    "browser_get_content": "获取页面文本内容（selector 可选，留空取整个 body）",
+    "browser_evaluate": "在页面执行 JavaScript（逃生舱）。脚本用 return 返回值",
+    "browser_tabs": (
+        "标签页管理（action: list/select/new/close，tab_id 为 CDP targetId 字符串，"
+        "生命周期内稳定；close/select 传 tab_id 指定目标）"
+    ),
+    "browser_scroll": "滚动页面（direction: up/down，amount 像素）",
+    "browser_wait_for": (
+        "等待包含指定文本的元素出现并显示（包含匹配，无需全文本一致；"
+        "超时返回 found=false）"
+    ),
+    "browser_close": "关闭浏览器（临时数据自动清理；配置了数据目录则登录态保留）",
+    "browser_console_logs": (
+        "查看页面控制台（console）日志：error/warning/info 等，"
+        "浏览器启动后自动全程捕获（含页面加载期报错）。"
+        "action: list（默认，仅当前导航）/ clear；level 过滤级别，"
+        "include_preserved=true 回看最近 3 次导航"
+    ),
+    "browser_network": (
+        "查看页面网络请求（Network 面板）。浏览器启动后自动捕获"
+        "（默认 Document/XHR/Fetch，跨导航持续）。action: list"
+        "（简表，默认当前导航，含 reqid）/ get（reqid 查详情含响应体）/ "
+        "start（覆盖过滤条件）/ stop（暂停）/ performance（资源时间线"
+        "全量 URL+耗时兜底）。排查接口报错：list 找 reqid → get 看响应体"
+    ),
+}
+
 
 class _NoArgsInput(BaseModel):
     """无参工具的空 schema（browser_close/snapshot）"""
@@ -582,7 +639,13 @@ class WaitForInput(BaseModel):
     """browser_wait_for 输入"""
 
     text: str = Field(..., description="要等待出现的页面文本")
-    timeout: int = Field(10, description="超时秒数，默认 10")
+    timeout: int = Field(
+        10,
+        description=(
+            "超时秒数（1~120，默认 10）。注意单位是秒不是毫秒——"
+            "传 5 表示 5 秒；超过 120 会被钳制到 120"
+        ),
+    )
     tab_id: Optional[str] = Field(
         None,
         description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
@@ -1112,7 +1175,7 @@ def _resolve_tab(session: "BrowserSession", tab_id: Optional[str]):
     return tab
 
 
-class BrowserToolKit:
+class BrowserToolKit(BaseToolKit):
     """浏览器 Agent 工具集（14 个工具，snapshot 范式）
 
     由 browser_handler.get_tool 构造，注入 cfg / flow_id / 审批回调。
@@ -1687,6 +1750,10 @@ class BrowserToolKit:
         async def browser_wait_for(
             text: str, timeout: int = 10, tab_id: Optional[str] = None
         ) -> str | dict:
+            # 入参钳制：模型常按毫秒直觉传 5000（想表达 5 秒），而 DP 的
+            # timeout 单位是秒——不钳制会挂 5000 秒（两段串行最坏 2 倍）。
+            # 上限 120 秒兜底，下限 1 秒防误传 0/负数
+            timeout = min(max(1, int(timeout)), 120)
             approval = await _approval(
                 "browser_wait_for", {"text": text, "tab_id": tab_id}, text
             )
@@ -1707,8 +1774,9 @@ class BrowserToolKit:
                     # 元素文本为「点击登录」时等「登录」永远匹配不上 → found=false。
                     # 改用 text:（包含匹配）；先查存在性再查显示性，避免
                     # ele_displayed 把超时全耗在定位上导致可见性检查零时间失败。
+                    # 两段共享预算：存在性检查用一半，给可见性检查留时间
                     locator = f"text:{text}"
-                    if not tab.ele(locator, timeout=timeout):
+                    if not tab.ele(locator, timeout=max(1, timeout // 2)):
                         return {
                             "success": False,
                             "found": False,
@@ -2024,135 +2092,109 @@ class BrowserToolKit:
         return [
             StructuredTool(
                 name="browser_start",
-                description=(
-                    "开启浏览器（每流程独立实例，幂等：已开启则直接复用）。"
-                    "操作浏览器的第一步；不调用直接用其他工具也会自动启动。"
-                    "本机未装 Chrome 或自动探测失败时，可传 browser_path 指定"
-                    "浏览器可执行文件路径（如 Edge 的 msedge.exe）"
-                ),
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_start"],
                 args_schema=StartInput,
                 func=None,
                 coroutine=browser_start,
             ),
             StructuredTool(
                 name="browser_snapshot",
-                description=(
-                    "Take a text snapshot of the current page based on the a11y tree. "
-                    "The snapshot lists page elements along with a unique identifier "
-                    "(uid). Always use the latest snapshot. Prefer taking a snapshot "
-                    "over taking a screenshot. 用 uid 引用元素进行 browser_click/browser_input。"
-                ),
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_snapshot"],
                 args_schema=_NoArgsInput,
                 func=None,
                 coroutine=browser_snapshot,
             ),
             StructuredTool(
                 name="browser_navigate",
-                description="导航到 URL（action: goto/back/forward/reload）",
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_navigate"],
                 args_schema=NavigateInput,
                 func=None,
                 coroutine=browser_navigate,
             ),
             StructuredTool(
                 name="browser_click",
-                description="点击页面元素。ref 为 browser_snapshot 返回的编号或 CSS/文本定位符",
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_click"],
                 args_schema=RefInput,
                 func=None,
                 coroutine=browser_click,
             ),
             StructuredTool(
                 name="browser_input",
-                description=(
-                    "向输入框输入文本。ref 为 snapshot 编号或定位符；clear=True 先清空。"
-                    "写操作同流程串行执行；输入后如需校验，请等本工具返回再单独调"
-                    "browser_evaluate（并行发 evaluate 读到的是输入前的旧值）"
-                ),
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_input"],
                 args_schema=InputInput,
                 func=None,
                 coroutine=browser_input,
             ),
             StructuredTool(
                 name="browser_screenshot",
-                description=(
-                    "截取当前页面（full_page=True 全页），返回可预览的图片链接。"
-                    "width/height 可临时调整窗口控制截图分辨率（如 1920x1080 高清截图），"
-                    "仅本次截图生效。注意：全页截图在内容较重的页面经常超时，"
-                    "优先用默认视口截图，需要长页面时用 browser_scroll 滚动后分段截图"
-                ),
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_screenshot"],
                 args_schema=ScreenshotInput,
                 func=None,
                 coroutine=browser_screenshot,
             ),
             StructuredTool(
                 name="browser_get_content",
-                description="获取页面文本内容（selector 可选，留空取整个 body）",
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_get_content"],
                 args_schema=GetContentInput,
                 func=None,
                 coroutine=browser_get_content,
             ),
             StructuredTool(
                 name="browser_evaluate",
-                description="在页面执行 JavaScript（逃生舱）。脚本用 return 返回值",
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_evaluate"],
                 args_schema=EvaluateInput,
                 func=None,
                 coroutine=browser_evaluate,
             ),
             StructuredTool(
                 name="browser_tabs",
-                description="标签页管理（action: list/select/new/close，tab_id 为 CDP targetId 字符串，生命周期内稳定；close/select 传 tab_id 指定目标）",
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_tabs"],
                 args_schema=TabsInput,
                 func=None,
                 coroutine=browser_tabs,
             ),
             StructuredTool(
                 name="browser_scroll",
-                description="滚动页面（direction: up/down，amount 像素）",
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_scroll"],
                 args_schema=ScrollInput,
                 func=None,
                 coroutine=browser_scroll,
             ),
             StructuredTool(
                 name="browser_wait_for",
-                description=(
-                    "等待包含指定文本的元素出现并显示（包含匹配，无需全文本一致；"
-                    "超时返回 found=false）"
-                ),
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_wait_for"],
                 args_schema=WaitForInput,
                 func=None,
                 coroutine=browser_wait_for,
             ),
             StructuredTool(
                 name="browser_close",
-                description="关闭浏览器（临时数据自动清理；配置了数据目录则登录态保留）",
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_close"],
                 args_schema=_NoArgsInput,
                 func=None,
                 coroutine=browser_close,
             ),
             StructuredTool(
                 name="browser_console_logs",
-                description=(
-                    "查看页面控制台（console）日志：error/warning/info 等，"
-                    "浏览器启动后自动全程捕获（含页面加载期报错）。"
-                    "action: list（默认，仅当前导航）/ clear；level 过滤级别，"
-                    "include_preserved=true 回看最近 3 次导航"
-                ),
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_console_logs"],
                 args_schema=ConsoleInput,
                 func=None,
                 coroutine=browser_console_logs,
             ),
             StructuredTool(
                 name="browser_network",
-                description=(
-                    "查看页面网络请求（Network 面板）。浏览器启动后自动捕获"
-                    "（默认 Document/XHR/Fetch，跨导航持续）。action: list"
-                    "（简表，默认当前导航，含 reqid）/ get（reqid 查详情含响应体）/ "
-                    "start（覆盖过滤条件）/ stop（暂停）/ performance（资源时间线"
-                    "全量 URL+耗时兜底）。排查接口报错：list 找 reqid → get 看响应体"
-                ),
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_network"],
                 args_schema=NetworkInput,
                 func=None,
                 coroutine=browser_network,
             ),
+        ]
+
+    @classmethod
+    def tool_info(cls, node=None) -> list[dict]:
+        """从描述常量派生（单源：与 build_tools 产出逐字节一致）"""
+        return [
+            {"name": n, "description": d} for n, d in BROWSER_TOOL_DESCRIPTIONS.items()
         ]
 
 
