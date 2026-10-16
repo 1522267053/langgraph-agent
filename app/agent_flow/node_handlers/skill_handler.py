@@ -26,6 +26,22 @@ from app.agent_flow.flow_event import NodeStartEvent, NodeDoneEvent
 if TYPE_CHECKING:
     from app.agent_flow.tool_resolver import LlmToolConfig
 
+# load_skill description 阈值化：技能数超过此值时 description 只留名称索引，
+# 完整描述改由 skill_search 按需检索（控制 tools 参数 token 膨胀）
+_SKILL_DESC_THRESHOLD = 10
+
+
+class SkillSearchInput(BaseModel):
+    """skill_search 工具输入参数"""
+
+    keyword: str = Field(
+        ...,
+        description=(
+            "关键词，匹配技能名称与描述（不区分大小写）。"
+            "支持空格分隔多个关键词，任一命中即返回，如 'agent mcp'"
+        ),
+    )
+
 
 class LoadSkillInput(BaseModel):
     """load_skill 工具输入参数"""
@@ -211,7 +227,7 @@ class SkillNodeHandler(BaseNodeHandler):
             node: 节点对象
 
         Returns:
-            LangChain StructuredTool
+            LangChain StructuredTool 列表（load_skill + 阈值触发的 skill_search）
         """
         node_config = node.base_config or {}
         skill_ids = node_config.get("skill_ids", [])
@@ -256,17 +272,83 @@ class SkillNodeHandler(BaseNodeHandler):
             f"技能名称(id={s.id})：{s.name}\n" + f"技能描述：{s.description}\n"
             for s in skills
         ]
-        description = (
-            f"加载技能文档(SKILLS.md)。当前可用技能: {'\n'.join(skill_desc_list)}"
-        )
+        # 阈值化：技能多时 description 只留名称索引（前缀缓存友好——
+        # description 纯静态），完整描述改由 skill_search 按需检索
+        if len(skills) <= _SKILL_DESC_THRESHOLD:
+            description = (
+                f"加载技能文档(SKILLS.md)。当前可用技能: {'\n'.join(skill_desc_list)}"
+            )
+        else:
+            name_list = ", ".join(s.name for s in skills)
+            description = (
+                f"加载技能文档(SKILLS.md)。当前可用技能({len(skills)}个): {name_list}。"
+                "技能较多，先用 skill_search(keyword) 按关键词查看技能描述再选择"
+            )
 
-        return StructuredTool(
-            name="load_skill",
-            description=description,
-            func=None,
-            coroutine=load_skill,
-            args_schema=LoadSkillInput,
-        )
+        # skill_search：技能多时提供按需检索（技能少时 description 已含全量
+        # 描述，注入反而冗余——按阈值开关）
+        tools_out = [
+            StructuredTool(
+                name="load_skill",
+                description=description,
+                func=None,
+                coroutine=load_skill,
+                args_schema=LoadSkillInput,
+            )
+        ]
+        if len(skills) > _SKILL_DESC_THRESHOLD:
+            skills_ref = list(skills)
+
+            async def skill_search(keyword: str) -> dict:
+                # 空格分隔多关键词：任一命中即召回（OR 语义）
+                keywords = [k for k in (keyword or "").split() if k]
+                if not keywords:
+                    return {
+                        "error": "keyword 不能为空；示例: keyword='发票' 查发票相关技能，"
+                        "空格分隔多词如 'agent mcp'（任一命中即返回）"
+                    }
+                lowered = [(k, k.lower()) for k in keywords]
+                matched = [
+                    s
+                    for s in skills_ref
+                    if any(
+                        kl in s.name.lower() or kl in (s.description or "").lower()
+                        for _, kl in lowered
+                    )
+                ]
+                if not matched:
+                    return {
+                        "success": False,
+                        "note": f"无匹配技能（keyword={keyword}）",
+                        "available": [s.name for s in skills_ref],
+                    }
+                return {
+                    "success": True,
+                    "skills": [
+                        {
+                            "name": s.name,
+                            "description": s.description,
+                            "note": "确认后用 load_skill(skill_name=...) 加载",
+                        }
+                        for s in matched
+                    ],
+                    "total": len(matched),
+                }
+
+            tools_out.append(
+                StructuredTool(
+                    name="skill_search",
+                    description=(
+                        "按关键词检索可用技能的名称与描述（技能较多时用于"
+                        "发现目标技能，再用 load_skill 加载）。支持空格分隔"
+                        "多个关键词，任一命中即返回"
+                    ),
+                    func=None,
+                    coroutine=skill_search,
+                    args_schema=SkillSearchInput,
+                )
+            )
+        return tools_out
 
     @classmethod
     def get_tool_config(cls, node: FlowNode, config: "LlmToolConfig") -> bool:
