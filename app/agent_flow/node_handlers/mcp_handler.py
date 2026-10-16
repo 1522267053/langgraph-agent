@@ -63,6 +63,11 @@ class McpNodeHandler(BaseNodeHandler):
 
     ConfigClass = McpNodeConfig
 
+    # MCP 族参与 auto 阈值判定：外部服务器工具是 token 膨胀源（schema 巨大、
+    # 低频），候选数 > DEFERRED_TOOL_THRESHOLD 时整体进延迟域，否则回退全量。
+    # 内置族保持基类默认 "bind"（始终具名绑定）。
+    defer_policy = "auto"
+
     async def execute(
         self,
         node: FlowNode,
@@ -260,6 +265,15 @@ class McpNodeHandler(BaseNodeHandler):
             )
         return wrapped
 
+    def get_provider(self, node: FlowNode) -> "McpToolProvider":
+        """MCP 工具族 ToolProvider（重写基类默认实现）
+
+        物化需真实建连+审批 wrap（基类默认实现只按名取 get_tool 结果，
+        不含 MCP 特有逻辑），故返回专用 McpToolProvider。节点配置
+        lazy_load=True 时由 setup_tool_handlers 登记进延迟域。
+        """
+        return McpToolProvider(node)
+
     @classmethod
     def get_tool_config(cls, node: FlowNode, config: "LlmToolConfig") -> bool:
         """将MCP服务器ID添加到工具配置"""
@@ -448,3 +462,138 @@ class McpNodeHandler(BaseNodeHandler):
         except Exception:
             return []
         return McpNodeHandler._parameters_from_schema(schema)
+
+
+class McpToolProvider:
+    """MCP 工具族 ToolProvider 实现（按需加载延迟域）
+
+    索引（list_meta/search）：三级读取——内存缓存 → DB 持久缓存
+    McpToolCache → 降级跳过（不建连，缓存未命中提示管理员刷新）；
+    物化（materialize）：走 mcp_tool_manager 真实建连取工具 + wrap 审批
+    钩子（基于真实工具名+参数做白名单/正则，防 tool_execute 成为审批后门）。
+
+    一个 provider 对应一个 MCP 节点实例（provider_key=mcp:{node_key}），
+    节点配置 lazy_load=True 时由 setup_tool_handlers 登记进延迟域。
+    """
+
+    def __init__(self, node: FlowNode):
+        self._node = node
+        cfg = node.base_config or {}
+        self._server_ids = [int(i) for i in cfg.get("mcp_server_ids", [])]
+        self._node_key = node.node_key
+        self._cfg = cfg
+
+    @property
+    def provider_key(self) -> str:
+        return f"mcp:{self._node_key}"
+
+    async def _read_cache_index(self) -> list[dict]:
+        """读 DB 持久缓存（零建连）：[{name, description, input_schema}]
+
+        工具名输出与 bound 路径（mcp_tool_manager）对齐：加前缀
+        mcp__{server_name}__（server_name 为空时不加，同 get_tools 语义）。
+        前缀一致性是延迟域正确性的前提——bound 剔除按名匹配、materialize
+        按名定位真实工具，索引名与 bound 名不一致会导致工具既留在 bound
+        又进延迟域，且延迟域侧永远物化失败。
+        """
+        from sqlalchemy import select
+
+        from app.config.database import AsyncSessionLocal
+        from app.models.mcp_server import McpServer
+        from app.services.mcp_server_service import mcp_server_service
+
+        result: list[dict] = []
+        async with AsyncSessionLocal() as db:
+            # 服务器名映射（前缀来源，与 mcp_manager._wrap_tool 同源）
+            name_by_id: dict[int, str] = {}
+            if self._server_ids:
+                rows = await db.execute(
+                    select(McpServer.id, McpServer.name).where(
+                        McpServer.id.in_(self._server_ids), McpServer.is_delete == 0
+                    )
+                )
+                name_by_id = {rid: rname for rid, rname in rows.all()}
+            for sid in self._server_ids:
+                server_name = name_by_id.get(sid, "")
+                prefix = f"mcp__{server_name}__" if server_name else ""
+                rows = await mcp_server_service.get_tools_cache(db, sid)
+                disabled = await mcp_server_service.get_disabled_tool_names(db, sid)
+                for row in rows:
+                    if row.tool_name in disabled:
+                        continue
+                    result.append(
+                        {
+                            "name": f"{prefix}{row.tool_name}",
+                            "description": row.description or "",
+                            "input_schema": row.tool_schema or {},
+                        }
+                    )
+        return result
+
+    async def list_meta(self) -> list[dict]:
+        return await self._read_cache_index()
+
+    async def search(self, pattern: str, limit: int = 10) -> list[dict]:
+        import re
+
+        regex = re.compile(pattern, re.IGNORECASE)
+        matched: list[dict] = []
+        for item in await self._read_cache_index():
+            if regex.search(item["name"] or "") or regex.search(
+                item["description"] or ""
+            ):
+                matched.append(item)
+                if len(matched) >= limit:
+                    break
+        return matched
+
+    async def materialize(self, tool_name: str) -> Optional[BaseTool]:
+        """物化：真实建连取工具 + wrap 审批钩子"""
+        # 真实建连取全部工具（mcp_tool_manager 内部有缓存/锁/session 重建）
+        async with AsyncSessionLocal() as db:
+            base_tools = await mcp_tool_manager.get_tools(db, self._server_ids)
+        for base_tool in base_tools:
+            if base_tool.name != tool_name:
+                continue
+            if not isinstance(base_tool, StructuredTool) or not base_tool.coroutine:
+                return base_tool
+            # wrap 审批（与 get_tool 同款工厂，隔离循环变量）
+            original_coro = base_tool.coroutine
+            handler_ref = McpNodeHandler()
+            node_ref = self._node
+
+            async def approval_wrapped_coro(*args, **kwargs):
+                flat: dict = dict(kwargs)
+                for i, v in enumerate(args):
+                    flat.setdefault(f"_arg_{i}", v)
+                content = f"{tool_name} " + " ".join(
+                    str(v)[:200] for v in flat.values()
+                )
+                approval_result = await handler_ref._check_and_request_approval(
+                    tool_name=tool_name,
+                    tool_args=flat,
+                    cfg=self._cfg,
+                    content_for_pattern=content,
+                    node_key=node_ref.node_key,
+                )
+                if approval_result not in (None, "approved"):
+                    return {
+                        "error": (
+                            f"用户未批准执行MCP工具 {tool_name}"
+                            f"（{approval_result}）。"
+                            "如需继续，请征得用户同意后重新调用。"
+                        ),
+                        "success": False,
+                        "error_type": "approval_rejected",
+                    }
+                return await original_coro(*args, **kwargs)
+
+            return StructuredTool(
+                name=base_tool.name,
+                description=base_tool.description,
+                args_schema=base_tool.args_schema,
+                coroutine=approval_wrapped_coro,
+                response_format=base_tool.response_format,
+                metadata=base_tool.metadata,
+            )
+        return None

@@ -23,6 +23,7 @@ from app.agent_flow.variable_resolver import VariableResolver, variable_resolver
 from app.services.interrupt_service import interrupt_service
 
 if TYPE_CHECKING:
+    from app.agent_flow.deferred_tools import ToolProvider
     from app.agent_flow.flow_event import FlowEvent
     from app.agent_flow.tool_resolver import LlmToolConfig
     from app.agent_flow.flow_context import FlowState
@@ -256,6 +257,15 @@ class BaseNodeHandler(ABC):
     """
 
     ConfigClass: Optional[type[BaseModel]] = None
+
+    # 按需加载（延迟域）族策略：节点 lazy_load 缺省时本族工具的默认归属。
+    #   "bind" = 始终具名绑定（内置族默认：高频核心能力，bind 的 token 成本低、
+    #            调用零往返，进延迟域纯属损失）
+    #   "auto" = 参与阈值判定（外部工具族如 MCP：候选数 > DEFERRED_TOOL_THRESHOLD
+    #            才整体进延迟域，否则回退全量）
+    # 三层策略优先级：节点 base_config.lazy_load > handler.defer_policy > "bind"。
+    # 仅 "auto" 族会被登记进延迟域候选；内置族想延迟需节点配置 lazy_load=true。
+    defer_policy: str = "bind"
 
     def __init__(self, resolver: Optional[VariableResolver] = None):
         """
@@ -824,6 +834,12 @@ class BaseNodeHandler(ABC):
     def get_tool_info(cls, node: "FlowNode") -> list[dict]:
         """返回工具元数据 [{name, description}]，不实际执行
 
+        职责：① 前端 connected-tools 展示；② 延迟域索引数据源
+        （get_provider 默认实现）。**必须保持同步、零建连、纯静态**——
+        禁止在此加 DB 查询/建连等动态逻辑（会拖慢前端 API 且破坏
+        延迟域零建连约定）；需要动态索引的族重写 get_provider 返回
+        自定义 provider（见 mcp_handler.McpToolProvider）。
+
         Args:
             node: 节点对象
 
@@ -831,6 +847,83 @@ class BaseNodeHandler(ABC):
             工具信息列表，每项包含 name 和 description 字段
         """
         return []
+
+    def get_provider(self, node: "FlowNode") -> Optional["ToolProvider"]:
+        """返回按需加载延迟域的 ToolProvider（None=不参与延迟域）
+
+        默认实现基于 get_tool_info（索引）+ get_tool（物化）组合：
+        子类已实现这两个方法时零成本接入延迟域——只需节点配置
+        tool_lazy=True，setup_tool_handlers 即登记本 provider。
+
+        物化语义：调 get_tool 取真实工具对象按名匹配（内置族零建连）；
+        需要特殊物化逻辑（如 MCP 真实建连+审批 wrap）的子类重写本方法
+        返回自定义 provider（见 mcp_handler.McpToolProvider）。
+
+        Args:
+            node: 节点对象
+
+        Returns:
+            ToolProvider 实例；默认 None（该族工具始终具名 bind）
+        """
+        if not self.get_tool_info(node):
+            return None
+
+        from app.agent_flow.deferred_tools import ToolProviderCompat
+
+        handler = self
+        # 物化缓存：同节点 N 个工具物化只调一次 get_tool（工具闭包重建
+        # 有成本，且 knowledge/browser 的 get_tool 每次重建全部工具）
+        _materialized_cache: dict[str, list] = {}
+
+        async def _get_tools_cached() -> list:
+            result = await handler.get_tool(node)
+            if result is None:
+                return []
+            if isinstance(result, (list, tuple)):
+                return list(result)
+            return [result]
+
+        async def _materialize(tool_name: str):
+            if not _materialized_cache:
+                _materialized_cache["tools"] = await _get_tools_cached()
+            for t in _materialized_cache["tools"]:
+                if t.name == tool_name:
+                    return t
+            return None
+
+        async def _search(pattern: str, limit: int = 10) -> list[dict]:
+            import re
+
+            regex = re.compile(pattern, re.IGNORECASE)
+            matched = []
+            for t in handler.get_tool_info(node):
+                if regex.search(t["name"]) or regex.search(t["description"]):
+                    # 命中即物化提取真实 args_schema（内置族零建连，代价
+                    # 可忽略）：模型看到参数格式才能一次调准 tool_execute，
+                    # 返回 None schema 会导致盲调→校验失败→多烧一轮往返
+                    tool = await _materialize(t["name"])
+                    matched.append(
+                        {
+                            "name": t["name"],
+                            "description": t["description"],
+                            "input_schema": (
+                                tool.args_schema if tool is not None else None
+                            ),
+                        }
+                    )
+                    if len(matched) >= limit:
+                        break
+            return matched
+
+        return ToolProviderCompat(
+            provider_key=f"{type(self).__name__}:{node.node_key}",
+            list_meta_fn=lambda: [
+                {"name": t["name"], "description": t["description"]}
+                for t in self.get_tool_info(node)
+            ],
+            search_fn=_search,
+            materialize_fn=_materialize,
+        )
 
     @classmethod
     def get_default_config(cls) -> dict:

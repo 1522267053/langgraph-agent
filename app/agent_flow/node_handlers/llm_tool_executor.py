@@ -307,6 +307,82 @@ async def setup_tool_handlers(
     # 按优先级排序：静态内容靠前，动态内容（如记忆）靠后，利于 LLM 缓存命中
     prompt_hints.sort(key=lambda x: (x[0], x[1]))
 
+    # ---- 按需加载（延迟域）：族策略 + auto 阈值决策 ----
+    # 机制：三层策略优先级——节点 base_config.lazy_load > handler.defer_policy
+    # > 默认 "bind"。仅 defer_policy=="auto" 的族（MCP）参与阈值判定：
+    # 延迟候选 > 阈值时启用延迟域（注入三元元工具），否则回退全量注册。
+    # 内置族默认 "bind"（高频核心能力，bind 的 token 成本低、调用零往返）；
+    # 节点配置 lazy_load=true 可强制任意族进延迟域，false 强制排除。
+    # 物化在 tool_execute coroutine 内部完成，handle_tool_calls 零改动。
+    # 缓存不变量：延迟域决策在本函数内一次性完成并冻结，bound tools 会话内恒定。
+    deferred_reminder = ""
+    if flow is not None and flow_id is not None:
+        from app.agent_flow.deferred_tools import (
+            DEFERRED_TOOL_THRESHOLD,
+            DeferredToolRegistry,
+            build_deferred_reminder,
+            create_deferred_meta_tools,
+        )
+
+        registry = DeferredToolRegistry()
+        # 三态分类：forced_lazy（强制延迟域）/ forced_bind（强制全量）/ auto
+        forced_lazy_nodes: list = []
+        auto_nodes: list = []
+        for tool_node, _edge in tool_edge_pairs:
+            node_cfg = tool_node.base_config or {}
+            override = node_cfg.get("lazy_load", node_cfg.get("tool_lazy"))
+            if override is True:
+                forced_lazy_nodes.append(tool_node)
+                continue
+            if override is False:
+                continue  # 强制全量：不登记 provider，工具保持具名 bind
+            handler = handler_registry.get(tool_node.node_type)
+            # 仅 defer_policy=="auto" 的族参与阈值判定（内置族默认 "bind"）
+            if handler is not None and handler.defer_policy == "auto":
+                auto_nodes.append(tool_node)
+
+        # auto 节点全部登记（provider 索引零建连：MCP 走 McpToolCache，
+        # 内置族走静态清单），freeze 后按总数决策
+        for tool_node in auto_nodes:
+            handler = handler_registry.get(tool_node.node_type)
+            if handler is None:
+                continue
+            provider = handler.get_provider(tool_node)
+            if provider is not None:
+                registry.register(provider)
+
+        snapshot = await registry.freeze()
+        auto_total = snapshot.total_tools
+        should_defer = auto_total > DEFERRED_TOOL_THRESHOLD or bool(forced_lazy_nodes)
+
+        if should_defer and auto_total > 0:
+            # 启用延迟域：auto 节点工具从 bound 剔除 + 强制 lazy 节点登记
+            for tool_node in forced_lazy_nodes:
+                handler = handler_registry.get(tool_node.node_type)
+                if handler is None:
+                    continue
+                provider = handler.get_provider(tool_node)
+                if provider is not None:
+                    registry.register(provider)
+            # 强制 lazy 节点登记后需重新冻结（索引变化）
+            if forced_lazy_nodes:
+                snapshot = await registry.freeze()
+            lazy_names = set(snapshot.name_to_provider.keys())
+            tools = [t for t in tools if t.name not in lazy_names]
+            tools.extend(create_deferred_meta_tools(registry))
+            deferred_reminder = build_deferred_reminder(snapshot)
+            # 挂到 state 供后续扩展（如执行面板展示延迟域信息）
+            state.set_variable("_deferred_tool_total", snapshot.total_tools)
+        else:
+            # 回退全量：auto 候选未过阈值（或索引全空）。强制 lazy 节点仍需
+            # 处理——它们的工具在全量路径已被收集，无需动作；仅当 forced_lazy
+            # 有值且 auto_total==0 时提示
+            if forced_lazy_nodes and auto_total == 0:
+                logger.warning(
+                    "节点[%s] 存在强制 lazy 节点但延迟域索引为空，其工具按全量注册",
+                    node.node_key,
+                )
+
     # 注入 WS 远程工具（仅智能体类型，远程工具仅 Agent 支持）
     # contextvar（WS execute 路径）优先；前端 SSE 路径 fallback 全局注册表
     if flow_type == FlowType.AGENT.value and flow_id is not None:
@@ -339,6 +415,11 @@ async def setup_tool_handlers(
         if tool.name not in seen_names:
             seen_names.add(tool.name)
             unique_tools.append(tool)
+
+    # 延迟域 reminder 并入 runtime_reminders（消息层 <system-reminder> 拼装，
+    # 内容为会话冻结快照，会话内不变——前缀缓存安全）
+    if deferred_reminder:
+        runtime_reminders.append(deferred_reminder)
 
     return (
         unique_tools,

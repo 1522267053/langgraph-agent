@@ -54,6 +54,24 @@ function cloneConfig(c: McpConfig): McpConfig {
   }
 }
 
+/** 按需加载三态（lazy_load）：缺省=auto（工具数>20 自动启用）；true=强制延迟域；false=强制全量 */
+function onLazyLoadChange(val: string): void {
+  // '' = auto（删除字段）；'true'/'false' 写入布尔
+  if (val === '') {
+    delete localConfig.value.lazy_load
+  } else {
+    localConfig.value.lazy_load = val === 'true'
+  }
+  updateConfig()
+}
+
+function lazyLoadState(): string {
+  const v = localConfig.value.lazy_load
+  if (v === true) return 'true'
+  if (v === false) return 'false'
+  return ''
+}
+
 const localConfig = ref<McpConfig>(cloneConfig(props.config))
 const { addInputVariable, removeInputVariable, handleSourceTypeChange } = useInputVariables(
   localConfig,
@@ -272,6 +290,24 @@ function onArgChange(): void {
           直接执行：连接到主干流程（"入/出"把手），按下方固定配置直接执行
         </el-text>
       </div>
+      <el-form label-width="80px" size="small" style="margin-top: 8px">
+        <el-form-item label="按需加载">
+          <el-select
+            :model-value="lazyLoadState()"
+            style="width: 100%"
+            @change="onLazyLoadChange"
+          >
+            <el-option label="自动（工具数 > 20 时启用，推荐）" value="" />
+            <el-option label="强制开启（工具始终按需加载）" value="true" />
+            <el-option label="强制关闭（工具始终直接注册）" value="false" />
+          </el-select>
+          <el-text size="small" type="info" style="margin-top: 4px; display: block">
+            开启后工具不直接注册给 AI，改由 tool_info_list / tool_search /
+            tool_execute 三个元工具按需发现与执行（省 tools 参数 token；
+            需服务器在管理页连接过一次以预热工具缓存）
+          </el-text>
+        </el-form-item>
+      </el-form>
     </div>
 
     <div class="config-section">

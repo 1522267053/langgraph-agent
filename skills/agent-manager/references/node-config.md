@@ -332,6 +332,28 @@ SSH 节点（`ssh`）是 Agent 专用工具提供者，仅支持工具边 `tools
 
 浏览器节点（`browser`）基于 DrissionPage（CDP）实现浏览器自动化，双形态：Flow 模式作主链执行节点（`default -> default`，一个节点一个动作：start/navigate/click/input/get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/console_logs/network/close，参数经 `flow_args` 绑定）；Agent 模式经工具边提供 14 个工具（`browser_start` / `browser_snapshot` / `browser_navigate` / `browser_click` / `browser_input` / `browser_screenshot` / `browser_get_content` / `browser_evaluate` / `browser_tabs` / `browser_scroll` / `browser_wait_for` / `browser_console_logs` / `browser_network` / `browser_close`）。同一 LLM 只能连接一个浏览器节点。
 
+### 返回值形态：Flow 模式返回 JSON 对象，Agent 模式返回文字（重要）
+
+同一动作在两种形态下的**返回值类型不同**，直接决定下游节点怎么写：
+
+| 形态 | 返回形态 | 具体内容 |
+|---|---|---|
+| **Flow 模式**（主链节点） | **结构化 JSON 对象**（节点输出变量 `result`） | `navigate` → `{url, title, tab_id}`；`evaluate` → `{url, title, result: <JS return 的原始值>}`；`click`/`input`/`snapshot`/`get_content`/`screenshot`/`tabs`/`console_logs`/`network` 等各有自己的 JSON 字段；失败时 `{error, error_type, ...}` |
+| **Agent 模式**（工具调用） | **文字**（LLM 读的文本；JSON 被序列化成字符串） | 工具返回内容以字符串形式回给 LLM，如 `{"success": true, "url": "...", "title": "...", "tab_id": 0}` 的文本；`evaluate` 的工具返回值形如 `{"success": true, "result": {...}, "tab_id": 0}` |
+
+**Flow 模式下游取值要点**：
+
+- `evaluate` 的动作结果**被包一层**：节点输出是 `{url, title, result}`，真正的 JS 返回值在 **`result`** 字段里。所以 Python/下游引用 `nodes.<evaluate节点key>.result.result` 才能拿到 JS 返回的对象；只写 `nodes.<evaluate节点key>.result` 拿到的是外层包装。
+- `evaluate` 的 `script` 建议写成自包含 IIFE/箭头函数（`async () => { ... return {...} }`），返回值尽量是纯数据对象，便于下游直接消费。
+- 用 Python 节点消费时建议做一层兼容解包（外层有 `result` 就用内层），避免因包装层级变化而拿到空值：
+  ```python
+  def unwrap(x):
+      if isinstance(x, dict) and isinstance(x.get('result'), dict):
+          return x['result']
+      return x if isinstance(x, dict) else {}
+  ```
+- 动作失败**不会抛异常中断流程**，而是把错误信息写进 JSON（如 `{"error": "...", "success": false}`）；需要分支判断时用 `condition` 节点检查输出字段，不要指望流程自动中止。
+
 ```json
 {
   "connect_mode": "launch",
@@ -390,6 +412,9 @@ Flow 模式每个动作的参数 schema（`flow_args` 该填什么）**唯一事
 - `browser_screenshot` 超时 30 秒返回 `error_type: "screenshot_timeout"`，成功返回含 `download_url`（前端渲染下载按钮）。
 - `browser_evaluate` 的脚本必须用 `return` 语句形态返回值（DrissionPage 4.x `run_js` 只认 return）。
 - 写操作（navigate/click/input/tabs/scroll）同流程串行（写锁），只读工具（snapshot/get_content/screenshot）可并行。
+- **登录态需显式持久化**：`user_data_path` 留空 = 临时目录，浏览器退出即清理，**下次运行必须重新登录**。需要登录态的自动化（如抓取个人账号页面）务必在 `flow_action="start"` 节点配置持久化目录（按 flow 派生子目录），并**先手工启动一次该 profile 完成登录**（可用同参数命令行启动浏览器登录：`chrome.exe --user-data-dir=<目录> <登录页>`），之后流程运行即可复用 Cookie。
+- **Flow 模式下优先选顶层页面而非 iframe 面板**：跨域 iframe（如 `rewards.bing.com` 嵌在 `cn.bing.com` 中）的 `contentDocument` 不可读，`evaluate` 会拿到 null。内置浏览器点击此类站点徽章可能跳转 SSO 而非展开面板，导致脚本拿不到面板内容。**改为直接 navigate 到目标站点自身的顶层页面**（有完整任务/数据列表的那个 URL）再 `evaluate`，可绕开跨域与面板展开的不确定性。
+- Flow 模式没有 `pageId` 概念，`evaluate`/`get_content` 等默认作用于当前活动标签页；多标签页场景用 `tabs(list)` 拿 `tab_id` 再 `tabs(select, tab_id=...)` 切换。
 
 ## 卡片
 

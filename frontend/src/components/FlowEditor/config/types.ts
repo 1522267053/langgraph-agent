@@ -191,6 +191,8 @@ export interface ApiConfig {
 export interface McpConfig {
   mcp_server_ids: number[]
   mcp_server_names?: string[]
+  /** 按需加载三态：缺省=auto（延迟域候选总数>20 自动启用）；true=强制延迟域；false=强制全量 */
+  lazy_load?: boolean
   /** 直接执行模式：挂到主干流程时按固定工具+参数直接调用 */
   tool_name?: string
   /** 工具参数（逐参数绑定值，支持 {{变量}} 插值） */
