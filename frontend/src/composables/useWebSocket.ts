@@ -1,7 +1,7 @@
 import { ref, h } from 'vue'
 import { ElNotification, ElButton, ElMessage } from 'element-plus'
 import { agendaApi } from '@/api/agenda'
-import { notify, isDenied } from '@/composables/useBrowserNotification'
+import { notifyOnce, isDenied } from '@/composables/useBrowserNotification'
 
 interface ExecutionDoneData {
   execution_id: number | null
@@ -39,6 +39,8 @@ interface ToolOutputEndData {
 
 interface WSMessage {
   type: 'execution_done' | 'agenda_reminder' | 'tool_output_start' | 'tool_output_end'
+  /** 推送唯一标识（后端生成）：多标签桌面通知去重依据 */
+  event_id?: string
   /** 推送类型（仅 agenda_reminder 时使用） */
   category?: 'agenda_reminder' | 'reminder'
   browser_notify?: boolean
@@ -138,7 +140,7 @@ function handleNotification(msg: WSMessage) {
           position: 'top-right'
         })
         if (msg.browser_notify !== false) {
-          notify(`${typeLabel}完成`, { body: msgPreview, icon: '/logo.ico' })
+          notifyOnce(msg.event_id, `${typeLabel}完成`, { body: msgPreview, icon: '/logo.ico' })
         }
       }
     } else if (status === 'failed') {
@@ -154,7 +156,7 @@ function handleNotification(msg: WSMessage) {
           position: 'top-right'
         })
         if (msg.browser_notify !== false) {
-          notify(`${typeLabel}失败`, { body: msgPreview, icon: '/logo.ico' })
+          notifyOnce(msg.event_id, `${typeLabel}失败`, { body: msgPreview, icon: '/logo.ico' })
         }
       }
     }
@@ -173,7 +175,7 @@ function handleNotification(msg: WSMessage) {
         position: 'top-right'
       })
       if (msg.browser_notify !== false) {
-        notify(`⏰ ${data.title}`, { body, icon: '/logo.ico' })
+        notifyOnce(msg.event_id, `⏰ ${data.title}`, { body, icon: '/logo.ico' })
       }
     } else {
       // 日程提醒：保留「完成」「延后15分钟」按钮
@@ -225,7 +227,7 @@ function handleNotification(msg: WSMessage) {
         position: 'top-right'
       })
       if (msg.browser_notify !== false) {
-        notify(`日程提醒: ${data.title}`, {
+        notifyOnce(msg.event_id, `日程提醒: ${data.title}`, {
           body: parts.join(' | ') || '该日程开始了',
           icon: '/logo.ico'
         })

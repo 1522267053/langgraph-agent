@@ -8,6 +8,7 @@ WebSocket 连接管理器
 
 import logging
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import WebSocket
 
@@ -98,13 +99,18 @@ class WebSocketManager:
         last_user_message: Optional[str] = None,
         browser_notify: bool = True,
     ) -> None:
-        """广播执行完成通知（统一入口），受通知开关控制"""
+        """广播执行完成通知（统一入口），受通知开关控制
+
+        event_id 为本次推送的唯一标识：多标签场景下前端据此「抢占去重」，
+        保证同一条事件只弹一次桌面通知（页内提示仍各标签各弹）。
+        """
         if not self._notification_enabled:
             return
 
         await self.broadcast(
             {
                 "type": "execution_done",
+                "event_id": uuid4().hex,
                 "browser_notify": browser_notify,
                 "data": {
                     "execution_id": execution_id,
@@ -136,11 +142,14 @@ class WebSocketManager:
         category 用于前端按类型区分弹窗样式：
         - agenda_reminder（默认）：日程提醒，含完成、延后按钮
         - reminder：定时任务触发的提醒（最简 UI）
+
+        event_id 为本次推送的唯一标识，用于多标签桌面通知去重（同 execution_done）。
         """
         await self.broadcast_to_user(
             username,
             {
                 "type": "agenda_reminder",
+                "event_id": uuid4().hex,
                 "category": category,
                 "browser_notify": browser_notify,
                 "data": {
