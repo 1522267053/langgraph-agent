@@ -156,6 +156,63 @@ async def _resolve_session_work_dir(
     return work_dir
 
 
+def _build_providers_of_node(
+    tool_node, handler_registry: dict, writer=None, session_id: int = 0
+) -> list:
+    """构建单个工具节点的延迟域 provider 列表（族内粒度由 handler 决定）
+
+    审批依赖（writer/session_id）必须透传：provider 内部构造的工具闭包拿不到
+    handler 自身的注入状态，自行 new 空壳 handler 会让审批静默放行（安全后门）。
+    单个节点构建失败不应拖垮整个 LLM 节点，故吞异常并告警。
+    """
+    node_handler = handler_registry.get(tool_node.node_type)
+    if node_handler is None:
+        return []
+    try:
+        return (
+            node_handler.get_providers(tool_node, writer=writer, session_id=session_id)
+            or []
+        )
+    except Exception as e:
+        logger.warning("延迟域 provider 构建失败，跳过[%s]: %s", tool_node.node_key, e)
+        return []
+
+
+def _collect_bind_keys(providers_by_node: dict, forced_bind_nodes: list) -> set:
+    """绑定优先排除集：lazy_load=false 节点引用到的 provider_key（server 粒度）
+
+    冲突口径：某 server 只要被任一 lazy_load=false 节点引用，就整体不进延迟域——
+    宁可工具留在 bound（模型直接可见），也不能因节点合并而从可见工具里消失。
+    """
+    bind_keys: set = set()
+    for tool_node in forced_bind_nodes:
+        bind_keys.update(
+            p.provider_key for p in providers_by_node.get(tool_node.node_key, [])
+        )
+    return bind_keys
+
+
+def _merge_providers(providers_by_node: dict, nodes: list, bind_keys: set) -> dict:
+    """按 provider_key 合并多个节点贡献的 provider（返回 provider_key -> provider）
+
+    同一 key 的后续 provider 不登记，改走已有实例的 `absorb(node, cfg)`
+    扩展点合并语义（MCP：审批规则并集 + 归因节点保留）。
+    """
+    merged: dict = {}
+    for tool_node in nodes:
+        for provider in providers_by_node.get(tool_node.node_key, []):
+            if provider.provider_key in bind_keys:
+                continue  # 绑定优先：该 server 整体留在 bound
+            existing = merged.get(provider.provider_key)
+            if existing is None:
+                merged[provider.provider_key] = provider
+                continue
+            absorb = getattr(existing, "absorb", None)
+            if absorb is not None:
+                absorb(tool_node, tool_node.base_config or {})
+    return merged
+
+
 async def setup_tool_handlers(
     node: FlowNode,
     state: FlowState,
@@ -309,10 +366,14 @@ async def setup_tool_handlers(
 
     # ---- 按需加载（延迟域）：族策略 + auto 阈值决策 ----
     # 机制：三层策略优先级——节点 base_config.lazy_load > handler.defer_policy
-    # > 默认 "bind"。仅 defer_policy=="auto" 的族（MCP）参与阈值判定：
-    # 延迟候选 > 阈值时启用延迟域（注入三元元工具），否则回退全量注册。
+    # > 默认 "bind"。仅 defer_policy=="auto" 的族（MCP/knowledge/browser）参与
+    # 阈值判定：延迟候选 > 阈值时启用延迟域（注入三元元工具），否则回退全量注册。
     # 内置族默认 "bind"（高频核心能力，bind 的 token 成本低、调用零往返）；
     # 节点配置 lazy_load=true 可强制任意族进延迟域，false 强制排除。
+    # provider 粒度由族决定（MCP 一族是「一 server 一 provider」，一个节点可贡献
+    # 多个 provider），故统一走 handler.get_providers 并按 provider_key 合并引用。
+    # lazy_load 冲突取**绑定优先**：某 server 被任一 lazy_load=false 节点引用时，
+    # 该 server 整体不进延迟域（宁可工具留在 bound，也不能从模型可见工具里消失）。
     # 物化在 tool_execute coroutine 内部完成，handle_tool_calls 零改动。
     # 缓存不变量：延迟域决策在本函数内一次性完成并冻结，bound tools 会话内恒定。
     deferred_reminder = ""
@@ -327,6 +388,7 @@ async def setup_tool_handlers(
         registry = DeferredToolRegistry()
         # 三态分类：forced_lazy（强制延迟域）/ forced_bind（强制全量）/ auto
         forced_lazy_nodes: list = []
+        forced_bind_nodes: list = []
         auto_nodes: list = []
         for tool_node, _edge in tool_edge_pairs:
             node_cfg = tool_node.base_config or {}
@@ -335,21 +397,36 @@ async def setup_tool_handlers(
                 forced_lazy_nodes.append(tool_node)
                 continue
             if override is False:
+                forced_bind_nodes.append(tool_node)
                 continue  # 强制全量：不登记 provider，工具保持具名 bind
             handler = handler_registry.get(tool_node.node_type)
             # 仅 defer_policy=="auto" 的族参与阈值判定（内置族默认 "bind"）
             if handler is not None and handler.defer_policy == "auto":
                 auto_nodes.append(tool_node)
 
+        # provider 构建与合并（纯逻辑抽为模块级函数，便于自验）
+        # 只为「参与延迟域决策」的节点构建（auto / 强制 lazy / 强制 bind）——
+        # 纯 bind 族的工具不进延迟域，构建 provider 属无谓开销
+        deferred_nodes = auto_nodes + forced_lazy_nodes + forced_bind_nodes
+        providers_by_node = {
+            tool_node.node_key: _build_providers_of_node(
+                tool_node, handler_registry, writer, session_id
+            )
+            for tool_node in deferred_nodes
+        }
+        bind_keys = _collect_bind_keys(providers_by_node, forced_bind_nodes)
+        if bind_keys:
+            logger.info(
+                "节点[%s] 延迟域绑定优先排除（lazy_load=false）: %s",
+                node.node_key,
+                sorted(bind_keys),
+            )
+        merged = _merge_providers(providers_by_node, auto_nodes, bind_keys)
+
         # auto 节点全部登记（provider 索引零建连：MCP 走 McpToolCache，
         # 内置族走静态清单），freeze 后按总数决策
-        for tool_node in auto_nodes:
-            handler = handler_registry.get(tool_node.node_type)
-            if handler is None:
-                continue
-            provider = handler.get_provider(tool_node)
-            if provider is not None:
-                registry.register(provider)
+        for provider in merged.values():
+            registry.register(provider)
 
         snapshot = await registry.freeze()
         auto_total = snapshot.total_tools
@@ -357,13 +434,9 @@ async def setup_tool_handlers(
 
         if should_defer and auto_total > 0:
             # 启用延迟域：auto 节点工具从 bound 剔除 + 强制 lazy 节点登记
-            for tool_node in forced_lazy_nodes:
-                handler = handler_registry.get(tool_node.node_type)
-                if handler is None:
-                    continue
-                provider = handler.get_provider(tool_node)
-                if provider is not None:
-                    registry.register(provider)
+            merged = _merge_providers(providers_by_node, forced_lazy_nodes, bind_keys)
+            for provider in merged.values():
+                registry.register(provider)
             # 强制 lazy 节点登记后需重新冻结（索引变化）
             if forced_lazy_nodes:
                 snapshot = await registry.freeze()

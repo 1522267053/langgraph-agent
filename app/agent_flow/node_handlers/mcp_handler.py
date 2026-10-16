@@ -8,6 +8,7 @@ MCP节点支持两种工作模式（可共存，由连线拓扑决定）：
 """
 
 import logging
+from collections import Counter
 from typing import Optional, TYPE_CHECKING
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
@@ -265,14 +266,105 @@ class McpNodeHandler(BaseNodeHandler):
             )
         return wrapped
 
-    def get_provider(self, node: FlowNode) -> "McpToolProvider":
-        """MCP 工具族 ToolProvider（重写基类默认实现）
+    def get_providers(
+        self, node: FlowNode, writer=None, session_id: int = 0
+    ) -> "list[McpToolProvider]":
+        """MCP 工具族 ToolProvider 列表（重写基类 `get_provider` 单 provider 形态）
 
-        物化需真实建连+审批 wrap（基类默认实现只按名取 get_tool 结果，
-        不含 MCP 特有逻辑），故返回专用 McpToolProvider。节点配置
-        lazy_load=True 时由 setup_tool_handlers 登记进延迟域。
+        一 server 一 provider（provider_key=mcp__{server_name}）——工具列表的粒度与
+        MCP 工具名前缀（mcp__{server_name}__）同族，共用 mcp__ 命名空间
+        （provider key 无收尾 __，工具名有）。同一 server 被多个节点引用时
+        由登记方按 key 合并（absorb），避免索引重复与工具总数虚高。
+
+        `writer`/`session_id` 为审批依赖，必须由调用方透传已注入的实例值：
+        延迟域物化的工具是独立闭包，拿不到 handler 自身的注入状态（构造空壳
+        handler 会让审批钩子因 `_session_id<=0 or _writer is None` 直接放行）。
+
+        Args:
+            node: MCP 节点
+            writer: StreamWriter（Agent 模式审批事件通道，None=非 Agent）
+            session_id: 会话 ID（>0 时审批生效）
         """
-        return McpToolProvider(node)
+        cfg = node.base_config or {}
+        server_ids = [int(i) for i in cfg.get("mcp_server_ids", [])]
+        if not server_ids:
+            return []
+        names = self._server_names(server_ids)
+        key_of = self._provider_key_resolver(server_ids, names)
+        return [
+            McpToolProvider(
+                server_id=sid,
+                server_name=names.get(sid, ""),
+                provider_key=key_of(sid),
+                sources=[(node, cfg)],
+                writer=writer,
+                session_id=session_id,
+            )
+            for sid in server_ids
+        ]
+
+    @classmethod
+    def _server_names(cls, server_ids: list[int]) -> dict[int, str]:
+        """读服务器名（provider_key 与工具名前缀同源；单次 DB 查询，无建连）"""
+        import asyncio
+
+        try:
+            from sqlalchemy import select
+
+            from app.config.database import AsyncSessionLocal
+            from app.models.mcp_server import McpServer
+
+            async def _read() -> dict[int, str]:
+                async with AsyncSessionLocal() as db:
+                    rows = await db.execute(
+                        select(McpServer.id, McpServer.name).where(
+                            McpServer.id.in_(server_ids), McpServer.is_delete == 0
+                        )
+                    )
+                    return {rid: (rname or "") for rid, rname in rows.all()}
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    return pool.submit(asyncio.run, _read()).result(timeout=10)
+            return asyncio.run(_read())
+        except Exception as e:
+            logger.warning(
+                "读取 MCP 服务器名失败（provider_key 回退 server_id）: %s", e
+            )
+            return {}
+
+    @classmethod
+    def _provider_key_resolver(cls, server_ids: list[int], names: dict[int, str]):
+        """构造 server_id → provider_key 解析器（重名/无名的确定性兜底）
+
+        - 名称为空 → mcp__{server_id}
+        - 名称唯一 → mcp__{name}（与工具名前缀 mcp__{name}__ 同族，
+          共用 mcp__ 命名空间；provider key 无收尾 __，工具名有）
+        - 名称重名 → mcp__{name}#{server_id} 并告警（重名服务器的工具前缀本就会
+          互相覆盖，此处只保证 provider_key 不撞车、可追溯）
+        """
+        counts = Counter(names.get(sid, "") for sid in server_ids)
+        if any(name and cnt > 1 for name, cnt in counts.items()):
+            logger.warning(
+                "MCP 服务器重名，provider_key 加 server_id 消歧: %s",
+                {n: c for n, c in counts.items() if n and c > 1},
+            )
+        for sid in server_ids:
+            if not names.get(sid):
+                logger.info("MCP 服务器 %s 无名称，provider_key 回退 mcp__%s", sid, sid)
+        return lambda sid: (
+            f"mcp__{names[sid]}"
+            if names.get(sid) and counts[names[sid]] == 1
+            else f"mcp__{names[sid]}#{sid}"
+            if names.get(sid)
+            else f"mcp__{sid}"
+        )
 
     @classmethod
     def get_tool_config(cls, node: FlowNode, config: "LlmToolConfig") -> bool:
@@ -465,27 +557,65 @@ class McpNodeHandler(BaseNodeHandler):
 
 
 class McpToolProvider:
-    """MCP 工具族 ToolProvider 实现（按需加载延迟域）
+    """MCP 工具族 ToolProvider 实现（按需加载延迟域，一 server 一 provider）
+
+    粒度：provider_key=mcp__{server_name}（与工具名前缀 mcp__{server_name}__ 同族，
+    共用 mcp__ 命名空间；provider key 无收尾 __，工具名有），
+    与「MCP 工具列表」概念对齐——索引去重、工具总数精确、展示名对模型可读。
+    同一 server 被多个节点引用时，由登记方按 key 合并（absorb），规则取并集。
 
     索引（list_meta/search）：三级读取——内存缓存 → DB 持久缓存
     McpToolCache → 降级跳过（不建连，缓存未命中提示管理员刷新）；
     物化（materialize）：走 mcp_tool_manager 真实建连取工具 + wrap 审批
     钩子（基于真实工具名+参数做白名单/正则，防 tool_execute 成为审批后门）。
-
-    一个 provider 对应一个 MCP 节点实例（provider_key=mcp:{node_key}），
-    节点配置 lazy_load=True 时由 setup_tool_handlers 登记进延迟域。
     """
 
-    def __init__(self, node: FlowNode):
-        self._node = node
-        cfg = node.base_config or {}
-        self._server_ids = [int(i) for i in cfg.get("mcp_server_ids", [])]
-        self._node_key = node.node_key
-        self._cfg = cfg
+    def __init__(
+        self,
+        server_id: int,
+        server_name: str,
+        provider_key: str,
+        sources: Optional[list[tuple[FlowNode, dict]]] = None,
+        writer=None,
+        session_id: int = 0,
+    ):
+        """
+        Args:
+            server_id: MCP 服务器 ID（索引/物化的数据源）
+            server_name: 服务器名（工具名前缀来源，空=不加前缀，同 get_tools 语义）
+            provider_key: 延迟域唯一标识（由 handler 统一解析，重名/无名兜底一致）
+            sources: 引用本 server 的 (节点, 节点配置) 列表——审批规则并集 + 归因
+            writer: StreamWriter（审批事件通道；None=审批不生效，非 Agent 模式）
+            session_id: 会话 ID（<=0 时审批不生效）
+        """
+        self._server_id = server_id
+        self._server_name = server_name
+        self._key = provider_key
+        self._sources: list[tuple[str, McpNodeConfig]] = [
+            (node.node_key, McpNodeConfig.model_validate(cfg or {}))
+            for node, cfg in (sources or [])
+        ]
+        self._writer = writer
+        self._session_id = session_id
+        # 审批钩子实例：只用基类方法（白名单/正则 → request approval），
+        # 必须携带真实的 _writer/_session_id，否则审批静默放行（P0）
+        self._approval_handler = McpNodeHandler()
+        self._approval_handler._writer = writer
+        self._approval_handler._session_id = int(session_id or 0)
+
+    def absorb(self, node: FlowNode, cfg: dict) -> None:
+        """合并同一 server 的另一个引用节点（索引零变化，仅审批规则变宽）
+
+        并集语义（fail-safe）：任一引用节点要求审批即审批——宁可多弹一次窗，
+        也不让已配置的审批规则因节点合并而失效。
+        """
+        if any(node_key == node.node_key for node_key, _ in self._sources):
+            return
+        self._sources.append((node.node_key, McpNodeConfig.model_validate(cfg or {})))
 
     @property
     def provider_key(self) -> str:
-        return f"mcp:{self._node_key}"
+        return self._key
 
     async def _read_cache_index(self) -> list[dict]:
         """读 DB 持久缓存（零建连）：[{name, description, input_schema}]
@@ -495,39 +625,30 @@ class McpToolProvider:
         前缀一致性是延迟域正确性的前提——bound 剔除按名匹配、materialize
         按名定位真实工具，索引名与 bound 名不一致会导致工具既留在 bound
         又进延迟域，且延迟域侧永远物化失败。
-        """
-        from sqlalchemy import select
 
+        仅读单个 server 的缓存（一 server 一 provider）：同一 server 被多节点
+        引用时索引天然只出现一份，工具总数不再虚高。
+        """
         from app.config.database import AsyncSessionLocal
-        from app.models.mcp_server import McpServer
         from app.services.mcp_server_service import mcp_server_service
 
         result: list[dict] = []
+        prefix = f"mcp__{self._server_name}__" if self._server_name else ""
         async with AsyncSessionLocal() as db:
-            # 服务器名映射（前缀来源，与 mcp_manager._wrap_tool 同源）
-            name_by_id: dict[int, str] = {}
-            if self._server_ids:
-                rows = await db.execute(
-                    select(McpServer.id, McpServer.name).where(
-                        McpServer.id.in_(self._server_ids), McpServer.is_delete == 0
-                    )
+            rows = await mcp_server_service.get_tools_cache(db, self._server_id)
+            disabled = await mcp_server_service.get_disabled_tool_names(
+                db, self._server_id
+            )
+            for row in rows:
+                if row.tool_name in disabled:
+                    continue
+                result.append(
+                    {
+                        "name": f"{prefix}{row.tool_name}",
+                        "description": row.description or "",
+                        "input_schema": row.tool_schema or {},
+                    }
                 )
-                name_by_id = {rid: rname for rid, rname in rows.all()}
-            for sid in self._server_ids:
-                server_name = name_by_id.get(sid, "")
-                prefix = f"mcp__{server_name}__" if server_name else ""
-                rows = await mcp_server_service.get_tools_cache(db, sid)
-                disabled = await mcp_server_service.get_disabled_tool_names(db, sid)
-                for row in rows:
-                    if row.tool_name in disabled:
-                        continue
-                    result.append(
-                        {
-                            "name": f"{prefix}{row.tool_name}",
-                            "description": row.description or "",
-                            "input_schema": row.tool_schema or {},
-                        }
-                    )
         return result
 
     async def list_meta(self) -> list[dict]:
@@ -547,11 +668,42 @@ class McpToolProvider:
                     break
         return matched
 
+    async def _check_approval(
+        self, tool_name: str, tool_args: dict, content: str
+    ) -> Optional[str]:
+        """审批并集检查：任一引用节点命中即审批（返回首个非放行结果）
+
+        归因：审批事件带命中的那个节点 node_key（前端展示与后续路由都按此）。
+        无引用节点（异常兜底）时用 server_id 占位。
+        """
+        if self._session_id <= 0 or self._writer is None:
+            return None
+        node_key_fallback = f"mcp_server_{self._server_id}"
+        if not self._sources:
+            return await self._approval_handler._check_and_request_approval(
+                tool_name=tool_name,
+                tool_args=tool_args,
+                cfg=McpNodeConfig(),
+                content_for_pattern=content,
+                node_key=node_key_fallback,
+            )
+        for node_key, cfg_obj in self._sources:
+            result = await self._approval_handler._check_and_request_approval(
+                tool_name=tool_name,
+                tool_args=tool_args,
+                cfg=cfg_obj,
+                content_for_pattern=content,
+                node_key=node_key,
+            )
+            if result not in (None, "approved"):
+                return result
+        return None
+
     async def materialize(self, tool_name: str) -> Optional[BaseTool]:
-        """物化：真实建连取工具 + wrap 审批钩子"""
-        # 真实建连取全部工具（mcp_tool_manager 内部有缓存/锁/session 重建）
+        """物化：真实建连取工具（仅本 server）+ wrap 审批钩子"""
+        # 真实建连取本 server 工具（mcp_tool_manager 内部有缓存/锁/session 重建）
         async with AsyncSessionLocal() as db:
-            base_tools = await mcp_tool_manager.get_tools(db, self._server_ids)
+            base_tools = await mcp_tool_manager.get_tools(db, [self._server_id])
         for base_tool in base_tools:
             if base_tool.name != tool_name:
                 continue
@@ -559,8 +711,6 @@ class McpToolProvider:
                 return base_tool
             # wrap 审批（与 get_tool 同款工厂，隔离循环变量）
             original_coro = base_tool.coroutine
-            handler_ref = McpNodeHandler()
-            node_ref = self._node
 
             async def approval_wrapped_coro(*args, **kwargs):
                 flat: dict = dict(kwargs)
@@ -569,12 +719,10 @@ class McpToolProvider:
                 content = f"{tool_name} " + " ".join(
                     str(v)[:200] for v in flat.values()
                 )
-                approval_result = await handler_ref._check_and_request_approval(
+                approval_result = await self._check_approval(
                     tool_name=tool_name,
                     tool_args=flat,
-                    cfg=self._cfg,
-                    content_for_pattern=content,
-                    node_key=node_ref.node_key,
+                    content=content,
                 )
                 if approval_result not in (None, "approved"):
                     return {

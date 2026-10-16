@@ -848,6 +848,30 @@ class BaseNodeHandler(ABC):
         """
         return []
 
+    def get_providers(
+        self, node: "FlowNode", writer=None, session_id: int = 0
+    ) -> list["ToolProvider"]:
+        """返回按需加载延迟域的 ToolProvider 列表（默认单 provider 形态）
+
+        与 `get_provider` 的关系：本方法是延迟域登记的**唯一入口**——族内 provider
+        粒度可能不同于节点粒度（如 MCP 一族是「一 server 一 provider」，一个节点
+        可贡献多个 provider），故统一返回列表；默认实现委托 `get_provider`。
+
+        `writer`/`session_id` 为审批依赖：重写者若在 provider 内部构造工具闭包并
+        做审批，必须使用调用方透传的已注入实例值——自行 new 一个 handler 空壳会让
+        审批钩子因 `_session_id<=0 or _writer is None` 静默放行（安全后门）。
+
+        Args:
+            node: 节点对象
+            writer: StreamWriter（Agent 模式审批事件通道）
+            session_id: 会话 ID（>0 审批生效）
+
+        Returns:
+            provider 列表（空列表 = 该节点工具不参与延迟域）
+        """
+        provider = self.get_provider(node)
+        return [provider] if provider is not None else []
+
     def get_provider(self, node: "FlowNode") -> Optional["ToolProvider"]:
         """返回按需加载延迟域的 ToolProvider（None=不参与延迟域）
 
@@ -857,7 +881,8 @@ class BaseNodeHandler(ABC):
 
         物化语义：调 get_tool 取真实工具对象按名匹配（内置族零建连）；
         需要特殊物化逻辑（如 MCP 真实建连+审批 wrap）的子类重写本方法
-        返回自定义 provider（见 mcp_handler.McpToolProvider）。
+        返回自定义 provider（见 mcp_handler.McpToolProvider）；需要一节点
+        多 provider 的族改重写 `get_providers`。
 
         Args:
             node: 节点对象

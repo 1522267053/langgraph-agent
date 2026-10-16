@@ -228,9 +228,12 @@ npm run format                          # Prettier 格式化
 ### 工具按需加载（deferred_tools.py，工具膨胀场景）
 - **机制/策略分离**: `ToolProvider` 协议（list_meta/search/materialize）对所有工具族通用；策略由三层优先级决定：节点 base_config.lazy_load > **handler.defer_policy** > 默认 "bind"
 - **族策略（defer_policy）**: 内置族默认 `"bind"`（shell/ssh/memory/todo/agenda/api/skill/sub_agent/question 等——高频核心能力，bind 的 token 成本低、调用零往返）；**mcp/knowledge/browser 为 `"auto"`**（外部服务器与多节点弹性膨胀源，参与阈值判定）。auto 族想强制全量配 lazy_load=false；bind 族想延迟配 lazy_load=true
-- **auto 阈值决策**: 仅 defer_policy=="auto" 的族参与计数——延迟候选 > `DEFERRED_TOOL_THRESHOLD`(20) 启用延迟域，≤20 回退全量注册（阈值不被内置工具数量污染）；节点配置 true/false 强制覆盖。判定数据零建连（MCP 走 McpToolCache）
+- **auto 阈值决策**: 仅 defer_policy=="auto" 的族参与计数——延迟候选 > `DEFERRED_TOOL_THRESHOLD`(20) 启用延迟域，≤20 回退全量注册（阈值不被内置工具数量污染）；节点配置 true/false 强制覆盖。判定数据零建连（MCP 走 McpToolCache）。**候选数按唯一工具计**（provider 粒度见下，同一 server 被多节点引用只算一份）
+- **provider 粒度（强制）**: 一 provider = 一个「工具列表」，**不等于一个节点**——MCP 是「一 server 一 provider」（`provider_key=mcp__{server_name}`，与工具名前缀 `mcp__{server_name}__` 同族、共用 `mcp__` 命名空间（provider key 无收尾 `__`，工具名有）；无名回退 `mcp__{server_id}`，重名加 `#{id}` 消歧并告警）；knowledge/browser 是「一节点一 provider」（基类默认 `{类名}:{node_key}`）。登记入口统一为 `handler.get_providers(node, writer, session_id)`（返回列表），基类默认实现 = `[get_provider(node)]`。同 `provider_key` 多节点引用由登记方合并，族可实现 `absorb(node, cfg)` 合并语义（MCP：审批规则**并集**，任一引用节点要求审批即审批，归因到命中的 node_key）
+- **延迟域审批依赖透传（强制）**: `get_providers`/`get_provider` 的 `writer`/`session_id` 必须由调用方透传已注入实例值；provider 内部构造工具闭包时**禁止 new 空的 handler**（`McpNodeHandler()` 的 `_session_id=0`/`_writer=None` 会被审批钩子首行 `return None` 静默放行，`tool_execute` 即审批后门）
+- **lazy_load 冲突取绑定优先**: 某 server 被任一 `lazy_load=false` 节点引用时，该 server 整体不进延迟域（宁可工具留在 bound，也不能因 provider 合并从模型可见工具里消失）
 - **索引名一致性（强制）**: 延迟域索引的工具名必须与 bound 路径逐字节一致（MCP 需带 `mcp__{server_name}__` 前缀，同 mcp_manager）——bound 剔除与 materialize 定位都按名匹配，不一致会导致工具双份绑定且延迟域执行失败
-- **基类默认实现**: `BaseNodeHandler.get_provider` = get_tool_info（索引，零建连）+ get_tool（物化，取工具对象，按 node 缓存）；物化需建连/审批的族重写之（如 `McpToolProvider`）
+- **基类默认实现**: `BaseNodeHandler.get_provider` = get_tool_info（索引，零建连）+ get_tool（物化，取工具对象，按 node 缓存）；物化需建连/审批的族重写之（如 `McpToolProvider`），需一节点多 provider 的族改重写 `get_providers`
 - **三元元工具**: `tool_info_list`（总览）/ `tool_search_tool_regex`（查 schema）/ `tool_execute`（执行，arguments 为 JSON 字符串）；物化在 tool_execute coroutine 内部，`handle_tool_calls` 零改动
 - **前缀缓存不变量（强制）**: 延迟域决策在 setup_tool_handlers 内一次性冻结；三元工具 description 纯静态；物化只进执行器永不回写 bound tools；违反即破坏 LLM 前缀缓存
 - **get_tool_info 双职责约束**: 兼任前端展示与延迟域索引，**必须保持同步、零建连、纯静态**；需要动态索引的族重写 get_provider 返回自定义 provider

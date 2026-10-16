@@ -77,13 +77,19 @@ def serialize_tool_schema(args_schema: Any) -> str:
 class ToolProvider(Protocol):
     """工具族 provider 协议：一个族一个实现（MCP/knowledge/browser/...）
 
+    provider 粒度由族自定，不必等于节点粒度：MCP 是「一 server 一 provider」
+    （provider_key=mcp__{server_name}，与工具名前缀 mcp__{server_name}__ 同族，
+    共用 mcp__ 命名空间），知识库/浏览器是「一节点一 provider」。同一 provider_key
+    被多个节点引用时由登记方合并（可选 `absorb(node, cfg)` 扩展点，MCP 用它做
+    审批规则并集）。
+
     索引方法（list_meta/search）必须零建连/零重负载——只读缓存或内存
     schema；materialize 才允许真实建连/取工具对象。
     """
 
     @property
     def provider_key(self) -> str:
-        """provider 唯一标识（如 mcp:3、knowledge:kb_5），用于展示与去重"""
+        """provider 唯一标识（如 mcp__lark、knowledge:kb_5），用于展示与去重"""
         ...
 
     async def list_meta(self) -> List[Dict[str, str]]:
@@ -203,7 +209,18 @@ class DeferredToolRegistry:
             snapshot.provider_counts[key] = len(metas)
             snapshot.index[key] = metas
             for meta in metas:
-                snapshot.name_to_provider[meta["name"]] = key
+                name = meta["name"]
+                owner = snapshot.name_to_provider.get(name)
+                if owner is not None and owner != key:
+                    # 同一工具名被两个 provider 认领：name_to_provider 后写覆盖，
+                    # 物化只按后写者定位，前者索引成为死条目（展示重复、total 虚高）
+                    logger.warning(
+                        "延迟域工具名重复认领: %s (provider=%s 覆盖 %s)",
+                        name,
+                        key,
+                        owner,
+                    )
+                snapshot.name_to_provider[name] = key
         self._snapshot = snapshot
         return snapshot
 
@@ -347,7 +364,10 @@ def create_deferred_meta_tools(
         """tool_info_list 输入"""
 
         provider: str = Field(
-            "", description="按 provider 过滤（如 mcp:3），空=全部；分页查看用"
+            "",
+            description=(
+                "按 provider 过滤（如 mcp__lark、knowledge:kb_5），空=全部；分页查看用"
+            ),
         )
         page_size: int = Field(50, description="每页条数（默认 50）")
         page_idx: int = Field(0, description="页码（0 起）")
