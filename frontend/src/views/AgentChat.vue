@@ -386,7 +386,7 @@ const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
       showEndOutput: showEndOutput.value,
       containerWidth: contentWidth.value
     }),
-  overscan: 8,
+  overscan: 12,
   getItemKey: (index: number) => chatRows.value[index]?.key ?? String(index),
   // 官方 chat 模式（virtual-core 3.13+）：anchorTo:'end' + followOnAppend: true
   // 由库内统一接管 prepend 视口稳定 + 流式贴底。手写补偿 + 自定义
