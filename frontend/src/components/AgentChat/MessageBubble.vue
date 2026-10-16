@@ -5,10 +5,11 @@ import AIMessageContent from '@/components/common/AIMessageContent.vue'
 import FilePreviewer from '@/components/common/FilePreviewer.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import type { ImagePreviewData } from '@/components/common/FilePreviewer.vue'
-import { formatChatTime } from '@/utils/format'
+import { formatChatTime, formatDuration } from '@/utils/format'
 import type { StreamingMessage } from '@/composables/useStreamingMessage'
 import type { Segment } from '@/types/segment'
 import type { ChatRowPart } from '@/components/AgentChat/chatRow'
+import { useAgentStore } from '@/stores/agentOptimized'
 
 /**
  * 消息行渲染器（段级虚拟行渲染单元，双形态）
@@ -72,6 +73,19 @@ const isMsgThinkingInProgress = computed(() => {
 const streamingActive = computed(() => props.isStreaming && props.isLast)
 /** 流式 markdown 仅在消息最后一个段上启用（父级传入的 isStreaming 已含 isLast 判定） */
 const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegment.value)
+
+// ---- 本轮执行计时 ----
+const agentStore = useAgentStore()
+/** 流式中：底部逐步跳动的实时计时（1s 更新，锚点为轮次起点） */
+const liveElapsedText = computed(() => {
+  if (!streamingActive.value) return ''
+  return formatDuration(agentStore.streamElapsedMs)
+})
+/** 完成后：头部定格时长（该轮最后一条 AI 行落库值） */
+const finalDurationText = computed(() => {
+  if (streamingActive.value || !props.msg.duration_ms) return ''
+  return formatDuration(props.msg.duration_ms)
+})
 </script>
 
 <template>
@@ -109,6 +123,9 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
       <div v-if="showHeader" class="message-header">
         <span class="role-name">{{ isHuman ? '你' : 'AI' }}</span>
         <span class="message-time">{{ formatChatTime(msg.createdAt) }}</span>
+        <span v-if="!isHuman && finalDurationText" class="message-duration">
+          · 耗时 {{ finalDurationText }}
+        </span>
         <el-tooltip v-if="isHuman && !isStreaming" content="回退到此消息" placement="top">
           <el-button
             :icon="RefreshLeft"
@@ -148,6 +165,10 @@ const segmentStreaming = computed(() => streamingActive.value && isMsgLastSegmen
           <span class="dot"></span>
           <span class="dot"></span>
           <span class="dot"></span>
+        </div>
+        <!-- 流式中：本轮执行实时计时（底部跳动，flow_done 后定格到头部） -->
+        <div v-if="streamingActive && liveElapsedText" class="elapsed-row">
+          <span class="elapsed-text">已运行 {{ liveElapsedText }}</span>
         </div>
         <!-- 结束节点输出：右上角"展示"下拉勾选后显示（该轮 AI 消息携带） -->
         <div
@@ -306,6 +327,26 @@ export default {
 .message-time {
   font-size: 11px;
   color: var(--paper-ink-5);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 完成后头部定格时长（AI 消息，该轮最后一条 AI 行落库值） */
+.message-duration {
+  font-size: 11px;
+  color: var(--paper-ink-5);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 流式中底部实时计时行（1s 跳动，flow_done 后由头部定格值接替） */
+.elapsed-row {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+}
+
+.elapsed-text {
+  font-size: 11px;
+  color: var(--paper-ink-4);
   font-variant-numeric: tabular-nums;
 }
 

@@ -75,6 +75,9 @@ class FlowDoneEvent(FlowEvent):
     execution_id: int = Field(..., description="执行记录ID")
     status: str = Field(..., description="执行状态: success/failed")
     output_data: dict = Field(default_factory=dict, description="输出数据")
+    duration_ms: Optional[int] = Field(
+        default=None, description="本轮执行耗时毫秒（Agent 链路携带，Flow 链路为 None）"
+    )
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.FLOW_DONE
@@ -425,11 +428,17 @@ class FlowEventFactory:
 
     @staticmethod
     def flow_done(
-        execution_id: int, output_data: dict, status: str = "success"
+        execution_id: int,
+        output_data: dict,
+        status: str = "success",
+        duration_ms: Optional[int] = None,
     ) -> dict:
         """创建流程完成事件"""
         return FlowDoneEvent(
-            execution_id=execution_id, status=status, output_data=output_data or {}
+            execution_id=execution_id,
+            status=status,
+            output_data=output_data or {},
+            duration_ms=duration_ms,
         ).to_dict()
 
     @staticmethod

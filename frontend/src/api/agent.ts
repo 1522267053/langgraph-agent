@@ -31,6 +31,8 @@ interface AgentRunStatus {
   waiting_human: boolean
   run_id: string | null
   last_event_id: number
+  /** 内容回放水位（最后一个 node_done 的事件 id）；内容类切分已在后端完成 */
+  content_watermark_event_id: number
   terminal_event_type: string | null
   waiting_event: SSEEvent | null
 }

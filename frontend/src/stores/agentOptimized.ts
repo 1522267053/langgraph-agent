@@ -157,6 +157,34 @@ export const useAgentStore = defineStore('agent', () => {
 
   // ========== SSE连接（使用composable） ==========
 
+  // ========== 本轮执行计时（流式中每秒跳动，flow_done 用后端权威值定格） ==========
+  const streamElapsedMs = ref(0)
+  let elapsedTimer: ReturnType<typeof setInterval> | null = null
+  /** 本轮起点（本地发送时刻或刷新重连时本轮 human 行的 created_at） */
+  let elapsedAnchorTs = 0
+
+  /**
+   * 起表：anchorTs 缺省 = 现在（发送/resume 场景）；重连场景传本轮 human 行
+   * created_at 毫秒值，保证刷新后计时仍从轮次真实起点累计
+   */
+  function startElapsedTimer(anchorTs?: number): void {
+    stopElapsedTimer()
+    elapsedAnchorTs = anchorTs ?? Date.now()
+    streamElapsedMs.value = 0
+    elapsedTimer = setInterval(() => {
+      streamElapsedMs.value = Math.max(0, Date.now() - elapsedAnchorTs)
+    }, 1000)
+  }
+
+  function stopElapsedTimer(finalDurationMs?: number): void {
+    if (elapsedTimer) {
+      clearInterval(elapsedTimer)
+      elapsedTimer = null
+    }
+    // 定格：优先后端权威值（flow_done 携带），无则保留当前跳动值
+    if (finalDurationMs !== undefined) streamElapsedMs.value = finalDurationMs
+  }
+
   // ========== 人工交互状态 ==========
   const currentWaitData = ref<SSEWaitData | null>(null)
   const isWaitingHuman = ref(false)
@@ -722,6 +750,7 @@ export const useAgentStore = defineStore('agent', () => {
     messagesLoading.value = true
     clearMessages()
     streamBaseMsgId = 0
+    stopElapsedTimer()
     cancelStream()
     stopCompressPolling()
     isCompressing.value = false
@@ -805,16 +834,24 @@ export const useAgentStore = defineStore('agent', () => {
         }
         const runId = runRes.data.data?.run_id
         if (runId && runRes.data.data?.managed_running) {
-          const lastEventId = runRes.data.data?.last_event_id || 0
-          // 全量回放（after=0）：并发 question/审批等「等待用户响应」事件发布于
-          // 流式中段，仅回放尾部会丢失导致刷新后弹窗不恢复；内容类事件由
-          // createReattachHandlers 的 snapshot 过滤丢弃，气泡不会重复渲染
+          // 计时锚定本轮 human 行 created_at（轮次真实起点），流式中恢复跳动；
+          // 无 human 行（极端）时回退当前时刻
+          const lastHuman = [...messages.value].reverse().find(m => m.role === 'human')
+          const anchorTs = lastHuman?.created_at
+            ? new Date(lastHuman.created_at).getTime()
+            : undefined
+          if (Number.isFinite(anchorTs)) startElapsedTimer(anchorTs)
+          else startElapsedTimer()
+          // 全量回放（after=0）：内容类事件的水位切分已在后端完成
+          // （水位 = 最后一个 node_done，其之前的内容已落库、由上面的 DB 重建呈现，
+          // 后端直接跳过不再下发）；进行中节点的已输出内容由此回放到空占位行上，
+          // 刷新不再丢内容。等待响应类事件同样全量回放，弹窗得以恢复。
           streamAbort = agentApi.subscribeRun(
             agentId,
             session.id,
             runId,
             0,
-            createReattachHandlers(context, lastEventId)
+            createStreamHandlers(context)
           )
         } else {
           startRunningPolling(agentId, session.id)
@@ -835,7 +872,8 @@ export const useAgentStore = defineStore('agent', () => {
         if (runRes.data.data.waiting_event) {
           handlers.onWaitingHuman?.(runRes.data.data.waiting_event)
         } else if (runRes.data.data.run_id) {
-          // 与上方 running 分支同语义：全量回放 + 前端 snapshot 过滤内容类事件
+          // 与上方 running 分支同语义：全量回放 + 后端水位切分内容类事件。
+          // 本分支原本即未做前端过滤，现与 running 分支口径完全一致
           streamAbort = agentApi.subscribeRun(
             agentId,
             session.id,
@@ -1113,6 +1151,10 @@ export const useAgentStore = defineStore('agent', () => {
         }
         if (msg.total_tokens) {
           currentAssistant.total_tokens = (currentAssistant.total_tokens || 0) + msg.total_tokens
+        }
+        // 本轮执行耗时：记于该轮最后一条 AI 行，组内任一行携带即拾取
+        if (msg.duration_ms && !currentAssistant.duration_ms) {
+          currentAssistant.duration_ms = msg.duration_ms
         }
       }
     }
@@ -1483,6 +1525,8 @@ export const useAgentStore = defineStore('agent', () => {
     const applyWaitingHuman = (event: SSEEvent) => {
       if (!isCurrentStream(context)) return
       stopStreaming()
+      // 等待用户输入：停表（等待时间不计入本轮时长）；resume 后重新起表
+      stopElapsedTimer()
       isWaitingHuman.value = true
       currentWaitData.value = event.data.wait_data || {
         type: 'human',
@@ -1714,6 +1758,10 @@ export const useAgentStore = defineStore('agent', () => {
         }
         // ---- 数据就绪：以下全部同步执行，中间不让出主线程（关键） ----
         stopStreaming()
+        // 定格计时：优先后端权威值（flow_done 携带，含取消轮），无则保留跳动值
+        stopElapsedTimer(
+          typeof event.data.duration_ms === 'number' ? event.data.duration_ms : undefined
+        )
         isCompressing.value = false
         if (isWaitingToolApproval.value) {
           pendingApprovals.clear()
@@ -1748,6 +1796,7 @@ export const useAgentStore = defineStore('agent', () => {
       onError: async (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
         stopStreaming()
+        stopElapsedTimer()
         isCompressing.value = false
         // 流异常结束：立即熄灭列表图标（waiting_human 除外——等待人工输入仍算对话中）
         setSessionRunningLocal(context.agentId, context.sessionId, false)
@@ -1817,34 +1866,6 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  function createReattachHandlers(
-    context: AgentStreamContext,
-    snapshotEventId: number
-  ): FlowSSEHandlers {
-    const handlers = createStreamHandlers(context)
-    const afterSnapshot = (handler: ((event: SSEEvent) => void) | undefined) => {
-      return (event: SSEEvent) => {
-        const eventId = Number(event.id)
-        if (!Number.isInteger(eventId) || eventId > snapshotEventId) {
-          handler?.(event)
-        }
-      }
-    }
-    return {
-      ...handlers,
-      onNodeThinking: afterSnapshot(handlers.onNodeThinking),
-      onNodeContent: afterSnapshot(handlers.onNodeContent),
-      onToolCallStart: afterSnapshot(handlers.onToolCallStart),
-      onToolCallEnd: afterSnapshot(handlers.onToolCallEnd),
-      onToolCallLimit: afterSnapshot(handlers.onToolCallLimit),
-      onSubAgentProgress: afterSnapshot(handlers.onSubAgentProgress),
-      onTokenUsage: afterSnapshot(handlers.onTokenUsage),
-      onTodoUpdate: afterSnapshot(handlers.onTodoUpdate),
-      onKnowledgeCitations: afterSnapshot(handlers.onKnowledgeCitations),
-      onLlmRetry: afterSnapshot(handlers.onLlmRetry)
-    }
-  }
-
   // ========== 发送消息 ==========
 
   /**
@@ -1878,6 +1899,7 @@ export const useAgentStore = defineStore('agent', () => {
     }
     addUserMessage(content, files)
     startStreaming()
+    startElapsedTimer()
     // 新轮次开始：增量从零累计（基线 serverTotalTokens 保持服务端值）
     streamRunTokens.value = 0
     // 立即点亮列表图标并启动轮询（不等 loadSessions）
@@ -1922,6 +1944,7 @@ export const useAgentStore = defineStore('agent', () => {
     isWaitingHuman.value = false
     currentWaitData.value = null
     startStreaming()
+    startElapsedTimer()
     // 新轮次开始：增量从零累计（基线 serverTotalTokens 保持服务端值）
     streamRunTokens.value = 0
     // 立即点亮列表图标并启动轮询（不等 loadSessions）
@@ -2199,6 +2222,8 @@ export const useAgentStore = defineStore('agent', () => {
     // 取消后 tool_call_end SSE 不会再来，终止仍在转圈的 running 工具分段，
     // 文案与后端补写的 ToolMessage 保持一致
     failRunningToolSegments('执行被中断')
+    // 停止计时（手动中断轮次，时长以后端取消路径落库值为准）
+    stopElapsedTimer()
     if (!waitForSave) {
       stopStreaming()
       isStopping.value = false
@@ -2428,6 +2453,7 @@ export const useAgentStore = defineStore('agent', () => {
     currentAgent.value = null
     sessions.value = []
     currentSession.value = null
+    stopElapsedTimer()
     // 计划模式 / 工作路径的会话暂存值一并复位（有会话时标志随 session 字段走）
     pendingPlanMode.value = false
     pendingWorkDir.value = ''
@@ -2553,6 +2579,8 @@ export const useAgentStore = defineStore('agent', () => {
     totalSessionTokens,
     fetchSessionTotalTokens,
     latestPromptTokens,
+    // 本轮执行计时
+    streamElapsedMs,
     // 分页
     sessionPage,
     sessionPageSize,

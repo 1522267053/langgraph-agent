@@ -46,6 +46,8 @@ export interface StreamingMessage {
   files?: MessageFile[]
   /** 结束节点输出（该轮 AI 消息携带，前端按钮查看） */
   end_output?: Record<string, unknown>
+  /** 本轮执行耗时毫秒（该轮最后一条 AI 行携带；流式中由 store 计时器逐步填充展示） */
+  duration_ms?: number
   createdAt: Date
 }
 

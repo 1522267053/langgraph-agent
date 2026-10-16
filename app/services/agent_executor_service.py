@@ -85,6 +85,24 @@ _PROGRESS_EVENT_TYPES = frozenset(
     {"node_start", "node_content", "tool_call_start", "tool_call_end", "node_done"}
 )
 
+# 随消息落库的内容类事件：`node_done` 之后到达的才属于「进行中、尚未落库」的节点。
+# 断线重连回放时，水位（最后一个 node_done 的事件 id）之前的部分由 DB 重建呈现，
+# 回放会与之重复，故按水位跳过；水位之后的必须回放，否则刷新会丢进行中节点的已输出内容。
+# 不含 waiting_human / todo_update / sub_agent_progress 等：前者与落库无关必须全量回放，
+# 后者为快照幂等语义且不落消息表（过滤会导致刷新后计划面板/子Agent预览空白）。
+_PERSISTED_CONTENT_EVENT_TYPES = frozenset(
+    {
+        "node_thinking",
+        "node_content",
+        "tool_call_start",
+        "tool_call_end",
+        "token_usage",
+        "knowledge_citations",
+        "llm_retry",
+        "file_changed",
+    }
+)
+
 
 @dataclass
 class _AgentRun:
@@ -109,6 +127,11 @@ class _AgentRun:
     completed_at: float | None = None
     terminal_event_type: str | None = None
     next_event_id: int = 1
+    # 内容回放水位：最后一个 node_done 的事件 id。事件发布顺序保证
+    # 「node_done 已发布 ⇒ 该节点消息已 save_to_db」（llm_tool_handler 的
+    # await msg_buf.save_to_db() 先于 handler 返回），因此水位之后的内容类事件
+    # 必定属于尚未落库的进行中节点，重连回放时不得跳过。
+    content_watermark_event_id: int = 0
 
     @property
     def last_event_id(self) -> int:
@@ -160,6 +183,10 @@ class AgentExecutorService(BaseExecutorService):
         }
         run.next_event_id += 1
         run.events.append(stored_event)
+        if stored_event["type"] == "node_done":
+            # 该节点消息已随 handler 内 save_to_db 落库，水位推进到此处：
+            # 更早的内容类事件由 DB 重建呈现，回放跳过；之后的属于进行中节点
+            run.content_watermark_event_id = stored_event["id"]
         if stored_event["type"] == "tool_approval_required" and run.approval_callback:
             try:
                 run.approval_callback(stored_event)
@@ -579,6 +606,14 @@ class AgentExecutorService(BaseExecutorService):
                 while cursor < run.last_event_id:
                     event = run.events[cursor]
                     cursor = event["id"]
+                    # 水位（最后一个 node_done）之前的内容类事件已落库，由前端 DB 重建
+                    # 呈现；回放会与其重复渲染，故跳过。水位之后的不跳过——那属于
+                    # 「正在进行中、尚未落库」的节点，是刷新丢内容的根因所在。
+                    if (
+                        event["type"] in _PERSISTED_CONTENT_EVENT_TYPES
+                        and event["id"] <= run.content_watermark_event_id
+                    ):
+                        continue
                     if event["type"] in (
                         "tool_approval_required",
                         "question_request",
@@ -646,6 +681,9 @@ class AgentExecutorService(BaseExecutorService):
             "waiting_human": session_id in self._waiting_sessions,
             "run_id": run.run_id if run else None,
             "last_event_id": run.last_event_id if run else 0,
+            # 内容回放水位（最后一个 node_done 的事件 id）。内容类事件的切分已在
+            # subscribe_run 内完成后端化，此字段供前端诊断与断线重连日志使用
+            "content_watermark_event_id": run.content_watermark_event_id if run else 0,
             "terminal_event_type": run.terminal_event_type if run else None,
             "waiting_event": self._waiting_events.get(session_id),
         }
@@ -1776,6 +1814,10 @@ class AgentExecutorService(BaseExecutorService):
             yield FlowEventFactory.error("服务正在关闭，无法启动 Agent 执行")
             return
 
+        # 本轮计时起点（monotonic，不受系统时钟回拨影响）；waiting_human 中断后
+        # 由 resume_stream 重新起表，等待用户输入的时间不计入本轮时长
+        round_started = time.monotonic()
+
         db: AsyncSession | None = None
         direct_task: asyncio.Task | None = None
         owns_execution = False
@@ -2035,10 +2077,14 @@ class AgentExecutorService(BaseExecutorService):
                     )
                 except Exception:
                     pass
+                # 本轮耗时：落库到最后一条 AI 行 + flow_done 事件携带（前端定格）
+                round_duration_ms = int((time.monotonic() - round_started) * 1000)
+                await self._save_round_duration(db, session_id, round_duration_ms)
                 yield FlowEventFactory.flow_done(
                     execution_id=session_id,
                     output_data={"content": llm_content, "end_output": end_output},
                     status="cancelled" if is_interrupted else "success",
+                    duration_ms=round_duration_ms,
                 )
                 interrupt_service.clear_agent_interrupted(session_id)
 
@@ -2047,6 +2093,10 @@ class AgentExecutorService(BaseExecutorService):
                 logger.exception(f"Agent执行失败: {e}")
                 # 错误落库为内部消息（先于 error 事件下发，前端 onError 刷新即可拉到展示行）
                 await self._save_error_message(db, session_id, error_msg)
+                # 失败轮次同样记录时长（失败仅 warning 不阻断）
+                await self._save_round_duration(
+                    db, session_id, int((time.monotonic() - round_started) * 1000)
+                )
                 # ---- WebSocket 广播（chat 失败通知）----
                 try:
                     from app.services.ws_manager import ws_manager
@@ -2127,6 +2177,32 @@ class AgentExecutorService(BaseExecutorService):
                 await db.commit()
         except Exception as e:
             logger.warning("保存结束节点输出失败 session_id=%s: %s", session_id, e)
+
+    async def _save_round_duration(
+        self, db: AsyncSession, session_id: int, duration_ms: int
+    ) -> None:
+        """把本轮执行耗时写入该会话最后一条 AI 消息（与 end_output 同锚点）
+
+        与 _save_end_output_to_message 的区别：不依赖 end_output 非空——取消/失败
+        轮次同样记录时长。落库失败不阻断主流程（时长属辅助信息）。
+        """
+        try:
+            result = await db.execute(
+                select(AgentMessage)
+                .where(
+                    AgentMessage.session_id == session_id,
+                    AgentMessage.role == "ai",
+                    AgentMessage.is_delete == 0,
+                )
+                .order_by(AgentMessage.id.desc())
+                .limit(1)
+            )
+            msg = result.scalar_one_or_none()
+            if msg is not None:
+                msg.duration_ms = duration_ms
+                await db.commit()
+        except Exception as e:
+            logger.warning("保存本轮执行耗时失败 session_id=%s: %s", session_id, e)
 
     async def _save_error_message(
         self, db: AsyncSession, session_id: int, error_msg: str
@@ -2243,6 +2319,9 @@ class AgentExecutorService(BaseExecutorService):
         if self._shutting_down:
             yield FlowEventFactory.error("服务正在关闭，无法恢复 Agent 执行")
             return
+
+        # 恢复轮独立计时：从 resume 提交起算，waiting_human 等待用户的时间不计入
+        round_started = time.monotonic()
 
         db: AsyncSession | None = None
         direct_task: asyncio.Task | None = None
@@ -2428,10 +2507,14 @@ class AgentExecutorService(BaseExecutorService):
                     )
                 except Exception:
                     pass
+                # 本轮耗时：落库到最后一条 AI 行 + flow_done 事件携带（前端定格）
+                round_duration_ms = int((time.monotonic() - round_started) * 1000)
+                await self._save_round_duration(db, session_id, round_duration_ms)
                 yield FlowEventFactory.flow_done(
                     execution_id=session_id,
                     output_data={"content": llm_content, "end_output": end_output},
                     status="cancelled" if is_interrupted else "success",
+                    duration_ms=round_duration_ms,
                 )
                 interrupt_service.clear_agent_interrupted(session_id)
 
@@ -2440,6 +2523,10 @@ class AgentExecutorService(BaseExecutorService):
                 logger.exception(f"Agent恢复执行失败: {e}")
                 # 错误落库为内部消息（先于 error 事件下发，前端 onError 刷新即可拉到展示行）
                 await self._save_error_message(db, session_id, error_msg)
+                # 失败轮次同样记录时长（失败仅 warning 不阻断）
+                await self._save_round_duration(
+                    db, session_id, int((time.monotonic() - round_started) * 1000)
+                )
                 # ---- WebSocket 广播（resume 失败通知）----
                 try:
                     from app.services.ws_manager import ws_manager

@@ -173,6 +173,10 @@ class AgentMessageBase(BaseModel):
     end_output: Optional[dict[str, Any]] = Field(
         default=None, description="结束节点输出（该轮 AI 消息携带）"
     )
+    duration_ms: Optional[int] = Field(
+        default=None,
+        description="本轮执行耗时毫秒（记于该轮最后一条 AI 消息，存量行为 NULL）",
+    )
     """创建Agent消息"""
 
     pass

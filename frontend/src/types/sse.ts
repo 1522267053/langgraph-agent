@@ -94,6 +94,8 @@ export interface SSEEventData {
   sub_status?: string
   /** 是否来自子Agent（tool_approval_required / question_request 转发事件） */
   is_sub_agent?: boolean
+  /** 本轮执行耗时毫秒（flow_done 事件携带，Agent 链路有值） */
+  duration_ms?: number
 }
 
 /** 人工等待数据 */

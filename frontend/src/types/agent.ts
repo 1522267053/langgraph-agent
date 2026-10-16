@@ -103,6 +103,8 @@ export interface AgentMessage extends BaseEntity {
   input_data?: Record<string, unknown>
   /** 结束节点输出（该轮 AI 消息携带，前端按钮查看） */
   end_output?: Record<string, unknown>
+  /** 本轮执行耗时毫秒（记于该轮最后一条 AI 消息，存量行为 NULL） */
+  duration_ms?: number
   /** 创建时间 */
   created_at?: string
 }
