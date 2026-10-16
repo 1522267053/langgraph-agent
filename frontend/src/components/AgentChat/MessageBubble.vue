@@ -166,8 +166,8 @@ const finalDurationText = computed(() => {
           <span class="dot"></span>
           <span class="dot"></span>
         </div>
-        <!-- 流式中：本轮执行实时计时（底部跳动，flow_done 后定格到头部） -->
-        <div v-if="streamingActive && liveElapsedText" class="elapsed-row">
+        <!-- 流式中：本轮执行实时计时（仅 last/single 行渲染一次，flow_done 后定格到头部） -->
+        <div v-if="showFooter && streamingActive && liveElapsedText" class="elapsed-row">
           <span class="elapsed-text">已运行 {{ liveElapsedText }}</span>
         </div>
         <!-- 结束节点输出：右上角"展示"下拉勾选后显示（该轮 AI 消息携带） -->
