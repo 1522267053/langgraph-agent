@@ -21,7 +21,6 @@ import type {
 } from '@/composables/useStreamingMessage'
 import { agentApi } from '@/api/agent'
 import { ApiError } from '@/api/index'
-import { savePlanModeForAgent } from '@/utils/planmode'
 import { USER_RESPONSE_COUNTDOWN_SECONDS } from '@/constants/timing'
 import { createOnToolCallLimitHandler, createOnLlmRetryHandler } from '@/composables/useSSEHandlers'
 import { useStreamingMessage } from '@/composables'
@@ -303,12 +302,18 @@ export const useAgentStore = defineStore('agent', () => {
 
   // ========== 计划模式（只读探索，不执行修改），按会话独立存储 ==========
   // 有会话时以 currentSession.plan_mode（DB 字段）为权威；无会话时暂存到
-  // pendingPlanMode，首次创建会话时随 createSession 传入。
-  // Agent 级记忆（utils/planmode.ts）供新建会话继承最近偏好
+  // pendingPlanMode（纯内存，本标签独享），首次创建会话时随 createSession 传入。
+  // 禁止写入 localStorage：跨标签共享会导致「新建会话被别的标签自动切成计划模式」。
   const pendingPlanMode = ref(false)
   const planMode = computed(() =>
     currentSession.value ? !!currentSession.value.plan_mode : pendingPlanMode.value
   )
+  /**
+   * 无会话阶段暂存的工作路径（纯内存，本标签独享）。
+   * 有会话时以 currentSession.work_dir 为准；首次创建会话时随 createSession 传入。
+   * 与 pendingPlanMode 同语义：只承载用户在本标签的显式选择，不做跨标签继承。
+   */
+  const pendingWorkDir = ref('')
   async function togglePlanMode(): Promise<void> {
     const next = !planMode.value
     const agentId = currentAgent.value?.id
@@ -327,8 +332,6 @@ export const useAgentStore = defineStore('agent', () => {
     } else {
       pendingPlanMode.value = next
     }
-    // Agent 级记忆：新建会话继承最近一次的计划模式偏好
-    savePlanModeForAgent(agentId ?? null, next)
   }
 
   /**
@@ -2425,8 +2428,9 @@ export const useAgentStore = defineStore('agent', () => {
     currentAgent.value = null
     sessions.value = []
     currentSession.value = null
-    // 计划模式的会话暂存值一并复位（有会话时标志随 session.plan_mode 走）
+    // 计划模式 / 工作路径的会话暂存值一并复位（有会话时标志随 session 字段走）
     pendingPlanMode.value = false
+    pendingWorkDir.value = ''
     messages.value = []
     clearMessages()
     streamBaseMsgId = 0
@@ -2588,6 +2592,8 @@ export const useAgentStore = defineStore('agent', () => {
     flowPreview,
     flowPreviewCollapsed,
     planMode,
+    pendingPlanMode,
+    pendingWorkDir,
     // 消息分页
     hasMoreMessages,
     loadingMoreMessages,

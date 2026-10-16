@@ -36,8 +36,6 @@ import {
   setWatchingSessionId
 } from '@/composables/useWebSocket'
 import { agentApi } from '@/api/agent'
-import { loadWorkDirForAgent } from '@/utils/workdir'
-import { loadPlanModeForAgent } from '@/utils/planmode'
 import { agendaApi } from '@/api/agenda'
 import {
   requestPermission as requestNotifyPermission,
@@ -484,14 +482,12 @@ function navigateTo(path: string) {
 
 async function handleNewSession(): Promise<void> {
   if (!chatAgentId.value) return
-  // 新建会话时自动复用 Agent 维度记忆的工作路径 / 计划模式（前端 localStorage 偏好）
-  // 让工具栏状态在「新建会话」瞬间就显示，不需要等用户发消息
-  const rememberedWorkDir = loadWorkDirForAgent(chatAgentId.value)
-  const rememberedPlanMode = loadPlanModeForAgent(chatAgentId.value)
+  // 只承载「本标签」的显式选择（store 内存暂存值）：不读取 localStorage 记忆，
+  // 否则多标签共享偏好会导致新会话被别的标签的动作自动带上计划模式 / 工作路径
   const session = await store.createSession(
     chatAgentId.value,
-    rememberedWorkDir || undefined,
-    rememberedPlanMode || undefined
+    store.pendingWorkDir || undefined,
+    store.pendingPlanMode || undefined
   )
   if (session) {
     await store.selectSession(chatAgentId.value, session)

@@ -52,7 +52,6 @@ import { clearBlockExpandOverrides } from '@/components/AgentChat/blockExpand'
 import { useToolOutputStore } from '@/stores/toolOutput'
 import { formatCountdown } from '@/utils/format'
 import { loadWorkDirForAgent, saveWorkDirForAgent } from '@/utils/workdir'
-import { loadPlanModeForAgent } from '@/utils/planmode'
 
 import 'highlight.js/styles/vs2015.css'
 
@@ -1087,13 +1086,12 @@ async function loadModelSelection(id: number) {
 }
 
 // ---- 会话级项目工作路径（对标 opencode session.directory）----
-// 有会话时以 currentSession.work_dir 为准，无会话时暂存到 pendingWorkDir，
-// 首次发消息创建会话时随 createSession 传入
+// 有会话时以 currentSession.work_dir 为准，无会话时暂存到 store.pendingWorkDir
+// （纯内存、按标签隔离），首次发消息创建会话时随 createSession 传入。
 const workDirPickerVisible = ref(false)
-const pendingWorkDir = ref('')
 
 const currentWorkDir = computed(() =>
-  store.currentSession ? store.currentSession.work_dir || '' : pendingWorkDir.value
+  store.currentSession ? store.currentSession.work_dir || '' : store.pendingWorkDir
 )
 
 // ---- Agent 级「记住的工作路径」：helper 已提取到 utils/workdir.ts（多入口复用）----
@@ -1130,8 +1128,8 @@ async function handleWorkDirConfirm(path: string): Promise<void> {
     }
     return
   }
-  pendingWorkDir.value = path
-  // 无会话阶段也写入记忆：首次创建会话后再次打开弹窗即可定位
+  store.pendingWorkDir = path
+  // 无会话阶段也写入「弹窗定位记忆」：下次打开弹窗直接落到该目录（不影响任何会话）
   saveWorkDirForAgent(agentId.value, path)
 }
 
@@ -1402,13 +1400,11 @@ async function handleChatSend(
   attachedFiles: Array<{ id: number; original_name: string; mime_type: string }>,
   message: string
 ) {
-  // 解析前端可解析的全部路径值
-  // 优先级 pendingWorkDir > Agent 记忆值（localStorage） > 空
-  // pendingWorkDir 是当前 AgentChat 内已选过的最新值；
-  // 记忆值是上次会话留下的偏好（按 Agent 隔离）——用户未点过按钮时兜底
-  const workDirForNew = pendingWorkDir.value || loadWorkDirForAgent(agentId.value)
-  // 计划模式同理：新建会话继承 Agent 维度记忆（欢迎页预开的开关已随 toggle 写入记忆）
-  const planModeForNew = loadPlanModeForAgent(agentId.value)
+  // 解析前端可解析的全部路径值：仅取本标签内存暂存值（store.pendingWorkDir），
+  // 不读取 localStorage 记忆——跨标签共享偏好会把别的标签选的路径带进新会话
+  const workDirForNew = store.pendingWorkDir
+  // 计划模式同理：仅取本标签内存暂存值，不做跨标签继承
+  const planModeForNew = store.pendingPlanMode
   const override = resolveSelectedModel()
   // 推理深度仅在选中临时模型时随请求透传（未选模型=跟随节点配置，
   // 后端 override 也只对切换后的模型生效）；无会话新建时随 createSession 落库
@@ -1427,22 +1423,9 @@ async function handleChatSend(
     )
     if (!session) return
     await store.selectSession(agentId.value!, session)
-  } else if (!store.currentSession.work_dir && workDirForNew) {
-    // 场景 2：已有 session（onMounted 自动选中 / 切换）但 work_dir 为空
-    // 自动用前端偏好回填——避免历史 session 没有工作路径时每次都要手动重选
-    try {
-      const res = await agentApi.updateWorkDir(
-        agentId.value!,
-        store.currentSession.id,
-        workDirForNew
-      )
-      if (res.data.code === 1 && res.data.data) {
-        store.currentSession.work_dir = res.data.data.work_dir
-      }
-    } catch {
-      // error handled by interceptor
-    }
   }
+  // 注意：不做「已有会话 work_dir 为空时用记忆值静默回填」——那会让会话凭空获得
+  // 工作路径且直接写库（跨标签串扰元凶之一）。会话 work_dir 只能由用户显式设置。
   // 场景 3：已有会话 chat_model 为空但当前选中了临时模型——发送前静默回填落库
   // （历史会话未落库时恢复阶段回退记忆值，此处让展示与 DB 保持一致）
   if (store.currentSession && !store.currentSession.chat_model && override) {
