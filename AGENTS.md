@@ -99,6 +99,66 @@ npm run format                          # Prettier 格式化
 - [ ] 无 emoji、无末尾句号
 - [ ] 多项改动可一次提交；type/scope/subject 以主要改动为准，其余内容写入 body
 
+## 开发协作流程（个人项目裁剪版）
+
+本项目需求**单源**（全部来自开发者本人），因此**省略需求台账 xlsx**——不要照搬企业项目的台账流程，那会产生空转文档。需求直接进 S2/S3，状态由 git 提交历史与 memory 承载。
+
+| 阶段 | 执行者 | 动作 | 产物 |
+|------|--------|------|------|
+| **S0 立项定规则** | 人（可与 Agent 讨论） | 维护本文件；规则膨胀时主动瘦身 | `AGENTS.md`（+ `frontend/AGENTS.md`） |
+| **S1 需求登记** | **人** | 口述/文字直发，**无台账** | — |
+| **S2 方案设计** | Agent 起草 → 人拍板 | 复杂功能才写详设；拆 Wave | `docs/<主题>.md`（按需） |
+| **S3 开发执行** | Dev Agent | 见下方 8 步 | 代码（**留工作区**）+ 断言脚本 + 开发报告 |
+| **S4 测试验证** | Agent 自验 / QA Agent | 实跑 + 抓证据 | 提交信息中写明验证结论；重大功能另出 `docs/` 报告 |
+| **S5 闭环沉淀** | Agent 起草 → **人授权提交** | 教训回写本文件 + memory + 提交 | 本文件新纪律条目、memory |
+
+**S0 瘦身纪律**：本文件曾在 2026-06-25 主动精简 557→154 行（细节外移到 `skills/*/references/`）。判据是**规则是否需要「同时生效」**——安全红线/架构约定/唯一真源必须留在本文件一次读全；操作手册类外移。当前约 330 行属健康区间，**超过 450 行时必须外移**（细节移到 `docs/` 或技能 `references/`，本文件只留索引链接）。
+
+**S3 开发执行 8 步**：
+
+1. `load_skill("dev-expert")` → 按路由表识别任务类型 → 加载对应 reference
+2. **通读本文件全文**（含「关键架构约定」「BaseToolKit 统一契约」等强制项）
+3. `memory_search` 检索项目历史决策/教训/口径
+4. `todowrite` 拆 3-7 个子任务
+5. 读懂现状再动手（禁止瞎猜）
+6. 改码用局部补丁，禁止无必要全文重写；**同一文件禁止并行编辑**（会互相覆盖）
+7. 自验：断言脚本 / e2e 实跑 + `ruff check` + `ruff format`（前端另跑 `npm run lint`）
+8. 汇报：改动文件清单 + 验证证据（命令/退出码/关键输出）+ 已知限制 + **未验证项**
+
+**S3 出口门禁**：☐ 已通读本文件 ☐ 已 `memory_search` 历史教训 ☐ 未引入第二份逻辑（唯一真源已复用）☐ 启动期断言未被破坏（`_validate_registry_consistency`）☐ ruff / lint 通过且不高于基线告警数 ☐ 断言脚本全绿 ☐ 验证脚本未碰生产库 ☐ **未 commit**
+
+**S3 硬纪律**：
+
+- **确定性归代码，语义性归 LLM**：权限校验、路径校验、白名单、索引名一致性属确定性，**必须落在代码里**，严禁只写在提示词或技能文档里让 LLM 自觉。
+- **验证脚本涉及 DB 写入时第一行就建临时库**（`tempfile` + `create_async_engine`），绝不 import 生产 engine 造数——`data/langgraph_agent.db` 是运行时真实数据（含技能、记忆、会话）。
+- **造数必须复制真实结构**：手写字段/列序会让基线全绿而真实数据必挂。
+- **改前端源码后必须 `cd frontend && npm run build`**：FastAPI 托管的是 `frontend/dist`，不 build 不生效（构建约 57s，需硬刷新）。
+
+### 实测翻车 → 规则回写（强制闭环）
+
+**返工是设计特性不是失败**：本项目 `feat` 后紧接 `fix` 占 44%，`fix` 占全部提交 50%。原因是需求锚定真实运行环境（真实浏览器 CDP 行为、真实 MCP 服务器响应、真实打包产物、真实模型网关超时），写代码时无法预知。
+
+因此每次真机翻车后**必须回写本文件**，否则同一个坑会踩第二次。回写判据：
+
+- 排查耗时 ≥40 分钟的坑 → **必须**回写
+- 「静态检查全绿但实跑翻车」的坑 → **必须**回写
+- 第三方库/协议的隐式行为（如 DrissionPage `listen.wait(count=1)` 返回单个 DataPacket 非列表、`console.messages` 是 drain 语义）→ **必须**回写
+- 一次性笔误 → 不回写（避免本文件膨胀）
+
+固定格式：
+
+```markdown
+- **<结论式纪律，一句话可执行>**（YYYY-MM-DD 实测修复）：
+  原实现是 <X> → 真实现象是 <Y> → 根因是 <Z> → 修复口径是 <W>。
+  **通用纪律：凡<同类场景>一律<正确做法>，禁止<错误做法>**
+```
+
+本文件已有的实测沉淀范例（保持此风格）：浏览器节点章节的「`listen.wait(count=1)` 返回单个 DataPacket 非列表、`console.messages` 是 drain 语义、`listen.start()` 空参数不重置过滤——三个坑均已封装在 drain/collect 辅助方法内」；工具按需加载章节的「**索引名一致性（强制）**：不一致会导致工具双份绑定且延迟域执行失败」。
+
+**S5 另需同步**：① `memory_save`（decision=5/hot、lesson=4-5、knowledge=4/warm、event=2-3/cold），**未 commit 的改动必须在记忆标题标注「（未commit）」**；② 新增节点类型必须同步 3 处声明（见「添加新模块清单」），启动期断言会捕获脱节；③ 新增工具集必须过 `assert_consistency(kit, node)` 逐字节校验；④ 过期文档标「历史快照」而非删除。
+
+> 完整六阶段流程、需求台账列定义、详设与实测报告模板见 dev-expert 技能 `references/dev-workflow.md` 与 `references/collaboration-templates.md`。企业交付项目（多需求来源）必须启用 S1 台账，裁剪规则见上述文档。
+
 ## 自动注册机制（核心架构）
 
 **这是整个项目最重要的约定**：新增模块放入对应目录即可自动加载，无需手动 import。
@@ -163,6 +223,7 @@ npm run format                          # Prettier 格式化
 - `llm_message_builder.py`: 消息构建全流程（历史加载、恢复、压缩判断）
 - `llm_stream.py`: 流式调用 + 重试 + thinking 解析
 - `llm_tool_executor.py`: 工具执行（并行、人工交互、审批、截断）
+- **thinking 空白防御（强制）**（2026-10-16 实测修复）：网关会下发空白占位 chunk（`reasoning_content=""`/`"\n\n"`），原「键存在」判断原样转发 → 前端流式建空思考块、空白 thinking 落库、历史回注污染 LLM 上下文。修复口径：转发（llm_stream）/落库（extract_thinking）/回注（get_history）/前端建段四层一律真值+trim 判断，块内空白保留（换行排版）。**通用纪律：凡流式 chunk 展示与落库一律真值+trim 判断，禁止键存在判断；SQLite 判空白必须 `TRIM(x, char(9)||char(10)||char(13)||' ')`——默认 TRIM 只剥空格，纯换行统计会假阴性**
 
 ### 工具按需加载（deferred_tools.py，工具膨胀场景）
 - **机制/策略分离**: `ToolProvider` 协议（list_meta/search/materialize）对所有工具族通用；策略由三层优先级决定：节点 base_config.lazy_load > **handler.defer_policy** > 默认 "bind"

@@ -265,7 +265,7 @@ class AgentConversationService:
             ai_msg = AIMessage(content=msg.content or "")
             if msg.tool_calls:
                 ai_msg.tool_calls = cast(list[ToolCall], msg.tool_calls)
-            if msg.thinking:
+            if msg.thinking and msg.thinking.strip():
                 ai_msg.additional_kwargs["reasoning_content"] = msg.thinking
             if msg.knowledge_citations:
                 ai_msg.additional_kwargs[KNOWLEDGE_CITATIONS_KEY] = (

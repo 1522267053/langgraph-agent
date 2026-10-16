@@ -84,7 +84,11 @@ export function useStreamingMessage() {
    * 将缓冲的 thinking/content 应用到当前流式消息（重建 segments，与原逐 chunk 逻辑一致）
    */
   function applyThinking(chunk: string): void {
+    if (!chunk) return
+    // 空白 chunk（网关空占位/纯换行）不新开思考块，避免渲染出空「思考过程」框；
+    // 已在 thinking 块中则照常累积，保留模型思考里的换行排版
     const isNewBlock = currentSegmentType.value !== 'thinking'
+    if (isNewBlock && !chunk.trim()) return
     if (isNewBlock) {
       currentSegmentType.value = 'thinking'
       thinkingContent.value = chunk

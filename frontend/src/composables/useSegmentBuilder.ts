@@ -30,6 +30,8 @@ export function appendThinking(segments: Segment[], content: string): Segment[] 
     last.thinking = (last.thinking || '') + content
     return segments
   }
+  // 空白内容不新建思考块（网关空占位 chunk 会渲染出空「思考过程」框）
+  if (!content.trim()) return segments
   return [...segments, { type: 'thinking', thinking: content, id: genSegmentId() }]
 }
 
@@ -61,6 +63,7 @@ export function updateThinking(segments: Segment[], content: string): Segment[] 
     updated[idx] = { ...updated[idx], thinking: content }
     return updated
   }
+  if (!content.trim()) return segments
   return [...segments, { type: 'thinking', thinking: content, id: genSegmentId() }]
 }
 
@@ -183,7 +186,7 @@ export function executionStepsToSegments(steps: ExecutionStep[]): Segment[] {
       continue
     }
 
-    if (step.thinking) {
+    if (step.thinking?.trim()) {
       segments.push({ type: 'thinking', thinking: step.thinking })
     }
     if (step.content || step.knowledge_citations?.length) {

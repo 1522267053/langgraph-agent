@@ -992,7 +992,7 @@ export const useAgentStore = defineStore('agent', () => {
           }
         }
 
-        if (msg.thinking) {
+        if (msg.thinking?.trim()) {
           currentAssistant.segments.push({
             type: 'thinking',
             thinking: msg.thinking,

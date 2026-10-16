@@ -86,16 +86,22 @@ def extract_thinking(msg: BaseMessage) -> str:
 
     依次检查 additional_kwargs.reasoning_content 和
     content 列表中的 thinking 块。
+
+    纯空白（网关空占位 chunk 经 chunk 相加累积成的 "\\n\\n" 等）视为无思考
+    返回 ""——调用方 `if thinking:` 自然跳过落库/注入，避免 DB 存空白思考、
+    历史加载渲染空思考块；非空白内容原样返回（保留块内换行排版）。
     """
     if hasattr(msg, "additional_kwargs") and msg.additional_kwargs:
         if "reasoning_content" in msg.additional_kwargs:
-            return msg.additional_kwargs["reasoning_content"]
+            text = msg.additional_kwargs["reasoning_content"]
+            return text if isinstance(text, str) and text.strip() else ""
     if isinstance(msg.content, list):
         parts = []
         for block in msg.content:
             if isinstance(block, dict) and block.get("type") == "thinking":
                 parts.append(block.get("thinking", ""))
-        return "".join(parts)
+        text = "".join(parts)
+        return text if text.strip() else ""
     return ""
 
 

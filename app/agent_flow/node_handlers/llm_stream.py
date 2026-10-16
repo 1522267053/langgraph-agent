@@ -81,11 +81,13 @@ async def stream_llm_response(
                     break
 
                 # 处理 reasoning_content（DeepSeek 等模型的思考过程）
-                if (
-                    chunk.additional_kwargs
-                    and "reasoning_content" in chunk.additional_kwargs
-                ):
-                    thinking_chunk = chunk.additional_kwargs["reasoning_content"]
+                # 真值判断而非「键存在」判断：部分网关在思考开始前会下发
+                # reasoning_content="" 的空占位 chunk，原样转发会让前端建出空思考块；
+                # 纯空白 chunk 仅在块内是排版（换行等），思考块开头同样视为占位不转发
+                thinking_chunk = (chunk.additional_kwargs or {}).get(
+                    "reasoning_content"
+                )
+                if thinking_chunk and (thinking_chunk.strip() or thinking_chunks):
                     thinking_chunks.append(thinking_chunk)
                     if writer:
                         writer(
@@ -96,6 +98,10 @@ async def stream_llm_response(
                 if chunk.content:
                     for text, is_thinking in parse_content_blocks(chunk.content):
                         if is_thinking:
+                            # 同 reasoning_content 路径：思考块开头不接受纯空白 chunk
+                            # （空白块直接丢弃，禁止落入正文分支）
+                            if not (text.strip() or thinking_chunks):
+                                continue
                             thinking_chunks.append(text)
                             if writer:
                                 writer(
