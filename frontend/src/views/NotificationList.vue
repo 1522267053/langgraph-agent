@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { notificationApi, type Notification } from '@/api/notification'
 import type { PaginatedResponse } from '@/types/common'
@@ -238,6 +238,14 @@ async function handleDelete(item: Notification) {
 }
 
 onMounted(loadData)
+
+// WS 推送到达时实时刷新列表（lastNotification 每次推送都会更新 _ts 触发 watch）
+watch(
+  () => notificationStore.lastNotification,
+  (val, old) => {
+    if (val && val !== old) loadData()
+  }
+)
 
 onUnmounted(() => {
   stopDetailPoll()

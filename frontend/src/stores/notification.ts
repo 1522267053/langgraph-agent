@@ -8,6 +8,8 @@ import { notificationApi } from '@/api/notification'
 
 export const useNotificationStore = defineStore('notification', () => {
   const unreadCount = ref(0)
+  /** 最新一条 WS 推送（通知页 watch 它实时刷新列表） */
+  const lastNotification = ref<Record<string, unknown> | null>(null)
 
   /** 拉取未读数（登录后调用） */
   async function fetchUnreadCount(): Promise<void> {
@@ -26,6 +28,7 @@ export const useNotificationStore = defineStore('notification', () => {
     } else {
       unreadCount.value++
     }
+    lastNotification.value = { ...payload, _ts: Date.now() }
   }
 
   /** 清零（全部已读后调用） */
@@ -33,5 +36,5 @@ export const useNotificationStore = defineStore('notification', () => {
     unreadCount.value = 0
   }
 
-  return { unreadCount, fetchUnreadCount, onWsNotification, resetCount }
+  return { unreadCount, lastNotification, fetchUnreadCount, onWsNotification, resetCount }
 })
