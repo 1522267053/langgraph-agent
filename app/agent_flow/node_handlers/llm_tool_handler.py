@@ -764,6 +764,9 @@ class LlmToolNodeHandler(BaseNodeHandler):
         prompt_tokens = await should_auto_compress(
             self.session_id, self.db_session_factory, cfg_context_length
         )
+        # 先保存一下user_prompt的消息到数据库中
+        await msg_buf.save_to_db()
+
         if cfg_context_length > 0 and prompt_tokens > int(
             cfg_context_length * COMPRESS_THRESHOLD_RATIO
         ):
