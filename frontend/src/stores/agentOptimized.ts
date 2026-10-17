@@ -1722,7 +1722,7 @@ export const useAgentStore = defineStore('agent', () => {
         // 新预览推入时展开（若处于上一回合折叠态）
         flowPreviewCollapsed.value = false
       },
-      onFlowDone: async () => {
+      onFlowDone: async (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
         // 回合结束自动折叠流程预览卡：消除画布在输入框上方悬空钉底的观感；
         // 折叠为单行条保留编辑入口，用户点击或下轮 flow_preview 再展开
