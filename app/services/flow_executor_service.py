@@ -520,7 +520,7 @@ class FlowExecutorService(BaseExecutorService):
                     if node_key == "__interrupt__":
                         interrupt_data = result[0].value if result else {}
                         yield await self._handle_interrupt_and_save(
-                            execution_id, interrupt_data, context
+                            execution_id, interrupt_data, context, flow_name=flow_name
                         )
                         return
 
@@ -983,6 +983,7 @@ class FlowExecutorService(BaseExecutorService):
         execution_id: int,
         interrupt_data: dict,
         context: FlowContext,
+        flow_name: str = "",
     ) -> dict:
         """
         处理 interrupt 事件并保存状态
@@ -991,6 +992,7 @@ class FlowExecutorService(BaseExecutorService):
             execution_id: 执行记录ID
             interrupt_data: interrupt 数据
             context: 执行上下文
+            flow_name: 流程名称（通知标题用）
 
         Returns:
             waiting_human 事件
@@ -1017,6 +1019,21 @@ class FlowExecutorService(BaseExecutorService):
                 execution.output_data = context.state.output_data
                 await db.commit()
                 new_execution_id = execution.id
+
+                # ---- 统一通知中心：等待人工输入通知（落库 + 推送）----
+                try:
+                    from app.services.notification_service import notification_service
+
+                    await notification_service.notify(
+                        db,
+                        type="human_input",
+                        title=f"「{flow_name or '流程'}」等待您的输入",
+                        content=question,
+                        ref_type="execution",
+                        ref_id=new_execution_id,
+                    )
+                except Exception as notify_err:
+                    logger.warning(f"等待人工输入通知失败: {notify_err}")
 
         return FlowEventFactory.waiting_human(
             execution_id=new_execution_id,

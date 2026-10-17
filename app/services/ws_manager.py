@@ -86,6 +86,35 @@ class WebSocketManager:
         """获取当前连接数"""
         return sum(len(conns) for conns in self._user_connections.values())
 
+    async def _persist_notification(
+        self,
+        *,
+        type: str,
+        title: str,
+        content: Optional[str] = None,
+        ref_type: Optional[str] = None,
+        ref_id: Optional[int] = None,
+        username: Optional[str] = None,
+    ) -> None:
+        """通知落库到 notification 表（统一通知中心，失败仅告警不阻断推送）"""
+        try:
+            from app.config.database import AsyncSessionLocal
+            from app.services.notification_service import notification_service
+
+            async with AsyncSessionLocal() as db:
+                await notification_service.notify(
+                    db,
+                    type=type,
+                    title=title,
+                    content=content,
+                    ref_type=ref_type,
+                    ref_id=ref_id,
+                    username=username,
+                    push=False,  # 推送由调用方完成，此处仅落库
+                )
+        except Exception as e:
+            logger.warning(f"通知落库失败 type={type}: {e}")
+
     async def notify_execution_done(
         self,
         *,
@@ -106,6 +135,17 @@ class WebSocketManager:
         """
         if not self._notification_enabled:
             return
+
+        # ---- 统一通知中心：落库（失败不阻断推送）----
+        await self._persist_notification(
+            type="execution_cancelled"
+            if status == "cancelled"
+            else ("execution_failed" if status == "failed" else "execution_done"),
+            title=f"「{flow_name}」执行{'取消' if status == 'cancelled' else ('失败' if status == 'failed' else '完成')}",
+            content=error_message,
+            ref_type="session" if source == "agent" else "execution",
+            ref_id=execution_id,
+        )
 
         await self.broadcast(
             {
@@ -145,6 +185,16 @@ class WebSocketManager:
 
         event_id 为本次推送的唯一标识，用于多标签桌面通知去重（同 execution_done）。
         """
+        # ---- 统一通知中心：落库（失败不阻断推送）----
+        await self._persist_notification(
+            type=category,
+            title=title,
+            content=description,
+            ref_type="agenda" if category == "agenda_reminder" else "task",
+            ref_id=agenda_id if agenda_id > 0 else None,
+            username=username,
+        )
+
         await self.broadcast_to_user(
             username,
             {

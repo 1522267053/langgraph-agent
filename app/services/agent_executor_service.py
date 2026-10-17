@@ -2284,6 +2284,24 @@ class AgentExecutorService(BaseExecutorService):
         if interrupt_type == "human_input_required":
             pass
 
+        # ---- 统一通知中心：等待人工输入通知（落库 + 推送，失败不阻断）----
+        try:
+            from app.services.notification_service import notification_service
+
+            session = await self._get_session(db, session_id)
+            await notification_service.notify(
+                db,
+                type="human_input",
+                title=f"「{session.title or 'Agent对话'}」等待您的回答",
+                content=interrupt_data.get("question", "需要您的输入"),
+                ref_type="session",
+                ref_id=session_id,
+            )
+        except Exception as notify_err:
+            logger.warning(
+                f"等待人工输入通知失败 session_id={session_id}: {notify_err}"
+            )
+
         return FlowEventFactory.waiting_human(
             execution_id=0,
             node_key=interrupt_data.get("node_key", ""),

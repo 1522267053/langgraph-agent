@@ -118,6 +118,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '日程管理' }
   },
   {
+    path: '/notifications',
+    name: 'NotificationList',
+    component: () => import('@/views/NotificationList.vue'),
+    meta: { title: '通知中心' }
+  },
+  {
     path: '/ws-gateway',
     name: 'WsGatewayList',
     component: () => import('@/views/WsGatewayList.vue'),

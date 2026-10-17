@@ -2,6 +2,7 @@ import { ref, h } from 'vue'
 import { ElNotification, ElButton, ElMessage } from 'element-plus'
 import { agendaApi } from '@/api/agenda'
 import { notifyOnce, isDenied } from '@/composables/useBrowserNotification'
+import { useNotificationStore } from '@/stores/notification'
 
 interface ExecutionDoneData {
   execution_id: number | null
@@ -22,6 +23,18 @@ interface AgendaReminderData {
   location?: string | null
 }
 
+/** 统一通知中心推送数据 */
+interface NotificationData {
+  notification_id: number | null
+  unread_count: number
+  type: string
+  title: string
+  content?: string | null
+  ref_type?: string | null
+  ref_id?: number | null
+  browser_notify?: boolean
+}
+
 interface ToolOutputStartData {
   task_id: string
   tool_name: string
@@ -38,13 +51,18 @@ interface ToolOutputEndData {
 }
 
 interface WSMessage {
-  type: 'execution_done' | 'agenda_reminder' | 'tool_output_start' | 'tool_output_end'
+  type:
+    | 'execution_done'
+    | 'agenda_reminder'
+    | 'tool_output_start'
+    | 'tool_output_end'
+    | 'notification'
   /** 推送唯一标识（后端生成）：多标签桌面通知去重依据 */
   event_id?: string
   /** 推送类型（仅 agenda_reminder 时使用） */
   category?: 'agenda_reminder' | 'reminder'
   browser_notify?: boolean
-  data: ExecutionDoneData | AgendaReminderData | ToolOutputStartData | ToolOutputEndData
+  data: ExecutionDoneData | AgendaReminderData | ToolOutputStartData | ToolOutputEndData | NotificationData
 }
 
 const ws = ref<WebSocket | null>(null)
@@ -92,6 +110,29 @@ function buildWsUrl(): string {
 }
 
 function handleNotification(msg: WSMessage) {
+  if (msg.type === 'notification') {
+    // 统一通知中心：更新角标未读数 + 弹提示（已读数以后端推送为准）
+    const data = msg.data as NotificationData
+    const notificationStore = useNotificationStore()
+    notificationStore.onWsNotification(data)
+
+    const isHumanInput = data.type === 'human_input'
+    ElNotification({
+      type: isHumanInput ? 'warning' : 'info',
+      title: data.title,
+      message: data.content || '点击铃铛查看通知中心',
+      duration: isHumanInput ? 0 : 5000,
+      position: 'top-right'
+    })
+    if (data.browser_notify !== false) {
+      notifyOnce(`notification-${data.notification_id}`, data.title, {
+        body: data.content || '点击查看通知中心',
+        icon: '/logo.ico'
+      })
+    }
+    return
+  }
+
   if (msg.type === 'execution_done') {
     const data = msg.data as ExecutionDoneData
     const { flow_name, status, source, execution_id, flow_id, last_user_message } = data

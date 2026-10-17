@@ -23,11 +23,12 @@ import {
   TrendCharts,
   ChatLineSquare,
   Calendar,
+  Bell,
   Loading
 } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage, ElNotification, ElButton } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import { useAgentStore, useAuthStore } from '@/stores'
+import { useAgentStore, useAuthStore, useNotificationStore } from '@/stores'
 import { authApi } from '@/api/auth'
 import { updateApi, type UpdateStatus } from '@/api/config'
 import {
@@ -48,7 +49,9 @@ const route = useRoute()
 const router = useRouter()
 const store = useAgentStore()
 const authStore = useAuthStore()
+const notificationStore = useNotificationStore()
 const { currentUser } = storeToRefs(authStore)
+const { unreadCount } = storeToRefs(notificationStore)
 const {
   visible: knowledgeReferenceDrawerVisible,
   reference: selectedKnowledgeReference,
@@ -251,6 +254,14 @@ function handleAppClick() {
   })
 }
 
+/** 跳转通知中心页 */
+function goNotifications(): void {
+  sidebarVisible.value = false
+  if (route.path !== '/notifications') {
+    router.push('/notifications')
+  }
+}
+
 // 初始化 WebSocket 连接（全局通知）
 connectWebSocket()
 
@@ -292,6 +303,7 @@ watch(
     if (!incompleteNotified && !route.meta?.public) {
       incompleteNotified = true
       checkIncompleteAgendas()
+      notificationStore.fetchUnreadCount()
     }
   },
   { immediate: true }
@@ -791,17 +803,31 @@ function handleSessionPageChange(page: number): void {
                 <el-icon :size="14" class="user-avatar"><User /></el-icon>
                 <span class="user-name">{{ currentUser }}</span>
               </div>
-              <el-tooltip
-                class="box-item"
-                effect="dark"
-                content="退出登录"
-                placement="top"
-              >
-                <button class="drawer-logout-btn" @click="handleLogout">
-                  <el-icon :size="14"><SwitchButton /></el-icon>
-                </button>
-              </el-tooltip>
-              
+              <div class="sidebar-user-actions">
+                <el-tooltip effect="dark" content="通知中心" placement="top">
+                  <button class="drawer-logout-btn" @click="goNotifications">
+                    <el-badge
+                      :value="unreadCount"
+                      :hidden="unreadCount <= 0"
+                      :max="9"
+                      class="notification-badge"
+                      :offset="[5,-5]"
+                    >
+                      <el-icon :size="14"><Bell /></el-icon>
+                    </el-badge>
+                  </button>
+                </el-tooltip>
+                <el-tooltip
+                  class="box-item"
+                  effect="dark"
+                  content="退出登录"
+                  placement="top"
+                >
+                  <button class="drawer-logout-btn" @click="handleLogout">
+                    <el-icon :size="14"><SwitchButton /></el-icon>
+                  </button>
+                </el-tooltip>
+              </div>
             </div>
           </aside>
 
@@ -990,17 +1016,30 @@ function handleSessionPageChange(page: number): void {
                 <el-icon :size="14" class="user-avatar"><User /></el-icon>
                 <span class="drawer-user-name">{{ currentUser }}</span>
               </div>
-              <el-tooltip
-                class="box-item"
-                effect="dark"
-                content="退出登录"
-                placement="top"
-              >
-                <button class="drawer-logout-btn" @click="handleLogout">
-                  <el-icon :size="14"><SwitchButton /></el-icon>
-                </button>
-              </el-tooltip>
-              
+              <div class="sidebar-user-actions">
+                <el-tooltip effect="dark" content="通知中心" placement="top">
+                  <button class="drawer-logout-btn" @click="goNotifications">
+                    <el-badge
+                      :value="unreadCount"
+                      :hidden="unreadCount <= 0"
+                      :max="99"
+                      class="notification-badge"
+                    >
+                      <el-icon :size="14"><Bell /></el-icon>
+                    </el-badge>
+                  </button>
+                </el-tooltip>
+                <el-tooltip
+                  class="box-item"
+                  effect="dark"
+                  content="退出登录"
+                  placement="top"
+                >
+                  <button class="drawer-logout-btn" @click="handleLogout">
+                    <el-icon :size="14"><SwitchButton /></el-icon>
+                  </button>
+                </el-tooltip>
+              </div>
             </div>
           </el-drawer>
         </template>
@@ -1886,6 +1925,14 @@ function handleSessionPageChange(page: number): void {
 .drawer-logout-btn:hover {
   color: var(--vermilion);
   background: var(--vermilion-soft);
+}
+
+/* ---- 通知铃铛（退出登录旁） ---- */
+.sidebar-user-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 @media (max-width: 768px) {
