@@ -313,6 +313,7 @@ class SubAgentNodeHandler(BaseNodeHandler):
                     _parent_writer(
                         SubAgentToolApprovalEvent(
                             node_key=event_data.get("node_key", ""),
+                            approval_id=event_data.get("approval_id", ""),
                             tool_calls=event_data.get("tool_calls", []),
                             approval_needed=event_data.get("approval_needed", []),
                             sub_agent_id=_agent_id,
