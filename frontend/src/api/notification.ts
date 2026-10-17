@@ -11,6 +11,8 @@ export interface Notification {
   content?: string
   ref_type?: string
   ref_id?: number
+  /** 辅助关联ID：session 通知存 agent flow_id（跳转 /chat/{ref_sub_id}?sessionId= 用） */
+  ref_sub_id?: number
   is_read?: number
   read_time?: string
   create_time?: string

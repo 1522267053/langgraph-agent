@@ -32,6 +32,8 @@ interface NotificationData {
   content?: string | null
   ref_type?: string | null
   ref_id?: number | null
+  /** 辅助关联ID：session 通知存 agent flow_id（跳转 /chat/{ref_sub_id}?sessionId= 用） */
+  ref_sub_id?: number | null
   browser_notify?: boolean
   /** 静默标记：ws_manager 落库后补发，只更新角标+刷新列表，不弹窗（弹窗由原消息类型负责） */
   silent?: boolean

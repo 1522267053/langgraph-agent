@@ -46,6 +46,7 @@ class NotificationService(
         content: Optional[str] = None,
         ref_type: Optional[str] = None,
         ref_id: Optional[int] = None,
+        ref_sub_id: Optional[int] = None,
         username: Optional[str] = None,
         browser_notify: bool = True,
         push: bool = True,
@@ -59,6 +60,7 @@ class NotificationService(
             content: 正文
             ref_type: 关联类型（NotificationRefType），前端跳转用
             ref_id: 关联 ID
+            ref_sub_id: 辅助关联 ID（session 通知存 agent flow_id，跳转用）
             username: 定向推送用户名（None 时全局广播）
             browser_notify: 是否触发浏览器桌面通知
             push: 是否 WebSocket 推送（False 仅落库）
@@ -74,6 +76,7 @@ class NotificationService(
                 content=content,
                 ref_type=ref_type,
                 ref_id=ref_id,
+                ref_sub_id=ref_sub_id,
             )
             notification = await self.create(db, create)
         except Exception as e:
@@ -93,6 +96,7 @@ class NotificationService(
                 "content": content,
                 "ref_type": ref_type,
                 "ref_id": ref_id,
+                "ref_sub_id": ref_sub_id,
                 "browser_notify": browser_notify,
             }
             try:

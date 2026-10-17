@@ -94,6 +94,7 @@ class WebSocketManager:
         content: Optional[str] = None,
         ref_type: Optional[str] = None,
         ref_id: Optional[int] = None,
+        ref_sub_id: Optional[int] = None,
         username: Optional[str] = None,
     ) -> None:
         """通知落库到 notification 表（统一通知中心，失败仅告警不阻断推送）
@@ -114,6 +115,7 @@ class WebSocketManager:
                     content=content,
                     ref_type=ref_type,
                     ref_id=ref_id,
+                    ref_sub_id=ref_sub_id,
                     username=username,
                     push=False,  # 推送由调用方完成，此处仅落库
                 )
@@ -128,6 +130,7 @@ class WebSocketManager:
                 "content": content,
                 "ref_type": ref_type,
                 "ref_id": ref_id,
+                "ref_sub_id": ref_sub_id,
                 "browser_notify": False,
                 "silent": True,
             }
@@ -169,6 +172,7 @@ class WebSocketManager:
             content=error_message,
             ref_type="session" if source == "agent" else "execution",
             ref_id=execution_id,
+            ref_sub_id=flow_id if source == "agent" else None,
         )
 
         await self.broadcast(

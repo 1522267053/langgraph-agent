@@ -65,6 +65,11 @@ class Notification(DbBaseModel):
         nullable=True,
         comment="关联ID：execution_id/session_id/agenda_id/task_id",
     )
+    ref_sub_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="辅助关联ID：session 通知存 agent flow_id（跳转 /chat/{ref_sub_id}?sessionId={ref_id} 用）",
+    )
     is_read: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, default=0, comment="已读标记：0=未读/1=已读"
     )

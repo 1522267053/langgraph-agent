@@ -128,7 +128,13 @@ async function handleClick(item: Notification) {
 function jumpToRef(item: Notification) {
   switch (item.ref_type) {
     case 'session':
-      if (item.ref_id) router.push(`/chat/${item.ref_id}`)
+      // ref_id=会话ID，ref_sub_id=Agent flow ID；/chat/:id 的 :id 是 Agent ID，
+      // 会话经 ?sessionId= 定位（AgentChat onMounted 支持）。旧通知无 ref_sub_id 回退 /chat
+      if (item.ref_sub_id && item.ref_id) {
+        router.push(`/chat/${item.ref_sub_id}?sessionId=${item.ref_id}`)
+      } else {
+        router.push('/chat')
+      }
       break
     case 'execution':
       router.push('/execution')

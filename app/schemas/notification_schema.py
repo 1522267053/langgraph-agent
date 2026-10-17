@@ -23,6 +23,9 @@ class NotificationBase(BaseView):
         default=None, description="关联类型：execution/session/agenda/task"
     )
     ref_id: Optional[int] = Field(default=None, description="关联ID")
+    ref_sub_id: Optional[int] = Field(
+        default=None, description="辅助关联ID：session 通知存 agent flow_id"
+    )
     is_read: Optional[int] = Field(default=None, description="已读标记：0=未读/1=已读")
     read_time: Optional[ChinaDateTime] = Field(default=None, description="已读时间")
 

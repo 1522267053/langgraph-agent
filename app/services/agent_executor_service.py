@@ -2296,6 +2296,7 @@ class AgentExecutorService(BaseExecutorService):
                 content=interrupt_data.get("question", "需要您的输入"),
                 ref_type="session",
                 ref_id=session_id,
+                ref_sub_id=session.flow_id,
             )
         except Exception as notify_err:
             logger.warning(
