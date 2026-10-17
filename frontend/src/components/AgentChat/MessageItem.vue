@@ -32,17 +32,19 @@ const elapsedText = computed(() => formatDuration(agentStore.streamElapsedMs))
 </script>
 
 <template>
-  <!-- 空窗期 typing 行：send 后 AI 消息对象未创建期间的头像 + 三点 + 计时 -->
+  <!-- 空窗期 typing 行：send 后 AI 消息对象未创建期间的头像 + 三点 + 计时（计时在三点下方） -->
   <div v-if="row?.kind === 'typing'" class="typing-row">
     <div class="typing-avatar avatar-ai">
       <el-icon :size="16"><ChatDotRound /></el-icon>
     </div>
     <div class="typing-body">
-      <span class="dot"></span>
-      <span class="dot"></span>
-      <span class="dot"></span>
+      <div class="typing-dots">
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
+      </div>
+      <span class="typing-elapsed">已运行 {{ elapsedText }}</span>
     </div>
-    <span class="typing-elapsed">已运行 {{ elapsedText }}</span>
   </div>
   <MessageBubble
     v-else-if="row?.msg"
@@ -84,13 +86,19 @@ const elapsedText = computed(() => formatDuration(agentStore.streamElapsedMs))
 }
 .typing-body {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
   gap: 4px;
   margin: 0px 0px 0px 10px;
+  min-height: 36px;
+}
+.typing-dots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   height: 36px;
 }
 .typing-elapsed {
-  margin-left: 10px;
   font-size: 11px;
   color: var(--paper-ink-4);
   font-variant-numeric: tabular-nums;
