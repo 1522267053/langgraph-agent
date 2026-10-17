@@ -1237,8 +1237,10 @@ function convergeScrollToBottom(): void {
     phase = 'follow'
     lastChangeAt = performance.now()
     followUntil = lastChangeAt + 1000
-    wrap.addEventListener('wheel', onUserInput, { capture: true, once: true })
-    wrap.addEventListener('touchstart', onUserInput, { capture: true, once: true })
+    // passive: true——onUserInput 只置标志不 preventDefault，标记后浏览器
+    // 无需等待监听器即可滚动（消除 Chrome non-passive Violation）
+    wrap.addEventListener('wheel', onUserInput, { capture: true, once: true, passive: true })
+    wrap.addEventListener('touchstart', onUserInput, { capture: true, once: true, passive: true })
     wrap.addEventListener('pointerdown', onUserInput, { capture: true, once: true })
   }
   const cleanup = () => {
