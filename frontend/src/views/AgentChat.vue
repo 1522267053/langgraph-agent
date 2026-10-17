@@ -1967,24 +1967,37 @@ const minimizedWaits = computed(() => {
       </el-card>
     </div>
 
-    <div v-if="store.isWaitingToolApproval && !approvalMinimized" class="tool-approval-overlay">
-      <el-card class="tool-approval-card">
-        <div class="overlay-card-header">
-          <div class="approval-header">
-            <el-icon style="color: #e6a23c; margin-right: 8px">
-              <Warning />
-            </el-icon>
-            <span v-if="store.subAgentApproval?.isSubAgent">
-              子Agent「{{ store.subAgentApproval.agentName }}」
-            </span>
-            <span v-if="store.approvalProgress.total > 1">
-              工具 {{ store.approvalProgress.current }}/{{ store.approvalProgress.total }}
-            </span>
-            <span v-else>请求执行工具</span>
-            <span class="approval-countdown">{{ formatCountdown(store.approvalCountdown) }}</span>
-          </div>
+    <!-- 工具审批弹窗：与 QuestionDialog 同款 el-dialog（挂 body 全屏模态遮罩，
+         而非 chat-content 内局部遮罩）；倒计时为橙色胶囊徽章 + 过期态 -->
+    <el-dialog
+      :model-value="store.isWaitingToolApproval && !approvalMinimized"
+      width="560px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :show-close="false"
+      destroy-on-close
+    >
+      <template #header>
+        <div class="approval-dialog-header">
+          <el-icon :size="20" class="approval-dialog-icon"><Warning /></el-icon>
+          <span class="approval-dialog-title">请求执行工具</span>
+          <span
+            v-if="store.subAgentApproval?.isSubAgent"
+            class="approval-dialog-sub-agent"
+          >
+            子Agent「{{ store.subAgentApproval.agentName }}」
+          </span>
+          <span v-if="store.approvalProgress.total > 1" class="approval-dialog-progress">
+            {{ store.approvalProgress.current }}/{{ store.approvalProgress.total }}
+          </span>
+          <span v-if="store.approvalCountdown <= 0" class="approval-dialog-expired">
+            已过期
+          </span>
+          <span v-else class="approval-dialog-countdown">
+            {{ formatCountdown(store.approvalCountdown) }}
+          </span>
           <button
-            class="overlay-minimize-btn"
+            class="approval-dialog-minimize"
             type="button"
             title="最小化（可回看对话，稍后恢复审批）"
             @click="minimizeApproval"
@@ -1992,33 +2005,33 @@ const minimizedWaits = computed(() => {
             <el-icon :size="16"><Minus /></el-icon>
           </button>
         </div>
-        <div class="approval-tools">
-          <div
-            v-for="tc in store.pendingToolCalls"
-            :key="tc.id || tc.name"
-            class="approval-tool-item"
-          >
-            <div class="approval-tool-name">
-              <el-tag
-                :type="store.pendingApprovalNeeded.includes(tc.name) ? 'danger' : 'info'"
-                size="small"
-                style="margin-right: 6px"
-              >
-                {{ store.pendingApprovalNeeded.includes(tc.name) ? '需确认' : '普通' }}
-              </el-tag>
-              {{ tc.name }}
-            </div>
-            <pre class="approval-tool-args">{{ formatToolApprovalArgs(tc.args) }}</pre>
+      </template>
+      <div class="approval-tools">
+        <div
+          v-for="tc in store.pendingToolCalls"
+          :key="tc.id || tc.name"
+          class="approval-tool-item"
+        >
+          <div class="approval-tool-name">
+            <el-tag
+              :type="store.pendingApprovalNeeded.includes(tc.name) ? 'danger' : 'info'"
+              size="small"
+              style="margin-right: 6px"
+            >
+              {{ store.pendingApprovalNeeded.includes(tc.name) ? '需确认' : '普通' }}
+            </el-tag>
+            {{ tc.name }}
           </div>
+          <pre class="approval-tool-args">{{ formatToolApprovalArgs(tc.args) }}</pre>
         </div>
-        <template #footer>
-          <div style="display: flex; justify-content: space-between; width: 100%">
-            <el-button type="danger" @click="handleRejectTools">拒绝</el-button>
-            <el-button type="primary" @click="handleApproveTools">批准</el-button>
-          </div>
-        </template>
-      </el-card>
-    </div>
+      </div>
+      <template #footer>
+        <div class="approval-dialog-footer">
+          <el-button type="danger" @click="handleRejectTools">拒绝</el-button>
+          <el-button type="primary" @click="handleApproveTools">批准</el-button>
+        </div>
+      </template>
+    </el-dialog>
 
     <div
       v-if="store.flowPreview"
@@ -2638,44 +2651,88 @@ export default {}
   pointer-events: none;
 }
 
-.tool-approval-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 100;
-}
-
-.tool-approval-card {
-  width: 560px;
-  max-width: 90%;
-  max-height: 80vh;
-}
-
-.tool-approval-card :deep(.el-card__body) {
-  padding-bottom: 0;
-  overflow-y: auto;
-  max-height: calc(80vh - 120px);
-}
-
-.approval-header {
-  font-size: 16px;
-  font-weight: 500;
-  margin-bottom: 16px;
+/* 审批弹窗（el-dialog）：与 QuestionDialog 同风格 */
+.approval-dialog-header {
   display: flex;
   align-items: center;
+  gap: 8px;
 }
 
-.approval-countdown {
+.approval-dialog-icon {
+  color: #e6a23c;
+}
+
+.approval-dialog-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: #303133;
+}
+
+.approval-dialog-sub-agent {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #b45309;
+  background: #fef3c7;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.approval-dialog-progress {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #1d4ed8;
+  background: #dbeafe;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.approval-dialog-countdown {
   margin-left: auto;
   font-size: 13px;
-  color: #94a3b8;
-  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: #e6a23c;
+  background: #fdf6ec;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.approval-dialog-expired {
+  margin-left: auto;
+  font-size: 13px;
+  color: #909399;
+  background: #f4f4f5;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.approval-dialog-minimize {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-left: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #909399;
+  cursor: pointer;
+}
+
+.approval-dialog-minimize:hover {
+  background: #f4f4f5;
+  color: #606266;
+}
+
+.approval-dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
 }
 
 .approval-tools {
@@ -2709,11 +2766,6 @@ export default {}
   word-break: break-all;
   max-height: 200px;
   overflow-y: auto;
-}
-
-.tool-approval-card :deep(.el-card__footer) {
-  padding-top: 16px;
-  text-align: right;
 }
 
 .flow-preview-wrapper {
