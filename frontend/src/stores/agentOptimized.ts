@@ -195,10 +195,22 @@ export const useAgentStore = defineStore('agent', () => {
     args: Record<string, unknown>
     id?: string
   }
-  // approvalId → { toolCalls, approvalNeeded }，不同 approvalId 同时入队
+  // approvalId → { toolCalls, approvalNeeded, subAgent?, deadline? }，不同 approvalId 同时入队
   // 用 reactive 包装 Map 实例（不是 ref(new Map())），确保 set/delete/clear 触发响应式
+  // subAgent：子Agent审批路由信息（按批次记录——多批次并行时各批次可能来自不同子会话，
+  // 提交时按当前 approvalId 精确路由，不能存全局单值，否则队列推进后路由错 session）
+  // deadline：后端权威超时死线（Date.now()+expires_in，按批次记录——倒计时是全局
+  // 单值时，批准当前批次 stop 后队列下一批无计时，会误显示「已过期」）
   const pendingApprovals = reactive(
-    new Map<string, { toolCalls: PendingToolCall[]; approvalNeeded: string[] }>()
+    new Map<
+      string,
+      {
+        toolCalls: PendingToolCall[]
+        approvalNeeded: string[]
+        subAgent?: { agentId: number; sessionId: number; agentName: string }
+        deadline?: number
+      }
+    >()
   )
   // 当前展示的 approvalId（FIFO：取最早入队的）
   const currentApprovalId = ref<string | null>(null)
@@ -231,24 +243,39 @@ export const useAgentStore = defineStore('agent', () => {
   }
   // 审批进度 N/M：后端在首个 ToolApprovalEvent 携带 total（整轮需审批的工具总数）
   const approvalProgress = ref<{ current: number; total: number }>({ current: 0, total: 0 })
-  const approvalCountdown = ref(0)
+  // 倒计时 tick：每秒自增触发 approvalCountdown 重算（deadline 按批次记录，
+  // 计时器只负责驱动刷新，不再持有倒计时状态——批准/拒绝删批次后队列下一批
+  // 自动显示自己的剩余时间，不再误显示「已过期」）
+  const approvalTick = ref(0)
   let approvalTimer: ReturnType<typeof setInterval> | null = null
 
   // ========== 子Agent工具审批状态 ==========
-  const subAgentApproval = ref<{
+  // 派生自当前审批批次的 subAgent 路由信息（与 currentApprovalId 一一对应）：
+  // 多批次并行时各批次可能来自不同子会话，全局单值会在队列推进后路由错 session
+  // （历史 Bug：第 1 批提交后清空单值，第 2/3 批误走父会话分支报「没有对应审批」）
+  const subAgentApproval = computed<{
     isSubAgent: boolean
     agentId: number
     sessionId: number
     agentName: string
-  } | null>(null)
+  } | null>(() => {
+    const id = currentApprovalId.value
+    if (!id) return null
+    const sub = pendingApprovals.get(id)?.subAgent
+    if (!sub) return null
+    return { isSubAgent: true, ...sub }
+  })
 
-  // ========== 子Agent问题反问状态（子Agent ask_user_question 穿透） ==========
-  const subAgentQuestion = ref<{
-    isSubAgent: boolean
-    agentId: number
-    sessionId: number
-    agentName: string
-  } | null>(null)
+  // 倒计时（秒）：派生自当前批次的 deadline 死线（approvalTick 每秒自增驱动重算）。
+  // 队列推进/批次删除后自动跟随下一批，无残留状态可失配
+  const approvalCountdown = computed<number>(() => {
+    void approvalTick.value // 依赖 tick：每秒重算
+    const id = currentApprovalId.value
+    if (!id) return 0
+    const deadline = pendingApprovals.get(id)?.deadline
+    if (!deadline) return 0
+    return Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+  })
 
   // ========== 问题反问状态（ask_user_question 工具，队列化） ==========
   interface QuestionOption {
@@ -265,6 +292,8 @@ export const useAgentStore = defineStore('agent', () => {
     multiple: boolean
     /** 后端权威回答剩余秒数（刷新重连回放时由服务端重算） */
     expiresIn?: number
+    /** 子Agent反问路由信息（按条目记录，提交时按 questionId 精确路由到子会话） */
+    subAgent?: { agentId: number; sessionId: number; agentName: string }
   }
   // questionId → PendingQuestion，不同 questionId 同时入队
   // 用 reactive 包装 Map 实例，确保 set/delete 触发响应式（队列推进时 <100ms 内更新下一个弹窗）
@@ -279,6 +308,20 @@ export const useAgentStore = defineStore('agent', () => {
   })
   // 已提交的 questionId 集合（幂等）
   const resolvedQuestionIds = new Set<string>()
+  // 子Agent反问路由信息：派生自当前问题条目（与 currentQuestionId 一一对应），
+  // 同审批队列同模式——全局单值会在队列推进后路由错 session
+  const subAgentQuestion = computed<{
+    isSubAgent: boolean
+    agentId: number
+    sessionId: number
+    agentName: string
+  } | null>(() => {
+    const id = currentQuestionId.value
+    if (!id) return null
+    const sub = pendingQuestions.get(id)?.subAgent
+    if (!sub) return null
+    return { isSubAgent: true, ...sub }
+  })
   // 队列推进：删除当前后从 Map 取最早入队的 key 顶上来
   function advanceQuestionQueue(): void {
     const nextId = pendingQuestions.keys().next().value ?? null
@@ -1624,21 +1667,23 @@ export const useAgentStore = defineStore('agent', () => {
             currentApprovalId.value = approvalId
           }
         }
-        // 检测子Agent审批
-        if (event.data.is_sub_agent) {
-          subAgentApproval.value = {
-            isSubAgent: true,
+        // 子Agent审批路由信息挂到当前批次（提交时按 approvalId 精确路由到子会话）
+        if (event.data.is_sub_agent && approvalId) {
+          pendingApprovals.get(approvalId)!.subAgent = {
             agentId: event.data.sub_agent_id,
             sessionId: event.data.sub_session_id,
             agentName: event.data.sub_agent_name || '子Agent'
           }
-        } else {
-          subAgentApproval.value = null
         }
         // 后端权威剩余秒数（live 发布时=完整超时，刷新重连回放时由服务端按死线
-        // 重算），缺失时回退常量——保证前端倒计时与后端超时死线不脱节
+        // 重算），缺失时回退常量——保证前端倒计时与后端超时死线不脱节。
+        // 死线按批次记录（不能写 currentApprovalId 对应批次：并发到达时
+        // current 始终指向第 1 批，后续批次的 deadline 会全部错挂到第 1 批）
         const expiresIn = Math.floor(Number(event.data.expires_in) || 0)
-        startApprovalCountdown(expiresIn > 0 ? expiresIn : USER_RESPONSE_COUNTDOWN_SECONDS)
+        const seconds = expiresIn > 0 ? expiresIn : USER_RESPONSE_COUNTDOWN_SECONDS
+        const targetId = approvalId || '__legacy__'
+        pendingApprovals.get(targetId)!.deadline = Date.now() + seconds * 1000
+        startApprovalCountdown()
       },
       onQuestionRequest: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
@@ -1658,17 +1703,13 @@ export const useAgentStore = defineStore('agent', () => {
         if (!currentQuestionId.value) {
           currentQuestionId.value = questionId
         }
-        // 检测子Agent反问（与 onToolApproval 的 is_sub_agent 同模式）：
-        // resolve 需路由到子会话
-        if (event.data.is_sub_agent) {
-          subAgentQuestion.value = {
-            isSubAgent: true,
+        // 子Agent反问路由信息挂到当前条目（resolve 时按 questionId 精确路由到子会话）
+        if (event.data.is_sub_agent && questionId) {
+          pendingQuestions.get(questionId)!.subAgent = {
             agentId: event.data.sub_agent_id || 0,
             sessionId: event.data.sub_session_id || 0,
             agentName: event.data.sub_agent_name || '子Agent'
           }
-        } else {
-          subAgentQuestion.value = null
         }
       },
       onFileChanged: (event: SSEEvent) => {
@@ -1785,10 +1826,10 @@ export const useAgentStore = defineStore('agent', () => {
           ElMessage.warning({ message: '工具确认超时，连接已断开', duration: 5000 })
         }
         // 问题反问兜底清理：正常回答时 resolveQuestion 已清空；后端超时/异常结束时
-        // 前端弹窗不会被动清除，避免留下无效弹窗
+        // 前端弹窗不会被动清除，避免留下无效弹窗（subAgentQuestion 为 computed，
+        // 随队列清空自动派生 null，无需手动清理）
         pendingQuestions.clear()
         currentQuestionId.value = null
-        subAgentQuestion.value = null
         if (isResume) {
           isResume = false
         }
@@ -1824,7 +1865,6 @@ export const useAgentStore = defineStore('agent', () => {
         }
         pendingQuestions.clear()
         currentQuestionId.value = null
-        subAgentQuestion.value = null
         try {
           await refreshStreamMessages(context, false, false, true)
         } catch (e) {
@@ -1972,24 +2012,33 @@ export const useAgentStore = defineStore('agent', () => {
     )
   }
 
-  function startApprovalCountdown(seconds: number) {
-    stopApprovalCountdown()
-    approvalCountdown.value = seconds
-    approvalTimer = setInterval(() => {
-      if (approvalCountdown.value > 0) {
-        approvalCountdown.value--
-      } else {
-        stopApprovalCountdown()
-      }
-    }, 1000)
+  /** 启动倒计时 tick：deadline 已由 onToolApproval 挂到各批次，这里只确保秒级 tick 在跑 */
+  function startApprovalCountdown() {
+    if (!approvalTimer) {
+      approvalTimer = setInterval(() => {
+        approvalTick.value += 1
+        // 过期批次自动出队（与后端同步：后端超时即从等待队列移除并按超时继续，
+        // 前端过期批次留着只会让用户点出「没有待确认的工具」）
+        const now = Date.now()
+        for (const [id, batch] of pendingApprovals) {
+          if (batch.deadline && batch.deadline <= now) {
+            pendingApprovals.delete(id)
+            resolvedApprovalIds.add(id)
+            if (currentApprovalId.value === id) {
+              advanceApprovalQueue()
+            }
+          }
+        }
+      }, 1000)
+    }
   }
 
+  /** 停止秒级 tick（队列清空时调用；不清理批次 deadline，倒计时随批次派生） */
   function stopApprovalCountdown() {
     if (approvalTimer) {
       clearInterval(approvalTimer)
       approvalTimer = null
     }
-    approvalCountdown.value = 0
   }
 
   /**
@@ -2000,19 +2049,17 @@ export const useAgentStore = defineStore('agent', () => {
     const approvalId = currentApprovalId.value
     // 幂等保护：同一 approval_id 已提交过则直接跳过
     if (!approvalId || resolvedApprovalIds.has(approvalId)) return
+    // 先从被批准批次本身捕获路由信息（不能读 subAgentApproval computed——
+    // 它派生自 currentApprovalId，advance 之后已指向下一批/空，会路由错 session）
+    const subAgent = pendingApprovals.get(approvalId)?.subAgent
     resolvedApprovalIds.add(approvalId)
     pendingApprovals.delete(approvalId)
     advanceApprovalQueue()
-    stopApprovalCountdown()
+    // 队列清空才停 tick；还有后续批次时倒计时自动跟随下一批 deadline
+    if (!currentApprovalId.value) stopApprovalCountdown()
     try {
-      if (subAgentApproval.value?.isSubAgent) {
-        await agentApi.toolApproval(
-          subAgentApproval.value.agentId,
-          subAgentApproval.value.sessionId,
-          approvalId,
-          'approved'
-        )
-        subAgentApproval.value = null
+      if (subAgent) {
+        await agentApi.toolApproval(subAgent.agentId, subAgent.sessionId, approvalId, 'approved')
       } else {
         await agentApi.toolApproval(
           currentAgent.value.id,
@@ -2030,19 +2077,15 @@ export const useAgentStore = defineStore('agent', () => {
     if (!currentAgent.value || !currentSession.value) return
     const approvalId = currentApprovalId.value
     if (!approvalId || resolvedApprovalIds.has(approvalId)) return
+    // 同 approveToolCalls：推进队列前先捕获本批次路由信息
+    const subAgent = pendingApprovals.get(approvalId)?.subAgent
     resolvedApprovalIds.add(approvalId)
     pendingApprovals.delete(approvalId)
     advanceApprovalQueue()
-    stopApprovalCountdown()
+    if (!currentApprovalId.value) stopApprovalCountdown()
     try {
-      if (subAgentApproval.value?.isSubAgent) {
-        await agentApi.toolApproval(
-          subAgentApproval.value.agentId,
-          subAgentApproval.value.sessionId,
-          approvalId,
-          'rejected'
-        )
-        subAgentApproval.value = null
+      if (subAgent) {
+        await agentApi.toolApproval(subAgent.agentId, subAgent.sessionId, approvalId, 'rejected')
       } else {
         await agentApi.toolApproval(
           currentAgent.value.id,
@@ -2063,20 +2106,20 @@ export const useAgentStore = defineStore('agent', () => {
     // 幂等保护：当前 questionId 已提交过则直接跳过
     if (!questionId || resolvedQuestionIds.has(questionId)) return
     if (!pendingQuestions.has(questionId)) return
+    // 先从被回答条目本身捕获路由信息（不能读 subAgentQuestion computed——
+    // advance 之后 currentQuestionId 已指向下一批/空，会路由错 session）
+    const subAgent = pendingQuestions.get(questionId)?.subAgent
     resolvedQuestionIds.add(questionId)
     pendingQuestions.delete(questionId)
     advanceQuestionQueue()
-    // 子Agent反问：按事件携带的子会话路由（Future 注册在子会话的等待句柄上）
-    const isSubAgentQuestion = subAgentQuestion.value?.isSubAgent
     try {
-      if (isSubAgentQuestion && subAgentQuestion.value) {
+      if (subAgent) {
         await agentApi.resolveQuestion(
-          subAgentQuestion.value.agentId,
-          subAgentQuestion.value.sessionId,
+          subAgent.agentId,
+          subAgent.sessionId,
           questionId,
           answers
         )
-        subAgentQuestion.value = null
       } else {
         await agentApi.resolveQuestion(
           currentAgent.value.id,
@@ -2110,10 +2153,6 @@ export const useAgentStore = defineStore('agent', () => {
     if (!questionId) return
     pendingQuestions.delete(questionId)
     advanceQuestionQueue()
-    // 队列清空时同步清理子Agent反问标记，避免残留影响下一次路由
-    if (!pendingQuestions.size) {
-      subAgentQuestion.value = null
-    }
   }
 
   // ===== 文件变更（侧栏 Diff 面板） =====
