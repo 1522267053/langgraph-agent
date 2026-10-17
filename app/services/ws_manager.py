@@ -96,13 +96,18 @@ class WebSocketManager:
         ref_id: Optional[int] = None,
         username: Optional[str] = None,
     ) -> None:
-        """通知落库到 notification 表（统一通知中心，失败仅告警不阻断推送）"""
+        """通知落库到 notification 表（统一通知中心，失败仅告警不阻断推送）
+
+        落库成功后补发一条 silent 的 notification 消息：前端据此更新
+        铃铛角标并实时刷新通知列表（弹窗仍由调用方的原消息类型负责，
+        silent 标记避免双重弹窗）。
+        """
         try:
             from app.config.database import AsyncSessionLocal
             from app.services.notification_service import notification_service
 
             async with AsyncSessionLocal() as db:
-                await notification_service.notify(
+                notification = await notification_service.notify(
                     db,
                     type=type,
                     title=title,
@@ -112,6 +117,25 @@ class WebSocketManager:
                     username=username,
                     push=False,  # 推送由调用方完成，此处仅落库
                 )
+                unread = await notification_service.get_unread_count(db)
+
+            # 补发静默通知：只更新角标 + 刷新列表，前端不弹窗
+            payload = {
+                "notification_id": notification.id if notification else None,
+                "unread_count": unread,
+                "type": type,
+                "title": title,
+                "content": content,
+                "ref_type": ref_type,
+                "ref_id": ref_id,
+                "browser_notify": False,
+                "silent": True,
+            }
+            message = {"type": "notification", "data": payload}
+            if username:
+                await self.broadcast_to_user(username, message)
+            else:
+                await self.broadcast(message)
         except Exception as e:
             logger.warning(f"通知落库失败 type={type}: {e}")
 

@@ -33,6 +33,8 @@ interface NotificationData {
   ref_type?: string | null
   ref_id?: number | null
   browser_notify?: boolean
+  /** 静默标记：ws_manager 落库后补发，只更新角标+刷新列表，不弹窗（弹窗由原消息类型负责） */
+  silent?: boolean
 }
 
 interface ToolOutputStartData {
@@ -115,6 +117,9 @@ function handleNotification(msg: WSMessage) {
     const data = msg.data as NotificationData
     const notificationStore = useNotificationStore()
     notificationStore.onWsNotification(data)
+
+    // silent 通知（ws_manager 落库后补发）：只更新角标+刷新列表，弹窗由原消息类型负责
+    if (data.silent) return
 
     const isHumanInput = data.type === 'human_input'
     ElNotification({
