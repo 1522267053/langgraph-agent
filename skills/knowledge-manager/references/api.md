@@ -47,6 +47,7 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 ```
 
 `condition.name` 匹配名称或描述（模糊，可选）。
+⚠️ 注意：本接口（知识库分页）condition 才有 `name` 字段；文档分页 `/api/knowledge/document/page` 的 condition 只支持 `knowledge_base_id` / `title`，传 `name` 报 422。
 
 **响应**：`data.items[]` + `data.total`
 
@@ -161,6 +162,7 @@ Base URL: `http://127.0.0.1:8000` | 响应: `{code:1, msg, data}` 成功 / `{cod
 ```
 
 `condition.title` 模糊匹配文档标题。
+⚠️ condition 只支持 `knowledge_base_id`（精确）与 `title`（模糊）两个字段，**不接受 `name`**（那是知识库分页 `/api/knowledge/base/page` 的字段，混用报 422）。
 
 ### GET /get/{id} — 文档详情
 

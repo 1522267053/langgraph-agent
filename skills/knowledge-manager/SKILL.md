@@ -97,7 +97,23 @@ AI 综合原始段落得出的结论性知识，与原始文档分层存储，�
 1. POST /api/knowledge/base/create     # 创建空知识库
 2. POST /api/knowledge/document/upload  # 上传文档（可批量）
 3. 轮询 GET /api/knowledge/document/get/{id}  # 等 processing_status=2（向量化已自动完成）
+4. 【内置助手专用】把新知识库挂到自己身上（见下节）
 ```
+
+## 内置助手：把知识库挂到自己身上（创建后必做）
+
+你是内置助手（`whoami` 返回 `is_builtin=1`）且刚创建了知识库时，**必须**把新知识库挂载为自身的 knowledge 节点，否则下一轮用户检索时你只能借道 REST API（绕过沉淀层优先级与引用标注）。按 [agent-manager 运行时自更新](../agent-manager/references/runtime-self-update.md) 的安全流程执行：
+
+1. `whoami` 工具确认自身 `flow_id`（禁止猜测）
+2. `POST /api/flow-snapshot/create/{flow_id}` 创建快照（自更新前备份）
+3. `GET /api/ai/flow/node-types/knowledge/config-schema` 查实时 schema，不凭记忆猜字段
+4. **幂等检查**：`GET /api/ai/flow/{flow_id}/detail` 查现有节点，已有绑定该 `knowledge_base_id` 的 knowledge 节点则跳过挂载
+5. `POST /api/ai/flow/{flow_id}/nodes/batch` 创建 knowledge 节点：`node_key` 用 `kb_{id}`（如 `kb_5`）防重名，`base_config.knowledge_base_id` = 新库 ID，`top_k=5`
+6. `POST /api/ai/flow/{flow_id}/edges/batch` 创建工具边：`kb_{id}` 的 `tools` handle → `llm` 节点的 `tools` handle
+7. `GET /api/ai/flow/{flow_id}/node/llm/connected-tools` 确认 `knowledge_kb_{id}_search` 等工具已出现
+
+生效边界：本轮会话使用的图在执行开始时已构建，新挂的节点**下一轮对话或新会话生效**。挂载成功后向用户说明「下一轮即可直接检索」。
+
 
 ### 创建知识库
 
@@ -251,6 +267,16 @@ POST /api/knowledge/insight/create
 7. 只有在综合多个段落形成稳定结论时才调用 `knowledge_save_insight`；不要把单段原文、临时回答或不确定内容写入沉淀。
 8. 成体系的知识沉淀为 Markdown 文档：`knowledge_save_document`（标题在库内需唯一，重名会被拒绝、需换标题；用 # 层级标题组织内容）；更新已有文档用 `knowledge_update_document` 全量覆盖；保存后约 1 分钟完成分段向量化，期间检索不到属正常现象。
 
+### 检索纪律（已挂载知识库的 Agent 必须遵守）
+
+Agent（尤其是内置助手）已通过 knowledge 节点挂载某知识库后，**运行时检索一律用原生知识工具**（`knowledge_{node_key}_search` / `title_search` / `get_paragraphs` / `adjacent`），**禁止**用 Python/Shell/API 工具调 `/api/knowledge/document/search-segments` 检索已挂载的库：
+
+- REST 检索只命中原始文档分段，绕过 AI 沉淀层优先匹配，结论可能过时
+- REST 检索没有引用标注（citation_marker），无法给用户可溯源的答案
+- 原生工具自带三层导航，按需取段落，上下文成本更低
+
+REST `search-segments` 仅限两个用途：① 排查「检索不到内容」（见下节）；② Agent 尚未挂载该知识库节点时的一次性临时检索（用完应提示用户挂载，参照「内置助手：把知识库挂到自己身上」章节）。
+
 工具模式下的工具名由节点 key 加前缀，具体名称以运行时工具列表为准。知识库节点本身不作为普通执行节点产生流程分支。
 
 ## 添加知识库的最短流程
@@ -278,8 +304,11 @@ POST /api/knowledge/insight/create
 
 ## 分页查询示例
 
+⚠️ 两个 page 接口的 condition 字段不同，不可混用：
+
+**知识库分页** `POST /api/knowledge/base/page`（condition 用 `name`）：
+
 ```json
-POST /api/knowledge/base/page
 {
   "page": 1,
   "page_size": 20,
@@ -289,7 +318,22 @@ POST /api/knowledge/base/page
 }
 ```
 
-`condition.name` 为名称/描述模糊匹配。返回 `data.items`（数组）+ `data.total`。
+`condition.name` 为知识库名称/描述模糊匹配。返回 `data.items`（数组）+ `data.total`。
+
+**文档分页** `POST /api/knowledge/document/page`（condition 用 `knowledge_base_id`，**不接受 `name`**）：
+
+```json
+{
+  "page": 1,
+  "page_size": 50,
+  "condition": {
+    "knowledge_base_id": 5,
+    "title": "手册"
+  }
+}
+```
+
+`condition.knowledge_base_id` 精确过滤所属知识库；`condition.title` 模糊匹配文档标题（均可选，但按知识库查文档时 `knowledge_base_id` 必传）。传 `name` 会报 422。
 
 ## 详细接口字段
 
