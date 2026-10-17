@@ -5,6 +5,7 @@ main 函数可选：有 main 时按参数注入调用并取返回值，无 main 
 """
 
 import asyncio
+import ast
 import inspect
 import io
 import re
@@ -290,6 +291,47 @@ def _coerce_default_value(var: PythonParam) -> Any:
     return value
 
 
+def _has_module_level_main_call(code: str) -> bool:
+    """静态检测代码顶层是否直接调用了 main()（ast 分析，不执行代码）
+
+    背景（双跑 bug）：沙箱语义是「顶层 exec + 有 main 再调一次」。LLM 常写
+    「定义 main 后在顶层手动 main()」——exec 顶层时已执行一遍（副作用全部
+    发生），沙箱检测到 main 存在又调一遍 → 同一次工具调用内代码双跑，
+    POST 类操作产生重复数据（创建两个知识库/上传两次 PDF 实锤）。
+
+    命中形式：模块级 Expr 语句中的 main 调用（main() / main(**x) /
+    result = main() 等赋值右侧直接调用）。嵌套在函数/条件内的调用不算
+    （那些在 exec 顶层执行时未必触发，保持沙箱调用语义）。
+
+    Returns:
+        True = 顶层已调用 main，沙箱应跳过二次调用（按脚本模式取 stdout）
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+
+    def _is_main_call(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "main"
+        )
+
+    for node in tree.body:
+        # main() 裸调用
+        if isinstance(node, ast.Expr) and _is_main_call(node.value):
+            return True
+        # x = main() / x: T = main() 赋值右侧直接调用
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            value = (
+                node.value if isinstance(node, ast.Assign) else node.value
+            )
+            if value is not None and _is_main_call(value):
+                return True
+    return False
+
+
 async def _run_python_in_sandbox(code: str, input_vars: dict, timeout: float) -> dict:
     """在 RestrictedPython 沙箱中执行 Python 代码（核心沙箱逻辑，无副作用）
 
@@ -337,6 +379,13 @@ async def _run_python_in_sandbox(code: str, input_vars: dict, timeout: float) ->
             # stdout/stderr 照常捕获返回）——工具模式下 LLM 常写脚本式代码，
             # 强制 main 会让已成功执行的代码被误报失败
             if "main" not in restricted_globals:
+                return None
+
+            # 顶层已直接调用过 main（如 LLM 常写的「定义 main 后顶层 main()」）：
+            # exec 顶层时 main 已执行一遍（副作用已发生），再调一次会双跑
+            # （同一次调用内创建两个知识库/上传两次 PDF 实锤）。跳过二次调用，
+            # 按脚本模式返回（None，结果以 stdout 为准）
+            if _has_module_level_main_call(code):
                 return None
 
             main_func = restricted_globals["main"]
@@ -575,29 +624,32 @@ class PythonNodeHandler(BaseNodeHandler):
         description = f"""在 Agent 主机上执行 Python 代码，进行数据处理、文件读写或流程中间计算。
 这是一个给后端补 Python 解释器能力的工具（不需要主机预装 Python），代码运行在后端 Python 环境，可读写本地文件系统，并非隔离沙箱。
 
-推荐定义 main 函数（返回值将作为执行结果），参数签名:
-  def main({params_desc}):
-
-脚本式代码也可以：不定义 main，顶层直接执行（配合 print 输出结果），此时以 stdout 为结果。
+⚠️ main 调用规则（防双跑，必须遵守）：
+- 方式一（推荐）：定义 def main(...)，系统自动调用并取返回值作为结果——顶层不要再调用 main()
+- 方式二：不定义 main，顶层直接写执行代码（print 输出作为结果）
+- 禁止「定义 main 后又在顶层调用 main()」——顶层调用已执行一遍，系统会跳过重复调用，但结果以 stdout 为准（main 返回值丢失）
 
 参数类型说明:
 {param_list}
 
 可用模块（实测可用，从 ALLOWED_MODULES 动态生成）: {", ".join(sorted(ALLOWED_MODULES))}。
-不适合此工具的能力: subprocess / socket / 网络请求等需要进程隔离的操作（如需请改用 shell_executor 或 ssh_executor）。
+不适合此工具的能力: subprocess / socket / shutil 等未列入白名单的模块（如需请改用 shell_executor 或 ssh_executor）。
 
 文件 IO 约定:
 - 默认工作目录是后端进程目录（不是用户当前项目目录，也不是约定 temp 目录）；如需写入请用绝对路径，必要时可先用 os.chdir() 切换。
 - 工作流 Python 节点里读 CSV / JSON / 文本等本地文件是正常用法。
 - 一次性验证脚本推荐写到项目的 workspace/temp 目录（_check/_tmp 前缀），7 天自动清理。
+- 文件复制：shutil 不在白名单，用 open(src,'rb') 读 + open(dst,'wb') 写完成。
 
 硬拦截（无法绕过）:
 - __dunder__ 属性（如 __name__/__import__ 等）在 AST 编译阶段直接报错，无法用 try/except 捕获。
+- 白名单外模块（如 shutil）import 直接报 Module not allowed，无法绕过。
 
 危险操作必须自律（工具不会主动阻止，但请勿执行）:
-- 不要 shutil.rmtree / os.remove 删项目源码或非自己创建的文件
+- 不要删除项目源码或非自己创建的文件（os.remove / open(w) 均可造成破坏）
 - 不要格式化磁盘 / 改注册表 / 操作系统目录
 - 远程服务器操作前必须与用户确认
+- 有副作用的 POST/创建类操作前先查询确认是否已存在（避免重复创建）
 
 返回值将作为执行结果。
 

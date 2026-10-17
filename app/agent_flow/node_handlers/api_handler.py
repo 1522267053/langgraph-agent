@@ -723,8 +723,17 @@ class ApiNodeHandler(BaseNodeHandler):
     ) -> dict:
         request_headers = dict(headers) if headers else {}
 
-        request_body = None
+        request_body: Any = None
         if method in ["POST", "PUT", "PATCH"] and body:
+            # str body 先尝试 JSON 解析：LLM 传 JSON 字符串时（最常见形态），
+            # 若按原文 content= 发送且未声明 Content-Type，FastAPI 会把 body
+            # 当原始字节交给 Pydantic，报 "Input should be a valid dictionary"。
+            # 解析成功走 json= 路径（dict 语义），失败保持原文（表单/纯文本场景）
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except (json.JSONDecodeError, ValueError):
+                    pass
             request_body = body
             # FastAPI 收到非 JSON Content-Type 时会把 body 当原始字节交给 Pydantic，
             # 报 "Input should be a valid dictionary"；dict body 且未声明类型时按 JSON 发送
