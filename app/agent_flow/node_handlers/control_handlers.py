@@ -10,13 +10,13 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
 from app.models.flow_node import FlowNode
 from app.agent_flow.flow_context import FlowState
-from app.agent_flow.node_handlers.base_handler import BaseNodeHandler
+from app.agent_flow.node_handlers.base_handler import BaseNodeConfig, BaseNodeHandler
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 
 logger = logging.getLogger(__name__)
 
 
-class StartNodeConfig(BaseModel):
+class StartNodeConfig(BaseNodeConfig):
     model_config = {"extra": "ignore"}
     _card_key: Optional[str] = None
     _card_input_mappings: list = []
@@ -101,7 +101,7 @@ class StartNodeHandler(BaseNodeHandler):
     ) -> FlowState:
         state.set_variable("_start_node", node.node_key)
 
-        cfg = self._get_config(node)
+        cfg:StartNodeConfig = self._get_config(node)
         card_key = cfg._card_key
         input_mappings = cfg._card_input_mappings
 
@@ -155,11 +155,10 @@ class StartNodeHandler(BaseNodeHandler):
             state.set_node_variable(card_key, f"input_{card_field}", value)
 
 
-class EndNodeConfig(BaseModel):
+class EndNodeConfig(BaseNodeConfig):
     model_config = {"extra": "ignore"}
     _card_key: Optional[str] = None
     _card_output_mappings: list = []
-    output_variables: Optional[list] = None
     output_mapping: Optional[dict] = None
 
 
@@ -182,7 +181,7 @@ class EndNodeHandler(BaseNodeHandler):
         writer: Optional[StreamWriter] = None,
     ) -> FlowState:
         state.set_variable("_end_node", node.node_key)
-        cfg = self._get_config(node)
+        cfg:EndNodeConfig = self._get_config(node)
 
         card_key = cfg._card_key
         output_mappings = cfg._card_output_mappings
@@ -192,8 +191,8 @@ class EndNodeHandler(BaseNodeHandler):
             sub_flow_output = {}
             if output_variables:
                 for var in output_variables:
-                    name = var.get("name", "")
-                    source = var.get("source", "")
+                    name = var.name
+                    source = var.source
                     if name and source:
                         value = self._resolve_variable(source, state)
                         sub_flow_output[name] = value
@@ -204,8 +203,8 @@ class EndNodeHandler(BaseNodeHandler):
         else:
             if output_variables:
                 for var in output_variables:
-                    name = var.get("name", "")
-                    source = var.get("source", "")
+                    name = var.name
+                    source = var.source
                     if name and source:
                         value = self._resolve_variable(source, state)
                         state.output_data[name] = value
@@ -319,7 +318,7 @@ class ConditionRule(BaseModel):
     value: str = Field("", description="比较值")
 
 
-class ConditionConfig(BaseModel):
+class ConditionConfig(BaseNodeConfig):
     model_config = {"extra": "ignore"}
     logic: str = Field("and", description="逻辑关系（and/or）")
     rules: list[ConditionRule] = Field(default=[], description="条件规则列表")
@@ -343,7 +342,7 @@ class ConditionNodeHandler(BaseNodeHandler):
         *,
         writer: Optional[StreamWriter] = None,
     ) -> FlowState:
-        cfg = self._get_config(node)
+        cfg:ConditionConfig = self._get_config(node)
 
         logic = cfg.logic
         rules = cfg.rules

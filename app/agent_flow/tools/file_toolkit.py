@@ -21,7 +21,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from platform import system as _platform_system
-from typing import Awaitable, Callable, Literal, Optional, Sequence
+from typing import Awaitable, Callable, Literal, Optional, Sequence, TypedDict
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
@@ -36,6 +36,7 @@ from app.agent_flow.tools.common import (
     validate_file_path as _validate_file_path,
     validate_writable_path as _validate_writable_path,
 )
+from app.agent_flow.tools.shell_toolkit import SUBPROCESS_WINDOW_FLAGS
 from app.config.build_utils import BASE_DIR
 from app.config.settings import settings
 from app.services.agent_file_change_service import (
@@ -196,15 +197,6 @@ def _diff_payload(old_string: str, new_string: str) -> dict[str, str]:
 def _collect_match_lines(raw: str, starts: list[int], max_lines: int = 10) -> list[int]:
     """将匹配起始偏移换算为 1-based 行号，最多返回 max_lines 个"""
     return sorted(raw.count("\n", 0, s) + 1 for s in starts[:max_lines])
-
-
-# Windows 下禁止为控制台程序新建窗口（ripgrep 子进程用）；POSIX 必须缺省
-_SUBPROCESS_WINDOW_FLAGS = (
-    {"creationflags": subprocess.CREATE_NO_WINDOW}
-    if _platform_system() == "Windows"
-    else {}
-)
-
 
 # ---- 描述单源（唯一维护点；tool_info 与 build_tools 共用）----
 FILE_TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -436,6 +428,8 @@ class FileToolsKit(BaseToolKit):
                         new_raw = raw.replace(old_string, new_string, 1)
                 else:
                     max_replace = 0 if replace_all else 1
+                    if tolerant_pattern is None:
+                        raise RuntimeError("tolerant_pattern为空")
                     new_raw, _ = tolerant_pattern.subn(
                         lambda _m: new_string, raw, count=max_replace
                     )
@@ -673,7 +667,7 @@ class FileToolsKit(BaseToolKit):
                 *cli_args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                **_SUBPROCESS_WINDOW_FLAGS,
+                **SUBPROCESS_WINDOW_FLAGS,
             )
             stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=60)
 

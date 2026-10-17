@@ -13,7 +13,7 @@
 import logging
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification import Notification
@@ -128,20 +128,24 @@ class NotificationService(
 
     def _apply_filters(
         self,
-        query: Optional[select],
-        count_query: Optional[select],
+        query: Optional[Select],
+        count_query: Optional[Select],
         condition: Optional[NotificationCondition],
     ):
         """重写过滤：类型/已读精确、标题模糊"""
         if not condition:
             return query, count_query
-
+        
         if condition.type:
-            query = query.where(Notification.type == condition.type)
-            count_query = count_query.where(Notification.type == condition.type)
+            if query is not None:
+                query = query.where(Notification.type == condition.type)
+            if count_query is not None:
+                count_query = count_query.where(Notification.type == condition.type)
         if condition.is_read is not None:
-            query = query.where(Notification.is_read == condition.is_read)
-            count_query = count_query.where(Notification.is_read == condition.is_read)
+            if query is not None:
+                query = query.where(Notification.is_read == condition.is_read)
+            if count_query is not None:
+                count_query = count_query.where(Notification.is_read == condition.is_read)
         if condition.title:
             query, count_query = self._apply_like_filter(
                 query, count_query, "title", condition.title

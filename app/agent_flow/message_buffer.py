@@ -226,7 +226,8 @@ class MessageBuffer:
         """将升级前 checkpoint 中已存在于数据库的消息标记为已保存。"""
         if self._persistence_reconciled or not self._messages:
             return
-
+        if self.conversation_service is None:
+            raise RuntimeError("conversation_service没有初始化")
         if self.session_id or self.history_mode == "flow":
             persisted = await self.conversation_service.get_full_history(
                 db, self._id_param, limit=0

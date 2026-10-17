@@ -130,7 +130,10 @@ class FlowEdgeApi(
             raise HTTPException(
                 status_code=400, detail="批量更新边时每条边都必须提供 flow_id"
             )
-        await self._validate_edges(db, data_list[0].flow_id, data_list)
+        flow_id = data_list[0].flow_id
+        if flow_id is None:
+            raise RuntimeError("flow_id为空")
+        await self._validate_edges(db, flow_id, data_list)
         for data in data_list:
             await flow_service.update_edge(db, data)
 

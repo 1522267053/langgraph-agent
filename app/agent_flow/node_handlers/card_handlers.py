@@ -26,7 +26,7 @@ from app.agent_flow.execution_context import (
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.card_subgraph import CardSubgraphBuilder
 from app.agent_flow.subgraph_runner import SubgraphRunner
-from app.agent_flow.node_handlers.base_handler import BaseNodeHandler
+from app.agent_flow.node_handlers.base_handler import BaseNodeConfig, BaseNodeHandler
 from app.agent_flow.variable_resolver import variable_resolver
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.services.flow_service import flow_service
@@ -34,7 +34,7 @@ from app.services.flow_service import flow_service
 logger = logging.getLogger(__name__)
 
 
-class CardNodeConfig(BaseModel):
+class CardNodeConfig(BaseNodeConfig):
     model_config = {"extra": "ignore"}
     input_mappings: list = []
     output_mappings: list = []

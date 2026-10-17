@@ -28,7 +28,7 @@ def _get_local_ips() -> list[str]:
     try:
         hostname = socket.gethostname()
         for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
-            ip = info[4][0]
+            ip = str(info[4][0])
             if ip not in ips and ip != "127.0.0.1":
                 ips.append(ip)
     except socket.gaierror:

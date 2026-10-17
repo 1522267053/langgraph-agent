@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config.build_utils import get_file_snapshots_dir
 from app.config.database import AsyncSessionLocal
 from app.models.agent_file_change import AgentFileChange
+from app.schemas.base_schema import BaseView
 from app.services.base_service import BaseService
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 RETENTION_DAYS = 7
 
 
-class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
+class AgentFileChangeService(BaseService[AgentFileChange, BaseView, BaseView]):
     """Agent 文件变更记录服务类"""
 
     def __init__(self):
@@ -131,6 +132,8 @@ class AgentFileChangeService(BaseService[AgentFileChange, None, None]):
     def _apply_filters(self, query, count_query, condition):
         """标准分页过滤：在等值条件（session_id 等）之上强制「未回退」领域不变量"""
         query, count_query = super()._apply_filters(query, count_query, condition)
+        if query is None:
+            raise RuntimeError("query为空")
         query = query.where(AgentFileChange.is_reverted == 0)
         if count_query is not None:
             count_query = count_query.where(AgentFileChange.is_reverted == 0)

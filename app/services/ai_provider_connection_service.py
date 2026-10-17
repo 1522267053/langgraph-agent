@@ -180,6 +180,8 @@ class AIProviderConnectionService(
     async def set_default(self, db: AsyncSession, id: int) -> None:
         """排他切换全局默认连接"""
         conn = await self.get_by_id(db, id, raise_not_found=True)
+        if conn is None:
+            raise RuntimeError("找不到默认供应商")
         await self._clear_default(db)
         conn.is_default = 1
         self._set_modifier_fields(conn)
@@ -241,7 +243,8 @@ class AIProviderConnectionService(
         if data.id is None:
             raise ValueError("更新供应商连接必须包含 id")
         conn = await self.get_by_id(db, data.id, raise_not_found=True)
-
+        if conn is None:
+            raise RuntimeError("找不到供应商")
         update_data = data.model_dump(exclude={"id"}, exclude_unset=True)
         api_key = update_data.pop("api_key", None)
         if api_key and api_key.strip():

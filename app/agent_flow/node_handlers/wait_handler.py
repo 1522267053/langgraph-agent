@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.handler_registry import NodeHandlerRegistry
-from app.agent_flow.node_handlers.base_handler import BaseNodeHandler
+from app.agent_flow.node_handlers.base_handler import BaseNodeConfig, BaseNodeHandler
 from app.models.flow_node import FlowNode
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ MAX_WAIT_SECONDS = 3600
 CHECK_INTERVAL_SECONDS = 1.0
 
 
-class WaitNodeConfig(BaseModel):
+class WaitNodeConfig(BaseNodeConfig):
     """延时节点配置"""
 
     model_config = {"extra": "ignore"}

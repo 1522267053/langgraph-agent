@@ -59,6 +59,8 @@ class AIProviderConnectionApi(
         """更新连接，默认连接变更后同步内置 Agent"""
         conn = await ai_provider_connection_service.update_connection(db, data)
         await self._sync_builtin_agent(db)
+        if conn is None:
+            raise RuntimeError("供应商为空")
         return conn
 
     async def delete(self, db: AsyncSession, id: int) -> None:

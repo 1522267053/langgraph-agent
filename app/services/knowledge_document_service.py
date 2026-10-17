@@ -88,9 +88,10 @@ class KnowledgeDocumentService(
                 document.word_count = len(document.content)
         else:
             document = await self.get_by_id(db, obj_in.id)
-            if "title" in obj_in.model_fields_set and obj_in.title is not None:
+            if "title" in obj_in.model_fields_set and obj_in.title is not None and document:
                 document.title = obj_in.title
-
+        if document is None:
+            raise RuntimeError("document为空")
         return await super().update(db, document)
 
     async def get_active_document(

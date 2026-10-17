@@ -42,7 +42,7 @@ class VideoRangeFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            return record.args[4] != 206
+            return record.args[4] != 206 # type: ignore
         except (IndexError, TypeError):
             return True
 

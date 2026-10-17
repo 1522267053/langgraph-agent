@@ -195,7 +195,7 @@ def _schema_from_pydantic(model_cls: type[BaseModel]) -> list[dict]:
         elif "default" not in field_desc and name in model_cls.model_fields:
             fi = model_cls.model_fields[name]
             if fi.default_factory is not None:
-                field_desc["default"] = fi.default_factory()
+                field_desc["default"] = fi.default_factory() # type: ignore
         if "enum" in prop:
             field_desc["options"] = prop["enum"]
         # 透传 json_schema_extra 中的自定义键
@@ -256,7 +256,7 @@ class BaseNodeHandler(ABC):
     所有节点处理器都应该继承此类
     """
 
-    ConfigClass: Optional[type[BaseModel]] = None
+    ConfigClass: Optional[type[BaseNodeConfig]] = None
 
     # 按需加载（延迟域）族策略：节点 lazy_load 缺省时本族工具的默认归属。
     #   "bind" = 始终具名绑定（内置族默认：高频核心能力，bind 的 token 成本低、
@@ -359,7 +359,7 @@ class BaseNodeHandler(ABC):
 
     # ---- 工具审批钩子（基类默认实现，shell/ssh/python 等"命令工具"复用）----
 
-    def _resolve_context(self, config: Optional[RunnableConfig]) -> None:
+    def _resolve_context(self, config: Optional[RunnableConfig]) -> tuple | None:
         """从 RunnableConfig 提取 session_id（question_handler / shell_handler 同模式）。
 
         setup_tool_handlers 在调用本方法前已注入 _writer，本方法只负责 session_id。
@@ -660,7 +660,7 @@ class BaseNodeHandler(ABC):
             names = [n for n in names if n]
             if names:
                 return names
-        cfg = cls.ConfigClass.model_construct()
+        cfg:BaseNodeConfig = cls.ConfigClass.model_construct()
         return [v.name for v in cfg.output_variables if v.name]
 
     def _variable_exists(self, source: str, state: FlowState) -> bool:
@@ -850,7 +850,7 @@ class BaseNodeHandler(ABC):
 
     def get_providers(
         self, node: "FlowNode", writer=None, session_id: int = 0
-    ) -> list["ToolProvider"]:
+    ) -> Sequence["ToolProvider"]:
         """返回按需加载延迟域的 ToolProvider 列表（默认单 provider 形态）
 
         与 `get_provider` 的关系：本方法是延迟域登记的**唯一入口**——族内 provider

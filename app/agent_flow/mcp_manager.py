@@ -760,7 +760,7 @@ class McpToolManager:
 
         config = await self._get_server_config(db, server.id)
         connection, timeout = self._build_connection(server.transport, config)
-        holder = await self._start_connection(server, connection)
+        holder = await self._start_connection(server, connection) # type: ignore
         try:
             tools = await load_mcp_tools(holder.session, server_name=server.name)
         except BaseException:
@@ -919,7 +919,7 @@ class McpToolManager:
                     check = check_command(str(command))
                     if check["missing"]:
                         return False, [], check["message"]
-            holder = await self._start_connection(server, connection)
+            holder = await self._start_connection(server, connection) # type: ignore
 
             tools = await load_mcp_tools(holder.session, server_name=server.name)
 

@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from DrissionPage.items import ChromiumElement
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.types import StreamWriter
@@ -491,7 +492,8 @@ class BrowserNodeHandler(BaseNodeHandler):
                 ele = tab.ele(_normalize_locator(sel), timeout=_ELE_FIND_TIMEOUT)
                 if not ele:
                     raise ValueError(f"未找到元素: {sel}")
-                ele.click()
+                if isinstance(ele,ChromiumElement):
+                    ele.click()
                 result["note"] = f"已点击 {sel}"
             elif action == "input":
                 sel = str(arg("selector", "")).strip()
@@ -501,9 +503,10 @@ class BrowserNodeHandler(BaseNodeHandler):
                 if not ele:
                     raise ValueError(f"未找到元素: {sel}")
                 text = str(arg("text", ""))
-                if bool(arg("clear", True)):
+                if bool(arg("clear", True)) and isinstance(ele,ChromiumElement):
                     ele.clear()
-                ele.input(text)
+                if isinstance(ele,ChromiumElement):
+                    ele.input(text)
                 result["note"] = f"已向 {sel} 输入文本"
             elif action == "get_content":
                 sel = _normalize_locator(str(arg("selector", "")))
@@ -840,7 +843,9 @@ class BrowserNodeHandler(BaseNodeHandler):
         cfg: BrowserNodeConfig = self._get_config(node)
         flow_id = get_flow_id()
 
-        def _approval(tool_name: str, tool_args: dict, content: str = ""):
+        def _approval(tool_name: str, tool_args: dict, content: Optional[str]):
+            if content is None:
+                content = ""
             return self._check_and_request_approval(
                 tool_name=tool_name,
                 tool_args=tool_args,

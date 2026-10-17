@@ -61,7 +61,7 @@ def get_internal_dir() -> Path:
         Path: 内部资源目录
     """
     if _is_pyinstaller():
-        return Path(sys._MEIPASS)
+        return Path(sys._MEIPASS) # type: ignore
     return get_base_dir()
 
 

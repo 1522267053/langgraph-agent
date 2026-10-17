@@ -860,12 +860,14 @@ class FlowService(BaseService[Flow, FlowCreate, FlowUpdate]):
             FlowNode.flow_id == flow_id, FlowNode.is_delete == 0
         )
         nodes_result = await db.execute(nodes_query)
-        key_to_type = {row[0]: row[1] for row in nodes_result.fetchall()}
+        key_to_type:dict[str,str] = {row[0]: row[1] for row in nodes_result.fetchall()}
 
         for edge_data in edges_data:
             source_key = edge_data.source_node_key
             target_key = edge_data.target_node_key
             source_handle = edge_data.source_handle
+            if source_key is None or target_key is None:
+                raise RuntimeError("source_key或target_key为空")
             source_type = key_to_type.get(source_key, "")
             target_type = key_to_type.get(target_key, "")
 

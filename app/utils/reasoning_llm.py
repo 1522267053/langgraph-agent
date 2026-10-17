@@ -4,12 +4,10 @@ LLM 工具模块
 
 功能：
 1. 从 LLM 响应中提取 reasoning_content
-2. 流式调用并实时收集 reasoning_content
-3. 多轮对话中保持 reasoning_content
+2. 多轮对话中保持 reasoning_content
 """
 
-from typing import Optional, Any, Dict, Callable, AsyncGenerator, Union
-from langchain_openai import ChatOpenAI
+from typing import Optional, Any, Union
 from langchain_core.messages import BaseMessage, AIMessage, BaseMessageChunk
 
 
@@ -105,88 +103,6 @@ def get_chunk_content(chunk: Union[BaseMessageChunk, Any]) -> Optional[str]:
         return "".join(parts) if parts else None
 
     return None
-
-
-async def stream_with_reasoning(
-    llm: ChatOpenAI,
-    messages: list,
-    on_thinking: Optional[Callable[[str], None]] = None,
-    on_content: Optional[Callable[[str], None]] = None,
-) -> Dict[str, Any]:
-    """
-    流式调用 LLM 并收集 reasoning_content
-
-    Args:
-        llm: ChatOpenAI 实例
-        messages: 消息列表
-        on_thinking: 思考内容回调函数，每收到一个 chunk 调用一次
-        on_content: 响应内容回调函数，每收到一个 chunk 调用一次
-
-    Returns:
-        包含 thinking 和 content 的字典
-    """
-    thinking_chunks = []
-    content_chunks = []
-
-    async for chunk in llm.astream(messages):
-        # 收集思考内容
-        reasoning = extract_reasoning_from_chunk(chunk)
-        if reasoning:
-            thinking_chunks.append(reasoning)
-            if on_thinking:
-                on_thinking(reasoning)
-
-        # 收集响应内容
-        if chunk.content:
-            content_chunks.append(chunk.content)
-            if on_content:
-                on_content(chunk.content)
-
-    return {
-        "thinking": "".join(thinking_chunks) if thinking_chunks else None,
-        "content": "".join(content_chunks),
-    }
-
-
-async def stream_with_reasoning_generator(
-    llm: ChatOpenAI, messages: list
-) -> AsyncGenerator[Dict[str, Any], None]:
-    """
-    流式调用 LLM 并生成事件流
-
-    适用于 SSE（Server-Sent Events）场景，每次 yield 一个事件
-
-    Args:
-        llm: ChatOpenAI 实例
-        messages: 消息列表
-
-    Yields:
-        事件字典，格式如下：
-        - {"type": "thinking", "content": "..."} - 思考内容
-        - {"type": "content", "content": "..."} - 响应内容
-        - {"type": "done", "thinking": "...", "content": "..."} - 完成事件
-    """
-    thinking_chunks = []
-    content_chunks = []
-
-    async for chunk in llm.astream(messages):
-        # 发送思考内容事件
-        reasoning = extract_reasoning_from_chunk(chunk)
-        if reasoning:
-            thinking_chunks.append(reasoning)
-            yield {"type": "thinking", "content": reasoning}
-
-        # 发送响应内容事件
-        if chunk.content:
-            content_chunks.append(chunk.content)
-            yield {"type": "content", "content": chunk.content}
-
-    # 发送完成事件
-    yield {
-        "type": "done",
-        "thinking": "".join(thinking_chunks) if thinking_chunks else None,
-        "content": "".join(content_chunks),
-    }
 
 
 def create_ai_message_with_reasoning(

@@ -5,12 +5,13 @@
 
 import logging
 import traceback
-from typing import Any
+from typing import Any, Sequence
 
 from fastapi import Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from pydantic_core import ErrorDetails
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -52,7 +53,7 @@ def _log_exception(request: Request, exc: Exception, level: str = "error") -> No
         logger.info(log_msg)
 
 
-def _format_validation_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _format_validation_errors(errors: Sequence[dict[str, Any]|ErrorDetails]) -> list[dict[str, Any]]:
     """格式化验证错误"""
     formatted = []
     for error in errors:

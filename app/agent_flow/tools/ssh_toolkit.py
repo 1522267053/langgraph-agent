@@ -220,6 +220,8 @@ def _exec_command_sync(client: SSHClient, command: str, timeout: int) -> dict:
         {exit_code, stdout, stderr}；超时抛 TimeoutError
     """
     transport = client.get_transport()
+    if transport is None:
+        raise RuntimeError("transport为空")
     channel = transport.open_session(timeout=_SESSION_OPEN_TIMEOUT)
     deadline = time.monotonic() + timeout
     stdout_buf: list[bytes] = []
@@ -593,29 +595,33 @@ class SshToolKit(BaseToolKit):
                 sftp.sock.settimeout(_SESSION_OPEN_TIMEOUT)
                 try:
                     st = sftp.stat(remote_norm)
-                    if stat_module.S_ISDIR(st.st_mode):
-                        return {
-                            "success": False,
-                            "error": f"目标是目录而非文件，请改用 ssh_list_dir 查看: {remote_norm}",
-                            "error_type": "is_directory",
-                        }
-                    size_mb = st.st_size / 1024 / 1024
-                    if st.st_size > transfer_limit_bytes:
-                        return {
-                            "success": False,
-                            "error": (
-                                f"文件大小 {size_mb:.1f}MB 超过传输上限"
-                                f"（{transfer_limit_bytes // 1024 // 1024}MB）"
-                            ),
-                            "error_type": "too_large",
-                        }
+                    st_mode = st.st_mode
+                    if st_mode:
+                        if stat_module.S_ISDIR(st_mode):
+                            return {
+                                "success": False,
+                                "error": f"目标是目录而非文件，请改用 ssh_list_dir 查看: {remote_norm}",
+                                "error_type": "is_directory",
+                            }
+                    st_size = st.st_size
+                    if st_size:
+                        size_mb = st_size / 1024 / 1024
+                        if st_size > transfer_limit_bytes:
+                            return {
+                                "success": False,
+                                "error": (
+                                    f"文件大小 {size_mb:.1f}MB 超过传输上限"
+                                    f"（{transfer_limit_bytes // 1024 // 1024}MB）"
+                                ),
+                                "error_type": "too_large",
+                            }
                     target.parent.mkdir(parents=True, exist_ok=True)
                     sftp.get(remote_norm, str(target))
                     return {
                         "success": True,
                         "remote_path": remote_norm,
                         "local_path": str(target),
-                        "size": st.st_size,
+                        "size": st_size,
                     }
                 finally:
                     sftp.close()
@@ -656,8 +662,8 @@ class SshToolKit(BaseToolKit):
                     sftp.close()
 
                 total = len(entries)
-                dirs = [e for e in entries if stat_module.S_ISDIR(e.st_mode)]
-                files = [e for e in entries if not stat_module.S_ISDIR(e.st_mode)]
+                dirs = [e for e in entries if stat_module.S_ISDIR(e.st_mode if e.st_mode else -1)]
+                files = [e for e in entries if not stat_module.S_ISDIR(e.st_mode if e.st_mode else -1)]
                 dirs.sort(key=lambda e: e.filename.lower())
                 files.sort(key=lambda e: e.filename.lower())
 
@@ -672,7 +678,10 @@ class SshToolKit(BaseToolKit):
                             f"\n(仅显示前 {_MAX_LIST_ENTRIES} 条，共 {total} 条，请缩小范围后重试)"
                         )
                         break
-                    is_dir = stat_module.S_ISDIR(entry.st_mode)
+                    st_mode = entry.st_mode
+                    is_dir = False
+                    if st_mode:
+                        is_dir = stat_module.S_ISDIR(st_mode)
                     size_str = "-" if is_dir else f"{entry.st_size}"
                     mtime_str = (
                         datetime.fromtimestamp(entry.st_mtime).strftime(

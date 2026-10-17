@@ -21,8 +21,10 @@ import logging
 import socket
 import time
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Sequence
 
+from DrissionPage import Chromium
+from DrissionPage.items import ChromiumElement, MixTab
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
@@ -30,6 +32,9 @@ from app.agent_flow.execution_context import get_execution_context
 from app.agent_flow.tools.base_abs_tool import BaseToolKit
 from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.config.build_utils import get_temp_dir
+if TYPE_CHECKING:
+    from app.agent_flow.node_handlers.browser_handler import BrowserNodeConfig
+
 
 logger = logging.getLogger(__name__)
 
@@ -357,9 +362,11 @@ def _build_ax_snapshot(tab, max_nodes: int = 400) -> str:
         if not ignored:
             uid = None
             if role in INTERACTIVE_ROLES:
-                ref_counter += 1
-                uid = ref_counter
-                ref_to_backend[uid] = node.get("backendDOMNodeId")
+                backend_id = node.get("backendDOMNodeId")
+                if backend_id is not None:
+                    ref_counter += 1
+                    uid = ref_counter
+                    ref_to_backend[uid] = backend_id
 
             indent = "  " * depth
             parts = [
@@ -736,7 +743,7 @@ class BrowserSession:
         # 首建会话的启动配置快照（headless/debug_port/browser_path/user_data_path）：
         # 同流程后续节点的同类配置不一致时告警（会话按 flow_id 复用，后到配置不生效）
         self.launch_cfg: dict = launch_cfg or {}
-        self.active_tab = None
+        self.active_tab: Optional[MixTab] = None
         # 空闲回收基准：每次工具调用刷新（monotonic，不受系统时钟跳变影响）
         self.last_used = time.monotonic()
         # 写操作互斥锁（同流程内 navigate/click/input/tabs/scroll 串行）：
@@ -971,7 +978,7 @@ class BrowserSessionManager:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
 
-    def _create_session_sync(self, cfg, flow_id: int) -> BrowserSession:
+    def _create_session_sync(self, cfg:"BrowserNodeConfig", flow_id: int) -> BrowserSession:
         from DrissionPage import Chromium, ChromiumOptions
 
         if cfg.connect_mode == "remote":
@@ -1133,7 +1140,7 @@ def _current_tab_id(session: "BrowserSession") -> Optional[str]:
         return None
 
 
-def _find_tab_by_ref(session: "BrowserSession", tab_id) -> Optional["object"]:
+def _find_tab_by_ref(session: "BrowserSession", tab_id) -> Optional["MixTab"]:
     """按 tab_id（CDP targetId 字符串）查找标签页对象；不改变 active_tab。
 
     targetId 在标签页生命周期内恒定，关闭其他标签页不漂移。
@@ -1143,7 +1150,8 @@ def _find_tab_by_ref(session: "BrowserSession", tab_id) -> Optional["object"]:
     """
     if tab_id is None or tab_id == "":
         return None
-    tabs = session.browser.get_tabs()
+    browser:Chromium = session.browser
+    tabs = browser.get_tabs()
     for t in tabs:
         try:
             if t.tab_id == tab_id:
@@ -1158,7 +1166,7 @@ def _find_tab_by_ref(session: "BrowserSession", tab_id) -> Optional["object"]:
     return None
 
 
-def _resolve_tab(session: "BrowserSession", tab_id: Optional[str]):
+def _resolve_tab(session: "BrowserSession", tab_id: Optional[str]) -> Optional[MixTab]:
     """按工具入参 tab_id 定位标签页（None=当前活动 tab）。
 
     tab_id 为 CDP targetId 字符串（browser_tabs list 返回的 tab_id），
@@ -1166,7 +1174,8 @@ def _resolve_tab(session: "BrowserSession", tab_id: Optional[str]):
     （由调用方报错）。LLM 可直接传 snapshot/browser_tabs 返回的 tab_id
     操作指定标签页，无需先 browser_tabs(select)。
     """
-    tabs = session.browser.get_tabs()
+    browser:Chromium = session.browser
+    tabs = browser.get_tabs()
     if tab_id is None or tab_id == "":
         return session.active_tab or (tabs[-1] if tabs else None)
     tab = _find_tab_by_ref(session, tab_id)
@@ -1240,11 +1249,16 @@ class BrowserToolKit(BaseToolKit):
                     tab_line += "\n其他标签页: " + ", ".join(
                         f"tab_id={t['tab_id']} {t['url'][:60]}" for t in other_tabs
                     )
+                active_tab = session.active_tab
+                if active_tab is None:
+                    raise RuntimeError("session.active_tab为空")
+                url = await asyncio.to_thread(lambda: active_tab.url)
+                title = await asyncio.to_thread(lambda: active_tab.title)
                 return (
                     "## Latest page snapshot（a11y 树，uid=N 为可交互元素编号）\n"
                     f"{tab_line}\n"
-                    f"url: {await asyncio.to_thread(lambda: session.active_tab.url)}\n"
-                    f"title: {await asyncio.to_thread(lambda: session.active_tab.title)}\n\n"
+                    f"url: {url}\n"
+                    f"title: {title}\n\n"
                     f"{snapshot_text}\n\n"
                     "用 uid=N 引用元素进行 browser_click/browser_input；"
                     "uid 只对当前 tab_id 的页面有效，切换标签页后需重新 snapshot；"
@@ -1340,7 +1354,8 @@ class BrowserToolKit(BaseToolKit):
                         )
                         if not ele:
                             return {"error": f"未找到元素: {raw}", "success": False}
-                        ele.click()
+                        if isinstance(ele,ChromiumElement):
+                            ele.click()
 
                     result = {
                         "success": True,
@@ -1422,8 +1437,9 @@ class BrowserToolKit(BaseToolKit):
                         )
                         if not ele:
                             return {"error": f"未找到元素: {raw}", "success": False}
-                        ele.clear() if clear else None
-                        ele.input(text)
+                        if isinstance(ele,ChromiumElement):
+                            ele.clear() if clear else None
+                            ele.input(text)
                     return {
                         "success": True,
                         "note": "输入完成",
@@ -1459,7 +1475,7 @@ class BrowserToolKit(BaseToolKit):
             try:
                 session = await _get_session()
 
-                def run():
+                def run() -> dict[str,Any] | str | bytes:
                     tab = _resolve_tab(session, tab_id)
                     if tab is None:
                         return {
@@ -1514,6 +1530,8 @@ class BrowserToolKit(BaseToolKit):
                         "success": False,
                         "error_type": "screenshot_timeout",
                     }
+                if not isinstance(png,bytes):
+                    raise RuntimeError("png不是bytes类型")
                 media = await save_media_bytes(
                     png,
                     "image/png",

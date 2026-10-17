@@ -130,7 +130,7 @@ class StructuredOutputService:
     def _build_model_from_fields(
         cls, fields: list[dict], model_name: str
     ) -> type[BaseModel]:
-        model_fields: dict[str, tuple] = {}
+        model_fields: dict[str, Any] = {}
         for idx, f in enumerate(fields):
             pyd_type = cls._field_annotation(f, f"{model_name}_{idx}")
             if f["required"]:

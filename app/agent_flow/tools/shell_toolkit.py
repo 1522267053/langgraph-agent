@@ -26,10 +26,11 @@ import subprocess
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Awaitable, Callable, Literal, Optional, Sequence
-
+from typing import Awaitable, Callable, Literal, Optional, Sequence, TypedDict
+from platform import system as _platform_system
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
+from sqlalchemy import Boolean
 
 from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.constants.timing import SHELL_TASK_EXPIRE_SECONDS
@@ -399,9 +400,12 @@ def _decode_output(data: bytes) -> str:
 
 # Windows 下禁止为控制台程序新建窗口（GUI/托盘宿主无控制台时子进程默认弹黑框）；
 # 仅影响控制台创建方式，stdout/stderr 管道捕获不受影响。POSIX 该参数必须缺省。
-_SUBPROCESS_WINDOW_FLAGS = (
+class _WindowFlags(TypedDict, total=False):
+    creationflags: int
+# Windows 下禁止为控制台程序新建窗口（ripgrep 子进程用）；POSIX 必须缺省
+SUBPROCESS_WINDOW_FLAGS:_WindowFlags = (
     {"creationflags": subprocess.CREATE_NO_WINDOW}
-    if platform.system() == "Windows"
+    if _platform_system() == "Windows"
     else {}
 )
 
@@ -409,7 +413,9 @@ _SUBPROCESS_WINDOW_FLAGS = (
 # 超时/取消时 os.killpg 只清杀命令树，不会误伤后端自身所在进程组。
 # 若缺失此参数，killpg(getpgid(pid)) 会连 uvicorn 一起 SIGKILL，导致整个服务假死。
 # Windows 无此参数（POSIX-only），必须缺省。
-_SUBPROCESS_SESSION_FLAGS = (
+class _SessionFlags(TypedDict, total=False):
+    start_new_session: bool
+SUBPROCESS_SESSION_FLAGS:_SessionFlags = (
     {} if platform.system() == "Windows" else {"start_new_session": True}
 )
 
@@ -435,8 +441,8 @@ async def _create_subprocess(
         stderr=asyncio.subprocess.PIPE,
         env=env,
         cwd=str(cwd) if cwd else None,
-        **_SUBPROCESS_WINDOW_FLAGS,
-        **_SUBPROCESS_SESSION_FLAGS,
+        **SUBPROCESS_WINDOW_FLAGS,
+        **SUBPROCESS_SESSION_FLAGS,
     )
 
 
@@ -856,7 +862,7 @@ async def _force_kill_process_tree(process: asyncio.subprocess.Process) -> None:
                 f"taskkill /F /T /PID {pid}",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
-                **_SUBPROCESS_WINDOW_FLAGS,
+                **SUBPROCESS_WINDOW_FLAGS,
             )
             await asyncio.wait_for(proc.wait(), timeout=5)
         else:
@@ -864,8 +870,8 @@ async def _force_kill_process_tree(process: asyncio.subprocess.Process) -> None:
 
             # 防御兜底：仅当子进程拥有独立进程组（start_new_session）时才整组清杀；
             # 若与后端自身同组，killpg 会连 uvicorn 一起 SIGKILL，必须退回单杀
-            pgid = os.getpgid(pid)
-            if pgid != os.getpgid(0):
+            pgid = os.getpgid(pid) # type: ignore
+            if pgid != os.getpgid(0): # type: ignore
                 os.killpg(pgid, signal.SIGKILL)  # type: ignore
             else:
                 process.kill()
@@ -1031,6 +1037,8 @@ class ShellToolKit(BaseToolKit):
                 }
 
             try:
+                if resolve_workdir is None:
+                    raise RuntimeError("resolve_workdir为空")
                 command_working_dir = resolve_workdir(workdir, base_working_dir)
             except ValueError as e:
                 return {

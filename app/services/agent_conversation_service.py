@@ -6,7 +6,7 @@ Agent 对话历史服务（适配器模式）
 """
 
 import logging
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 from langchain_core.messages import (
     AIMessage,
@@ -258,7 +258,7 @@ class AgentConversationService:
             files = msg.files if isinstance(msg.files, list) else None
             if files:
                 content = await build_content_from_db_files(
-                    db, content, files, capabilities
+                    db, cast(str, content), files, capabilities
                 )
             message = HumanMessage(content=content)
         elif msg.role == "ai":
@@ -273,7 +273,7 @@ class AgentConversationService:
                 )
             message = ai_msg
         elif msg.role == "tool":
-            kwargs = {
+            kwargs: dict[str, Any] = {
                 "content": msg.content or "",
                 "tool_call_id": msg.tool_call_id or "",
             }

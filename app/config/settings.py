@@ -175,7 +175,7 @@ class Settings(BaseSettings):
             Path: 绝对路径，如果路径为空则返回 None
         """
         if not relative_path:
-            return None
+            raise RuntimeError("relative_path为空")
 
         path = Path(relative_path)
         # 如果已经是绝对路径，直接返回

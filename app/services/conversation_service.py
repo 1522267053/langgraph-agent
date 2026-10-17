@@ -186,7 +186,7 @@ class ConversationService:
             files = msg.files if isinstance(msg.files, list) else None
             if files:
                 content = await build_content_from_db_files(
-                    db, content, files, capabilities
+                    db, cast(str, content), files, capabilities
                 )
             message = HumanMessage(content=content)
         elif msg.role == "ai":

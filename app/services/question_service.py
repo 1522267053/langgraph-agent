@@ -43,7 +43,7 @@ class QuestionService(AsyncPendingService[QuestionFuture, list[str]]):
         """构造 QuestionFuture（保留 metadata 透传字段）"""
         return QuestionFuture(metadata=kwargs.get("metadata", {}))
 
-    def _resolve_future(self, future: QuestionFuture, result: list[str]) -> None:
+    def _resolve_future(self, future: QuestionFuture, result: list[str] | None) -> None:
         """resolve 时把用户答案写入 future.answers"""
         future.answers = result
 

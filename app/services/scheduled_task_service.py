@@ -139,6 +139,8 @@ class ScheduledTaskService(
                 target_type = task.target_type
                 target_id = task.target_id
                 input_data = task.input_data or {}
+                if target_id is None:
+                    raise RuntimeError("target_id为空")
                 if (
                     target_type != ScheduledTaskTargetType.REMINDER.value
                     and not target_id

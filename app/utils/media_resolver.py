@@ -9,7 +9,7 @@ import asyncio
 import base64
 import logging
 from pathlib import Path
-from typing import Any, Awaitable, Callable, cast
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 from langchain_core.messages import HumanMessage
@@ -194,7 +194,7 @@ def get_injectable_media_types(capabilities: dict, adapter_type: str) -> set[str
 
 async def build_media_blocks(
     sources: list[str], capabilities: dict | None = None
-) -> list[dict[str, Any]]:
+) -> list[str | dict[Any, Any]]:
     """将文件路径/URL 列表构建为多模态 content blocks
 
     本地 image/audio → base64 媒体块；本地 pdf → file 块（带 filename）；
@@ -209,9 +209,9 @@ async def build_media_blocks(
     Returns:
         [标注文本块, 媒体块, ...] 列表
     """
-    blocks: list[dict] = []
+    blocks: list[str | dict[Any, Any]] = []
 
-    def _label(text: str) -> dict:
+    def _label(text: str) -> str | dict[str, Any]:
         return {"type": "text", "text": text}
 
     def _cap_enabled(capability: str) -> bool:
@@ -281,10 +281,8 @@ async def build_media_human_message(sources: list[str]) -> HumanMessage:
         additional_kwargs 带 _media_injected 标记（持久化时写 message_type）
         和 _media_sources（持久化到 input_data，历史加载时重建媒体块）
     """
-    blocks: list[dict[str, Any]] = await build_media_blocks(sources)
-    message = HumanMessage(
-        content=cast(list[dict[str, Any] | str], blocks) or "[空媒体注入]"
-    )
+    blocks: list[str | dict[Any, Any]] = await build_media_blocks(sources)
+    message = HumanMessage(content=blocks or "[空媒体注入]")
     message.additional_kwargs["_media_injected"] = True
     message.additional_kwargs["_media_sources"] = list(sources)
     return message
@@ -534,9 +532,14 @@ def normalize_file_value(value) -> dict | list[dict] | None:
     兼容 Python __save_file__（嵌套 result）、API downloaded_file、流程输入三种格式。
     """
     if isinstance(value, list):
-        items = [normalize_file_value(v) for v in value]
-        filtered = [item for item in items if item]
-        return filtered or None
+        items: list[dict] = []
+        for v in value:
+            normalized = normalize_file_value(v)
+            if isinstance(normalized, dict):
+                items.append(normalized)
+            elif isinstance(normalized, list):
+                items.extend(normalized)
+        return items or None
     if not isinstance(value, dict):
         return None
 

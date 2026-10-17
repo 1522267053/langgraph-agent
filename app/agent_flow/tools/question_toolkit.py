@@ -26,6 +26,7 @@ from app.agent_flow.flow_event import QuestionRequestEvent
 from app.agent_flow.tools.base_abs_tool import BaseToolKit
 from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
 from app.services.question_service import question_service
+from langgraph.types import StreamWriter
 
 if TYPE_CHECKING:
     from app.models.flow_node import FlowNode
@@ -78,7 +79,7 @@ class QuestionToolKit(BaseToolKit):
         self,
         node_key: str,
         get_session_id: Callable[[], int],
-        get_writer: Callable[[], object],
+        get_writer: Callable[[], StreamWriter],
     ):
         self._node_key = node_key
         self._get_session_id = get_session_id

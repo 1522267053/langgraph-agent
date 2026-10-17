@@ -20,6 +20,7 @@ from app.agent_flow.flow_event import TodoUpdateEvent
 from app.agent_flow.tools.base_abs_tool import BaseToolKit
 from app.config.database import AsyncSessionLocal
 from app.services.todo_service import todo_service
+from langgraph.types import StreamWriter
 
 if TYPE_CHECKING:
     from app.models.flow_node import FlowNode
@@ -37,7 +38,7 @@ TODO_TOOL_DESCRIPTIONS: dict[str, str] = {
 # 回调签名：() -> (ref_type, ref_id)（handler 注入，原 _resolve_context）
 ResolveContextFn = Callable[[], Awaitable[tuple[Optional[str], Optional[int]]]]
 # 回调签名：() -> Optional[StreamWriter]（handler 注入，SSE 推送用）
-GetWriterFn = Callable[[], object]
+GetWriterFn = Callable[[], StreamWriter]
 
 
 class TodoItem(BaseModel):

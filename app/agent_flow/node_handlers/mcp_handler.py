@@ -268,7 +268,7 @@ class McpNodeHandler(BaseNodeHandler):
 
     def get_providers(
         self, node: FlowNode, writer=None, session_id: int = 0
-    ) -> "list[McpToolProvider]":
+    ) -> list["McpToolProvider"]:
         """MCP 工具族 ToolProvider 列表（重写基类 `get_provider` 单 provider 形态）
 
         一 server 一 provider（provider_key=mcp__{server_name}）——工具列表的粒度与
@@ -548,7 +548,7 @@ class McpNodeHandler(BaseNodeHandler):
             if isinstance(schema_obj, dict):
                 schema = schema_obj
             elif hasattr(schema_obj, "model_json_schema"):
-                schema = schema_obj.model_json_schema()
+                schema = getattr(schema_obj, "model_json_schema")()
             else:
                 return []
         except Exception:

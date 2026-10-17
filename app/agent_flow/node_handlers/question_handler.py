@@ -98,7 +98,9 @@ class QuestionNodeHandler(BaseNodeHandler):
         def _get_session_id() -> int:
             return self._session_id
 
-        def _get_writer():
+        def _get_writer() -> StreamWriter:
+            if self._writer is None:
+                raise RuntimeError("_writer为空")
             return self._writer
 
         kit = QuestionToolKit(

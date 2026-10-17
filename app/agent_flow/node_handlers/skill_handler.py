@@ -219,7 +219,7 @@ class SkillNodeHandler(BaseNodeHandler):
         """skill 节点使用固定工具名 load_skill，多实例会导致工具名冲突"""
         return False
 
-    async def get_tool(self, node: FlowNode) -> Optional[StructuredTool]:
+    async def get_tool(self, node: FlowNode) -> list[StructuredTool] | None:
         """
         返回 load_skill 工具，供 LLM 调用
 

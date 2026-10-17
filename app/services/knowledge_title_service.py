@@ -495,12 +495,14 @@ class KnowledgeTitleService:
         self,
         db: AsyncSession,
         knowledge_base_id: int,
-        vector_results: List[Dict],
-    ) -> List[Dict]:
+        vector_results: List[Dict[str,Any]],
+    ) -> List[Dict[str,Any]]:
         """使用活动数据库记录补全向量结果。"""
         segment_ids = []
         for item in vector_results:
-            metadata = item.get("metadata") or {}
+            metadata = item.get("metadata")
+            if metadata is None:
+                continue
             try:
                 segment_id = int(metadata.get("segment_id"))
             except (TypeError, ValueError):
@@ -513,7 +515,9 @@ class KnowledgeTitleService:
 
         results = []
         for item in vector_results:
-            metadata = item.get("metadata") or {}
+            metadata = item.get("metadata")
+            if metadata is None:
+                continue
             try:
                 segment_id = int(metadata.get("segment_id"))
             except (TypeError, ValueError):

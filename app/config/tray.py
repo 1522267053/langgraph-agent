@@ -184,6 +184,8 @@ def _start_uvicorn(app) -> None:
 
     def _serve() -> None:
         try:
+            if _server is None:
+                raise RuntimeError("_server为空")
             _server.run()
         except Exception:
             logger.exception("uvicorn server crashed")
@@ -340,9 +342,9 @@ def run_with_tray(app) -> None:
             logger.warning("服务在 30 秒内未就绪，仍创建托盘图标")
         stop_loading_server()
         from app.config.version import get_version
-
-        icon.title = f"智能体平台 v{get_version()}"
-        icon.notify("服务已就绪", "智能体平台")
+        if icon:
+            icon.title = f"智能体平台 v{get_version()}"
+            icon.notify("服务已就绪", "智能体平台")
 
     threading.Thread(
         target=_watch_server_ready, daemon=True, name="server-ready-watcher"

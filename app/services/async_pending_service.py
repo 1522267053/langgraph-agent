@@ -71,11 +71,11 @@ class AsyncPendingService(Generic[T_FUTURE, T_RESULT]):
         """构造 Future 对象（子类定制 Future 结构和字段）"""
         raise NotImplementedError
 
-    def _resolve_future(self, future: T_FUTURE, result: T_RESULT) -> None:
+    def _resolve_future(self, future: T_FUTURE, result: T_RESULT | None) -> None:
         """填充 Future 结果（子类决定 result 落到哪个字段）"""
         raise NotImplementedError
 
-    def _cancel_result(self) -> T_RESULT:
+    def _cancel_result(self) -> T_RESULT | None:
         """cancel 时填充的默认值（question=None / approval=rejected）"""
         raise NotImplementedError
 

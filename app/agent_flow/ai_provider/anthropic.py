@@ -253,7 +253,7 @@ class AnthropicProvider(BaseAIProvider):
         llm_kwargs["default_headers"] = default_headers
         # 直接构造子类（原 init_chat_model 仅做字面量分发），以注入代理策略客户端
         llm = ProxiedChatAnthropic(
-            model=model,
+            model=model, # type: ignore
             **llm_kwargs,
         )
         # 临时调试：挂载 httpx request hook 打印真实请求

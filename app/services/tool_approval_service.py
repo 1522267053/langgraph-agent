@@ -48,7 +48,7 @@ class ToolApprovalService(AsyncPendingService[ToolApprovalFuture, str]):
             expires_at=now + self._timeout_seconds,
         )
 
-    def _resolve_future(self, future: ToolApprovalFuture, result: str) -> None:
+    def _resolve_future(self, future: ToolApprovalFuture, result: str|None) -> None:
         """resolve 时把审批结果写入 future.result（approved / rejected）"""
         future.result = result
 

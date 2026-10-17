@@ -2289,6 +2289,8 @@ class AgentExecutorService(BaseExecutorService):
             from app.services.notification_service import notification_service
 
             session = await self._get_session(db, session_id)
+            if session is None:
+                raise RuntimeError("session为空")
             await notification_service.notify(
                 db,
                 type="human_input",
@@ -2818,13 +2820,14 @@ class AgentExecutorService(BaseExecutorService):
             override_model, override_provider = self._split_composite_chat_model(
                 session.chat_model, session.chat_provider
             )
-            await self._apply_chat_model_override(
-                db,
-                flow,
-                override_model,
-                override_provider,
-                session.chat_reasoning,
-            )
+            if override_model:
+                await self._apply_chat_model_override(
+                    db,
+                    flow,
+                    override_model,
+                    override_provider,
+                    session.chat_reasoning,
+                )
 
         llm_config = self._extract_llm_config(flow)
         if not llm_config.get("model"):

@@ -9,6 +9,7 @@ import json
 import logging
 from typing import AsyncGenerator, Optional
 from sse_starlette.sse import EventSourceResponse
+from sse_starlette.event import ServerSentEvent
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +86,10 @@ async def create_sse_response(
                 _pump_to_queue(stream_generator, queue, end_event_types)
             )
             if task_store is not None and task_key is not None:
-                task_store[task_key] = task
-                task.add_done_callback(lambda t: task_store.pop(task_key, None))
+                store = task_store
+                key = task_key
+                store[key] = task
+                task.add_done_callback(lambda t, _store=store, _key=key: _store.pop(_key, None))
             try:
                 while True:
                     event = await queue.get()
@@ -139,7 +142,7 @@ async def create_sse_response(
     return EventSourceResponse(
         event_generator(),
         ping=30,
-        ping_message_factory=lambda: {"comment": "ping"},
+        ping_message_factory=lambda: ServerSentEvent(comment="ping"),
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 

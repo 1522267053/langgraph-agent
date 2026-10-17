@@ -75,12 +75,13 @@ class SkillUploader:
                     continue
 
                 if in_block_scalar:
-                    if block_style == ">":
-                        skill_info[current_key] = " ".join(
-                            "\n".join(current_value_lines).split()
-                        )
-                    else:
-                        skill_info[current_key] = "\n".join(current_value_lines).strip()
+                    if current_key:
+                        if block_style == ">":
+                            skill_info[current_key] = " ".join(
+                                "\n".join(current_value_lines).split()
+                            )
+                        else:
+                            skill_info[current_key] = "\n".join(current_value_lines).strip()
                     in_block_scalar = False
                     current_key = None
                     current_value_lines = []
