@@ -215,6 +215,8 @@ function formatErrorSummary(result: unknown, parsed: unknown): string {
     if (typeof r.error === 'string' && r.error) return r.error
     if (typeof r.message === 'string' && r.message) return r.message
     if (typeof r.detail === 'string' && r.detail) return r.detail
+    // 1.5 stderr 字段（shell/ssh 类工具失败时错误在 stderr，stdout 可能为空）
+    if (typeof r.stderr === 'string' && r.stderr) return r.stderr
     // 2. status_code + data 组合（api_call_tool_* 通用模式 4xx/5xx 返回结构）
     if (typeof r.status_code === 'number' && r.status_code >= 400) {
       const dataStr =
