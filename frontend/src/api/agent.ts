@@ -607,16 +607,19 @@ export const agentApi = {
    * @param agentId Agent ID
    * @param sessionId 会话ID
    * @param action "approved" 或 "rejected"
+   * @param rememberSession 批准时是否记住本会话免审（同会话同工具后续调用自动放行）
    */
   toolApproval(
     agentId: number,
     sessionId: number,
     approvalId: string,
-    action: 'approved' | 'rejected'
+    action: 'approved' | 'rejected',
+    rememberSession = false
   ) {
     return post<void>(`/agent/${agentId}/sessions/${sessionId}/tool_approval`, {
       approval_id: approvalId,
-      action
+      action,
+      remember_session: rememberSession
     })
   },
 

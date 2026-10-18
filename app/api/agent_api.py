@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config.database import get_db
+from app.config.database import get_db, AsyncSessionLocal
 from app.models.flow import FlowType
 from app.services.agent_executor_service import (
     agent_executor_service,
@@ -51,6 +51,11 @@ class ToolApprovalRequest(BaseModel):
         ..., description="对应 ToolApprovalEvent.approval_id，精确路由到指定审批批次"
     )
     action: str = Field(..., description="approved 或 rejected")
+    remember_session: bool = Field(
+        default=False,
+        description="批准时是否记住本会话免审（仅 action=approved 时生效；"
+        "同会话同工具名后续调用自动放行）",
+    )
 
 
 class QuestionResolveRequest(BaseModel):
@@ -600,7 +605,42 @@ class AgentApi:
             )
             if not resolved:
                 return ApiResponse.error(msg="没有待确认的工具")
+            # 批准并记住：写会话级免审授权（同会话同工具后续调用自动放行）。
+            # 从 pending 快照取本批次工具名——resolve 已把条目从队列弹出，须在
+            # resolve 前捕获；这里用审批审计表反查（fire-and-forget 写入可能
+            # 尚未提交，故直接查 pending 不可靠，改为 resolve 前先取）。
+            if req.action == "approved" and req.remember_session:
+                await _grant_session_tools(session_id, req.approval_id)
             return ApiResponse.success(msg="操作成功")
+
+        async def _grant_session_tools(session_id: int, approval_id: str) -> None:
+            """把指定审批批次的工具名写为会话级免审授权（失败仅告警）"""
+            from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+            from app.models.session_tool_grant import SessionToolGrant
+
+            tool_names = tool_approval_service.get_approval_tool_names(
+                session_id, approval_id
+            )
+            if not tool_names:
+                return
+            try:
+                async with AsyncSessionLocal() as db:
+                    for name in tool_names:
+                        stmt = sqlite_insert(SessionToolGrant).values(
+                            scope="agent",
+                            session_id=session_id,
+                            tool_name=name,
+                            granted_by=approval_id,
+                        )
+                        # 同会话同工具重复授权幂等（不更新首次授权来源）
+                        stmt = stmt.on_conflict_do_nothing(
+                            index_elements=["scope", "session_id", "tool_name"]
+                        )
+                        await db.execute(stmt)
+                    await db.commit()
+            except Exception as e:
+                logger.warning("会话级免审授权写入失败: %s", e)
 
         @self.router.post("/{id}/sessions/{session_id}/question/resolve")
         async def resolve_question(

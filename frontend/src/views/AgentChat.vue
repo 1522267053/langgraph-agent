@@ -6,7 +6,7 @@ import { useVirtualizer } from '@tanstack/vue-virtual'
 import { elementScroll as libElementScroll } from '@tanstack/virtual-core'
 import { useAgentStore } from '@/stores'
 import { ElMessage, ElMessageBox, ElImageViewer } from 'element-plus'
-import type { ScrollbarDirection, ScrollbarInstance } from 'element-plus'
+import type { ScrollbarInstance } from 'element-plus'
 import {
   Operation,
   Bottom,
@@ -119,6 +119,46 @@ function syncAtEnd(): void {
   if (elDist <= 2 && performance.now() - pinUnlockAt > PIN_RELOCK_GRACE_MS) {
     followPinned.value = true
   }
+  checkTopLoadMore(el.scrollTop)
+}
+
+/**
+ * 顶部加载历史触发（@scroll 直连，不依赖 el-scrollbar 的 end-reached）。
+ *
+ * 根因（el-plus 方向闩锁）：el-scrollbar 内部 distanceScrollState.top 首次
+ * 触发 end-reached('top') 后武装，仅在下滚事件（方向翻转复位）或组件 update
+ * 时解除；若触发被我方守卫拒绝（isLoadingMore / hasMoreMessages false /
+ * messagesLoading），不会有 loadMore 前插 → 无补偿位移 → 无下滚事件 → 闩锁
+ * 永久武装，后续上滚事件被 shouldSkipDirection 早退丢弃——表现为「必须先
+ * 下滚一段再上滚才能加载」。本函数绕开该闩锁：滚动事件直连 + 滞回回臂 +
+ * 边沿触发（回臂阈值 > 触发阈值，避免边界抖动重复请求）。
+ */
+const TOP_LOAD_REARM_PX = 160
+let topLoadArmed = true
+function checkTopLoadMore(scrollTop: number): void {
+  if (!messagesRevealed.value) return
+  if (scrollTop > TOP_LOAD_REARM_PX) {
+    topLoadArmed = true
+    return
+  }
+  if (!topLoadArmed) return
+  if (scrollTop > SCROLL_END_PX) return
+  topLoadArmed = false
+  handleLoadMore()
+}
+
+/** 手势补位重试：视口已在顶部（scrollTop≈0）时继续上滚不产生 scroll 事件
+ * （scrollTop 无处可减），checkTopLoadMore 收不到调用——典型场景是上一轮
+ * 触发被守卫拒绝后用户停在顶部继续滚。在手势路径（wheel 上滚/touch 上滑）
+ * 补位：守卫通过则强制回臂并重查。isLoadingMore / messagesLoading 守卫
+ * 保证加载进行中的重复手势是空操作，不会并发请求 */
+function retryTopLoadOnGesture(): void {
+  const el = messagesContainer.value
+  if (!el || !messagesRevealed.value) return
+  if (el.scrollTop > SCROLL_END_PX) return
+  if (isLoadingMore.value || store.messagesLoading || !store.hasMoreMessages) return
+  topLoadArmed = true
+  checkTopLoadMore(el.scrollTop)
 }
 
 function scrollToLatest(): void {
@@ -156,6 +196,7 @@ function onUserScrollUpIntent(event?: Event): void {
     const movingUp = el.scrollTop < lastTouchScrollTop - 1
     lastTouchScrollTop = el.scrollTop
     if (!movingUp) return
+    retryTopLoadOnGesture()
   } else if (event?.type === 'touchstart') {
     // 新手势起点：重置方向基准
     lastTouchScrollTop = messagesContainer.value?.scrollTop ?? -1
@@ -169,7 +210,10 @@ function onUserScrollUpIntent(event?: Event): void {
  * 事件回调同步返回前不能滚动，Chrome DevTools 报 [Violation]
  * "Added non-passive event listener to a scroll-blocking ... event" */
 function onWheel(event: WheelEvent): void {
-  if (event.deltaY < 0) onUserScrollUpIntent()
+  if (event.deltaY < 0) {
+    onUserScrollUpIntent()
+    retryTopLoadOnGesture()
+  }
 }
 
 function handleScrollbarPointerDown(event: PointerEvent): void {
@@ -1332,19 +1376,6 @@ watch(
   }
 )
 
-// 上次加载更多的时间戳：加载完成后恢复视口会产生向下的滚动事件，
-// 复位 el-scrollbar 的方向闩锁；惯性滚动/估算高度纠偏可能立刻再次满足
-// end-reached 条件，需冷却窗口防重复请求
-let lastLoadMoreAt = 0
-
-function onEndReached(direction: ScrollbarDirection) {
-  if (direction !== 'top') return
-  if (isLoadingMore.value || !store.hasMoreMessages || store.messagesLoading) return
-  if (Date.now() - lastLoadMoreAt < 1000) return
-  lastLoadMoreAt = Date.now()
-  handleLoadMore()
-}
-
 async function handleLoadMore() {
   if (!agentId.value || isLoadingMore.value) return
   isLoadingMore.value = true
@@ -1672,6 +1703,11 @@ function handleApproveTools() {
   store.approveToolCalls()
 }
 
+// 批准并记住：本会话内同工具后续调用免审（后端写 session_tool_grant）
+function handleApproveAndRemember() {
+  store.approveToolCalls(true)
+}
+
 function handleRejectTools() {
   store.rejectToolCalls()
 }
@@ -1870,7 +1906,6 @@ const minimizedWaits = computed(() => {
       :distance="SCROLL_END_PX"
       wrap-style="overflow-anchor: none"
       @scroll="syncAtEnd"
-      @end-reached="onEndReached"
       @wheel.passive="onWheel"
       @touchstart.passive="onUserScrollUpIntent"
       @touchmove.passive="onUserScrollUpIntent"
@@ -2028,6 +2063,7 @@ const minimizedWaits = computed(() => {
       <template #footer>
         <div class="approval-dialog-footer">
           <el-button type="danger" @click="handleRejectTools">拒绝</el-button>
+          <el-button @click="handleApproveAndRemember">批准并记住</el-button>
           <el-button type="primary" @click="handleApproveTools">批准</el-button>
         </div>
       </template>

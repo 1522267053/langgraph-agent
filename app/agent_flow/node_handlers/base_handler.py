@@ -280,6 +280,9 @@ class BaseNodeHandler(ABC):
         # 非 Agent 模式保持 None / 0，对应工具审批钩子直接跳过。
         self._writer: Optional[StreamWriter] = None
         self._session_id: int = 0
+        # Flow 模式执行记录 ID（thread_id=flow_{id} 时由 _resolve_context 写入；
+        # >0 表示 Flow 模式，工具审批钩子走 interrupt 路径）
+        self._execution_id: int = 0
         # 审批正则缓存：_compiled_patterns_source 作为缓存 key（tuple 不可哈希问题规避）
         self._compiled_patterns: list[re.Pattern] = []
         self._compiled_patterns_source: Optional[tuple[str, ...]] = None
@@ -363,15 +366,23 @@ class BaseNodeHandler(ABC):
         """从 RunnableConfig 提取 session_id（question_handler / shell_handler 同模式）。
 
         setup_tool_handlers 在调用本方法前已注入 _writer，本方法只负责 session_id。
-        非 Agent 模式（_session_id 保持 0）下工具审批钩子会被调用方跳过。
+        Agent 模式：thread_id=agent_{id} → _session_id；
+        Flow 模式：thread_id=flow_{id} → _execution_id（_session_id 保持 0，
+        工具审批钩子据此分流到 interrupt 路径而非 SSE pending 路径）。
         """
         self._session_id = 0
+        self._execution_id = 0
         configurable = (config or {}).get("configurable", {})
         session_id = configurable.get("session_id")
         if not session_id:
             thread_id = str(configurable.get("thread_id") or "")
             if thread_id.startswith("agent_"):
                 session_id = thread_id.removeprefix("agent_")
+            elif thread_id.startswith("flow_"):
+                try:
+                    self._execution_id = int(thread_id.removeprefix("flow_"))
+                except (TypeError, ValueError):
+                    self._execution_id = 0
         try:
             self._session_id = int(session_id or 0)
         except (TypeError, ValueError):
@@ -420,9 +431,13 @@ class BaseNodeHandler(ABC):
             "approved"：用户已批准；
             "rejected" / "timeout"：拒绝/超时。
 
-        仅 Agent 模式生效（_session_id > 0 且 _writer 非空）；非 Agent 模式直接 None 放行。
+        双模式分流：
+        - Agent 模式（_session_id > 0 且 _writer 非空）：SSE + pending service 路径；
+        - Flow 模式（_execution_id > 0）：LangGraph interrupt 路径（复用
+          waiting_human 机制，执行暂停落库，前端 Flow 页审批弹窗，resume 恢复）；
+        - 两者皆非：直接 None 放行（纯 Flow 无审批配置时零开销）。
         """
-        if self._session_id <= 0 or self._writer is None:
+        if self._session_id <= 0 and self._execution_id <= 0:
             return None
 
         approval_tools = list(getattr(cfg, "approval_required_tools", []) or [])
@@ -444,19 +459,156 @@ class BaseNodeHandler(ABC):
         if not (hit_tool or hit_pattern):
             return None
 
+        # 3) 免审授权命中：用户曾对该工具选「批准并记住」→ 直接放行。
+        # 查询失败按未授权处理（fail-closed，不因授权表异常扩大放行面）
+        try:
+            if await self._has_session_grant(tool_name):
+                logger.info(
+                    "免审授权命中: session_id=%s, execution_id=%s, tool=%s（自动放行）",
+                    self._session_id,
+                    self._execution_id,
+                    tool_name,
+                )
+                return "approved"
+        except Exception as e:
+            logger.warning("免审授权查询失败，按需审批处理: %s", e)
+
         # 拼装审批原因（reason），前端 ToolApprovalEvent 直接展示
         reason_parts: list[str] = []
         if hit_tool:
             reason_parts.append("工具已配置为需审批")
         if hit_pattern and matched_pattern is not None:
             reason_parts.append(f"命令匹配危险模式: {matched_pattern}")
+        approval_reason = "; ".join(reason_parts) or None
+
+        # 4) 模式分流：Flow 走 interrupt（waiting_human），Agent 走 SSE pending
+        if self._session_id <= 0 and self._execution_id > 0:
+            return await self._request_tool_approval_via_interrupt(
+                tool_name=tool_name,
+                tool_args=tool_args,
+                node_key=node_key,
+                approval_reason=approval_reason,
+            )
 
         return await self._request_tool_approval(
             tool_name=tool_name,
             tool_args=tool_args,
             node_key=node_key,
-            approval_reason="; ".join(reason_parts) or None,
+            approval_reason=approval_reason,
         )
+
+    async def _has_session_grant(self, tool_name: str) -> bool:
+        """查询当前域是否已有该工具的免审授权（session_tool_grant 表）。
+
+        scope 必须与查询域一致：Agent 查 scope=agent（session_id=会话ID），
+        Flow 查 scope=flow（session_id=执行记录ID）——两域主键独立自增会撞号，
+        缺 scope 条件会导致授权误命中。
+        """
+        from sqlalchemy import select
+
+        from app.config.database import AsyncSessionLocal
+        from app.models.session_tool_grant import SessionToolGrant
+
+        if self._session_id > 0:
+            scope, domain_id = "agent", self._session_id
+        else:
+            scope, domain_id = "flow", self._execution_id
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(SessionToolGrant.id).where(
+                    SessionToolGrant.scope == scope,
+                    SessionToolGrant.session_id == domain_id,
+                    SessionToolGrant.tool_name == tool_name,
+                    SessionToolGrant.is_delete == 0,
+                )
+            )
+            return result.first() is not None
+
+    async def _request_tool_approval_via_interrupt(
+        self,
+        tool_name: str,
+        tool_args: dict,
+        node_key: str,
+        approval_reason: Optional[str] = None,
+    ) -> str:
+        """Flow 模式审批：LangGraph interrupt 暂停 → waiting_human 落库 → resume 恢复。
+
+        interrupt payload 由 _handle_interrupt_and_save 全量存入 execution.wait_data，
+        前端 Flow 页据此渲染审批弹窗；resume 携带决策 JSON（见 execution_api
+        HumanInputSubmit），interrupt() 返回该 JSON，此处解析并写审计/授权。
+        Returns: "approved" / "rejected"。
+        """
+        from langgraph.types import interrupt
+
+        from app.services.pending_audit import PendingAuditLogger
+
+        approval_id = uuid.uuid4().hex[:16]
+        audit = PendingAuditLogger("approval", scope="flow")
+
+        # asked 快照落盘（scope=flow，session_id 列存 execution_id）
+        audit.audit_asked(
+            self._execution_id,
+            approval_id,
+            {
+                "tool_calls": [
+                    {"id": f"call_{uuid.uuid4().hex[:24]}", "name": tool_name, "args": tool_args}
+                ],
+                "approval_needed": [tool_name],
+                "approval_reason": approval_reason,
+            },
+        )
+
+        # interrupt：执行暂停，payload 进 checkpoint + execution.wait_data
+        decision = interrupt(
+            {
+                "type": "tool_approval_required",
+                "node_key": node_key,
+                "approval_id": approval_id,
+                "tool_calls": [{"name": tool_name, "args": tool_args}],
+                "approval_needed": [tool_name],
+                "approval_reason": approval_reason,
+            }
+        )
+
+        # resume 后到达：解析决策（异常/非法值按拒绝处理，fail-closed）
+        action = "rejected"
+        remember = False
+        if isinstance(decision, dict):
+            action = decision.get("action", "rejected")
+            remember = bool(decision.get("remember_session"))
+        if action not in ("approved", "rejected"):
+            action = "rejected"
+
+        audit.audit_decided(self._execution_id, approval_id, action)
+
+        if action == "approved" and remember:
+            try:
+                await self._grant_flow_tool(tool_name, approval_id)
+            except Exception as e:
+                logger.warning("Flow 执行级免审授权写入失败: %s", e)
+
+        return action
+
+    async def _grant_flow_tool(self, tool_name: str, approval_id: str) -> None:
+        """写 Flow 执行级免审授权（scope=flow，session_id 列存 execution_id）"""
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        from app.config.database import AsyncSessionLocal
+        from app.models.session_tool_grant import SessionToolGrant
+
+        async with AsyncSessionLocal() as db:
+            stmt = sqlite_insert(SessionToolGrant).values(
+                scope="flow",
+                session_id=self._execution_id,
+                tool_name=tool_name,
+                granted_by=approval_id,
+            )
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["scope", "session_id", "tool_name"]
+            )
+            await db.execute(stmt)
+            await db.commit()
 
     async def _request_tool_approval(
         self,
@@ -636,6 +788,37 @@ class BaseNodeHandler(ABC):
             if var.name and var.source:
                 context[var.name] = self._resolve_variable(var.source, state)
         return context
+
+    async def _check_direct_execution_approval(
+        self,
+        node: FlowNode,
+        state: FlowState,
+        config: Optional[RunnableConfig],
+        content_for_pattern: str,
+    ) -> Optional[str]:
+        """直执行节点（Flow 主图 default 边）的审批检查（python/api 复用）。
+
+        直执行节点没有 LLM 工具调用入口，审批钩子此前不生效——本方法补齐：
+        在 execute 开头调用，按节点配置的 approval_required_tools/patterns 判定。
+        工具名约定为 {node_type}_executor_{node_key}（与 python 工具路径同源）。
+
+        Returns:
+            None：未命中审批条件（继续执行）；
+            "approved"：用户已批准（Agent=SSE 路径 / Flow=interrupt 路径）；
+            "rejected" / "timeout"：拒绝/超时（调用方应中止执行并记错误）。
+        """
+        # 直执行入口此前未调 _resolve_context（工具路径才调），先解析运行域
+        self._resolve_context(config)
+
+        cfg = self._get_config(node)
+        tool_name = f"{node.node_type}_executor_{node.node_key}"
+        return await self._check_and_request_approval(
+            tool_name=tool_name,
+            tool_args={"content": content_for_pattern[:2000]},
+            cfg=cfg,
+            content_for_pattern=content_for_pattern,
+            node_key=node.node_key,
+        )
 
     @classmethod
     def _resolve_output_var_names(cls, node: FlowNode) -> list[str]:
@@ -856,7 +1039,7 @@ class BaseNodeHandler(ABC):
         return []
 
     def get_providers(
-        self, node: "FlowNode", writer=None, session_id: int = 0
+        self, node: "FlowNode", writer=None, session_id: int = 0, execution_id: int = 0
     ) -> Sequence["ToolProvider"]:
         """返回按需加载延迟域的 ToolProvider 列表（默认单 provider 形态）
 
@@ -864,14 +1047,16 @@ class BaseNodeHandler(ABC):
         粒度可能不同于节点粒度（如 MCP 一族是「一 server 一 provider」，一个节点
         可贡献多个 provider），故统一返回列表；默认实现委托 `get_provider`。
 
-        `writer`/`session_id` 为审批依赖：重写者若在 provider 内部构造工具闭包并
-        做审批，必须使用调用方透传的已注入实例值——自行 new 一个 handler 空壳会让
-        审批钩子因 `_session_id<=0 or _writer is None` 静默放行（安全后门）。
+        `writer`/`session_id`/`execution_id` 为审批依赖：重写者若在 provider 内部
+        构造工具闭包并做审批，必须使用调用方透传的已注入实例值——自行 new 一个
+        handler 空壳会让审批钩子静默放行（Agent 因 `_session_id<=0`，Flow 因
+        `_execution_id<=0`，安全后门）。
 
         Args:
             node: 节点对象
             writer: StreamWriter（Agent 模式审批事件通道）
-            session_id: 会话 ID（>0 审批生效）
+            session_id: 会话 ID（>0 Agent 模式审批生效）
+            execution_id: 执行记录 ID（>0 Flow 模式审批走 interrupt 路径）
 
         Returns:
             provider 列表（空列表 = 该节点工具不参与延迟域）

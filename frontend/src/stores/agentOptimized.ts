@@ -2043,8 +2043,9 @@ export const useAgentStore = defineStore('agent', () => {
 
   /**
    * 批准工具执行（工具确认后继续）
+   * @param rememberSession 批准并记住：同会话同工具后续调用自动放行
    */
-  async function approveToolCalls() {
+  async function approveToolCalls(rememberSession = false) {
     if (!currentAgent.value || !currentSession.value) return
     const approvalId = currentApprovalId.value
     // 幂等保护：同一 approval_id 已提交过则直接跳过
@@ -2059,13 +2060,14 @@ export const useAgentStore = defineStore('agent', () => {
     if (!currentApprovalId.value) stopApprovalCountdown()
     try {
       if (subAgent) {
-        await agentApi.toolApproval(subAgent.agentId, subAgent.sessionId, approvalId, 'approved')
+        await agentApi.toolApproval(subAgent.agentId, subAgent.sessionId, approvalId, 'approved', rememberSession)
       } else {
         await agentApi.toolApproval(
           currentAgent.value.id,
           currentSession.value.id,
           approvalId,
-          'approved'
+          'approved',
+          rememberSession
         )
       }
     } catch {
