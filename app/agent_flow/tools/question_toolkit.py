@@ -123,8 +123,14 @@ class QuestionToolKit(BaseToolKit):
 
             question_id = uuid.uuid4().hex[:16]
 
-            # 3. 注册 Future + emit SSE 事件
-            future = question_service.register(session_id, question_id)
+            # 3. 注册 Future（透传问题内容供审计快照）+ emit SSE 事件
+            future = question_service.register(
+                session_id,
+                question_id,
+                question=question,
+                options=options,
+                multiple=multiple,
+            )
             writer(
                 QuestionRequestEvent(
                     node_key=node_key,
@@ -144,6 +150,8 @@ class QuestionToolKit(BaseToolKit):
                 )
             except asyncio.TimeoutError:
                 question_service.remove(session_id, question_id)
+                # 审计补写：超时终态（与用户回答竞争时先到先得，幂等）
+                question_service.mark_timeout(session_id, question_id)
                 return json.dumps(
                     {
                         "error": (

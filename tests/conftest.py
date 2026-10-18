@@ -28,6 +28,11 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from app.config.database import AsyncSessionLocal, init_db  # noqa: E402
 
+# 显式导入测试涉及的模型：create_all 只建「已导入到 metadata」的表
+# （运行时由 load_all_models 自动加载，测试进程不触发 app 启动流程）
+import app.models.interaction_audit_log  # noqa: E402, F401
+import app.models.session_tool_grant  # noqa: E402, F401
+
 
 @pytest.fixture(scope="session", autouse=True)
 async def _setup_test_db():
@@ -40,15 +45,18 @@ async def _setup_test_db():
 
 @pytest.fixture(autouse=True)
 async def _clean_tables():
-    """每个测试前后清空审批审计表，保证用例互不污染"""
+    """每个测试前后清空交互审计表，保证用例互不污染"""
     from sqlalchemy import delete
 
-    from app.models.tool_approval_log import ToolApprovalLog
+    from app.models.interaction_audit_log import InteractionAuditLog
+    from app.models.session_tool_grant import SessionToolGrant
 
     async with AsyncSessionLocal() as db:
-        await db.execute(delete(ToolApprovalLog))
+        await db.execute(delete(InteractionAuditLog))
+        await db.execute(delete(SessionToolGrant))
         await db.commit()
     yield
     async with AsyncSessionLocal() as db:
-        await db.execute(delete(ToolApprovalLog))
+        await db.execute(delete(InteractionAuditLog))
+        await db.execute(delete(SessionToolGrant))
         await db.commit()
