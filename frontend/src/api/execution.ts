@@ -94,19 +94,22 @@ export const executionApi = {
    * 提交工具审批决策（Flow future 路线；resolve 后端 future 唤醒执行流）
    * @param executionId 执行记录ID（审批队列 key）
    * @param approvalId 审批批次ID
-   * @param action approved / rejected
+   * @param action approved / rejected（整批粒度；提供 toolDecisions 时表示「是否存在拒绝项」）
    * @param rememberSession 批准时是否记住本执行免审
+   * @param toolDecisions 逐工具决策（方案B）：{tool_call_id: approved|rejected}，缺省整批
    */
   submitToolApproval(
     executionId: number,
     approvalId: string,
     action: 'approved' | 'rejected',
-    rememberSession: boolean
+    rememberSession: boolean,
+    toolDecisions?: Record<string, 'approved' | 'rejected'>
   ): Promise<unknown> {
     return post(`/execution/tool-approval/${executionId}`, {
       approval_id: approvalId,
       action,
-      remember_session: rememberSession
+      remember_session: rememberSession,
+      ...(toolDecisions ? { tool_decisions: toolDecisions } : {})
     })
   },
 

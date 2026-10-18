@@ -323,7 +323,7 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
     const expiresIn = Number(event.data.expires_in) || 0
     pendingApproval.value = {
       approvalId: String(event.data.approval_id || ''),
-      toolCalls: (event.data.tool_calls || []) as Array<{ name: string; args: Record<string, unknown> }>,
+      toolCalls: (event.data.tool_calls || []) as Array<{ id?: string; name: string; args: Record<string, unknown> }>,
       approvalNeeded: (event.data.approval_needed || []) as string[],
       approvalReason: (event.data.approval_reason as string) || null,
       // 后端权威剩余秒数 → 本地死线（与 AgentChat approvalCountdown 同语义）
@@ -335,8 +335,15 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
     showHumanInputDialog.value = true
   }
 
-  /** 提交工具审批决策（Flow future 路线；resolve 后端 future 唤醒执行流，SSE 流保持连接） */
-  async function submitApprovalDecision(action: 'approved' | 'rejected', rememberSession = false): Promise<void> {
+  /** 提交工具审批决策（Flow future 路线；resolve 后端 future 唤醒执行流，SSE 流保持连接）
+   * @param toolDecisions 逐工具决策（方案B）：{tool_call_id: approved|rejected}；
+   *   提供时 action 仅表示「是否存在拒绝项」，各卡片按自己的决策分发
+   */
+  async function submitApprovalDecision(
+    action: 'approved' | 'rejected',
+    rememberSession = false,
+    toolDecisions?: Record<string, 'approved' | 'rejected'>
+  ): Promise<void> {
     if (!currentExecution.value?.id) {
       ElMessage.error({ message: '执行记录不存在', duration: 5000 })
       return
@@ -351,7 +358,8 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
         currentExecution.value.id,
         pendingApproval.value.approvalId,
         action,
-        rememberSession
+        rememberSession,
+        toolDecisions
       )
       // 决策已唤醒后端执行流：关弹窗、恢复 running 态。
       // SSE 连接未断，后续工具 start/end 事件继续由现有 handlers 消费

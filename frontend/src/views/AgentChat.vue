@@ -1699,13 +1699,68 @@ function formatToolApprovalArgs(args?: Record<string, unknown>): string {
   }
 }
 
+// ===== 逐工具决策（方案B：单窗口多卡片独立决策，与 Flow HumanInputDialog 同构） =====
+type ToolDecision = 'approved' | 'rejected'
+const toolDecisions = ref<Record<string, ToolDecision>>({})
+
+// 批内是否存在逐工具的拒绝项（决定提交时是否携带 tool_decisions）
+const hasPerToolRejection = computed(
+  () => Object.values(toolDecisions.value).some(d => d === 'rejected')
+)
+
+// 多卡片时显示逐工具开关；单卡片保持经典三按钮（决策粒度等价，不添乱）
+const showPerToolControls = computed(
+  () => (store.pendingToolCalls?.length ?? 0) > 1
+)
+
+function decisionKey(tc: { id?: string; name: string }, index: number): string {
+  return tc.id || `${tc.name}#${index}`
+}
+
+function getDecision(tc: { id?: string; name: string }, index: number): ToolDecision {
+  return toolDecisions.value[decisionKey(tc, index)] || 'approved'
+}
+
+function toggleDecision(tc: { id?: string; name: string }, index: number): void {
+  const key = decisionKey(tc, index)
+  toolDecisions.value[key] = getDecision(tc, index) === 'approved' ? 'rejected' : 'approved'
+}
+
+function setAllDecisions(decision: ToolDecision): void {
+  const next: Record<string, ToolDecision> = {}
+  for (let i = 0; i < (store.pendingToolCalls?.length ?? 0); i++) {
+    const tc = store.pendingToolCalls[i]
+    next[decisionKey(tc, i)] = decision
+  }
+  toolDecisions.value = next
+}
+
+/** 组装逐工具决策 payload（仅存在拒绝项时携带，缺省走整批语义） */
+function buildToolDecisions(): Record<string, ToolDecision> | undefined {
+  if (!showPerToolControls.value || !hasPerToolRejection.value) return undefined
+  const result: Record<string, ToolDecision> = {}
+  for (let i = 0; i < (store.pendingToolCalls?.length ?? 0); i++) {
+    const tc = store.pendingToolCalls[i]
+    result[decisionKey(tc, i)] = getDecision(tc, i)
+  }
+  return result
+}
+
+// 新批次到来时重置逐工具决策
+watch(
+  () => store.currentApprovalId,
+  () => {
+    toolDecisions.value = {}
+  }
+)
+
 function handleApproveTools() {
-  store.approveToolCalls()
+  store.approveToolCalls(false, buildToolDecisions())
 }
 
 // 批准并记住：本会话内同工具后续调用免审（后端写 session_tool_grant）
 function handleApproveAndRemember() {
-  store.approveToolCalls(true)
+  store.approveToolCalls(true, buildToolDecisions())
 }
 
 function handleRejectTools() {
@@ -2022,7 +2077,11 @@ const minimizedWaits = computed(() => {
           >
             子Agent「{{ store.subAgentApproval.agentName }}」
           </span>
-          <span v-if="store.approvalProgress.total > 1" class="approval-dialog-progress">
+          <!-- N/M 排队指示器：方案B 批次合并后已无排队概念，恒隐藏（保留结构兼容旧回放） -->
+          <span
+            v-if="false && store.approvalProgress.total > 1"
+            class="approval-dialog-progress"
+          >
             {{ store.approvalProgress.current }}/{{ store.approvalProgress.total }}
           </span>
           <span v-if="store.approvalCountdown <= 0" class="approval-dialog-expired">
@@ -2043,9 +2102,10 @@ const minimizedWaits = computed(() => {
       </template>
       <div class="approval-tools">
         <div
-          v-for="tc in store.pendingToolCalls"
+          v-for="(tc, index) in store.pendingToolCalls"
           :key="tc.id || tc.name"
           class="approval-tool-item"
+          :class="{ 'approval-tool-rejected': getDecision(tc, index) === 'rejected' }"
         >
           <div class="approval-tool-name">
             <el-tag
@@ -2056,6 +2116,15 @@ const minimizedWaits = computed(() => {
               {{ store.pendingApprovalNeeded.includes(tc.name) ? '需确认' : '普通' }}
             </el-tag>
             {{ tc.name }}
+            <el-switch
+              v-if="showPerToolControls"
+              class="approval-tool-switch"
+              :model-value="getDecision(tc, index) === 'approved'"
+              inline-prompt
+              active-text="批准"
+              inactive-text="拒绝"
+              @change="toggleDecision(tc, index)"
+            />
           </div>
           <pre class="approval-tool-args">{{ formatToolApprovalArgs(tc.args) }}</pre>
         </div>
@@ -2063,8 +2132,13 @@ const minimizedWaits = computed(() => {
       <template #footer>
         <div class="approval-dialog-footer">
           <el-button type="danger" @click="handleRejectTools">拒绝</el-button>
-          <el-button @click="handleApproveAndRemember">批准并记住</el-button>
-          <el-button type="primary" @click="handleApproveTools">批准</el-button>
+          <div>
+            <el-button v-if="showPerToolControls" @click="setAllDecisions('rejected')">
+              全部拒绝
+            </el-button>
+            <el-button @click="handleApproveAndRemember">批准并记住</el-button>
+            <el-button type="primary" @click="handleApproveTools">批准</el-button>
+          </div>
         </div>
       </template>
     </el-dialog>
@@ -2783,12 +2857,22 @@ export default {}
   padding: 12px;
 }
 
+/* 逐工具决策为拒绝时卡片降透明度提示（仍展示参数供回看） */
+.approval-tool-item.approval-tool-rejected {
+  opacity: 0.55;
+}
+
 .approval-tool-name {
   font-size: 14px;
   font-weight: 500;
   margin-bottom: 8px;
   display: flex;
   align-items: center;
+}
+
+/* 逐工具决策开关推到卡片行尾 */
+.approval-tool-switch {
+  margin-left: auto;
 }
 
 .approval-tool-args {

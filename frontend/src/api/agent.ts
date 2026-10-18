@@ -606,20 +606,23 @@ export const agentApi = {
    * 工具确认（批准/拒绝）
    * @param agentId Agent ID
    * @param sessionId 会话ID
-   * @param action "approved" 或 "rejected"
+   * @param action "approved" 或 "rejected"（整批粒度；提供 toolDecisions 时表示「是否存在拒绝项」）
    * @param rememberSession 批准时是否记住本会话免审（同会话同工具后续调用自动放行）
+   * @param toolDecisions 逐工具决策（方案B）：{tool_call_id: approved|rejected}，缺省整批
    */
   toolApproval(
     agentId: number,
     sessionId: number,
     approvalId: string,
     action: 'approved' | 'rejected',
-    rememberSession = false
+    rememberSession = false,
+    toolDecisions?: Record<string, 'approved' | 'rejected'>
   ) {
     return post<void>(`/agent/${agentId}/sessions/${sessionId}/tool_approval`, {
       approval_id: approvalId,
       action,
-      remember_session: rememberSession
+      remember_session: rememberSession,
+      ...(toolDecisions ? { tool_decisions: toolDecisions } : {})
     })
   },
 

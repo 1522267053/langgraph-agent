@@ -38,6 +38,11 @@ class ToolApprovalFuture:
     expires_at: float = 0.0
     # 审批原因（白名单/危险正则命中说明），register 时由调用方透传，落审计表
     approval_reason: str | None = None
+    # 逐工具决策（方案B：单窗口多卡片独立决策）。
+    # resolve 时由 API 层填充：{tool_call_id: "approved" | "rejected"}；
+    # 批内等待方（base_handler）按 tool_call_id 取各自结局。
+    # 整批决策（action 粒度）时保持 None——等待方回退读 result。
+    per_tool_decisions: dict[str, str] | None = None
     # asked 审计行是否已写入（重复注册复用 Future 时不重复写）
     audit_asked: bool = False
 
@@ -113,7 +118,31 @@ class ToolApprovalService(AsyncPendingService[ToolApprovalFuture, str]):
             self._audit.audit_asked(session_id, item_id, self._audit_payload(future))
         return future
 
-    def resolve(self, session_id: int, item_id: str, result: str) -> bool:
+    def resolve(
+        self,
+        session_id: int,
+        item_id: str,
+        result: str,
+        per_tool_decisions: dict[str, str] | None = None,
+    ) -> bool:
+        """按 item_id 精确路由到指定 Future 并唤醒
+
+        Args:
+            session_id: 队列 key（Agent=会话ID / Flow=执行ID）
+            item_id: 审批批次 ID
+            result: 整批决策（approved / rejected）
+            per_tool_decisions: 逐工具决策（方案B，可选）。
+                {tool_call_id: "approved" | "rejected"}；提供时 result 语义为
+                「是否存在拒绝项」（仅审计用），批内等待方按 id 取各自结局。
+
+        Returns:
+            True 表示找到并唤醒；False 表示 item_id 不存在（已超时/已 cancel/从未注册）
+        """
+        item = self._get_item(session_id, item_id)
+        if not item:
+            return False
+        if per_tool_decisions is not None:
+            item.future.per_tool_decisions = dict(per_tool_decisions)
         resolved = super().resolve(session_id, item_id, result)
         if resolved:
             self._audit.audit_decided(session_id, item_id, result)

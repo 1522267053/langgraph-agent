@@ -237,7 +237,10 @@ class ExecutionApi(
                 execution_id, req.approval_id
             )
             resolved = tool_approval_service.resolve(
-                execution_id, req.approval_id, req.action
+                execution_id,
+                req.approval_id,
+                req.action,
+                per_tool_decisions=req.tool_decisions,
             )
             if not resolved:
                 return ApiResponse.error(msg="没有待确认的工具")

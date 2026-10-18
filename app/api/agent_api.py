@@ -56,6 +56,14 @@ class ToolApprovalRequest(BaseModel):
         description="批准时是否记住本会话免审（仅 action=approved 时生效；"
         "同会话同工具名后续调用自动放行）",
     )
+    tool_decisions: Optional[dict[str, str]] = Field(
+        default=None,
+        description=(
+            "逐工具决策（方案B，可选）：{tool_call_id: approved|rejected}。"
+            "提供时按卡片独立分发结果；缺省走整批粒度（action 对全部工具生效）。"
+            "tool_call_id 对应 ToolApprovalEvent.tool_calls[].id"
+        ),
+    )
 
 
 class QuestionResolveRequest(BaseModel):
@@ -601,7 +609,10 @@ class AgentApi:
             if req.action not in ("approved", "rejected"):
                 return ApiResponse.error(msg="action 必须为 approved 或 rejected")
             resolved = tool_approval_service.resolve(
-                session_id, req.approval_id, req.action
+                session_id,
+                req.approval_id,
+                req.action,
+                per_tool_decisions=req.tool_decisions,
             )
             if not resolved:
                 return ApiResponse.error(msg="没有待确认的工具")

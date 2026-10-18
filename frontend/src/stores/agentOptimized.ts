@@ -232,16 +232,14 @@ export const useAgentStore = defineStore('agent', () => {
   function advanceApprovalQueue(): void {
     const nextId = pendingApprovals.keys().next().value ?? null
     currentApprovalId.value = nextId
-    // 推进后 current +1（用于 N/M 指示器）
-    if (approvalProgress.value.total > 0 && nextId) {
-      approvalProgress.value.current += 1
-    }
     if (!nextId) {
       // 队列清空，重置进度
       approvalProgress.value = { current: 0, total: 0 }
     }
   }
-  // 审批进度 N/M：后端在首个 ToolApprovalEvent 携带 total（整轮需审批的工具总数）
+  // 审批进度 N/M：方案B 批次合并后同轮工具合并为单批次一次弹窗，
+  // 逐个排队的 N/M 指示器已无意义——保留字段兼容旧回放事件，仅整批
+  // 场景（total>1 且批次数>1，如旧版后端）才展示，正常恒为隐藏
   const approvalProgress = ref<{ current: number; total: number }>({ current: 0, total: 0 })
   // 倒计时 tick：每秒自增触发 approvalCountdown 重算（deadline 按批次记录，
   // 计时器只负责驱动刷新，不再持有倒计时状态——批准/拒绝删批次后队列下一批
@@ -1323,17 +1321,18 @@ export const useAgentStore = defineStore('agent', () => {
     // 占位级联失配；反向对齐只影响末尾对应关系，缺行位置的行保持独立成行。
     // streamBaseMsgId=0（首轮/空会话）时 dbMsgId > 0 恒真，全部 rebuilt 行参与匹配
     const matchedPlaceholders: StreamingMessage[] = []
+    // 排除 context-summary / execution-error：两者是内部标记消息（压缩摘要/错误卡片），
+    // 参与对齐会被尾部流式占位行吸收（跳过内部行 + dbMsgId 过继给
+    // 占位行），导致卡片卡在下次全量重建前不渲染；占位行只与真实对话行对齐
+    // （提升到 if 外：未匹配占位行分流复用本轮新增行清单）
+    const freshRows = rebuilt.filter(
+      r =>
+        r.dbMsgId != null &&
+        r.dbMsgId > streamBaseMsgId &&
+        r.displayType !== 'context-summary' &&
+        r.displayType !== 'execution-error'
+    )
     if (placeholders.length > 0) {
-      // 排除 context-summary / execution-error：两者是内部标记消息（压缩摘要/错误卡片），
-      // 参与对齐会被尾部流式占位行吸收（跳过内部行 + dbMsgId 过继给
-      // 占位行），导致卡片卡在下次全量重建前不渲染；占位行只与真实对话行对齐
-      const freshRows = rebuilt.filter(
-        r =>
-          r.dbMsgId != null &&
-          r.dbMsgId > streamBaseMsgId &&
-          r.displayType !== 'context-summary' &&
-          r.displayType !== 'execution-error'
-      )
       let freshIdx = freshRows.length - 1
       for (let pi = placeholders.length - 1; pi >= 0 && freshIdx >= 0; pi--) {
         const ph = placeholders[pi]
@@ -1424,12 +1423,47 @@ export const useAgentStore = defineStore('agent', () => {
       result.unshift(...olderKept)
     }
 
-    // 未匹配占位行（DB 尚无对应行）保持尾部；已匹配行已按 rebuilt 原位出现
+    // 未匹配占位行分流（修复「human 气泡显示在最新 AI 回复之后」）：
+    //
+    // 缺陷背景：尾部反向对齐按 role 逐位消费，本轮 AI 渲染组（ai+tool 合并组）
+    // 夹在 human 与 AI 占位行之间时 human 占位必然失配；长轮次（>100 条落库行）
+    // 增量窗口（limit=100）不含 human 行时同样失配。失配占位被 push 到列表
+    // 最底部 → 用户消息显示在最新 AI 回复之后（刷新后按 DB 全量重建才恢复）。
+    //
+    // human 占位行：
+    // - 本轮 DB 已有同内容行（长轮次窗口截断场景）→ 去重丢弃（DB 行已按正确
+    //   时序渲染，占位行再追加只会造成重复+错位）
+    // - 无同内容行 → 前插到本轮首个新增渲染行之前（human 语义先于本轮 AI 回复）
+    // AI 占位行：保持尾部追加（未落库的流式思考内容属本轮终态）
     const matchedSet = new Set(matchedPlaceholders)
     const unmatchedPlaceholders = placeholders.filter(ph => !matchedSet.has(ph))
+    const trailingAiPlaceholders: StreamingMessage[] = []
+    if (unmatchedPlaceholders.length > 0) {
+      const firstFreshIdx = result.findIndex(
+        r => r.dbMsgId != null && r.dbMsgId > streamBaseMsgId
+      )
+      let insertAt = firstFreshIdx === -1 ? result.length : firstFreshIdx
+      for (const ph of unmatchedPlaceholders) {
+        if (ph.role === 'human') {
+          const dupInFresh = freshRows.some(
+            r =>
+              r.role === 'human' &&
+              r.dbMsgId != null &&
+              r.dbMsgId > streamBaseMsgId &&
+              r.content === ph.content
+          )
+          if (!dupInFresh) {
+            result.splice(insertAt, 0, ph)
+            insertAt++
+          }
+        } else {
+          trailingAiPlaceholders.push(ph)
+        }
+      }
+    }
     // 错误卡（本轮终态）压轴：先于未匹配占位行（AI 流式思考）之上仍是其历史，
     // 与未匹配占位行同属"DB 未沉淀的尾部状态"
-    result.push(...unmatchedPlaceholders, ...terminalRows)
+    result.push(...trailingAiPlaceholders, ...terminalRows)
     chatMessages.value = result
 
     thinkingContent.value = ''
@@ -1645,7 +1679,8 @@ export const useAgentStore = defineStore('agent', () => {
       onToolApproval: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
         const approvalId = String(event.data.approval_id || '')
-        // 首事件携带 total（整轮需审批的工具总数）；用于 N/M 指示器
+        // total 字段保留兼容旧版后端回放；方案B 批次合并后 N/M 指示器不再展示
+        // （同轮工具合并为单批次，无排队概念），仅记录不驱动 UI
         const totalFromEvent = Number(event.data.total) || 0
         if (totalFromEvent > 0 && approvalProgress.value.total === 0) {
           approvalProgress.value = { current: 1, total: totalFromEvent }
@@ -2044,8 +2079,10 @@ export const useAgentStore = defineStore('agent', () => {
   /**
    * 批准工具执行（工具确认后继续）
    * @param rememberSession 批准并记住：同会话同工具后续调用自动放行
+   * @param toolDecisions 逐工具决策（方案B）：{tool_call_id: approved|rejected}；
+   *   提供时按卡片独立分发，action 仅表示「是否存在拒绝项」
    */
-  async function approveToolCalls(rememberSession = false) {
+  async function approveToolCalls(rememberSession = false, toolDecisions?: Record<string, 'approved' | 'rejected'>) {
     if (!currentAgent.value || !currentSession.value) return
     const approvalId = currentApprovalId.value
     // 幂等保护：同一 approval_id 已提交过则直接跳过
@@ -2060,14 +2097,15 @@ export const useAgentStore = defineStore('agent', () => {
     if (!currentApprovalId.value) stopApprovalCountdown()
     try {
       if (subAgent) {
-        await agentApi.toolApproval(subAgent.agentId, subAgent.sessionId, approvalId, 'approved', rememberSession)
+        await agentApi.toolApproval(subAgent.agentId, subAgent.sessionId, approvalId, 'approved', rememberSession, toolDecisions)
       } else {
         await agentApi.toolApproval(
           currentAgent.value.id,
           currentSession.value.id,
           approvalId,
           'approved',
-          rememberSession
+          rememberSession,
+          toolDecisions
         )
       }
     } catch {
@@ -2075,7 +2113,7 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  async function rejectToolCalls() {
+  async function rejectToolCalls(toolDecisions?: Record<string, 'approved' | 'rejected'>) {
     if (!currentAgent.value || !currentSession.value) return
     const approvalId = currentApprovalId.value
     if (!approvalId || resolvedApprovalIds.has(approvalId)) return
@@ -2087,13 +2125,15 @@ export const useAgentStore = defineStore('agent', () => {
     if (!currentApprovalId.value) stopApprovalCountdown()
     try {
       if (subAgent) {
-        await agentApi.toolApproval(subAgent.agentId, subAgent.sessionId, approvalId, 'rejected')
+        await agentApi.toolApproval(subAgent.agentId, subAgent.sessionId, approvalId, 'rejected', false, toolDecisions)
       } else {
         await agentApi.toolApproval(
           currentAgent.value.id,
           currentSession.value.id,
           approvalId,
-          'rejected'
+          'rejected',
+          false,
+          toolDecisions
         )
       }
     } catch {

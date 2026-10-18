@@ -513,7 +513,7 @@ class BaseNodeHandler(ABC):
                 except Exception as e:
                     logger.warning("免审授权查询失败，按需审批处理: %s", e)
                 # 锁内快速段：加入/创建批次（创建者先不发事件），拿到 (future, approval_id)
-                future, approval_id, is_creator = await self._join_or_create_batch(
+                future, approval_id, is_creator, call_id = await self._join_or_create_batch(
                     tool_name=tool_name,
                     tool_args=tool_args,
                     node_key=node_key,
@@ -522,20 +522,67 @@ class BaseNodeHandler(ABC):
             # ---- 锁外：创建者走收集窗口收敛成员后发全量事件 ----
             if is_creator:
                 await self._collect_and_emit_batch(
-                    approval_id=approval_id, node_key=node_key
+                    approval_id=approval_id,
+                    node_key=node_key,
+                    approval_reason=approval_reason,
                 )
             return await self._await_batch_decision(
                 future=future,
                 approval_id=approval_id,
                 is_creator=is_creator,
+                call_id=call_id,
             )
 
+        if self._session_id > 0 and self._writer is not None:
+            # Agent 模式（方案B 统一）：并发工具同样合并为单批次一次弹窗，
+            # 复用 Flow 的三方法结构（队列 key= session_id，域隔离见
+            # _approval_queue_key）。单工具调用时批次天然只有 1 个成员，
+            # 行为与旧的逐工具队列一致；子Agent 审批仍走独立转发链路。
+            async with self._flow_approval_lock:
+                try:
+                    if await self._has_session_grant(tool_name):
+                        logger.info(
+                            "免审授权命中(锁内双检): session_id=%s, tool=%s（自动放行）",
+                            self._session_id,
+                            tool_name,
+                        )
+                        return "approved"
+                except Exception as e:
+                    logger.warning("免审授权查询失败，按需审批处理: %s", e)
+                future, approval_id, is_creator, call_id = await self._join_or_create_batch(
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    node_key=node_key,
+                    approval_reason=approval_reason,
+                )
+            if is_creator:
+                await self._collect_and_emit_batch(
+                    approval_id=approval_id,
+                    node_key=node_key,
+                    approval_reason=approval_reason,
+                )
+            return await self._await_batch_decision(
+                future=future,
+                approval_id=approval_id,
+                is_creator=is_creator,
+                call_id=call_id,
+            )
+
+        # 无 writer 的 Agent 场景（子Agent 内部等）退回逐工具路径
         return await self._request_tool_approval(
             tool_name=tool_name,
             tool_args=tool_args,
             node_key=node_key,
             approval_reason=approval_reason,
         )
+
+    def _approval_queue_key(self) -> int:
+        """审批批次队列 key：Agent 用 session_id，Flow 用 execution_id。
+
+        两域主键独立自增会撞号，tool_approval_service 队列按 key 隔离，
+        语义等同域隔离。批次状态 _active_flow_batch 也以本 key 路由。
+        """
+        return self._session_id if self._session_id > 0 else self._execution_id
 
     async def _has_session_grant(self, tool_name: str) -> bool:
         """查询当前域是否已有该工具的免审授权（session_tool_grant 表）。
@@ -668,14 +715,17 @@ class BaseNodeHandler(ABC):
         tool_args: dict,
         node_key: str,
         approval_reason: Optional[str] = None,
-    ) -> tuple[Any, str, bool]:
+    ) -> tuple[Any, str, bool, str]:
         """锁内快速段：加入活跃批次或创建新批次（创建者先不发事件）。
 
-        调用方必须已持有 _flow_approval_lock。返回 (future, approval_id, is_creator)。
+        调用方必须已持有 _flow_approval_lock。返回 (future, approval_id, is_creator, call_id)。
+        call_id 是本工具调用在批次内的唯一标识（逐工具决策的路由键）——
+        每次调用独立生成，批内不重复；等待方凭它从 per_tool_decisions 取结局。
         """
         from app.services.tool_approval_service import tool_approval_service
 
-        approval_key = self._execution_id
+        approval_key = self._approval_queue_key()
+        call_id = f"call_{uuid.uuid4().hex[:24]}"
 
         if (
             self._active_flow_batch is not None
@@ -686,16 +736,18 @@ class BaseNodeHandler(ABC):
             # 加入现有批次（慢兄弟兜底：创建者已发事件后才进锁的场景）
             batch = self._active_flow_batch
             batch["tool_calls"].append(
-                {"id": batch["approval_id"], "name": tool_name, "args": tool_args}
+                {"id": call_id, "name": tool_name, "args": tool_args}
             )
-            return batch["future"], batch["approval_id"], False
+            if approval_reason and approval_reason not in batch["reasons"]:
+                batch["reasons"].append(approval_reason)
+            return batch["future"], batch["approval_id"], False, call_id
 
         approval_id = uuid.uuid4().hex[:16]
         future = tool_approval_service.register(
             approval_key,
             approval_id,
             tool_calls=[
-                {"id": f"call_{uuid.uuid4().hex[:24]}", "name": tool_name, "args": tool_args}
+                {"id": call_id, "name": tool_name, "args": tool_args}
             ],
             approval_needed=[tool_name],
             approval_reason=approval_reason,
@@ -703,11 +755,14 @@ class BaseNodeHandler(ABC):
         self._active_flow_batch = {
             "approval_id": approval_id,
             "future": future,
-            "tool_calls": [{"id": approval_id, "name": tool_name, "args": tool_args}],
+            "tool_calls": [{"id": call_id, "name": tool_name, "args": tool_args}],
+            "reasons": [approval_reason] if approval_reason else [],
         }
-        return future, approval_id, True
+        return future, approval_id, True, call_id
 
-    async def _collect_and_emit_batch(self, approval_id: str, node_key: str) -> None:
+    async def _collect_and_emit_batch(
+        self, approval_id: str, node_key: str, approval_reason: Optional[str] = None
+    ) -> None:
         """锁外收集窗口：等并行兄弟进锁加入（动态收敛），稳定后发全量事件。
 
         创建者专用。窗口总时长 ~1s（10 轮 × 100ms），连续一轮无新增即收敛。
@@ -716,7 +771,7 @@ class BaseNodeHandler(ABC):
         from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
         from app.services.tool_approval_service import tool_approval_service
 
-        approval_key = self._execution_id
+        approval_key = self._approval_queue_key()
         last_count = 1
         for _ in range(10):
             await asyncio.sleep(0.1)
@@ -740,6 +795,11 @@ class BaseNodeHandler(ABC):
                 if batch and batch["approval_id"] == approval_id
                 else []
             )
+            reasons = (
+                list(batch["reasons"])
+                if batch and batch["approval_id"] == approval_id
+                else []
+            )
         try:
             if self._writer is None:
                 raise RuntimeError("StreamWriter 未注入，无法发送审批事件")
@@ -750,7 +810,7 @@ class BaseNodeHandler(ABC):
                     tool_calls=tool_calls,
                     approval_needed=[tc["name"] for tc in tool_calls],
                     expires_in=USER_RESPONSE_TIMEOUT_SECONDS,
-                    approval_reason=None,
+                    approval_reason="; ".join(reasons) or approval_reason,
                     total=len(tool_calls),
                 )
             )
@@ -763,16 +823,28 @@ class BaseNodeHandler(ABC):
             )
 
     async def _await_batch_decision(
-        self, future: Any, approval_id: str, is_creator: bool
+        self,
+        future: Any,
+        approval_id: str,
+        is_creator: bool,
+        call_id: str = "",
     ) -> str:
         """锁外等批次决策（Event 由 tool_approval_service.resolve 触发）。
 
         创建者负责清理批次状态（决策后/超时后）；加入者只读结果。
+
+        决策粒度分发（方案B）：
+        - future.per_tool_decisions 非空（逐工具决策）：按本调用的 call_id 取
+          各自结局，缺失项 fail-closed 视为 rejected；
+        - 否则整批粒度：直接返回 result（approved / rejected / cancelled）。
+
+        Returns:
+            "approved" / "rejected" / "timeout"（本工具调用的最终结局）
         """
         from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
         from app.services.tool_approval_service import tool_approval_service
 
-        approval_key = self._execution_id
+        approval_key = self._approval_queue_key()
         try:
             await asyncio.wait_for(
                 future.event.wait(), timeout=USER_RESPONSE_TIMEOUT_SECONDS
@@ -788,6 +860,9 @@ class BaseNodeHandler(ABC):
             tool_approval_service.remove(approval_key, approval_id)
             self._active_flow_batch = None
 
+        per_tool = future.per_tool_decisions
+        if per_tool and call_id:
+            return per_tool.get(call_id, "rejected")
         return future.result or "rejected"
 
     # ---- 配置校验 ----
