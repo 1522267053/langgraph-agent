@@ -62,5 +62,18 @@ url = "https://mirrors.ustc.edu.cn/pypi/simple/"
 priority = "supplemental"
 [dependency-groups]
 dev = [
-    "nuitka (>=4.1.2,<5.0.0)"
+    "nuitka (>=4.1.2,<5.0.0)",
+    "pytest (>=8.3.0,<9.0.0)",
+    "pytest-asyncio (>=0.24.0,<2.0.0)",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# 单循环会话：SQLAlchemy 异步引擎连接池不能跨事件循环复用，
+# 所有测试共用一个 loop（与 uvicorn 运行时单 loop 一致）
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+filterwarnings = [
+    "ignore::DeprecationWarning",
 ]

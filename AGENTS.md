@@ -21,9 +21,23 @@ npm run format                          # Prettier 格式化
 ```
 
 - Python 严格 `>=3.12,<3.13`，默认 SQLite 零配置启动
-- 无测试框架，修改后运行 `ruff check` + `ruff format`（后端）或 `npm run lint`（前端）
+- 修改后运行 `ruff check` + `ruff format`（后端）或 `npm run lint`（前端）
 - `npm run build` 只运行 `vite build`，不含类型检查
 - mypy 未安装，AGENTS.md 旧版中的 `poetry run mypy app/` 命令不可用
+
+## 测试（pytest）
+
+```bash
+poetry run pytest            # 跑 tests/ 全部用例
+poetry run pytest -v         # 显示每条用例结果
+poetry run pytest tests/test_tool_approval_audit.py   # 只跑单个文件
+```
+
+- 框架：pytest 8.x + pytest-asyncio（dev 依赖组），配置在 `pyproject.toml` 的 `[tool.pytest.ini_options]`
+- **隔离机制（勿破坏）**：`tests/conftest.py` 在导入任何 app 模块**之前**设置 `DATABASE_URL` 指向 `temp/pytest_test.db`——settings 是模块级单例、engine 导入时即创建，环境变量设置晚了会指向真实 `data/` 库
+- **单事件循环**：`asyncio_default_test_loop_scope = "session"`——SQLAlchemy 异步引擎连接池不能跨 loop 复用，所有测试共用一个 loop（与 uvicorn 运行时一致）；新增测试直接写 `async def test_xxx()` 即可（asyncio_mode=auto），不要自行 `asyncio.run()`
+- 新增测试放 `tests/test_*.py`；涉及 DB 的用例依赖 conftest 的表清理夹具（autouse），无需自行清理
+- 修改后端代码后必须跑：`ruff check` + `ruff format` + `pytest`
 
 ## Git 提交规范（强制）
 

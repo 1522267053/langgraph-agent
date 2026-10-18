@@ -28,6 +28,7 @@ wheels/
 .lingma/*
 .http/*
 temp/
+.pytest_cache/
 
 package-lock.json
 
