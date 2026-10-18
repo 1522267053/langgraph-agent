@@ -184,8 +184,10 @@ onUnmounted(() => {
       :context="humanInputContext"
       :messages="humanInputMessages"
       :loading="humanInputLoading"
+      :approval="pendingApproval"
       @submit="submitHumanInput"
       @cancel="stopExecution"
+      @approval="submitApprovalDecision"
     />
   </el-dialog>
 </template>

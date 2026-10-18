@@ -213,7 +213,7 @@ def _build_mode_prompt(
     sections = [
         "# 当前运行模式：执行模式（Build Mode）",
         "",
-        "你现在处于「执行模式」，可以根据用户需求执行任务。",
+        "你现在处于「执行模式」，可以根据用户需求执行任务(如果你有不确定的地方，不要自己决定，需要询问用户)。",
         "",
         inventory,
     ]
@@ -565,7 +565,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
         4. ReAct 循环：流式调用 LLM → 处理工具调用 → 继续调用
         5. 保存执行结果（输出变量 + 对话历史）
         """
-        cfg = self._get_config(node)
+        cfg:LlmNodeConfig = self._get_config(node)
         max_tool_iterations = cfg.max_tool_iterations
 
         # 单次遍历：收集工具 + 注入处理器依赖 + 收集 prompt 提示
@@ -588,6 +588,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
             handler_registry=self.handler_registry,
             emit_fn=self._emit,
             session_id=self.session_id,
+            execution_id=self.execution_id,
         )
 
         # 计划模式：工具列表保持恒定（跨模式切换不破坏 LLM 前缀缓存），禁用工具的
@@ -764,8 +765,6 @@ class LlmToolNodeHandler(BaseNodeHandler):
         prompt_tokens = await should_auto_compress(
             self.session_id, self.db_session_factory, cfg_context_length
         )
-        # 先保存一下user_prompt的消息到数据库中
-        await msg_buf.save_to_db()
 
         if cfg_context_length > 0 and prompt_tokens > int(
             cfg_context_length * COMPRESS_THRESHOLD_RATIO
@@ -773,7 +772,9 @@ class LlmToolNodeHandler(BaseNodeHandler):
             await msg_buf.maybe_compress(
                 cfg_context_length, node.base_config or {}, writer
             )
-
+        # 先保存一下user_prompt的消息到数据库中
+        await msg_buf.save_to_db()
+        
         # ReAct 循环 + 结果保存
         last_content = ""
         thinking_content: list[str] = []

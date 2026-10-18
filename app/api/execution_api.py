@@ -199,14 +199,17 @@ class ExecutionApi(
             "/human-input-stream/{execution_id}", summary="流式恢复执行(SSE)"
         )
         async def resume_execution_stream(execution_id: int, data: HumanInputSubmit):
-            """提交人工输入并流式恢复执行"""
+            """提交人工输入并流式恢复执行（审批决策经 approval_action 字段分流）"""
             from app.agent_flow.flow_event import FlowEventFactory
 
             async def stream():
                 yield FlowEventFactory.resume_start(execution_id)
 
                 async for event in flow_executor_service.resume_execution(
-                    execution_id, data.input
+                    execution_id,
+                    data.input,
+                    approval_action=data.approval_action,
+                    remember_session=data.remember_session,
                 ):
                     yield event
 
@@ -238,6 +241,12 @@ class ExecutionApi(
                         "output_variable", "human_feedback"
                     ),
                     "timeout": wait_data.get("timeout", 600),
+                    # 工具审批等待透传（前端据此渲染审批弹窗而非文本输入框）
+                    "type": wait_data.get("type"),
+                    "approval_id": wait_data.get("approval_id"),
+                    "tool_calls": wait_data.get("tool_calls"),
+                    "approval_needed": wait_data.get("approval_needed"),
+                    "approval_reason": wait_data.get("approval_reason"),
                 },
                 msg="查询成功",
             )

@@ -16,12 +16,19 @@ const props = defineProps<{
   context: string
   messages: ConversationMessage[]
   loading: boolean
+  /** 工具审批模式（Flow interrupt 路径）：非空时渲染审批分支而非文本输入 */
+  approval?: {
+    toolCalls: Array<{ name: string; args: Record<string, unknown> }>
+    approvalNeeded: string[]
+    approvalReason: string | null
+  } | null
 }>()
 
 const emit = defineEmits<{
   (e: 'update:visible', value: boolean): void
   (e: 'submit', value: string): void
   (e: 'cancel'): void
+  (e: 'approval', action: 'approved' | 'rejected', rememberSession: boolean): void
 }>()
 
 const inputValue = ref('')
@@ -112,7 +119,31 @@ function handleOpen(): void {
         {{ question }}
       </div>
 
-      <div v-if="messages.length > 0 || context" class="context-panel">
+      <!-- 工具审批分支：工具名+参数+原因展示，按钮组决策 -->
+      <template v-if="approval">
+        <div v-if="approval.approvalReason" class="approval-reason">
+          审批原因：{{ approval.approvalReason }}
+        </div>
+        <div class="approval-tools">
+          <div v-for="(tc, index) in approval.toolCalls" :key="index" class="approval-tool-item">
+            <div class="approval-tool-name">
+              <el-tag
+                :type="approval.approvalNeeded.includes(tc.name) ? 'danger' : 'info'"
+                size="small"
+                style="margin-right: 6px"
+              >
+                {{ approval.approvalNeeded.includes(tc.name) ? '需确认' : '普通' }}
+              </el-tag>
+              {{ tc.name }}
+            </div>
+            <pre v-if="tc.args && Object.keys(tc.args).length > 0" class="tool-call-args">{{
+              formatToolArgs(tc.args, 500)
+            }}</pre>
+          </div>
+        </div>
+      </template>
+
+      <div v-else-if="messages.length > 0 || context" class="context-panel">
         <div class="context-label">上下文与对话历史：</div>
 
         <div v-if="messages.length > 0" class="history-messages">
@@ -149,6 +180,7 @@ function handleOpen(): void {
         <div v-if="context" class="context-text">{{ context }}</div>
       </div>
       <el-input
+        v-if="!approval"
         v-model="inputValue"
         type="textarea"
         :rows="4"
@@ -158,8 +190,19 @@ function handleOpen(): void {
     </div>
     <template #footer>
       <div style="display: flex; justify-content: space-between; width: 100%">
-        <el-button @click="emit('cancel')">取消执行</el-button>
-        <el-button type="primary" :loading="loading" @click="handleSubmit">提交并继续</el-button>
+        <!-- 审批模式：拒绝 / 批准并记住 / 批准 -->
+        <template v-if="approval">
+          <el-button type="danger" :loading="loading" @click="emit('approval', 'rejected')">拒绝</el-button>
+          <div>
+            <el-button :loading="loading" @click="emit('approval', 'approved', true)">批准并记住</el-button>
+            <el-button type="primary" :loading="loading" @click="emit('approval', 'approved')">批准</el-button>
+          </div>
+        </template>
+        <!-- 常规输入模式 -->
+        <template v-else>
+          <el-button @click="emit('cancel')">取消执行</el-button>
+          <el-button type="primary" :loading="loading" @click="handleSubmit">提交并继续</el-button>
+        </template>
       </div>
     </template>
   </el-dialog>
@@ -272,6 +315,35 @@ function handleOpen(): void {
   margin-bottom: 16px;
   display: flex;
   align-items: flex-start;
+}
+
+/* ---- 工具审批分支样式（对齐 AgentChat 审批弹窗风格） ---- */
+.approval-reason {
+  background: #fdf6ec;
+  color: #e6a23c;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.approval-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.approval-tool-item {
+  background: #f5f7fa;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+.approval-tool-name {
+  font-weight: 500;
+  display: flex;
+  align-items: center;
 }
 
 .human-input-content .context-panel {

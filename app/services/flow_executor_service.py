@@ -180,6 +180,21 @@ class FlowExecutorService(BaseExecutorService):
             # 先设内存中断标志：协作式取消的信号源，节点/循环检查点据此停止
             # （WS 网关取消路径已设过，此处统一兜底 REST 直调路径，幂等）
             interrupt_service.set_flow_interrupted(execution_id)
+            # 审批等待中被取消：补写审计终态 cancelled（幂等，仅 outcome 为 NULL 时生效）
+            if (
+                execution.status == ExecutionStatus.WAITING_HUMAN.value
+                and (execution.wait_data or {}).get("type") == "tool_approval_required"
+            ):
+                try:
+                    from app.services.pending_audit import PendingAuditLogger
+
+                    approval_id = (execution.wait_data or {}).get("approval_id")
+                    if approval_id:
+                        PendingAuditLogger("approval", scope="flow").audit_decided(
+                            execution_id, approval_id, "cancelled"
+                        )
+                except Exception as audit_err:
+                    logger.warning("审批取消审计补写失败: %s", audit_err)
             execution.status = ExecutionStatus.CANCELLED.value
             execution.end_time = datetime.now()
             execution.wait_data = None
@@ -339,7 +354,11 @@ class FlowExecutorService(BaseExecutorService):
                     return
 
     async def resume_execution(
-        self, execution_id: int, human_input: str
+        self,
+        execution_id: int,
+        human_input: str,
+        approval_action: Optional[str] = None,
+        remember_session: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         恢复执行（多轮人工交互）
@@ -348,7 +367,10 @@ class FlowExecutorService(BaseExecutorService):
 
         Args:
             execution_id: 执行记录ID
-            human_input: 用户输入内容
+            human_input: 用户输入内容（人工输入场景）
+            approval_action: 审批决策（approved/rejected）；非 None 表示本次 resume
+                是工具审批决策，Command(resume=...) 携带结构化 JSON 而非纯文本
+            remember_session: 审批决策为 approved 时是否记住本执行免审
 
         Yields:
             SSE事件
@@ -443,6 +465,17 @@ class FlowExecutorService(BaseExecutorService):
                 execution, expanded_flow, config
             )
 
+            # 审批决策 resume：Command(resume=...) 携带结构化 JSON（interrupt()
+            # 返回值即此 dict，见 base_handler._request_tool_approval_via_interrupt）；
+            # 人工输入 resume 维持纯文本（human 节点 / LLM 求助语义不变）
+            if approval_action is not None:
+                resume_value: Any = {
+                    "action": approval_action,
+                    "remember_session": remember_session,
+                }
+            else:
+                resume_value = human_input
+
             async for event in self._execute_graph_stream(
                 graph=graph,
                 config=config,
@@ -450,7 +483,7 @@ class FlowExecutorService(BaseExecutorService):
                 expanded_flow=expanded_flow,
                 context=context,
                 tool_node_keys=self._get_tool_node_keys(expanded_flow),
-                resume_input=human_input,
+                resume_input=resume_value,
                 flow_name=flow.name or "",
             ):
                 yield event
@@ -465,7 +498,7 @@ class FlowExecutorService(BaseExecutorService):
         expanded_flow: ExpandedFlow,
         context: FlowContext,
         tool_node_keys: set[str],
-        resume_input: Optional[str] = None,
+        resume_input: Optional[Any] = None,
         flow_name: str = "",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """

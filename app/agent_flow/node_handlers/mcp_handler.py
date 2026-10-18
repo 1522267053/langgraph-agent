@@ -267,7 +267,7 @@ class McpNodeHandler(BaseNodeHandler):
         return wrapped
 
     def get_providers(
-        self, node: FlowNode, writer=None, session_id: int = 0
+        self, node: FlowNode, writer=None, session_id: int = 0, execution_id: int = 0
     ) -> list["McpToolProvider"]:
         """MCP 工具族 ToolProvider 列表（重写基类 `get_provider` 单 provider 形态）
 
@@ -276,14 +276,16 @@ class McpNodeHandler(BaseNodeHandler):
         （provider key 无收尾 __，工具名有）。同一 server 被多个节点引用时
         由登记方按 key 合并（absorb），避免索引重复与工具总数虚高。
 
-        `writer`/`session_id` 为审批依赖，必须由调用方透传已注入的实例值：
-        延迟域物化的工具是独立闭包，拿不到 handler 自身的注入状态（构造空壳
-        handler 会让审批钩子因 `_session_id<=0 or _writer is None` 直接放行）。
+        `writer`/`session_id`/`execution_id` 为审批依赖，必须由调用方透传已注入
+        的实例值：延迟域物化的工具是独立闭包，拿不到 handler 自身的注入状态
+        （构造空壳 handler 会让审批钩子直接放行——Agent 因 `_session_id<=0`，
+        Flow 因 `_execution_id<=0`，两个模式都一样）。
 
         Args:
             node: MCP 节点
             writer: StreamWriter（Agent 模式审批事件通道，None=非 Agent）
-            session_id: 会话 ID（>0 时审批生效）
+            session_id: 会话 ID（>0 时 Agent 模式审批生效）
+            execution_id: 执行记录 ID（>0 时 Flow 模式审批走 interrupt 路径）
         """
         cfg = node.base_config or {}
         server_ids = [int(i) for i in cfg.get("mcp_server_ids", [])]
@@ -299,6 +301,7 @@ class McpNodeHandler(BaseNodeHandler):
                 sources=[(node, cfg)],
                 writer=writer,
                 session_id=session_id,
+                execution_id=execution_id,
             )
             for sid in server_ids
         ]
@@ -578,6 +581,7 @@ class McpToolProvider:
         sources: Optional[list[tuple[FlowNode, dict]]] = None,
         writer=None,
         session_id: int = 0,
+        execution_id: int = 0,
     ):
         """
         Args:
@@ -586,7 +590,8 @@ class McpToolProvider:
             provider_key: 延迟域唯一标识（由 handler 统一解析，重名/无名兜底一致）
             sources: 引用本 server 的 (节点, 节点配置) 列表——审批规则并集 + 归因
             writer: StreamWriter（审批事件通道；None=审批不生效，非 Agent 模式）
-            session_id: 会话 ID（<=0 时审批不生效）
+            session_id: 会话 ID（>0 时 Agent 模式审批生效）
+            execution_id: 执行记录 ID（>0 时 Flow 模式审批走 interrupt 路径）
         """
         self._server_id = server_id
         self._server_name = server_name
@@ -598,10 +603,12 @@ class McpToolProvider:
         self._writer = writer
         self._session_id = session_id
         # 审批钩子实例：只用基类方法（白名单/正则 → request approval），
-        # 必须携带真实的 _writer/_session_id，否则审批静默放行（P0）
+        # 必须携带真实的 _writer/_session_id/_execution_id，否则审批静默放行（P0）：
+        # Agent 模式缺 _session_id、Flow 模式缺 _execution_id 都会绕过审批
         self._approval_handler = McpNodeHandler()
         self._approval_handler._writer = writer
         self._approval_handler._session_id = int(session_id or 0)
+        self._approval_handler._execution_id = int(execution_id or 0)
 
     def absorb(self, node: FlowNode, cfg: dict) -> None:
         """合并同一 server 的另一个引用节点（索引零变化，仅审批规则变宽）

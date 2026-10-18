@@ -51,6 +51,14 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
   const humanInputLoading = ref(false)
   const humanInputMessages = ref<ConversationMessage[]>([])
 
+  // ---- 工具审批状态（Flow 模式 interrupt 路径；非空时 HumanInputDialog 渲染审批分支） ----
+  const pendingApproval = ref<{
+    approvalId: string
+    toolCalls: Array<{ name: string; args: Record<string, unknown> }>
+    approvalNeeded: string[]
+    approvalReason: string | null
+  } | null>(null)
+
   // ---- 计算属性 ----
   const isRunning = computed(() => currentExecution.value?.status === 1)
   const hasExecution = computed(() => !!currentExecution.value)
@@ -296,6 +304,23 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
 
   // ---- 人工输入 ----
   function handleWaitingHuman(event: SSEEvent): void {
+    const waitData = (event.data.wait_data || {}) as Record<string, unknown>
+    // 工具审批等待：置审批态，弹窗渲染审批分支（拒绝/批准并记住/批准）
+    if (waitData.type === 'tool_approval_required') {
+      pendingApproval.value = {
+        approvalId: String(waitData.approval_id || ''),
+        toolCalls: (waitData.tool_calls || []) as Array<{ name: string; args: Record<string, unknown> }>,
+        approvalNeeded: (waitData.approval_needed || []) as string[],
+        approvalReason: (waitData.approval_reason as string) || null
+      }
+      humanInputQuestion.value = '请求执行工具'
+      humanInputContext.value = ''
+      humanInputMessages.value = []
+      showHumanInputDialog.value = true
+      return
+    }
+    // 常规人工输入
+    pendingApproval.value = null
     humanInputQuestion.value = event.data.question || '请提供输入'
     humanInputContext.value = event.data.context || ''
     humanInputMessages.value = []
@@ -348,6 +373,33 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
         currentExecution.value.id,
         value,
         createStreamHandlers()
+      )
+    } finally {
+      humanInputLoading.value = false
+    }
+  }
+
+  /** 提交工具审批决策（Flow 模式 interrupt 路径；resume 携带结构化决策） */
+  function submitApprovalDecision(action: 'approved' | 'rejected', rememberSession = false): void {
+    if (!currentExecution.value?.id) {
+      ElMessage.error({ message: '执行记录不存在', duration: 5000 })
+      return
+    }
+    if (!pendingApproval.value?.approvalId) {
+      ElMessage.error({ message: '审批批次不存在或已失效', duration: 5000 })
+      return
+    }
+    humanInputLoading.value = true
+    try {
+      executionRequestVersion++
+      showHumanInputDialog.value = false
+      pendingApproval.value = null
+      isStreamRunning.value = true
+      streamAbort.value = executionApi.resumeStream(
+        currentExecution.value.id,
+        '',
+        createStreamHandlers(),
+        { action, rememberSession }
       )
     } finally {
       humanInputLoading.value = false
@@ -409,8 +461,22 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
       const waitRes = await executionApi.getWaitStatus(exec.id)
       if (requestVersion !== executionRequestVersion) return
       if (waitRes.data.code === 1 && waitRes.data.data.waiting) {
-        humanInputQuestion.value = waitRes.data.data.prompt || '请提供输入'
-        humanInputContext.value = waitRes.data.data.context || ''
+        const wd = waitRes.data.data as Record<string, unknown>
+        if (wd.type === 'tool_approval_required') {
+          // 刷新恢复：审批等待 → 审批态 + 审批弹窗
+          pendingApproval.value = {
+            approvalId: String(wd.approval_id || ''),
+            toolCalls: (wd.tool_calls || []) as Array<{ name: string; args: Record<string, unknown> }>,
+            approvalNeeded: (wd.approval_needed || []) as string[],
+            approvalReason: (wd.approval_reason as string) || null
+          }
+          humanInputQuestion.value = '请求执行工具'
+          humanInputContext.value = ''
+        } else {
+          pendingApproval.value = null
+          humanInputQuestion.value = waitRes.data.data.prompt || '请提供输入'
+          humanInputContext.value = waitRes.data.data.context || ''
+        }
         showHumanInputDialog.value = true
       }
     }
@@ -479,6 +545,7 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
     flowTodos.value = []
     isStreamRunning.value = false
     showHumanInputDialog.value = false
+    pendingApproval.value = null
   }
 
   return {
@@ -497,6 +564,9 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
     humanInputContext,
     humanInputLoading,
     humanInputMessages,
+    // 工具审批（Flow 模式 interrupt 路径）
+    pendingApproval,
+    submitApprovalDecision,
     // 方法
     createStreamHandlers,
     startStream,

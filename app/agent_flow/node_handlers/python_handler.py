@@ -458,6 +458,18 @@ class PythonNodeHandler(BaseNodeHandler):
             state.add_error(node.node_key, "Python代码不能为空")
             return state
 
+        # 直执行审批检查（此前不生效——直执行节点无 LLM 工具调用入口）：
+        # 按 approval_required_tools/patterns 判定，命中则等待用户决策
+        approval_result = await self._check_direct_execution_approval(
+            node, state, config, content_for_pattern=code
+        )
+        if approval_result not in (None, "approved"):
+            state.add_error(
+                node.node_key,
+                f"用户未批准执行Python代码（{approval_result}）",
+            )
+            return state
+
         context = self._resolve_input_variables(cfg.input_variables, state)
         # 未绑定来源或解析值为 None 的参数，回退默认值
         for var in cfg.input_variables:

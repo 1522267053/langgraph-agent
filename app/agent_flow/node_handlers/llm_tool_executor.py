@@ -157,12 +157,13 @@ async def _resolve_session_work_dir(
 
 
 def _build_providers_of_node(
-    tool_node, handler_registry: dict, writer=None, session_id: int = 0
+    tool_node, handler_registry: dict, writer=None, session_id: int = 0, execution_id: int = 0
 ) -> list:
     """构建单个工具节点的延迟域 provider 列表（族内粒度由 handler 决定）
 
-    审批依赖（writer/session_id）必须透传：provider 内部构造的工具闭包拿不到
-    handler 自身的注入状态，自行 new 空壳 handler 会让审批静默放行（安全后门）。
+    审批依赖（writer/session_id/execution_id）必须透传：provider 内部构造的工具
+    闭包拿不到 handler 自身的注入状态，自行 new 空壳 handler 会让审批静默放行
+    （安全后门——Agent 缺 session_id、Flow 缺 execution_id 同样绕过）。
     单个节点构建失败不应拖垮整个 LLM 节点，故吞异常并告警。
     """
     node_handler = handler_registry.get(tool_node.node_type)
@@ -170,7 +171,9 @@ def _build_providers_of_node(
         return []
     try:
         return (
-            node_handler.get_providers(tool_node, writer=writer, session_id=session_id)
+            node_handler.get_providers(
+                tool_node, writer=writer, session_id=session_id, execution_id=execution_id
+            )
             or []
         )
     except Exception as e:
@@ -225,6 +228,7 @@ async def setup_tool_handlers(
     handler_registry: dict,
     emit_fn: Optional[Callable] = None,
     session_id: int = 0,
+    execution_id: int = 0,
 ) -> tuple[list[BaseTool], list[str], list[str], list[str]]:
     """单次遍历工具节点，完成三件事：
 
@@ -410,7 +414,7 @@ async def setup_tool_handlers(
         deferred_nodes = auto_nodes + forced_lazy_nodes + forced_bind_nodes
         providers_by_node = {
             tool_node.node_key: _build_providers_of_node(
-                tool_node, handler_registry, writer, session_id
+                tool_node, handler_registry, writer, session_id, execution_id
             )
             for tool_node in deferred_nodes
         }

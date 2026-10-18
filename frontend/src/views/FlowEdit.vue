@@ -470,8 +470,10 @@ async function handleResetBuiltin() {
       :context="humanInputContext"
       :messages="humanInputMessages"
       :loading="humanInputLoading"
+      :approval="pendingApproval"
       @submit="submitHumanInput"
       @cancel="stopExecutionWithPolling"
+      @approval="submitApprovalDecision"
     />
 
     <SnapshotPanel

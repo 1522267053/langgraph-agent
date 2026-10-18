@@ -143,6 +143,22 @@ class ApiNodeHandler(BaseNodeHandler):
             state.add_error(node.node_key, "API地址不能为空")
             return state
 
+        # 直执行审批检查（此前不生效——直执行节点无 LLM 工具调用入口）：
+        # 按 approval_required_tools/patterns 判定，命中则等待用户决策；
+        # 审批内容 = method + URL + body（正则可匹配危险外发目标）
+        approval_result = await self._check_direct_execution_approval(
+            node,
+            state,
+            config,
+            content_for_pattern=f"{method} {api_url} {body_str}",
+        )
+        if approval_result not in (None, "approved"):
+            state.add_error(
+                node.node_key,
+                f"用户未批准执行API调用（{approval_result}）",
+            )
+            return state
+
         headers = {}
         if headers_str:
             try:

@@ -70,15 +70,24 @@ export const executionApi = {
   },
 
   /**
-   * 流式恢复执行（多轮人工交互）
+   * 流式恢复执行（多轮人工交互 / 工具审批决策）
    * @param executionId 执行记录ID
-   * @param input 用户输入
+   * @param input 用户输入（审批决策时忽略）
    * @param handlers 事件处理器
+   * @param approval 审批决策；提供时本次 resume 为审批提交（input 忽略）
    * @returns 中断连接函数
    */
-  resumeStream(executionId: number, input: string, handlers: FlowSSEHandlers): () => void {
+  resumeStream(
+    executionId: number,
+    input: string,
+    handlers: FlowSSEHandlers,
+    approval?: { action: 'approved' | 'rejected'; rememberSession: boolean }
+  ): () => void {
     const url = `/api/execution/human-input-stream/${executionId}`
-    return createFlowSSEConnection(url, { input }, handlers, '[Flow SSE Resume]')
+    const payload = approval
+      ? { input, approval_action: approval.action, remember_session: approval.rememberSession }
+      : { input }
+    return createFlowSSEConnection(url, payload, handlers, '[Flow SSE Resume]')
   },
 
   /**

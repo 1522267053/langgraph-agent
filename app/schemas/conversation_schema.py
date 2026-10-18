@@ -81,6 +81,15 @@ class HumanInputSubmit(BaseView):
 
     execution_id: Optional[int] = Field(default=None, description="执行记录ID")
     input: str = Field(..., description="用户输入内容")
+    approval_action: Optional[str] = Field(
+        default=None,
+        description="工具审批决策（approved/rejected）；非 None 表示本次提交是审批决策"
+        "（input 忽略），resume 携带结构化决策 JSON",
+    )
+    remember_session: bool = Field(
+        default=False,
+        description="审批决策为 approved 时是否记住本执行免审（scope=flow，执行结束失效）",
+    )
 
     @field_validator("input")
     @classmethod
@@ -90,4 +99,12 @@ class HumanInputSubmit(BaseView):
             raise RequestValidationError("用户输入不能为空")
         if len(v) > 10000:
             raise RequestValidationError("用户输入不能超过10000个字符")
+        return v
+
+    @field_validator("approval_action")
+    @classmethod
+    def validate_approval_action(cls, v: Optional[str]) -> Optional[str]:
+        """校验审批决策取值"""
+        if v is not None and v not in ("approved", "rejected"):
+            raise RequestValidationError("approval_action 必须为 approved 或 rejected")
         return v
