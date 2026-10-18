@@ -319,6 +319,17 @@ async def _run_with_client(cfg, job: Callable[[SSHClient], dict]) -> dict:
 # ssh_executor/ssh_upload/ssh_download 描述含运行时值（主机/上限），用构建函数
 
 
+def _render_ssh_target(host: str, username: str, port: int) -> str:
+    """渲染 ssh_executor 描述中的目标主机串（tool_info 与 build_tools 共用）。
+
+    host 未配置时渲染「未配置」提示而非占位主机名（user@host:22 会被模型
+    误读为已配置的连接目标，与 system prompt 的「尚未预设连接信息」矛盾）。
+    """
+    if not (host or "").strip():
+        return "目标主机未配置（请先调用 ssh_set_config 提供主机与凭据）"
+    return f"{username or 'user'}@{host}:{port}"
+
+
 def _desc_ssh_executor(
     target: str = "user@host:22",
     command_timeout: int = 60,
@@ -447,7 +458,8 @@ class SshToolKit(BaseToolKit):
         ssh_executor_tool = StructuredTool(
             name="ssh_executor",
             description=_desc_ssh_executor(
-                f"{cfg.username}@{cfg.host}:{cfg.port}", cfg.command_timeout
+                _render_ssh_target(cfg.host, cfg.username, cfg.port),
+                cfg.command_timeout,
             ),
             func=None,
             coroutine=run_remote_command,
@@ -662,8 +674,16 @@ class SshToolKit(BaseToolKit):
                     sftp.close()
 
                 total = len(entries)
-                dirs = [e for e in entries if stat_module.S_ISDIR(e.st_mode if e.st_mode else -1)]
-                files = [e for e in entries if not stat_module.S_ISDIR(e.st_mode if e.st_mode else -1)]
+                dirs = [
+                    e
+                    for e in entries
+                    if stat_module.S_ISDIR(e.st_mode if e.st_mode else -1)
+                ]
+                files = [
+                    e
+                    for e in entries
+                    if not stat_module.S_ISDIR(e.st_mode if e.st_mode else -1)
+                ]
                 dirs.sort(key=lambda e: e.filename.lower())
                 files.sort(key=lambda e: e.filename.lower())
 
@@ -841,16 +861,16 @@ class SshToolKit(BaseToolKit):
         未配置时用 SshNodeConfig 默认值。
         """
         node_cfg = (getattr(node, "base_config", None) or {}) if node else {}
-        host = node_cfg.get("host") or "user@example.com"
+        host = node_cfg.get("host") or ""
         port = node_cfg.get("port") or 22
-        username = node_cfg.get("username") or "user"
+        username = node_cfg.get("username") or ""
         command_timeout = node_cfg.get("command_timeout") or 300
         transfer_limit_mb = node_cfg.get("max_transfer_mb") or 100
         return [
             {
                 "name": "ssh_executor",
                 "description": _desc_ssh_executor(
-                    f"{username}@{host}:{port}", command_timeout
+                    _render_ssh_target(host, username, port), command_timeout
                 ),
             },
             {"name": "ssh_upload", "description": _desc_ssh_upload(transfer_limit_mb)},

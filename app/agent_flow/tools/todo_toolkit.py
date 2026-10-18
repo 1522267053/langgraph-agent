@@ -28,7 +28,8 @@ if TYPE_CHECKING:
 # ---- 描述单源（唯一维护点；tool_info 与 build_tools 共用）----
 TODO_TOOL_DESCRIPTIONS: dict[str, str] = {
     "todowrite": (
-        "创建或更新任务列表。"
+        "创建或更新任务列表（LLM 自身的任务规划工具，专用于拆解和跟踪你正在执行的"
+        "多步任务；不要用它记录用户的待办事项）。"
         "参数 todos 为 JSON 数组，每条: content(必填), status, priority。"
         "每次调用替换整个列表，同一时间仅一个 in_progress。"
     ),

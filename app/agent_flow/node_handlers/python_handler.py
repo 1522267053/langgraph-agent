@@ -324,9 +324,7 @@ def _has_module_level_main_call(code: str) -> bool:
             return True
         # x = main() / x: T = main() 赋值右侧直接调用
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            value = (
-                node.value if isinstance(node, ast.Assign) else node.value
-            )
+            value = node.value if isinstance(node, ast.Assign) else node.value
             if value is not None and _is_main_call(value):
                 return True
     return False
@@ -636,10 +634,10 @@ class PythonNodeHandler(BaseNodeHandler):
         description = f"""在 Agent 主机上执行 Python 代码，进行数据处理、文件读写或流程中间计算。
 这是一个给后端补 Python 解释器能力的工具（不需要主机预装 Python），代码运行在后端 Python 环境，可读写本地文件系统，并非隔离沙箱。
 
-⚠️ main 调用规则（防双跑，必须遵守）：
-- 方式一（推荐）：定义 def main(...)，系统自动调用并取返回值作为结果——顶层不要再调用 main()
+⚠️ main 调用规则（防双跑）：
+- 方式一（推荐）：定义 def main(...)，系统自动调用并取返回值作为结果
 - 方式二：不定义 main，顶层直接写执行代码（print 输出作为结果）
-- 禁止「定义 main 后又在顶层调用 main()」——顶层调用已执行一遍，系统会跳过重复调用，但结果以 stdout 为准（main 返回值丢失）
+- 不推荐「定义 main 后又在顶层调用 main()」：系统检测到顶层调用会跳过自动调用（不会双跑），但此时结果以 stdout 为准，main 的返回值会丢失——需要返回值时不要这样写
 
 参数类型说明:
 {param_list}
@@ -648,9 +646,9 @@ class PythonNodeHandler(BaseNodeHandler):
 不适合此工具的能力: subprocess / socket / shutil 等未列入白名单的模块（如需请改用 shell_executor 或 ssh_executor）。
 
 文件 IO 约定:
-- 默认工作目录是后端进程目录（不是用户当前项目目录，也不是约定 temp 目录）；如需写入请用绝对路径，必要时可先用 os.chdir() 切换。
+- 本工具不感知 Agent 工作目录，代码继承后端进程启动目录（与 shell_executor 的默认工作目录不同）；读写文件请一律使用绝对路径。Agent 工作目录可从 shell_executor 返回的 cwd 或运行时提醒中获取。
 - 工作流 Python 节点里读 CSV / JSON / 文本等本地文件是正常用法。
-- 一次性验证脚本推荐写到项目的 workspace/temp 目录（_check/_tmp 前缀），7 天自动清理。
+- 一次性验证脚本推荐写到 workspace/temp 目录（_check/_tmp 前缀，绝对路径），7 天自动清理。
 - 文件复制：shutil 不在白名单，用 open(src,'rb') 读 + open(dst,'wb') 写完成。
 
 硬拦截（无法绕过）:

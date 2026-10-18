@@ -370,6 +370,7 @@ class ShellNodeHandler(BaseNodeHandler):
     async def get_system_prompt_hint(self, node: FlowNode) -> Optional[str]:
         """返回临时文件目录说明和文件工具使用指南，追加到 LLM system_prompt"""
         temp_dir = get_temp_dir()
+        cfg = self._get_config(node)
         ps_compat_hint = (
             (
                 "### Windows 命令环境（cmd.exe）\n"
@@ -406,7 +407,8 @@ class ShellNodeHandler(BaseNodeHandler):
                 "- 工具执行产出媒体文件（截图、导出的 PDF 等）后，如需查看其内容，"
                 "主动用 file_read 读取该文件路径\n"
                 "- xlsx/docx 自动转文本读取；不支持网络 URL、视频和 .xls/.doc 旧格式，"
-                "禁止用 file_read 读其他二进制文件\n"
+                "file_read 仅支持上述类型（图片/PDF/音频/xlsx/docx）与文本文件，"
+                "其余二进制文件（exe/zip/视频/数据库文件等）禁止用 file_read 读取\n"
             )
             if supported_labels
             else (
@@ -414,7 +416,8 @@ class ShellNodeHandler(BaseNodeHandler):
                 "当前模型不支持查看图片/音频/PDF，用户要求查看媒体文件时如实说明，"
                 "不要尝试用 file_read 读取媒体文件（会返回错误），也不要声称已查看媒体内容\n"
                 "- xlsx/docx 自动转文本读取；不支持网络 URL、视频和 .xls/.doc 旧格式，"
-                "禁止用 file_read 读其他二进制文件\n"
+                "file_read 仅支持上述类型（xlsx/docx）与文本文件，"
+                "其余二进制文件（exe/zip/视频/数据库文件等）禁止用 file_read 读取\n"
             )
         )
 
@@ -432,6 +435,9 @@ class ShellNodeHandler(BaseNodeHandler):
             "- Shell 每次调用都是独立进程；切换目录时传入 shell_executor 的 workdir 参数，不要依赖 cd 影响后续调用\n"
             "- 长时间任务超过等待秒数会转后台并返回 task_id：后台任务支持并发与多次长阻塞查询（wait_time 最长120秒），"
             "期间可继续执行其他工具调用\n"
+            f"- 三重超时的关系：命令执行等待 {cfg.async_wait} 秒未完成→转后台继续跑（不算失败）；"
+            f"后台任务连续 {cfg.timeout} 秒无任何输出才判超时清杀（idle_timeout，持续输出的长驻进程不会误杀）；"
+            "后台任务总时长另有硬上限（默认1800秒，timeout_reason=max_duration，节点配置 max_duration=0 可解除）\n"
             "- 需要等待时（后台任务推进、服务启动、文件生成、重试间隔）用 shell_wait 主动等待（1~120秒），"
             "不要用高频空转轮询消耗调用次数\n"
             "### 后台任务三件套（status / input / cancel）联动模式\n"

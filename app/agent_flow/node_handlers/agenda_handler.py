@@ -60,12 +60,17 @@ class AgendaNodeHandler(BaseNodeHandler):
         return (
             "\n\n## 日程管理\n"
             "拥有日程管理能力（agenda_create/agenda_list/agenda_update/agenda_delete）。使用规则：\n"
-            "- 用户提到日程、提醒、安排时间时，主动使用日程工具\n"
+            "- 用户提到日程、安排时间时，主动使用日程工具\n"
             "- 时间格式统一使用 YYYY-MM-DD HH:MM:SS\n"
             "- 修改日程流程：① agenda_list 查询找到目标日程（含 recurrence/color）→ ② 获取 id ③ agenda_update(id, ...) 更新\n"
             "- 删除日程流程：① agenda_list 查询找到目标日程 → ② 获取 id → ③ agenda_delete(id)\n"
             "- 日程时间已过时也可查询（用于回顾）\n"
-            "- 更新字段语义：不传=保持原值；传 null 或空串=清空（title 不支持清空）；传值=设为该值"
+            "- 更新字段语义：不传=保持原值；传 null 或空串=清空（title 不支持清空）；传值=设为该值\n"
+            "- **提醒类请求路由裁决**（日程工具与定时任务都可能命中，按此裁决）：\n"
+            "  · 需要日历承载/可查看可编辑的日程（如「明天下午3点开会」「每周一例会」）→ 用 agenda_create（recurrence 支持周期）\n"
+            "  · 纯通知型提醒、无需日历管理（如「每30分钟提醒我喝水」「半小时后提醒我看远方」）→ 不用日程工具，"
+            "改走 scheduled-task-manager 技能创建 reminder 类型定时任务（到点仅推送 WebSocket 通知，不进日历）\n"
+            "  · 用户明确说「定时任务」或同时要求执行流程/Agent 时 → 一律走 scheduled-task-manager"
         )
 
     async def get_tool(self, node: FlowNode) -> list[BaseTool]:

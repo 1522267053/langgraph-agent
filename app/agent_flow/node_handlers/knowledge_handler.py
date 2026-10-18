@@ -212,28 +212,44 @@ class KnowledgeNodeHandler(BaseNodeHandler):
                 name = kb.name or "知识库"
                 description = kb.description or ""
 
+                # 工具名规则必须写「knowledge_<node_key>_<动作>」模式而非渲染真实
+                # node_key：node_key 是用户任意命名，逐字渲染会让每个 knowledge
+                # 节点产生一份不同文本，破坏 system_prompt 前缀缓存（AGENTS.md
+                # 强制不变量）。静态模式化描述跨节点逐字节一致，模型按运行时
+                # 工具列表中的真实前缀套用即可。
                 static_prefix = (
                     "\n\n## 知识库\n"
                     "你已连接知识库，可通过工具浏览其文档内容。"
-                    "\n\n沉淀策略（仅在以下时机使用 knowledge_save_insight）：\n"
+                    "知识库工具名均带节点前缀，模式为 `knowledge_<node_key>_<动作>`"
+                    "（<node_key> 为该知识库节点的标识，以运行时工具列表中的实际名称为准，"
+                    "不要按裸短名如 knowledge_save_insight 拼名）。\n"
+                    "\n沉淀策略（仅在以下时机使用 knowledge_<node_key>_save_insight）：\n"
                     "1. 综合多个段落得出完整答案时 — 保存总结（question写原始问题，answer写综合答案）\n"
                     "2. 多次导航拼凑出复杂主题全貌时 — 保存最终结论\n"
                     "3. 重复回答同类问题时 — 首次整理后保存，后续搜索可命中\n"
                     "4. 发现跨文档的关联知识时 — 保存分析结论\n"
                     "\n不需要保存的情况：直接引用单个段落、临时性回答、不确定准确的信息\n"
-                    "保存前可用 knowledge_list_insight 查看已有沉淀，避免重复保存同类结论\n"
+                    "保存前可用 knowledge_<node_key>_list_insight 查看已有沉淀，避免重复保存同类结论\n"
                 )
                 if cfg.enable_document_edit:
                     static_prefix += (
-                        "\n文档沉淀（knowledge_save_document / knowledge_update_document"
-                        " / knowledge_delete_document）：\n"
+                        "\n文档沉淀（knowledge_<node_key>_save_document"
+                        " / knowledge_<node_key>_update_document"
+                        " / knowledge_<node_key>_delete_document）：\n"
                         "当用户要求把知识整理进知识库、或成体系的知识值得长期沉淀时，写成 Markdown 文档：\n"
-                        "1. 保存前先用 title_search 查看文档列表，同主题文档已存在则用 update_document"
-                        " 全量覆盖更新（不是追加）\n"
+                        "1. 保存前先用 knowledge_<node_key>_title_search 查看文档列表，"
+                        "同主题文档已存在则用 knowledge_<node_key>_update_document 全量覆盖更新（不是追加）\n"
                         "2. 内容用 # 层级标题组织，系统会按标题生成标题树并分段向量化\n"
                         "3. 保存后约1分钟完成分段向量化，期间检索不到属正常现象，不要重复保存\n"
-                        "零散的单点结论仍优先用 knowledge_save_insight，成体系资料用文档沉淀\n"
+                        "零散的单点结论仍优先用 knowledge_<node_key>_save_insight，成体系资料用文档沉淀\n"
                     )
+                static_prefix += (
+                    "\n工具调用路径：知识库工具可能未直接绑定在你的工具列表中（按需加载），"
+                    "此时通过 tool_info_list → tool_search_tool_regex → tool_execute 三步访问；"
+                    "动作名清单：search/title_search/get_paragraphs/adjacent/title_lookup/"
+                    "save_insight/list_insight/delete_insight"
+                    "[/save_document/update_document/delete_document/list_document]"
+                )
                 dynamic_suffix = f"\n知识库名称：{name}"
                 if description:
                     dynamic_suffix += f"\n简介：{description}"
