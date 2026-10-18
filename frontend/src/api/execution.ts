@@ -91,6 +91,26 @@ export const executionApi = {
   },
 
   /**
+   * 提交工具审批决策（Flow future 路线；resolve 后端 future 唤醒执行流）
+   * @param executionId 执行记录ID（审批队列 key）
+   * @param approvalId 审批批次ID
+   * @param action approved / rejected
+   * @param rememberSession 批准时是否记住本执行免审
+   */
+  submitToolApproval(
+    executionId: number,
+    approvalId: string,
+    action: 'approved' | 'rejected',
+    rememberSession: boolean
+  ): Promise<unknown> {
+    return post(`/execution/tool-approval/${executionId}`, {
+      approval_id: approvalId,
+      action,
+      remember_session: rememberSession
+    })
+  },
+
+  /**
    * 获取等待状态
    * @param executionId 执行记录ID
    */

@@ -473,6 +473,12 @@ class FlowExecutorService(BaseExecutorService):
                     "action": approval_action,
                     "remember_session": remember_session,
                 }
+                logger.info(
+                    "审批决策 resume: execution_id=%s, action=%s, remember_session=%s",
+                    execution_id,
+                    approval_action,
+                    remember_session,
+                )
             else:
                 resume_value = human_input
 
@@ -552,9 +558,12 @@ class FlowExecutorService(BaseExecutorService):
                 for node_key, result in event_data.items():
                     if node_key == "__interrupt__":
                         interrupt_data = result[0].value if result else {}
-                        yield await self._handle_interrupt_and_save(
+                        interrupt_event = await self._handle_interrupt_and_save(
                             execution_id, interrupt_data, context, flow_name=flow_name
                         )
+                        # 终态守卫返回 None：执行已被取消/失败，不再推送等待事件
+                        if interrupt_event is not None:
+                            yield interrupt_event
                         return
 
                     node = node_map.get(node_key)
@@ -1028,7 +1037,8 @@ class FlowExecutorService(BaseExecutorService):
             flow_name: 流程名称（通知标题用）
 
         Returns:
-            waiting_human 事件
+            waiting_human 事件；执行已处于终态（被取消/失败等）时返回 None，
+            表示 interrupt 已被终态守卫丢弃，不应推送等待事件
         """
         question = interrupt_data.get("question", "请提供输入")
         context_str = interrupt_data.get("context")
@@ -1046,6 +1056,18 @@ class FlowExecutorService(BaseExecutorService):
         async with AsyncSessionLocal() as db:
             execution = await self.get_execution(db, execution_id)
             if execution:
+                # 终态守卫：取消/失败/完成后到达的 interrupt 不再覆盖状态。
+                # 竞态场景：用户点终止 → cancel 置 CANCELLED，但图任务尚未跑到
+                # 取消检查点，工具闭包的审批 interrupt() 先触发——若无条件写
+                # WAITING_HUMAN，会把已取消的执行「复活」并推送等待通知。
+                if execution.status != ExecutionStatus.RUNNING.value:
+                    logger.warning(
+                        "忽略终态执行的 interrupt: execution_id=%s, status=%s, type=%s",
+                        execution_id,
+                        execution.status,
+                        interrupt_data.get("type"),
+                    )
+                    return None
                 execution.status = ExecutionStatus.WAITING_HUMAN.value
                 execution.wait_for = "human_input"
                 execution.wait_data = wait_data

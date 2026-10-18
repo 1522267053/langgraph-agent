@@ -283,6 +283,14 @@ class BaseNodeHandler(ABC):
         # Flow 模式执行记录 ID（thread_id=flow_{id} 时由 _resolve_context 写入；
         # >0 表示 Flow 模式，工具审批钩子走 interrupt 路径）
         self._execution_id: int = 0
+        # Flow 审批互斥锁：同一 handler 实例服务并行工具时串行化「查授权 →
+        # 加入/创建审批批次」的快速决策段，防止并发写批次状态。
+        # 批次合并语义见 _request_flow_batch_approval。
+        self._flow_approval_lock = asyncio.Lock()
+        # Flow 活跃审批批次：{"approval_id", "future", "tool_calls"}。
+        # 并行工具进锁时若存在未决策批次则加入（整批一次弹窗一次决策），
+        # 批次决策后由创建者清理。仅 Flow 路线使用（Agent 保持逐工具队列语义）。
+        self._active_flow_batch: Optional[dict] = None
         # 审批正则缓存：_compiled_patterns_source 作为缓存 key（tuple 不可哈希问题规避）
         self._compiled_patterns: list[re.Pattern] = []
         self._compiled_patterns_source: Optional[tuple[str, ...]] = None
@@ -481,13 +489,45 @@ class BaseNodeHandler(ABC):
             reason_parts.append(f"命令匹配危险模式: {matched_pattern}")
         approval_reason = "; ".join(reason_parts) or None
 
-        # 4) 模式分流：Flow 走 interrupt（waiting_human），Agent 走 SSE pending
+        # 4) 模式分流：Flow 与 Agent 统一走 tool_approval_service（future 等待）。
+        # Flow 曾用 LangGraph interrupt 路线，但 interrupt 会暂停整张图并在
+        # resume 后从头重执行节点——LLM 被重新调用生成新工具调用，旧工具段在
+        # 前端永远停在「执行中」（新事件是新 tool_call_id），且多批审批连环
+        # 弹窗。future 路线：图不暂停，SSE 推审批事件，await Event 等决策，
+        # 与 Agent 模式完全同构（tool_approval_service 注释亦说明此设计动机）。
+        # session key：Agent 用 session_id，Flow 用 execution_id（两域主键独立，
+        # tool_approval_service 队列按 key 隔离，互不干扰）。
         if self._session_id <= 0 and self._execution_id > 0:
-            return await self._request_tool_approval_via_interrupt(
-                tool_name=tool_name,
-                tool_args=tool_args,
-                node_key=node_key,
-                approval_reason=approval_reason,
+            # Flow 整批审批：锁内只做「查授权 → 加入/创建批次」的快速决策段，
+            # **锁必须在本调用返回前释放**——收集窗口与 Event 等待都在锁外，
+            # 否则兄弟工具永远拿不到锁（自我死锁，模拟测试实锤）。
+            async with self._flow_approval_lock:
+                try:
+                    if await self._has_session_grant(tool_name):
+                        logger.info(
+                            "免审授权命中(锁内双检): execution_id=%s, tool=%s（自动放行）",
+                            self._execution_id,
+                            tool_name,
+                        )
+                        return "approved"
+                except Exception as e:
+                    logger.warning("免审授权查询失败，按需审批处理: %s", e)
+                # 锁内快速段：加入/创建批次（创建者先不发事件），拿到 (future, approval_id)
+                future, approval_id, is_creator = await self._join_or_create_batch(
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    node_key=node_key,
+                    approval_reason=approval_reason,
+                )
+            # ---- 锁外：创建者走收集窗口收敛成员后发全量事件 ----
+            if is_creator:
+                await self._collect_and_emit_batch(
+                    approval_id=approval_id, node_key=node_key
+                )
+            return await self._await_batch_decision(
+                future=future,
+                approval_id=approval_id,
+                is_creator=is_creator,
             )
 
         return await self._request_tool_approval(
@@ -524,71 +564,6 @@ class BaseNodeHandler(ABC):
                 )
             )
             return result.first() is not None
-
-    async def _request_tool_approval_via_interrupt(
-        self,
-        tool_name: str,
-        tool_args: dict,
-        node_key: str,
-        approval_reason: Optional[str] = None,
-    ) -> str:
-        """Flow 模式审批：LangGraph interrupt 暂停 → waiting_human 落库 → resume 恢复。
-
-        interrupt payload 由 _handle_interrupt_and_save 全量存入 execution.wait_data，
-        前端 Flow 页据此渲染审批弹窗；resume 携带决策 JSON（见 execution_api
-        HumanInputSubmit），interrupt() 返回该 JSON，此处解析并写审计/授权。
-        Returns: "approved" / "rejected"。
-        """
-        from langgraph.types import interrupt
-
-        from app.services.pending_audit import PendingAuditLogger
-
-        approval_id = uuid.uuid4().hex[:16]
-        audit = PendingAuditLogger("approval", scope="flow")
-
-        # asked 快照落盘（scope=flow，session_id 列存 execution_id）
-        audit.audit_asked(
-            self._execution_id,
-            approval_id,
-            {
-                "tool_calls": [
-                    {"id": f"call_{uuid.uuid4().hex[:24]}", "name": tool_name, "args": tool_args}
-                ],
-                "approval_needed": [tool_name],
-                "approval_reason": approval_reason,
-            },
-        )
-
-        # interrupt：执行暂停，payload 进 checkpoint + execution.wait_data
-        decision = interrupt(
-            {
-                "type": "tool_approval_required",
-                "node_key": node_key,
-                "approval_id": approval_id,
-                "tool_calls": [{"name": tool_name, "args": tool_args}],
-                "approval_needed": [tool_name],
-                "approval_reason": approval_reason,
-            }
-        )
-
-        # resume 后到达：解析决策（异常/非法值按拒绝处理，fail-closed）
-        action = "rejected"
-        remember = False
-        if isinstance(decision, dict):
-            action = decision.get("action", "rejected")
-            remember = bool(decision.get("remember_session"))
-        if action not in ("approved", "rejected"):
-            action = "rejected"
-
-        audit.audit_decided(self._execution_id, approval_id, action)
-
-        if action == "approved" and remember:
-            try:
-                await self._grant_flow_tool(tool_name, approval_id)
-            except Exception as e:
-                logger.warning("Flow 执行级免审授权写入失败: %s", e)
-
-        return action
 
     async def _grant_flow_tool(self, tool_name: str, approval_id: str) -> None:
         """写 Flow 执行级免审授权（scope=flow，session_id 列存 execution_id）"""
@@ -628,9 +603,13 @@ class BaseNodeHandler(ABC):
         from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
         from app.services.tool_approval_service import tool_approval_service
 
+        # 队列 key：Agent 用 session_id，Flow 用 execution_id（两域主键独立自增，
+        # 混用会撞号；tool_approval_service 队列按 key 隔离，语义等同域隔离）
+        approval_key = self._session_id if self._session_id > 0 else self._execution_id
+
         approval_id = uuid.uuid4().hex[:16]
         future = tool_approval_service.register(
-            self._session_id,
+            approval_key,
             approval_id,
             tool_calls=[
                 {
@@ -663,10 +642,10 @@ class BaseNodeHandler(ABC):
             )
         except Exception as e:  # 事件发送失败按拒绝处理，避免继续执行未知命令
             logger.warning("审批事件发送失败，按拒绝处理: %s", e)
-            tool_approval_service.remove(self._session_id, approval_id)
+            tool_approval_service.remove(approval_key, approval_id)
             # 审计补写：发送失败即 fail-closed 拒绝（asked 行已落，补终态）
-            tool_approval_service._audit_decided(
-                self._session_id, approval_id, "rejected"
+            tool_approval_service._audit.audit_decided(
+                approval_key, approval_id, "rejected"
             )
             return "rejected"
 
@@ -675,12 +654,140 @@ class BaseNodeHandler(ABC):
                 future.event.wait(), timeout=USER_RESPONSE_TIMEOUT_SECONDS
             )
         except asyncio.TimeoutError:
-            tool_approval_service.remove(self._session_id, approval_id)
+            tool_approval_service.remove(approval_key, approval_id)
             # 审计补写：超时终态（与用户决策竞争时先到先得，幂等）
-            tool_approval_service.mark_timeout(self._session_id, approval_id)
+            tool_approval_service.mark_timeout(approval_key, approval_id)
             return "timeout"
 
-        tool_approval_service.remove(self._session_id, approval_id)
+        tool_approval_service.remove(approval_key, approval_id)
+        return future.result or "rejected"
+
+    async def _join_or_create_batch(
+        self,
+        tool_name: str,
+        tool_args: dict,
+        node_key: str,
+        approval_reason: Optional[str] = None,
+    ) -> tuple[Any, str, bool]:
+        """锁内快速段：加入活跃批次或创建新批次（创建者先不发事件）。
+
+        调用方必须已持有 _flow_approval_lock。返回 (future, approval_id, is_creator)。
+        """
+        from app.services.tool_approval_service import tool_approval_service
+
+        approval_key = self._execution_id
+
+        if (
+            self._active_flow_batch is not None
+            and tool_approval_service.is_pending(
+                approval_key, self._active_flow_batch["approval_id"]
+            )
+        ):
+            # 加入现有批次（慢兄弟兜底：创建者已发事件后才进锁的场景）
+            batch = self._active_flow_batch
+            batch["tool_calls"].append(
+                {"id": batch["approval_id"], "name": tool_name, "args": tool_args}
+            )
+            return batch["future"], batch["approval_id"], False
+
+        approval_id = uuid.uuid4().hex[:16]
+        future = tool_approval_service.register(
+            approval_key,
+            approval_id,
+            tool_calls=[
+                {"id": f"call_{uuid.uuid4().hex[:24]}", "name": tool_name, "args": tool_args}
+            ],
+            approval_needed=[tool_name],
+            approval_reason=approval_reason,
+        )
+        self._active_flow_batch = {
+            "approval_id": approval_id,
+            "future": future,
+            "tool_calls": [{"id": approval_id, "name": tool_name, "args": tool_args}],
+        }
+        return future, approval_id, True
+
+    async def _collect_and_emit_batch(self, approval_id: str, node_key: str) -> None:
+        """锁外收集窗口：等并行兄弟进锁加入（动态收敛），稳定后发全量事件。
+
+        创建者专用。窗口总时长 ~1s（10 轮 × 100ms），连续一轮无新增即收敛。
+        """
+        from app.agent_flow.flow_event import ToolApprovalEvent
+        from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
+        from app.services.tool_approval_service import tool_approval_service
+
+        approval_key = self._execution_id
+        last_count = 1
+        for _ in range(10):
+            await asyncio.sleep(0.1)
+            async with self._flow_approval_lock:
+                batch = self._active_flow_batch
+                cur = (
+                    len(batch["tool_calls"])
+                    if batch and batch["approval_id"] == approval_id
+                    else last_count
+                )
+            if cur > last_count:
+                last_count = cur
+            else:
+                break
+
+        # 取最终成员快照发全量事件（前端弹窗渲染全部工具卡片）
+        async with self._flow_approval_lock:
+            batch = self._active_flow_batch
+            tool_calls = (
+                list(batch["tool_calls"])
+                if batch and batch["approval_id"] == approval_id
+                else []
+            )
+        try:
+            if self._writer is None:
+                raise RuntimeError("StreamWriter 未注入，无法发送审批事件")
+            self._writer(
+                ToolApprovalEvent(
+                    node_key=node_key,
+                    approval_id=approval_id,
+                    tool_calls=tool_calls,
+                    approval_needed=[tc["name"] for tc in tool_calls],
+                    expires_in=USER_RESPONSE_TIMEOUT_SECONDS,
+                    approval_reason=None,
+                    total=len(tool_calls),
+                )
+            )
+        except Exception as e:
+            logger.warning("审批事件发送失败，按拒绝处理: %s", e)
+            tool_approval_service.remove(approval_key, approval_id)
+            self._active_flow_batch = None
+            tool_approval_service._audit.audit_decided(
+                approval_key, approval_id, "rejected"
+            )
+
+    async def _await_batch_decision(
+        self, future: Any, approval_id: str, is_creator: bool
+    ) -> str:
+        """锁外等批次决策（Event 由 tool_approval_service.resolve 触发）。
+
+        创建者负责清理批次状态（决策后/超时后）；加入者只读结果。
+        """
+        from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
+        from app.services.tool_approval_service import tool_approval_service
+
+        approval_key = self._execution_id
+        try:
+            await asyncio.wait_for(
+                future.event.wait(), timeout=USER_RESPONSE_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            if is_creator:
+                tool_approval_service.remove(approval_key, approval_id)
+                self._active_flow_batch = None
+                tool_approval_service.mark_timeout(approval_key, approval_id)
+            return "timeout"
+
+        if is_creator:
+            tool_approval_service.remove(approval_key, approval_id)
+            self._active_flow_batch = None
+
         return future.result or "rejected"
 
     # ---- 配置校验 ----

@@ -51,12 +51,14 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
   const humanInputLoading = ref(false)
   const humanInputMessages = ref<ConversationMessage[]>([])
 
-  // ---- 工具审批状态（Flow 模式 interrupt 路径；非空时 HumanInputDialog 渲染审批分支） ----
+  // ---- 工具审批状态（Flow future 路线；非空时 HumanInputDialog 渲染审批分支） ----
   const pendingApproval = ref<{
     approvalId: string
     toolCalls: Array<{ name: string; args: Record<string, unknown> }>
     approvalNeeded: string[]
     approvalReason: string | null
+    /** 倒计时死线（本地毫秒时间戳，由事件 expires_in 换算；null 不显示倒计时） */
+    expiresAt: number | null
   } | null>(null)
 
   // ---- 计算属性 ----
@@ -238,6 +240,7 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
       },
       onToolCallLimit: createOnToolCallLimitHandler(),
       onWaitingHuman: handleWaitingHuman,
+      onToolApproval: handleToolApproval,
       onTokenUsage: (event: SSEEvent) => {
         const nodeKey = event.data.node_key || ''
         const existingIndex = nodeExecutions.value.findIndex(n => n.node_key === nodeKey)
@@ -304,22 +307,7 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
 
   // ---- 人工输入 ----
   function handleWaitingHuman(event: SSEEvent): void {
-    const waitData = (event.data.wait_data || {}) as Record<string, unknown>
-    // 工具审批等待：置审批态，弹窗渲染审批分支（拒绝/批准并记住/批准）
-    if (waitData.type === 'tool_approval_required') {
-      pendingApproval.value = {
-        approvalId: String(waitData.approval_id || ''),
-        toolCalls: (waitData.tool_calls || []) as Array<{ name: string; args: Record<string, unknown> }>,
-        approvalNeeded: (waitData.approval_needed || []) as string[],
-        approvalReason: (waitData.approval_reason as string) || null
-      }
-      humanInputQuestion.value = '请求执行工具'
-      humanInputContext.value = ''
-      humanInputMessages.value = []
-      showHumanInputDialog.value = true
-      return
-    }
-    // 常规人工输入
+    // 常规人工输入（工具审批已切换到 future 路线，走 onToolApproval 事件）
     pendingApproval.value = null
     humanInputQuestion.value = event.data.question || '请提供输入'
     humanInputContext.value = event.data.context || ''
@@ -328,6 +316,53 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
       loadConversationHistory(event.data.execution_id, event.data.node_key, executionRequestVersion)
     }
     showHumanInputDialog.value = true
+  }
+
+  // ---- 工具审批（Flow future 路线：与 Agent 同构，SSE ToolApprovalEvent 直达） ----
+  function handleToolApproval(event: SSEEvent): void {
+    const expiresIn = Number(event.data.expires_in) || 0
+    pendingApproval.value = {
+      approvalId: String(event.data.approval_id || ''),
+      toolCalls: (event.data.tool_calls || []) as Array<{ name: string; args: Record<string, unknown> }>,
+      approvalNeeded: (event.data.approval_needed || []) as string[],
+      approvalReason: (event.data.approval_reason as string) || null,
+      // 后端权威剩余秒数 → 本地死线（与 AgentChat approvalCountdown 同语义）
+      expiresAt: expiresIn > 0 ? Date.now() + expiresIn * 1000 : null
+    }
+    humanInputQuestion.value = '请求执行工具'
+    humanInputContext.value = ''
+    humanInputMessages.value = []
+    showHumanInputDialog.value = true
+  }
+
+  /** 提交工具审批决策（Flow future 路线；resolve 后端 future 唤醒执行流，SSE 流保持连接） */
+  async function submitApprovalDecision(action: 'approved' | 'rejected', rememberSession = false): Promise<void> {
+    if (!currentExecution.value?.id) {
+      ElMessage.error({ message: '执行记录不存在', duration: 5000 })
+      return
+    }
+    if (!pendingApproval.value?.approvalId) {
+      ElMessage.error({ message: '审批批次不存在或已失效', duration: 5000 })
+      return
+    }
+    humanInputLoading.value = true
+    try {
+      await executionApi.submitToolApproval(
+        currentExecution.value.id,
+        pendingApproval.value.approvalId,
+        action,
+        rememberSession
+      )
+      // 决策已唤醒后端执行流：关弹窗、恢复 running 态。
+      // SSE 连接未断，后续工具 start/end 事件继续由现有 handlers 消费
+      showHumanInputDialog.value = false
+      pendingApproval.value = null
+    } catch (error) {
+      console.error('[useFlowExecution] 提交审批决策失败:', error)
+      ElMessage.error({ message: '提交审批失败，请重试', duration: 5000 })
+    } finally {
+      humanInputLoading.value = false
+    }
   }
 
   async function loadConversationHistory(
@@ -373,33 +408,6 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
         currentExecution.value.id,
         value,
         createStreamHandlers()
-      )
-    } finally {
-      humanInputLoading.value = false
-    }
-  }
-
-  /** 提交工具审批决策（Flow 模式 interrupt 路径；resume 携带结构化决策） */
-  function submitApprovalDecision(action: 'approved' | 'rejected', rememberSession = false): void {
-    if (!currentExecution.value?.id) {
-      ElMessage.error({ message: '执行记录不存在', duration: 5000 })
-      return
-    }
-    if (!pendingApproval.value?.approvalId) {
-      ElMessage.error({ message: '审批批次不存在或已失效', duration: 5000 })
-      return
-    }
-    humanInputLoading.value = true
-    try {
-      executionRequestVersion++
-      showHumanInputDialog.value = false
-      pendingApproval.value = null
-      isStreamRunning.value = true
-      streamAbort.value = executionApi.resumeStream(
-        currentExecution.value.id,
-        '',
-        createStreamHandlers(),
-        { action, rememberSession }
       )
     } finally {
       humanInputLoading.value = false
@@ -462,21 +470,10 @@ export function useFlowExecution(options: UseFlowExecutionOptions = {}) {
       if (requestVersion !== executionRequestVersion) return
       if (waitRes.data.code === 1 && waitRes.data.data.waiting) {
         const wd = waitRes.data.data as Record<string, unknown>
-        if (wd.type === 'tool_approval_required') {
-          // 刷新恢复：审批等待 → 审批态 + 审批弹窗
-          pendingApproval.value = {
-            approvalId: String(wd.approval_id || ''),
-            toolCalls: (wd.tool_calls || []) as Array<{ name: string; args: Record<string, unknown> }>,
-            approvalNeeded: (wd.approval_needed || []) as string[],
-            approvalReason: (wd.approval_reason as string) || null
-          }
-          humanInputQuestion.value = '请求执行工具'
-          humanInputContext.value = ''
-        } else {
-          pendingApproval.value = null
-          humanInputQuestion.value = waitRes.data.data.prompt || '请提供输入'
-          humanInputContext.value = waitRes.data.data.context || ''
-        }
+        // future 路线下审批不再产生 WAITING_HUMAN（图不暂停），刷新恢复只处理人工输入
+        pendingApproval.value = null
+        humanInputQuestion.value = wd.prompt || '请提供输入'
+        humanInputContext.value = wd.context || ''
         showHumanInputDialog.value = true
       }
     }

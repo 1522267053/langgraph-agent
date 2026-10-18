@@ -280,10 +280,12 @@ AI 消息带 `end_output` 字段（结束节点输出持久化），可直接读
 
 ```text
 POST /agent/{agent_id}/sessions/{session_id}/tool_approval
-Body: {"action": "approved"}
+Body: {"action": "approved", "remember_session": false}
 ```
 
-`action` 只能是 `approved` 或 `rejected`。子 Agent 审批需要使用事件携带的子 Agent ID 和子会话 ID，详见 [子 Agent](sub-agent.md)。
+`action` 只能是 `approved` 或 `rejected`；`remember_session`（可选，默认 false）为 true 时记住本会话免审（同会话同工具后续调用自动放行，写 session_tool_grant 表）。子 Agent 审批需要使用事件携带的子 Agent ID 和子会话 ID，详见 [子 Agent](sub-agent.md)。
+
+Flow 模式审批（interrupt 路径）走 `POST /execution/human-input-stream/{execution_id}`，请求体加 `approval_action`（approved/rejected）与 `remember_session` 字段，详见 [工具审批](tool-approval.md#双模式分流agent=sse-弹窗--flow=interrupt-暂停)。
 
 ## 修改后验证
 

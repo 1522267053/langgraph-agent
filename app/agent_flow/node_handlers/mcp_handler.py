@@ -13,6 +13,7 @@ from typing import Optional, TYPE_CHECKING
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 
+from langgraph.errors import GraphBubbleUp
 from langgraph.types import StreamWriter
 from pydantic import Field
 
@@ -119,6 +120,10 @@ class McpNodeHandler(BaseNodeHandler):
             # 4. 结果写入输出变量（默认 result，可通过 output_variables 改名）
             output_names = self._resolve_output_var_names(node)
             state.set_node_variable(node.node_key, output_names[0], result)
+        except GraphBubbleUp:
+            # LangGraph interrupt（Flow 模式 MCP 工具审批）必须冒泡到框架层，
+            # 吞掉会把暂停变成节点错误、审批永不弹出
+            raise
         except Exception as e:
             logger.exception(f"MCP节点直接执行失败: {e}")
             state.add_error(node.node_key, f"MCP工具 {tool_name} 执行失败: {str(e)}")

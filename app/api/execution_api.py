@@ -24,7 +24,12 @@ from app.schemas.execution_schema import (
     ExecutionInput,
 )
 from app.schemas.conversation_schema import HumanInputSubmit
+from app.api.agent_api import ToolApprovalRequest
 from app.schemas.base_schema import ApiResponse, PaginationParams, PaginatedResponse
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionApi(
@@ -214,6 +219,51 @@ class ExecutionApi(
                     yield event
 
             return await create_sse_response(stream(), detach_on_disconnect=True)
+
+        @self.router.post(
+            "/tool-approval/{execution_id}", summary="提交工具审批决策（Flow future 路线）"
+        )
+        async def submit_tool_approval(execution_id: int, req: ToolApprovalRequest):
+            """Flow 工具审批决策：resolve tool_approval_service 的 future 唤醒执行流。
+
+            与 Agent 的 /tool_approval 同构；队列 key 为 execution_id（Flow 域）。
+            批准并记住：写 scope=flow 的执行级免审授权（resolve 前取本批次工具名）。
+            """
+            from app.services.tool_approval_service import tool_approval_service
+
+            if req.action not in ("approved", "rejected"):
+                return ApiResponse.error(msg="action 必须为 approved 或 rejected")
+            tool_names = tool_approval_service.get_approval_tool_names(
+                execution_id, req.approval_id
+            )
+            resolved = tool_approval_service.resolve(
+                execution_id, req.approval_id, req.action
+            )
+            if not resolved:
+                return ApiResponse.error(msg="没有待确认的工具")
+            if req.action == "approved" and req.remember_session:
+                try:
+                    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+                    from app.models.session_tool_grant import SessionToolGrant
+                    from app.config.database import AsyncSessionLocal
+
+                    async with AsyncSessionLocal() as db:
+                        for name in tool_names:
+                            stmt = sqlite_insert(SessionToolGrant).values(
+                                scope="flow",
+                                session_id=execution_id,
+                                tool_name=name,
+                                granted_by=req.approval_id,
+                            )
+                            stmt = stmt.on_conflict_do_nothing(
+                                index_elements=["scope", "session_id", "tool_name"]
+                            )
+                            await db.execute(stmt)
+                        await db.commit()
+                except Exception as e:
+                    logger.warning("Flow 执行级免审授权写入失败: %s", e)
+            return ApiResponse.success(msg="操作成功")
 
         @self.router.get("/wait-status/{execution_id}", summary="获取等待状态详情")
         async def get_wait_status(

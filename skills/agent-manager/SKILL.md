@@ -212,16 +212,16 @@ LLM 节点开启 `json_output_enabled: true` 后绑定 `structured_output` 虚�
 - 详情接口返回的配置符合预期，没有覆盖无关字段。
 - 至少一次真实执行收到状态为 `success` 的 `flow_done`，输出结构满足目标。
 
-## 工具审批（Agent 模式）
+## 工具审批（Agent 与 Flow 双模式）
 
 工具节点（shell / ssh / python / api / mcp / browser）在执行危险操作前可触发用户审批。在 `base_config` 中配两个独立字段：
 
 - `approval_required_tools`：完整工具名白名单（与 connected-tools 返回的 `name` 完全一致，**不是 `node_key`**）
 - `approval_required_patterns`：对"内容字符串"做正则匹配，命中即触发
 
-**仅 Agent 模式生效**（Workflow 模式忽略这两个字段）。
+**Agent 与 Flow 两种模式均生效**（2026-10-18 起）：Agent 走 SSE 审批弹窗，Flow 走 interrupt 暂停（复用 waiting_human 机制，执行落库等待，前端 Flow 页审批弹窗恢复）。审批弹窗均提供「批准并记住」（同域同工具免审：Agent 会话级 / Flow 执行级）。python/api 作为 Flow 主干直执行时同样受审批约束（`_check_direct_execution_approval`）。
 
-配置各节点的运行时工具名格式、内容匹配语义、正则匹配 4 层设计、前端方案 C 工具名下拉、基类 `_check_and_request_approval` 实现：
+配置各节点的运行时工具名格式、内容匹配语义、正则匹配 4 层设计、前端方案 C 工具名下拉、双模式分流与免审授权、基类 `_check_and_request_approval` 实现：
 
 → 详见 [工具审批](references/tool-approval.md)
 

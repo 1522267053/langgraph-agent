@@ -28,6 +28,8 @@ const {
   humanInputContext,
   humanInputLoading,
   humanInputMessages,
+  pendingApproval,
+  submitApprovalDecision,
   resumeFromHistory,
   loadExecutionDetail,
   submitHumanInput,
@@ -387,15 +389,17 @@ onUnmounted(() => {
       </template>
     </el-dialog>
 
-    <!-- 人工输入弹窗（等待输入通知直达） -->
+    <!-- 人工输入弹窗（等待输入/工具审批通知直达；审批态由组件内独立审批弹窗渲染） -->
     <HumanInputDialog
       v-model:visible="showHumanInputDialog"
       :question="humanInputQuestion"
       :context="humanInputContext"
       :messages="humanInputMessages"
       :loading="humanInputLoading"
+      :approval="pendingApproval"
       @submit="submitHumanInput"
       @cancel="stopExecution"
+      @approval="submitApprovalDecision"
     />
   </div>
 </template>

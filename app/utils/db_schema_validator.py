@@ -109,6 +109,86 @@ def _apply_missing_indexes(sync_conn, missing: list[tuple[Table, Index]]) -> lis
     return created
 
 
+def _needs_grant_scope_unique(sync_conn) -> bool:
+    """检测 session_tool_grant 是否缺 (scope, session_id, tool_name) 唯一约束。
+
+    历史迁移漏洞：模型加 scope 列时只 ALTER ADD COLUMN，旧约束
+    UNIQUE(session_id, tool_name) 未更新（SQLite 不支持 ALTER 改约束，
+    create_all 不改已存在的表）→ on_conflict_do_nothing(scope, ...) 报
+    "does not match any PRIMARY KEY or UNIQUE constraint"，免审授权写入
+    静默失败（Agent/Flow 两域同中招）。有此约束则无需处理（幂等）。
+    """
+    inspector = inspect(sync_conn)
+    if "session_tool_grant" not in set(inspector.get_table_names()):
+        return False
+    for idx in inspector.get_indexes("session_tool_grant"):
+        if idx.get("unique") and set(idx["column_names"]) == {
+            "scope",
+            "session_id",
+            "tool_name",
+        }:
+            return False
+    return True
+
+
+def _rebuild_grant_table_with_scope_unique(sync_conn) -> None:
+    """重建 session_tool_grant 表：替换旧唯一约束为含 scope 的三列约束。
+
+    SQLite 改约束的唯一途径是建新表→拷数据→删旧表→改名（12 步流程简化版，
+    表数据量极小且为纯授权记录，事务内完成无风险）。列定义与模型保持一致。
+    """
+    sync_conn.execute(
+        text(
+            """
+            CREATE TABLE session_tool_grant_new (
+                session_id INTEGER NOT NULL,
+                tool_name VARCHAR(100) NOT NULL,
+                granted_by VARCHAR(32),
+                id INTEGER NOT NULL,
+                creator_id INTEGER,
+                creator_type SMALLINT,
+                creator_name VARCHAR(100),
+                create_time DATETIME,
+                modifier_id INTEGER,
+                modifier_type SMALLINT,
+                modifier_name VARCHAR(100),
+                modify_time DATETIME,
+                is_delete SMALLINT NOT NULL,
+                scope VARCHAR(10) NULL,
+                PRIMARY KEY (id),
+                CONSTRAINT uq_session_tool_grant_scope_session_tool
+                    UNIQUE (scope, session_id, tool_name)
+            )
+            """
+        )
+    )
+    sync_conn.execute(
+        text(
+            """
+            INSERT INTO session_tool_grant_new (
+                session_id, tool_name, granted_by, id, creator_id, creator_type,
+                creator_name, create_time, modifier_id, modifier_type,
+                modifier_name, modify_time, is_delete, scope
+            )
+            SELECT session_id, tool_name, granted_by, id, creator_id, creator_type,
+                   creator_name, create_time, modifier_id, modifier_type,
+                   modifier_name, modify_time, is_delete, scope
+            FROM session_tool_grant
+            """
+        )
+    )
+    sync_conn.execute(text("DROP TABLE session_tool_grant"))
+    sync_conn.execute(
+        text("ALTER TABLE session_tool_grant_new RENAME TO session_tool_grant")
+    )
+    sync_conn.execute(
+        text(
+            "CREATE INDEX idx_session_tool_grant_session "
+            "ON session_tool_grant (session_id, is_delete)"
+        )
+    )
+
+
 async def validate_and_update_db_schema(
     engine: AsyncEngine, metadata: MetaData
 ) -> None:
@@ -129,6 +209,12 @@ async def validate_and_update_db_schema(
             created = _apply_missing_indexes(
                 sync_conn, _collect_missing_indexes(sync_conn, metadata)
             )
+            # 专项迁移：session_tool_grant 旧约束升级（幂等，检测到才执行）
+            if _needs_grant_scope_unique(sync_conn):
+                _rebuild_grant_table_with_scope_unique(sync_conn)
+                logger.info(
+                    "session_tool_grant 唯一约束升级为 (scope, session_id, tool_name)"
+                )
             return added, created
 
         added, created = await conn.run_sync(_sync)

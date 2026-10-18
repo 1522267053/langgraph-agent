@@ -3,7 +3,7 @@
 """
 
 from typing import Optional, Any
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from fastapi.exceptions import RequestValidationError
 from app.schemas.base_schema import BaseView
 
@@ -91,15 +91,14 @@ class HumanInputSubmit(BaseView):
         description="审批决策为 approved 时是否记住本执行免审（scope=flow，执行结束失效）",
     )
 
-    @field_validator("input")
-    @classmethod
-    def validate_input(cls, v: str) -> str:
-        """校验用户输入"""
-        if not v or not v.strip():
+    @model_validator(mode="after")
+    def validate_input(self) -> "HumanInputSubmit":
+        """校验用户输入（模型级：审批决策提交时 input 为空串，跳过非空校验）"""
+        if self.approval_action is None and not (self.input and self.input.strip()):
             raise RequestValidationError("用户输入不能为空")
-        if len(v) > 10000:
+        if len(self.input) > 10000:
             raise RequestValidationError("用户输入不能超过10000个字符")
-        return v
+        return self
 
     @field_validator("approval_action")
     @classmethod

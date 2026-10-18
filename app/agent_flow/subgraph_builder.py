@@ -8,6 +8,7 @@ StateGraph 子图构建逻辑。子类通过重写钩子方法实现各自的特
 import logging
 from typing import Any, Callable, Optional
 
+from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.runnables import RunnableConfig
@@ -171,6 +172,9 @@ class BaseSubgraphBuilder:
                 result = await handler.execute(
                     effective_node, state, config=config, writer=writer
                 )
+            except GraphBubbleUp:
+                # LangGraph interrupt（子流程内工具审批）必须冒泡到框架层
+                raise
             except Exception as exc:
                 if writer:
                     writer(

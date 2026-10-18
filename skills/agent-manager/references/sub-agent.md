@@ -124,7 +124,7 @@ POST /api/agent/{sub_agent_id}/sessions/{sub_session_id}/tool_approval
 Body: {"action": "approved"}
 ```
 
-`action` 可为 `approved` 或 `rejected`。审批等待最多 5 分钟。
+`action` 可为 `approved` 或 `rejected`，另可传 `remember_session: true` 记住本会话免审（写子会话的 session_tool_grant，scope=agent）。审批等待最多 60 分钟（USER_RESPONSE_TIMEOUT_SECONDS）。
 
 ## 取消与故障
 

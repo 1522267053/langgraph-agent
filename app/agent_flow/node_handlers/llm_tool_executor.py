@@ -22,6 +22,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import ToolCall, ToolMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import BaseTool
+from langgraph.errors import GraphBubbleUp
 from langgraph.types import StreamWriter, interrupt
 
 from app.agent_flow.flow_change_tracker import consume_changes_since
@@ -853,6 +854,12 @@ async def handle_tool_calls(
                     tool_status,
                     tool_call_id=tool_id,
                 )
+        except GraphBubbleUp:
+            # LangGraph interrupt（如 Flow 工具审批）经异常冒泡暂停执行。此处
+            # 若用下方 except BaseException 捕获存入 results，会被结果循环转成
+            # 「工具执行异常」错误 dict 返回 LLM，审批永不弹出——必须 re-raise
+            # 让其穿过 gather 冒泡到框架层。
+            raise
         except BaseException as exc:
             results[index] = exc
 
@@ -1036,6 +1043,10 @@ async def execute_tool(
         if tool.name == tool_name:
             try:
                 return await tool.ainvoke(tool_args)
+            except GraphBubbleUp:
+                # LangGraph interrupt（如 Flow 工具审批）经异常冒泡暂停执行，
+                # 必须透传给框架层处理——吞掉会把暂停变成错误返回，审批永不弹出
+                raise
             except Exception as e:
                 return {"success": False, "error": f"工具执行错误: {str(e)}"}
     return {"success": False, "error": f"未找到工具: {tool_name}"}

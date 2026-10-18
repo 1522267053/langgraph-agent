@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { QuestionFilled, Minus, FullScreen } from '@element-plus/icons-vue'
-import { formatToolArgs } from '@/utils/format'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { QuestionFilled, Warning, Minus, FullScreen } from '@element-plus/icons-vue'
+import { formatToolArgs, formatCountdown } from '@/utils/format'
 
 interface ConversationMessage {
   role: string
@@ -16,11 +16,13 @@ const props = defineProps<{
   context: string
   messages: ConversationMessage[]
   loading: boolean
-  /** 工具审批模式（Flow interrupt 路径）：非空时渲染审批分支而非文本输入 */
+  /** 工具审批模式（Flow future 路线）：非空时渲染独立审批弹窗（对齐 AgentChat 审批弹窗风格） */
   approval?: {
     toolCalls: Array<{ name: string; args: Record<string, unknown> }>
     approvalNeeded: string[]
     approvalReason: string | null
+    /** 倒计时死线（本地毫秒时间戳；null 不显示倒计时） */
+    expiresAt?: number | null
   } | null
 }>()
 
@@ -35,6 +37,47 @@ const inputValue = ref('')
 // 最小化状态：true 时隐藏弹窗（含遮罩），右下角显示悬浮条，可随时恢复。
 // 输入内容保留——最小化/恢复间不丢已填回答
 const minimized = ref(false)
+
+const isApprovalMode = computed(() => !!props.approval)
+
+// ---- 审批倒计时（对齐 AgentChat approvalCountdown：每秒重算，过期显示「已过期」） ----
+const countdownTick = ref(0)
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+
+const approvalCountdown = computed<number>(() => {
+  void countdownTick.value
+  const deadline = props.approval?.expiresAt
+  if (!deadline) return 0
+  return Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+})
+
+const approvalExpired = computed(
+  () => isApprovalMode.value && !!props.approval?.expiresAt && approvalCountdown.value <= 0
+)
+
+watch(
+  () => [props.visible, props.approval?.expiresAt] as const,
+  ([visible]) => {
+    if (visible && isApprovalMode.value) {
+      if (!countdownTimer) {
+        countdownTimer = setInterval(() => {
+          countdownTick.value++
+        }, 1000)
+      }
+    } else if (countdownTimer) {
+      clearInterval(countdownTimer)
+      countdownTimer = null
+    }
+  },
+  { immediate: true }
+)
+
+onBeforeUnmount(() => {
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+})
 
 function minimize(): void {
   minimized.value = true
@@ -63,8 +106,14 @@ watch(
   }
 )
 
-// 问题摘要（悬浮条展示用）
-const questionPreview = computed(() => props.question || '请提供输入')
+// 悬浮条摘要：审批模式显示工具名，提问模式显示问题
+const questionPreview = computed(() => {
+  if (isApprovalMode.value && props.approval) {
+    const names = props.approval.toolCalls.map(tc => tc.name).join('、')
+    return names ? `请求执行工具：${names}` : '请求执行工具'
+  }
+  return props.question || '请提供输入'
+})
 
 function getRoleLabel(role: string): string {
   const labels: Record<string, string> = {
@@ -87,8 +136,9 @@ function handleOpen(): void {
 </script>
 
 <template>
+  <!-- 常规人工输入弹窗（审批模式下隐藏，由下方独立审批弹窗接管） -->
   <el-dialog
-    :model-value="visible && !minimized"
+    :model-value="visible && !minimized && !isApprovalMode"
     title="需要您的输入"
     width="600px"
     :close-on-click-modal="false"
@@ -119,31 +169,7 @@ function handleOpen(): void {
         {{ question }}
       </div>
 
-      <!-- 工具审批分支：工具名+参数+原因展示，按钮组决策 -->
-      <template v-if="approval">
-        <div v-if="approval.approvalReason" class="approval-reason">
-          审批原因：{{ approval.approvalReason }}
-        </div>
-        <div class="approval-tools">
-          <div v-for="(tc, index) in approval.toolCalls" :key="index" class="approval-tool-item">
-            <div class="approval-tool-name">
-              <el-tag
-                :type="approval.approvalNeeded.includes(tc.name) ? 'danger' : 'info'"
-                size="small"
-                style="margin-right: 6px"
-              >
-                {{ approval.approvalNeeded.includes(tc.name) ? '需确认' : '普通' }}
-              </el-tag>
-              {{ tc.name }}
-            </div>
-            <pre v-if="tc.args && Object.keys(tc.args).length > 0" class="tool-call-args">{{
-              formatToolArgs(tc.args, 500)
-            }}</pre>
-          </div>
-        </div>
-      </template>
-
-      <div v-else-if="messages.length > 0 || context" class="context-panel">
+      <div v-if="messages.length > 0 || context" class="context-panel">
         <div class="context-label">上下文与对话历史：</div>
 
         <div v-if="messages.length > 0" class="history-messages">
@@ -180,7 +206,6 @@ function handleOpen(): void {
         <div v-if="context" class="context-text">{{ context }}</div>
       </div>
       <el-input
-        v-if="!approval"
         v-model="inputValue"
         type="textarea"
         :rows="4"
@@ -190,28 +215,92 @@ function handleOpen(): void {
     </div>
     <template #footer>
       <div style="display: flex; justify-content: space-between; width: 100%">
-        <!-- 审批模式：拒绝 / 批准并记住 / 批准 -->
-        <template v-if="approval">
-          <el-button type="danger" :loading="loading" @click="emit('approval', 'rejected')">拒绝</el-button>
-          <div>
-            <el-button :loading="loading" @click="emit('approval', 'approved', true)">批准并记住</el-button>
-            <el-button type="primary" :loading="loading" @click="emit('approval', 'approved')">批准</el-button>
-          </div>
-        </template>
-        <!-- 常规输入模式 -->
-        <template v-else>
-          <el-button @click="emit('cancel')">取消执行</el-button>
-          <el-button type="primary" :loading="loading" @click="handleSubmit">提交并继续</el-button>
-        </template>
+        <el-button @click="emit('cancel')">取消执行</el-button>
+        <el-button type="primary" :loading="loading" @click="handleSubmit">提交并继续</el-button>
       </div>
     </template>
   </el-dialog>
 
-  <!-- 最小化悬浮条：弹窗隐藏期间显示，点击恢复作答 -->
+  <!-- 工具审批弹窗：独立 el-dialog，风格对齐 AgentChat 审批弹窗
+       （Warning 图标 + 「请求执行工具」标题 + 深色参数块 + 拒绝/批准并记住/批准） -->
+  <el-dialog
+    :model-value="visible && !minimized && isApprovalMode"
+    width="560px"
+    :close-on-click-modal="false"
+    :close-on-press-escape="false"
+    :show-close="false"
+    destroy-on-close
+    @update:model-value="onDialogModelChange"
+  >
+    <template #header>
+      <div class="approval-dialog-header">
+        <el-icon :size="20" class="approval-dialog-icon"><Warning /></el-icon>
+        <span class="approval-dialog-title">请求执行工具</span>
+        <span v-if="approvalExpired" class="approval-dialog-expired">已过期</span>
+        <span v-else-if="approvalCountdown > 0" class="approval-dialog-countdown">
+          {{ formatCountdown(approvalCountdown) }}
+        </span>
+        <button
+          class="dialog-minimize"
+          type="button"
+          title="最小化（可回看执行输出，稍后恢复审批）"
+          @click="minimize"
+        >
+          <el-icon :size="16"><Minus /></el-icon>
+        </button>
+      </div>
+    </template>
+    <div v-if="approval" class="approval-body">
+      <div v-if="approval.approvalReason" class="approval-reason">
+        审批原因：{{ approval.approvalReason }}
+      </div>
+      <div class="approval-tools">
+        <div
+          v-for="(tc, index) in approval.toolCalls"
+          :key="index"
+          class="approval-tool-item"
+        >
+          <div class="approval-tool-name">
+            <el-tag
+              :type="approval.approvalNeeded.includes(tc.name) ? 'danger' : 'info'"
+              size="small"
+              style="margin-right: 6px"
+            >
+              {{ approval.approvalNeeded.includes(tc.name) ? '需确认' : '普通' }}
+            </el-tag>
+            {{ tc.name }}
+          </div>
+          <pre v-if="tc.args && Object.keys(tc.args).length > 0" class="approval-tool-args">{{
+            formatToolArgs(tc.args, 500)
+          }}</pre>
+        </div>
+      </div>
+    </div>
+    <template #footer>
+      <div class="approval-dialog-footer">
+        <el-button type="danger" :loading="loading" @click="emit('approval', 'rejected', false)">
+          拒绝
+        </el-button>
+        <div>
+          <el-button :loading="loading" @click="emit('approval', 'approved', true)">
+            批准并记住
+          </el-button>
+          <el-button type="primary" :loading="loading" @click="emit('approval', 'approved', false)">
+            批准
+          </el-button>
+        </div>
+      </div>
+    </template>
+  </el-dialog>
+
+  <!-- 最小化悬浮条：弹窗隐藏期间显示，点击恢复作答/审批 -->
   <Teleport to="body">
     <button v-if="visible && minimized" class="human-input-minimized-bar" type="button" @click="restore">
-      <el-icon :size="16" class="bar-icon"><QuestionFilled /></el-icon>
-      <span class="bar-title">需要您的输入</span>
+      <el-icon :size="16" class="bar-icon">
+        <Warning v-if="isApprovalMode" />
+        <QuestionFilled v-else />
+      </el-icon>
+      <span class="bar-title">{{ isApprovalMode ? '请求执行工具' : '需要您的输入' }}</span>
       <span class="bar-question">{{ questionPreview }}</span>
       <el-icon :size="14" class="bar-expand"><FullScreen /></el-icon>
     </button>
@@ -231,7 +320,7 @@ function handleOpen(): void {
   color: #303133;
 }
 
-/* header 最小化按钮 */
+/* header 最小化按钮（提问弹窗 / 审批弹窗共用） */
 .dialog-minimize {
   flex-shrink: 0;
   display: flex;
@@ -251,6 +340,95 @@ function handleOpen(): void {
 .dialog-minimize:hover {
   background: #f0f2f5;
   color: #606266;
+}
+
+/* ---- 审批弹窗（对齐 AgentChat 审批弹窗风格） ---- */
+.approval-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.approval-dialog-icon {
+  color: #e6a23c;
+}
+
+.approval-dialog-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: #303133;
+}
+
+/* 倒计时/过期徽章（对齐 AgentChat approval-dialog-countdown/expired） */
+.approval-dialog-countdown {
+  margin-left: auto;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: #e6a23c;
+  background: #fdf6ec;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.approval-dialog-expired {
+  margin-left: auto;
+  font-size: 13px;
+  color: #909399;
+  background: #f4f4f5;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.approval-body {
+  padding: 2px 0;
+}
+
+.approval-reason {
+  background: #fdf6ec;
+  color: #e6a23c;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.approval-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.approval-tool-item {
+  background: var(--paper-warm, #f5f7fa);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.approval-tool-name {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+}
+
+.approval-tool-args {
+  font-size: 12px;
+  background: var(--ink-island, #2b2b2b);
+  color: #e8e3d8;
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.approval-dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
 }
 
 /* 最小化悬浮条（Teleport 到 body，fixed 定位） */
@@ -315,35 +493,6 @@ function handleOpen(): void {
   margin-bottom: 16px;
   display: flex;
   align-items: flex-start;
-}
-
-/* ---- 工具审批分支样式（对齐 AgentChat 审批弹窗风格） ---- */
-.approval-reason {
-  background: #fdf6ec;
-  color: #e6a23c;
-  border-radius: 6px;
-  padding: 8px 12px;
-  font-size: 13px;
-  margin-bottom: 12px;
-}
-
-.approval-tools {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.approval-tool-item {
-  background: #f5f7fa;
-  border-radius: 6px;
-  padding: 8px 12px;
-}
-
-.approval-tool-name {
-  font-weight: 500;
-  display: flex;
-  align-items: center;
 }
 
 .human-input-content .context-panel {

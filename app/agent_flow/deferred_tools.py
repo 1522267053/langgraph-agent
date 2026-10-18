@@ -38,6 +38,7 @@ from typing import (
 )
 
 from langchain_core.tools import BaseTool
+from langgraph.errors import GraphBubbleUp
 
 logger = logging.getLogger(__name__)
 
@@ -489,6 +490,9 @@ def create_deferred_meta_tools(
 
         try:
             result = await tool.ainvoke(args)
+        except GraphBubbleUp:
+            # LangGraph interrupt（Flow 模式延迟域工具审批）必须冒泡到框架层
+            raise
         except Exception as e:
             return {
                 "success": False,

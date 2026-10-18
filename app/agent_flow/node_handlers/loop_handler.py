@@ -34,6 +34,7 @@ from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.agent_flow.execution_context import get_execution_context
 from app.agent_flow.loop_subgraph import LoopSubgraphBuilder
 from app.agent_flow.subgraph_runner import SubgraphRunner
+from langgraph.errors import GraphBubbleUp
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +364,10 @@ class LoopNodeHandler(BaseNodeHandler):
                             result["conversation_messages"]
                         )
 
+            except GraphBubbleUp:
+                # LangGraph interrupt（循环体内工具审批）必须冒泡到框架层——
+                # 吞掉会把暂停变成迭代错误，审批永不弹出
+                raise
             except Exception as exc:
                 logger.error(
                     f"循环节点[{loop_key}]迭代 {i}/{total_count} 执行失败: {exc}"
@@ -443,6 +448,9 @@ class LoopNodeHandler(BaseNodeHandler):
                         "errors": iter_state.errors.copy(),
                     }
 
+                except GraphBubbleUp:
+                    # LangGraph interrupt（并发迭代内工具审批）必须冒泡到框架层
+                    raise
                 except Exception as exc:
                     logger.error(
                         f"循环节点[{loop_key}]并发迭代 {index} 执行失败: {exc}"

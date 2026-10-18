@@ -31,6 +31,7 @@ from langchain_core.messages import (
 )
 from langchain_core.tools import BaseTool
 from langchain_core.runnables import RunnableConfig
+from langgraph.errors import GraphBubbleUp
 from langgraph.types import StreamWriter
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -867,6 +868,10 @@ class LlmToolNodeHandler(BaseNodeHandler):
                     node.node_key, thinking_name, "".join(thinking_content)
                 )
             state.set_conversation_messages(node.node_key, list(msg_buf.messages))
+            raise
+        except GraphBubbleUp:
+            # LangGraph interrupt（Flow 模式工具审批）：直接冒泡到框架层，
+            # 不记节点错误（暂停不是失败），checkpoint 由框架保存
             raise
         except Exception as e:
             logger.info(

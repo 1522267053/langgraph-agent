@@ -32,6 +32,8 @@ const {
   humanInputContext,
   humanInputLoading,
   humanInputMessages,
+  pendingApproval,
+  submitApprovalDecision,
   resumeFromHistory,
   loadExecutionDetail,
   submitHumanInput,

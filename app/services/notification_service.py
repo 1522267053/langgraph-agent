@@ -26,6 +26,11 @@ from app.services.base_service import BaseService
 
 logger = logging.getLogger(__name__)
 
+# 通知正文截断上限：通知是提示性入口，正文只承担「是什么事」的概览职责，
+# 全文（如 LLM 完整输出、审批工具参数快照）应到关联页面（ref_type/ref_id）查看。
+# 落库与 WS 推送共用同一截断，避免前端弹窗被超长内容撑爆。
+NOTIFICATION_CONTENT_MAX_CHARS = 200
+
 
 class NotificationService(
     BaseService[Notification, NotificationCreate, NotificationUpdate]
@@ -69,11 +74,18 @@ class NotificationService(
             通知记录（落库失败返回 None，不抛异常）
         """
         notification: Optional[Notification] = None
+        # 正文截断：单行压缩（换行变空格）+ 限长，超长全文到关联页面查看
+        if content:
+            compact = " ".join(content.split())
+            if len(compact) > NOTIFICATION_CONTENT_MAX_CHARS:
+                compact = compact[:NOTIFICATION_CONTENT_MAX_CHARS] + "…"
+        else:
+            compact = content
         try:
             create = NotificationCreate(
                 type=type,
                 title=title[:255] if title else "通知",
-                content=content,
+                content=compact,
                 ref_type=ref_type,
                 ref_id=ref_id,
                 ref_sub_id=ref_sub_id,
@@ -93,7 +105,7 @@ class NotificationService(
                 "unread_count": unread,
                 "type": type,
                 "title": title,
-                "content": content,
+                "content": compact,
                 "ref_type": ref_type,
                 "ref_id": ref_id,
                 "ref_sub_id": ref_sub_id,
