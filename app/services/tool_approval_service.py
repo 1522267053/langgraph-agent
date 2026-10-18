@@ -6,15 +6,22 @@
 
 通过 asyncio.Event 实现 SSE 流内的工具确认等待/唤醒，
 不使用 LangGraph interrupt 机制，避免节点重执行问题。
+
+审计落盘：register 写入 asked 快照（outcome=NULL），resolve/cancel/mark_timeout
+补写终态。审计写入为 fire-and-forget（独立 task，失败仅告警），
+绝不阻塞审批主流程；approval_id 唯一约束保证每批次至多一行。
 """
 
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from langchain_core.messages import ToolCall
+from sqlalchemy import update
 
+from app.config.database import AsyncSessionLocal
 from app.constants.timing import USER_RESPONSE_TIMEOUT_SECONDS
 from app.services.async_pending_service import AsyncPendingService
 
@@ -31,6 +38,10 @@ class ToolApprovalFuture:
     approval_needed: list[str] = field(default_factory=list)
     # 确认死线（time.time() 秒）：后端权威超时点，供断线重连回放时重算剩余
     expires_at: float = 0.0
+    # 审批原因（白名单/危险正则命中说明），register 时由调用方透传，落审计表
+    approval_reason: str | None = None
+    # asked 审计行是否已写入（重复注册复用 Future 时不重复写）
+    audit_asked: bool = False
 
 
 class ToolApprovalService(AsyncPendingService[ToolApprovalFuture, str]):
@@ -40,15 +51,16 @@ class ToolApprovalService(AsyncPendingService[ToolApprovalFuture, str]):
         super().__init__(timeout_seconds=USER_RESPONSE_TIMEOUT_SECONDS)
 
     def _create_future(self, item_id: str, **kwargs) -> ToolApprovalFuture:
-        """构造 ToolApprovalFuture（接收 tool_calls + approval_needed kwargs）"""
+        """构造 ToolApprovalFuture（接收 tool_calls + approval_needed + approval_reason kwargs）"""
         now = time.time()
         return ToolApprovalFuture(
             tool_calls=kwargs.get("tool_calls", []),
             approval_needed=kwargs.get("approval_needed", []),
             expires_at=now + self._timeout_seconds,
+            approval_reason=kwargs.get("approval_reason"),
         )
 
-    def _resolve_future(self, future: ToolApprovalFuture, result: str|None) -> None:
+    def _resolve_future(self, future: ToolApprovalFuture, result: str | None) -> None:
         """resolve 时把审批结果写入 future.result（approved / rejected）"""
         future.result = result
 
@@ -66,6 +78,111 @@ class ToolApprovalService(AsyncPendingService[ToolApprovalFuture, str]):
             item_id,
             future.approval_needed,
         )
+
+    # ---- 审计落盘（fire-and-forget，失败不阻塞审批主流程） ----
+
+    def _serialize_tool_calls(self, tool_calls: list[ToolCall]) -> list[dict]:
+        """ToolCall 对象/字典统一序列化为可存 JSON 的列表"""
+        result: list[dict] = []
+        for tc in tool_calls or []:
+            if isinstance(tc, dict):
+                result.append(tc)
+            else:
+                result.append(
+                    {
+                        "id": getattr(tc, "id", None),
+                        "name": getattr(tc, "name", None),
+                        "args": getattr(tc, "args", None),
+                    }
+                )
+        return result
+
+    def _spawn_audit(self, coro) -> None:
+        """后台执行审计写入；异常仅告警，不影响审批主流程"""
+
+        async def _runner():
+            try:
+                await coro
+            except Exception:
+                logger.exception("审批审计写入失败（不影响审批流程）")
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # 无事件循环（如测试同步上下文），放弃本次审计写入
+            coro.close()
+            logger.warning("审批审计写入跳过：无运行中的事件循环")
+            return
+        asyncio.create_task(_runner())
+
+    def _audit_asked(
+        self, session_id: int, approval_id: str, future: ToolApprovalFuture
+    ) -> None:
+        """register 后写入 asked 快照（outcome=NULL）"""
+        from app.models.tool_approval_log import ToolApprovalLog
+
+        async def _write():
+            async with AsyncSessionLocal() as db:
+                db.add(
+                    ToolApprovalLog(
+                        session_id=session_id,
+                        approval_id=approval_id,
+                        tool_calls=self._serialize_tool_calls(future.tool_calls),
+                        approval_needed=list(future.approval_needed or []),
+                        approval_reason=future.approval_reason,
+                        outcome=None,
+                    )
+                )
+                await db.commit()
+
+        self._spawn_audit(_write())
+
+    def _audit_decided(self, session_id: int, approval_id: str, outcome: str) -> None:
+        """终态补写：仅当 outcome 仍为 NULL 时更新（幂等，防超时与决策竞争双写）"""
+        from app.models.tool_approval_log import ToolApprovalLog
+
+        async def _write():
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    update(ToolApprovalLog)
+                    .where(
+                        ToolApprovalLog.approval_id == approval_id,
+                        ToolApprovalLog.outcome.is_(None),
+                    )
+                    .values(outcome=outcome, decided_at=datetime.now())
+                )
+                await db.commit()
+
+        self._spawn_audit(_write())
+
+    # ---- 生命周期 override：在基类行为之上追加审计 ----
+
+    def register(self, session_id: int, item_id: str, **kwargs) -> ToolApprovalFuture:
+        future = super().register(session_id, item_id, **kwargs)
+        # 重复注册复用现有 Future 时不重复写 asked 审计
+        if not future.audit_asked:
+            future.audit_asked = True
+            self._audit_asked(session_id, item_id, future)
+        return future
+
+    def resolve(self, session_id: int, item_id: str, result: str) -> bool:
+        resolved = super().resolve(session_id, item_id, result)
+        if resolved:
+            self._audit_decided(session_id, item_id, result)
+        return resolved
+
+    def cancel(self, session_id: int, item_id: str | None = None) -> None:
+        # 先收集本批要取消的 id，再走基类取消，最后补审计
+        items = self._pending.get(session_id)
+        target_ids = [item_id] if item_id else (list(items.keys()) if items else [])
+        super().cancel(session_id, item_id)
+        for iid in target_ids:
+            self._audit_decided(session_id, iid, "cancelled")
+
+    def mark_timeout(self, session_id: int, item_id: str) -> bool:
+        """超时终态补写（幂等）：调用方在等待超时后调用，与用户决策竞争时先到先得"""
+        self._audit_decided(session_id, item_id, "timeout")
+        return True
 
 
 tool_approval_service = ToolApprovalService()

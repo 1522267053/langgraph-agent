@@ -488,6 +488,7 @@ class BaseNodeHandler(ABC):
                 }
             ],
             approval_needed=[tool_name],
+            approval_reason=approval_reason,
         )
         try:
             if self._writer is None:
@@ -511,6 +512,10 @@ class BaseNodeHandler(ABC):
         except Exception as e:  # 事件发送失败按拒绝处理，避免继续执行未知命令
             logger.warning("审批事件发送失败，按拒绝处理: %s", e)
             tool_approval_service.remove(self._session_id, approval_id)
+            # 审计补写：发送失败即 fail-closed 拒绝（asked 行已落，补终态）
+            tool_approval_service._audit_decided(
+                self._session_id, approval_id, "rejected"
+            )
             return "rejected"
 
         try:
@@ -519,6 +524,8 @@ class BaseNodeHandler(ABC):
             )
         except asyncio.TimeoutError:
             tool_approval_service.remove(self._session_id, approval_id)
+            # 审计补写：超时终态（与用户决策竞争时先到先得，幂等）
+            tool_approval_service.mark_timeout(self._session_id, approval_id)
             return "timeout"
 
         tool_approval_service.remove(self._session_id, approval_id)
