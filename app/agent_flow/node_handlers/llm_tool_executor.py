@@ -633,7 +633,7 @@ async def handle_tool_calls(
                 writer, node.node_key, tool_name, tool_args, tool_call_id=tool_id
             )
         result = await handle_human_interaction(
-            tool_args, tool_id, msg_buf.messages, node, state
+            tool_args, tool_id, msg_buf.messages, node, state, msg_buf=msg_buf
         )
 
         # 截断人工交互结果
@@ -1058,6 +1058,7 @@ async def handle_human_interaction(
     messages: list,
     node: FlowNode,
     state: FlowState,
+    msg_buf: Optional[MessageBuffer] = None,
 ) -> str:
     """处理人工协助工具调用
 
@@ -1069,6 +1070,7 @@ async def handle_human_interaction(
         messages: 当前消息列表
         node: 当前节点
         state: 流程状态
+        msg_buf: 消息缓冲区（提供时在 interrupt 前落库）
 
     Returns:
         用户输入的回复内容
@@ -1078,6 +1080,12 @@ async def handle_human_interaction(
 
     # 在 interrupt 前保存进度（state），确保前端能展示当前对话
     state.set_conversation_messages(node.node_key, list(messages))
+
+    # interrupt 前落库：interrupt 抛出后节点不会 return，conversation_messages
+    # 不会进 checkpoint；恢复时只能从 DB 找回含 request_human_help tool_call
+    # 的 AIMessage（inject_resume_if_needed 的匹配目标）。不落库则恢复必失败。
+    if msg_buf is not None:
+        await msg_buf.save_to_db()
 
     # 触发 LangGraph interrupt，暂停执行等待用户输入
     human_input = interrupt(

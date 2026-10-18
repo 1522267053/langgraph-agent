@@ -101,6 +101,7 @@ async def build_initial_messages(
         execution_id=execution_id,
         conversation_service=conversation_service,
         db_session_factory=db_session_factory,
+        config=config,
     )
     resume_injected = inject_resume_if_needed(
         messages,
@@ -141,6 +142,7 @@ async def load_base_messages(
         Union[ConversationService, AgentConversationService]
     ],
     db_session_factory: Optional[Callable[[], AsyncSession]],
+    config: Optional[RunnableConfig] = None,
 ) -> list[BaseMessage]:
     """加载历史消息：优先 checkpoint（state），其次数据库
 
@@ -152,10 +154,30 @@ async def load_base_messages(
         execution_id: 执行记录 ID
         conversation_service: 对话服务
         db_session_factory: 数据库会话工厂
+        config: RunnableConfig（用于识别 LLM 求助恢复场景）
 
     Returns:
         历史消息列表（不含 SystemMessage）
     """
+    # LLM 求助恢复场景必须走 DB：interrupt 暂停时节点未 return，
+    # checkpoint 里的 conversation_messages 是 interrupt 前的旧快照
+    # （甚至为空），待恢复的 request_human_help tool_call 只在 DB 中。
+    force_db = _expects_human_tool_resume(config, node.node_key)
+    if force_db:
+        return [
+            m
+            for m in await load_history_from_db(
+                node_config,
+                node.node_key,
+                session_id=session_id,
+                execution_id=execution_id,
+                conversation_service=conversation_service,
+                db_session_factory=db_session_factory,
+                force_load=True,
+            )
+            if not isinstance(m, SystemMessage)
+        ]
+
     # 优先使用 checkpoint 中的消息
     messages: list[BaseMessage] = [
         m
@@ -473,6 +495,7 @@ async def load_history_from_db(
         Union[ConversationService, AgentConversationService]
     ],
     db_session_factory: Optional[Callable[[], AsyncSession]],
+    force_load: bool = False,
 ) -> list[BaseMessage]:
     """从数据库加载对话历史（仅首次执行时调用）
 
@@ -489,6 +512,8 @@ async def load_history_from_db(
         execution_id: 执行记录 ID（Flow 模式）
         conversation_service: 对话服务
         db_session_factory: 数据库会话工厂
+        force_load: 强制加载（LLM 求助恢复场景，none 降级为 node——
+            待恢复的 tool_call 消息已在 interrupt 前落库，必须读回）
 
     Returns:
         历史消息列表
@@ -511,9 +536,9 @@ async def load_history_from_db(
         except Exception:
             return []
 
-    # Flow 模式：按 history_mode 区分
+    # Flow 模式：按 history_mode 区分（force_load 时 none 降级为 node）
     history_mode = node_config.get("history_mode", "node")
-    if history_mode == "none":
+    if history_mode == "none" and not force_load:
         return []
 
     try:
