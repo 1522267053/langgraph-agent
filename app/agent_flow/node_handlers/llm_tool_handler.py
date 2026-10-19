@@ -97,6 +97,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ReAct 中途落库步长：每 N 轮迭代保存一次消息并推进内容回放水位。
+# 降低执行中刷新的 SSE 回放量（已落库轮次由 DB 重建呈现，回放跳过）；
+# 节点结束/取消/interrupt 前的既有保存不受影响，任何 N 值均不丢数据。
+REACT_MIDWAY_SAVE_EVERY_N_ITERATIONS = 5
+
 
 def _build_mode_prompt(
     is_plan_mode: bool, tools: Optional[list[BaseTool]] = None
@@ -560,14 +565,123 @@ class LlmToolNodeHandler(BaseNodeHandler):
         执行增强版 LLM 节点，支持多轮人工交互和流式输出
 
         整体流程：
-        1. 解析配置、初始化工具处理器、收集工具和 prompt 提示
-        2. 准备 LLM 实例并绑定工具
-        3. 构建初始消息列表（checkpoint 恢复 / DB 加载 / 首次构建）
+        1. 前置阶段（不依赖工具列表）：解析输入、发送 node_start、校验配置、
+           构建初始消息、上下文压缩、保存 user_prompt 到 DB
+           （提前于 setup_tool_handlers，避免 MCP 慢加载阻塞首字延迟）
+        2. 初始化工具处理器（setup_tool_handlers，收集工具和 prompt 提示）
+        3. 准备 LLM 实例并绑定工具
         4. ReAct 循环：流式调用 LLM → 处理工具调用 → 继续调用
         5. 保存执行结果（输出变量 + 对话历史）
         """
-        cfg:LlmNodeConfig = self._get_config(node)
+        cfg: LlmNodeConfig = self._get_config(node)
         max_tool_iterations = cfg.max_tool_iterations
+
+        # ---- 前置阶段（先于 setup_tool_handlers）----
+        # 解析输入变量、构建消息、压缩与保存 user_prompt 均不依赖工具列表，
+        # 提前执行避免 MCP 慢加载阻塞首字延迟。注意：若 setup_tool_handlers
+        # 失败，user_prompt 已落库但无 AI 回复（save_to_db 幂等，
+        # DB_PERSISTED_MESSAGE_KEY 标记防重复保存），与「先保存 user_prompt」语义一致。
+
+        # 解析输入变量，提取 system_prompt 和 user_prompt
+        input_data = self.__class__.get_input_content(
+            node, state, self._resolver, node.base_config or {}
+        )
+        system_prompt = (
+            (input_data.get("system_prompt") or "").strip() or None
+            if input_data
+            else None
+        )
+        user_prompt = (
+            (input_data.get("user_prompt") or "").strip() or None
+            if input_data
+            else None
+        )
+        if not user_prompt:
+            raise NodeExecutionError(node.node_key, "用户提示词（user_prompt）不能为空")
+
+        knowledge_reference_sources: dict[str, int] = {}
+        if self.flow:
+            for flow_node in self.flow.nodes:
+                if flow_node.node_type != "knowledge":
+                    continue
+                knowledge_base_id = (flow_node.base_config or {}).get(
+                    "knowledge_base_id"
+                )
+                if isinstance(knowledge_base_id, int):
+                    knowledge_reference_sources[
+                        f"nodes.{flow_node.node_key}.knowledge_references"
+                    ] = knowledge_base_id
+
+        preloaded_references: list[dict] = []
+        citation_context = f"{system_prompt or ''}\n{user_prompt}"
+        for key, knowledge_base_id in knowledge_reference_sources.items():
+            value = state.variables.get(key)
+            visible = [
+                reference
+                for reference in filter_references_in_content(citation_context, value)
+                if reference.get("knowledge_base_id") == knowledge_base_id
+            ]
+            preloaded_references = merge_knowledge_references(
+                preloaded_references, visible
+            )
+
+        # 发送 node_start 事件（提前：MCP 慢加载期间前端即可看到节点启动）
+        self._emit(
+            writer,
+            NodeStartEvent(
+                node_key=node.node_key,
+                node_type=node.node_type,
+                node_name=node.node_name,
+                input_data=input_data if input_data else None,
+            ),
+        )
+
+        checked = self.check_config(
+            node.base_config or {}, node.node_key, state, writer
+        )
+        if not checked:
+            return state
+
+        # 构建初始消息列表（checkpoint 恢复 / DB 加载 / 首次构建）
+        messages = await build_initial_messages(
+            node,
+            node.base_config or {},
+            user_prompt,
+            state,
+            session_id=self.session_id,
+            execution_id=self.execution_id,
+            conversation_service=self.conversation_service,
+            db_session_factory=self.db_session_factory,
+            config=config,
+            writer=writer,
+            emit_fn=self._emit,
+            emit_tool_end_fn=self._emit_tool_end,
+        )
+
+        # 自动上下文压缩：超过阈值时调用 LLM 压缩旧消息
+        cfg_context_length = cfg.context_length or 0
+        msg_buf = MessageBuffer(
+            messages,
+            session_id=self.session_id,
+            execution_id=self.execution_id,
+            db_session_factory=self.db_session_factory,
+            conversation_service=self.conversation_service,
+            node_key=node.node_key,
+            history_mode=cfg.history_mode,
+            emit_fn=self._emit,
+        )
+        prompt_tokens = await should_auto_compress(
+            self.session_id, self.db_session_factory, cfg_context_length
+        )
+
+        if cfg_context_length > 0 and prompt_tokens > int(
+            cfg_context_length * COMPRESS_THRESHOLD_RATIO
+        ):
+            await msg_buf.maybe_compress(
+                cfg_context_length, node.base_config or {}, writer
+            )
+        # 先保存一下user_prompt的消息到数据库中（先于工具加载，缩短 MCP 慢加载场景的首字延迟）
+        await msg_buf.save_to_db()
 
         # 单次遍历：收集工具 + 注入处理器依赖 + 收集 prompt 提示
         # runtime_reminders: 各工具 handler 的动态提醒片段（如工作目录），
@@ -632,49 +746,6 @@ class LlmToolNodeHandler(BaseNodeHandler):
         if json_output_tool is not None:
             checklist.append(OUTPUT_TOOL_NAME)
 
-        # 解析输入变量，提取 system_prompt 和 user_prompt
-        input_data = self.__class__.get_input_content(
-            node, state, self._resolver, node.base_config or {}
-        )
-        system_prompt = (
-            (input_data.get("system_prompt") or "").strip() or None
-            if input_data
-            else None
-        )
-        user_prompt = (
-            (input_data.get("user_prompt") or "").strip() or None
-            if input_data
-            else None
-        )
-        if not user_prompt:
-            raise NodeExecutionError(node.node_key, "用户提示词（user_prompt）不能为空")
-
-        knowledge_reference_sources: dict[str, int] = {}
-        if self.flow:
-            for flow_node in self.flow.nodes:
-                if flow_node.node_type != "knowledge":
-                    continue
-                knowledge_base_id = (flow_node.base_config or {}).get(
-                    "knowledge_base_id"
-                )
-                if isinstance(knowledge_base_id, int):
-                    knowledge_reference_sources[
-                        f"nodes.{flow_node.node_key}.knowledge_references"
-                    ] = knowledge_base_id
-
-        preloaded_references: list[dict] = []
-        citation_context = f"{system_prompt or ''}\n{user_prompt}"
-        for key, knowledge_base_id in knowledge_reference_sources.items():
-            value = state.variables.get(key)
-            visible = [
-                reference
-                for reference in filter_references_in_content(citation_context, value)
-                if reference.get("knowledge_base_id") == knowledge_base_id
-            ]
-            preloaded_references = merge_knowledge_references(
-                preloaded_references, visible
-            )
-
         allowed_knowledge_base_ids: set[int] = set()
         for tool in tools:
             metadata = getattr(tool, "metadata", None) or {}
@@ -715,71 +786,14 @@ class LlmToolNodeHandler(BaseNodeHandler):
             "不需要也不应该原样复述给用户；仅当用户主动询问时才解释其用途与内容。"
             + system_prompt
         )
-        # 发送 node_start 事件
-        self._emit(
-            writer,
-            NodeStartEvent(
-                node_key=node.node_key,
-                node_type=node.node_type,
-                node_name=node.node_name,
-                input_data=input_data if input_data else None,
-            ),
-        )
-
-        checked = self.check_config(
-            node.base_config or {}, node.node_key, state, writer
-        )
-        if not checked:
-            return state
-
-        # 准备 LLM 实例和消息列表
+        # 准备 LLM 实例（依赖 tools，须在 setup_tool_handlers 之后）
         _, llm_with_tools, _ = prepare_llm(
             node.base_config or {}, tools, node.node_key, state
         )
-        messages = await build_initial_messages(
-            node,
-            node.base_config or {},
-            user_prompt,
-            state,
-            session_id=self.session_id,
-            execution_id=self.execution_id,
-            conversation_service=self.conversation_service,
-            db_session_factory=self.db_session_factory,
-            config=config,
-            writer=writer,
-            emit_fn=self._emit,
-            emit_tool_end_fn=self._emit_tool_end,
-        )
 
-        # 自动上下文压缩：超过阈值时调用 LLM 压缩旧消息
-        cfg_context_length = cfg.context_length or 0
-        msg_buf = MessageBuffer(
-            messages,
-            session_id=self.session_id,
-            execution_id=self.execution_id,
-            db_session_factory=self.db_session_factory,
-            conversation_service=self.conversation_service,
-            node_key=node.node_key,
-            history_mode=cfg.history_mode,
-            emit_fn=self._emit,
-        )
-        prompt_tokens = await should_auto_compress(
-            self.session_id, self.db_session_factory, cfg_context_length
-        )
-
-        if cfg_context_length > 0 and prompt_tokens > int(
-            cfg_context_length * COMPRESS_THRESHOLD_RATIO
-        ):
-            await msg_buf.maybe_compress(
-                cfg_context_length, node.base_config or {}, writer
-            )
-        # 先保存一下user_prompt的消息到数据库中
-        await msg_buf.save_to_db()
-        
         # ReAct 循环 + 结果保存
         last_content = ""
         thinking_content: list[str] = []
-        called_tools: set[str] = set()
         output_names = self._resolve_output_var_names(node)
         result_name = output_names[0] if len(output_names) > 0 else "result"
         thinking_name = output_names[1] if len(output_names) > 1 else "thinking"
@@ -997,6 +1011,7 @@ class LlmToolNodeHandler(BaseNodeHandler):
         thinking_content: list[str] = []
         last_content = ""
         tool_call_count = 0
+        react_iteration_count = 0
         called_tools = ctx.called_tools if ctx.called_tools is not None else set()
         retry_count = 0
         react_compress_attempts = 0
@@ -1240,6 +1255,21 @@ class LlmToolNodeHandler(BaseNodeHandler):
                     msg_buf.messages[message_count_before_tools:]
                 ),
             )
+
+            # 中途落库 + 水位推进（每 N 轮）：长 ReAct 执行中刷新时，已完成轮次
+            # 由 DB 重建呈现，回放只含最近未落库轮次，避免前端渲染风暴。
+            # 不变量：轮次边界处 msg_buf 恰含完整 AIMessage + ToolMessage 对，
+            # save_to_db 幂等增量（DB_PERSISTED_MESSAGE_KEY）；事件发布与循环
+            # 同协程顺序执行，save 完成前的内容类事件必已有 DB 行，水位推进合法。
+            react_iteration_count += 1
+            if (
+                self.session_id
+                and react_iteration_count % REACT_MIDWAY_SAVE_EVERY_N_ITERATIONS == 0
+                and await msg_buf.save_to_db()
+            ):
+                from app.services.agent_executor_service import agent_executor_service
+
+                agent_executor_service.advance_content_watermark(self.session_id)
             if not should_continue:
                 break
 
