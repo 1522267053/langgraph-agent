@@ -608,6 +608,19 @@ class AgentApi:
             """前端确认/拒绝工具执行"""
             if req.action not in ("approved", "rejected"):
                 return ApiResponse.error(msg="action 必须为 approved 或 rejected")
+            # 批准并记住：写会话级免审授权（同会话同工具后续调用自动放行）。
+            # 工具名必须在 resolve **之前**获取——resolve 会把条目从队列弹出
+            # （_pop_item），之后再查恒为空列表。
+            # 逐工具决策（tool_decisions）非空时过滤 rejected：被拒绝的工具
+            # 不得获得免审授权（get_grantable_tool_names 内处理）。
+            # 注意：resolve 全函数仅此一次——重复调用会二次弹队列导致
+            # 「没有待确认的工具」且授权写入被跳过（2026-10-19 实锤）。
+            if req.action == "approved" and req.remember_session:
+                tool_names = tool_approval_service.get_grantable_tool_names(
+                    session_id,
+                    req.approval_id,
+                    per_tool_decisions=req.tool_decisions,
+                )
             resolved = tool_approval_service.resolve(
                 session_id,
                 req.approval_id,
@@ -616,25 +629,18 @@ class AgentApi:
             )
             if not resolved:
                 return ApiResponse.error(msg="没有待确认的工具")
-            # 批准并记住：写会话级免审授权（同会话同工具后续调用自动放行）。
-            # 从 pending 快照取本批次工具名——resolve 已把条目从队列弹出，须在
-            # resolve 前捕获；这里用审批审计表反查（fire-and-forget 写入可能
-            # 尚未提交，故直接查 pending 不可靠，改为 resolve 前先取）。
-            if req.action == "approved" and req.remember_session:
-                await _grant_session_tools(session_id, req.approval_id)
+            if req.action == "approved" and req.remember_session and tool_names:
+                await _write_session_grants(session_id, tool_names, req.approval_id)
             return ApiResponse.success(msg="操作成功")
 
-        async def _grant_session_tools(session_id: int, approval_id: str) -> None:
-            """把指定审批批次的工具名写为会话级免审授权（失败仅告警）"""
+        async def _write_session_grants(
+            session_id: int, tool_names: list[str], approval_id: str
+        ) -> None:
+            """把工具名写为会话级免审授权（失败仅告警）"""
             from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
             from app.models.session_tool_grant import SessionToolGrant
 
-            tool_names = tool_approval_service.get_approval_tool_names(
-                session_id, approval_id
-            )
-            if not tool_names:
-                return
             try:
                 async with AsyncSessionLocal() as db:
                     for name in tool_names:

@@ -51,7 +51,13 @@ import {
 import { clearBlockExpandOverrides } from '@/components/AgentChat/blockExpand'
 import { useToolOutputStore } from '@/stores/toolOutput'
 import { formatCountdown } from '@/utils/format'
-import { loadWorkDirForAgent, saveWorkDirForAgent } from '@/utils/workdir'
+import { useDraggableBar } from '@/composables/useDraggableBar'
+import {
+  loadWorkDirForAgent,
+  saveWorkDirForAgent,
+  loadWorkDirRecents,
+  recordWorkDirRecent
+} from '@/utils/workdir'
 
 import 'highlight.js/styles/vs2015.css'
 
@@ -1133,6 +1139,8 @@ async function loadModelSelection(id: number) {
 // 有会话时以 currentSession.work_dir 为准，无会话时暂存到 store.pendingWorkDir
 // （纯内存、按标签隔离），首次发消息创建会话时随 createSession 传入。
 const workDirPickerVisible = ref(false)
+/** 弹窗「最近使用」快捷区数据：打开弹窗时从 localStorage 加载（per-Agent） */
+const workDirRecents = ref<string[]>([])
 
 const currentWorkDir = computed(() =>
   store.currentSession ? store.currentSession.work_dir || '' : store.pendingWorkDir
@@ -1150,6 +1158,7 @@ function handleSelectWorkDir(): void {
     ElMessage.warning({ message: '请等待回复完成', duration: 5000 })
     return
   }
+  workDirRecents.value = loadWorkDirRecents(agentId.value)
   workDirPickerVisible.value = true
 }
 
@@ -1162,6 +1171,8 @@ async function handleWorkDirConfirm(path: string): Promise<void> {
         session.work_dir = res.data.data.work_dir
         // 服务端权威值（标准化后的路径）写记忆；空串清 key 防脏数据
         saveWorkDirForAgent(agentId.value, res.data.data.work_dir || '')
+        // 有会话时用服务端标准化路径记入最近列表（空路径=清除选择，不记录）
+        recordWorkDirRecent(agentId.value, res.data.data.work_dir || '')
         ElMessage.success({
           message: path ? '工作目录已切换' : '已清除，回退默认目录',
           duration: 5000
@@ -1175,6 +1186,8 @@ async function handleWorkDirConfirm(path: string): Promise<void> {
   store.pendingWorkDir = path
   // 无会话阶段也写入「弹窗定位记忆」：下次打开弹窗直接落到该目录（不影响任何会话）
   saveWorkDirForAgent(agentId.value, path)
+  // 同步记入「最近使用」快捷区（空路径=清除选择，recordWorkDirRecent 内部已忽略）
+  recordWorkDirRecent(agentId.value, path)
 }
 
 onMounted(async () => {
@@ -1726,13 +1739,11 @@ function toggleDecision(tc: { id?: string; name: string }, index: number): void 
   toolDecisions.value[key] = getDecision(tc, index) === 'approved' ? 'rejected' : 'approved'
 }
 
-function setAllDecisions(decision: ToolDecision): void {
-  const next: Record<string, ToolDecision> = {}
-  for (let i = 0; i < (store.pendingToolCalls?.length ?? 0); i++) {
-    const tc = store.pendingToolCalls[i]
-    next[decisionKey(tc, i)] = decision
-  }
-  toolDecisions.value = next
+// 全拒守卫：所有卡片均为 rejected 时，「批准/批准并记住」改走整批拒绝——
+// 保证审计语义正确（interaction_audit_log 记 rejected 而非 approved），文案与结果不脱钩
+function isAllRejected(): boolean {
+  const calls = store.pendingToolCalls ?? []
+  return calls.length > 0 && calls.every((tc, i) => getDecision(tc, i) === 'rejected')
 }
 
 /** 组装逐工具决策 payload（仅存在拒绝项时携带，缺省走整批语义） */
@@ -1755,11 +1766,20 @@ watch(
 )
 
 function handleApproveTools() {
+  // 全拒守卫：全 rejected 时提交「批准」会得到全拒结局但审计记 approved，改走整批拒绝
+  if (isAllRejected()) {
+    store.rejectToolCalls()
+    return
+  }
   store.approveToolCalls(false, buildToolDecisions())
 }
 
 // 批准并记住：本会话内同工具后续调用免审（后端写 session_tool_grant）
 function handleApproveAndRemember() {
+  if (isAllRejected()) {
+    store.rejectToolCalls()
+    return
+  }
   store.approveToolCalls(true, buildToolDecisions())
 }
 
@@ -1827,6 +1847,10 @@ const minimizedWaits = computed(() => {
   }
   return bars
 })
+
+// 最小化等待悬浮条组可拖动（整组移动，位置记忆 localStorage；位移<4px 仍视为点击恢复）
+const { barStyle: waitsDragStyle, onPointerDown: onWaitsPointerDown, isDragging: waitsDragging } =
+  useDraggableBar('agent-waits-bar')
 </script>
 
 <template>
@@ -2133,10 +2157,7 @@ const minimizedWaits = computed(() => {
         <div class="approval-dialog-footer">
           <el-button type="danger" @click="handleRejectTools">拒绝</el-button>
           <div>
-            <el-button v-if="showPerToolControls" @click="setAllDecisions('rejected')">
-              全部拒绝
-            </el-button>
-            <el-button @click="handleApproveAndRemember">批准并记住</el-button>
+          <el-button @click="handleApproveAndRemember">批准并记住</el-button>
             <el-button type="primary" @click="handleApproveTools">批准</el-button>
           </div>
         </div>
@@ -2192,7 +2213,13 @@ const minimizedWaits = computed(() => {
     <ToolOutputDrawer />
     <!-- 最小化等待悬浮条：human-input / tool-approval 最小化期间显示，点击恢复。
          结构与 QuestionDialog 悬浮条一致：图标 + 标题 + 摘要 + 倒计时 + 展开图标 -->
-    <div v-if="minimizedWaits.length > 0" class="minimized-waits">
+    <div
+      v-if="minimizedWaits.length > 0"
+      class="minimized-waits"
+      :class="{ 'is-dragging': waitsDragging }"
+      :style="waitsDragStyle"
+      @pointerdown="onWaitsPointerDown"
+    >
       <button
         v-for="bar in minimizedWaits"
         :key="bar.key"
@@ -2221,6 +2248,7 @@ const minimizedWaits = computed(() => {
     <DirectoryPickerDialog
       v-model="workDirPickerVisible"
       :initial-path="effectiveInitialPath"
+      :recent-dirs="workDirRecents"
       @confirm="handleWorkDirConfirm"
     />
 
@@ -2637,6 +2665,16 @@ export default {}
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* 拖动中：grabbing 光标 + 禁子项 hover 位移（防抖动） */
+.minimized-waits.is-dragging {
+  cursor: grabbing;
+}
+
+.minimized-waits.is-dragging .minimized-wait-bar {
+  transform: none;
+  transition: none;
 }
 
 .minimized-wait-bar {

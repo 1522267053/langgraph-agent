@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { QuestionFilled, Warning, Minus, FullScreen } from '@element-plus/icons-vue'
 import { formatToolArgs, formatCountdown } from '@/utils/format'
+import { useDraggableBar } from '@/composables/useDraggableBar'
 
 interface ConversationMessage {
   role: string
@@ -69,13 +70,29 @@ function toggleDecision(tc: { id?: string; name: string }, index: number): void 
   toolDecisions.value[key] = getDecision(tc, index) === 'approved' ? 'rejected' : 'approved'
 }
 
-function setAllDecisions(decision: ToolDecision): void {
-  const next: Record<string, ToolDecision> = {}
-  for (let i = 0; i < (props.approval?.toolCalls.length ?? 0); i++) {
-    const tc = props.approval!.toolCalls[i]
-    next[decisionKey(tc, i)] = decision
+// 全拒守卫：所有卡片均为 rejected 时，「批准/批准并记住」改走整批拒绝——
+// 保证审计语义正确（interaction_audit_log 记 rejected 而非 approved），文案与结果不脱钩
+function isAllRejected(): boolean {
+  const calls = props.approval?.toolCalls ?? []
+  return calls.length > 0 && calls.every((tc, i) => getDecision(tc, i) === 'rejected')
+}
+
+/** 批准（守卫接管：全 rejected 时上抛 rejected 整批决策） */
+function handleApprove(): void {
+  if (isAllRejected()) {
+    emit('approval', 'rejected', false)
+    return
   }
-  toolDecisions.value = next
+  emit('approval', 'approved', false, buildToolDecisions())
+}
+
+/** 批准并记住（守卫同上） */
+function handleApproveAndRemember(): void {
+  if (isAllRejected()) {
+    emit('approval', 'rejected', false)
+    return
+  }
+  emit('approval', 'approved', true, buildToolDecisions())
 }
 
 /** 组装逐工具决策 payload（仅存在拒绝项时携带，缺省走整批语义） */
@@ -143,6 +160,10 @@ function minimize(): void {
 function restore(): void {
   minimized.value = false
 }
+
+// 最小化悬浮条可拖动（位置记忆 localStorage；位移<4px 仍视为点击恢复）
+const { barStyle: barDragStyle, onPointerDown: onBarPointerDown, isDragging: barDragging } =
+  useDraggableBar('agent-approval-bar')
 
 /**
  * el-dialog model-value 变化分流：
@@ -349,21 +370,10 @@ function handleOpen(): void {
           拒绝
         </el-button>
         <div>
-          <el-button
-            v-if="showPerToolControls"
-            :loading="loading"
-            @click="setAllDecisions('rejected')"
-          >
-            全部拒绝
-          </el-button>
-          <el-button :loading="loading" @click="emit('approval', 'approved', true, buildToolDecisions())">
+          <el-button :loading="loading" @click="handleApproveAndRemember">
             批准并记住
           </el-button>
-          <el-button
-            type="primary"
-            :loading="loading"
-            @click="emit('approval', 'approved', false, buildToolDecisions())"
-          >
+          <el-button type="primary" :loading="loading" @click="handleApprove">
             批准
           </el-button>
         </div>
@@ -373,7 +383,15 @@ function handleOpen(): void {
 
   <!-- 最小化悬浮条：弹窗隐藏期间显示，点击恢复作答/审批 -->
   <Teleport to="body">
-    <button v-if="visible && minimized" class="human-input-minimized-bar" type="button" @click="restore">
+    <button
+      v-if="visible && minimized"
+      class="human-input-minimized-bar"
+      :class="{ 'is-dragging': barDragging }"
+      type="button"
+      :style="barDragStyle"
+      @pointerdown="onBarPointerDown"
+      @click="restore"
+    >
       <el-icon :size="16" class="bar-icon">
         <Warning v-if="isApprovalMode" />
         <QuestionFilled v-else />
@@ -542,6 +560,13 @@ function handleOpen(): void {
 .human-input-minimized-bar:hover {
   box-shadow: 0 6px 20px rgba(230, 162, 60, 0.35);
   transform: translateY(-1px);
+}
+
+/* 拖动中：grabbing 光标 + 禁 hover 位移（防抖动） */
+.human-input-minimized-bar.is-dragging {
+  cursor: grabbing;
+  transform: none;
+  transition: none;
 }
 
 .bar-icon {

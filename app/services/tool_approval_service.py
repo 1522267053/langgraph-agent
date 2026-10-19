@@ -168,5 +168,60 @@ class ToolApprovalService(AsyncPendingService[ToolApprovalFuture, str]):
             return []
         return list(item.future.approval_needed or [])
 
+    def get_grantable_tool_names(
+        self,
+        session_id: int,
+        item_id: str,
+        per_tool_decisions: dict[str, str] | None = None,
+    ) -> list[str]:
+        """取「批准并记住」应写入免审授权的工具名（须在 resolve 前调用）。
+
+        决策粒度对齐（修复：混合决策时被拒绝工具不得获得授权）：
+        - per_tool_decisions 非空：按 tool_call_id 过滤，仅 decision=approved
+          的工具写入授权（缺失项按 approved 处理，与执行侧 fail-open 默认一致，
+          执行侧对缺失项 fail-closed 拒绝执行，但授权不应因前端漏传而漏写已批准项）；
+        - per_tool_decisions 为空（整批语义）：返回全量 approval_needed（原行为）。
+
+        Args:
+            session_id: 队列 key（Agent=会话ID / Flow=执行ID）
+            item_id: 审批批次 ID
+            per_tool_decisions: 逐工具决策 {tool_call_id: approved|rejected}，可选
+        """
+        item = self._get_item(session_id, item_id)
+        if not item:
+            return []
+        future = item.future
+        if not per_tool_decisions:
+            return list(future.approval_needed or [])
+
+        # tool_call_id → 工具名（逐工具决策的 key 是 ToolCall.id）。
+        # tool_calls 元素可能是 dict（register 透传）或 ToolCall 对象（LangChain），
+        # 两种形态统一取 id/name（getattr 对 dict 无效，须显式分支）
+        def _tc_id(tc) -> str:
+            if isinstance(tc, dict):
+                return str(tc.get("id") or "")
+            return str(getattr(tc, "id", None) or "")
+
+        def _tc_name(tc) -> str:
+            if isinstance(tc, dict):
+                return str(tc.get("name") or "")
+            return str(getattr(tc, "name", None) or "")
+
+        id_to_name = {_tc_id(tc): _tc_name(tc) for tc in future.tool_calls or []}
+        grantable: list[str] = []
+        for tc in future.tool_calls or []:
+            tc_id = _tc_id(tc)
+            name = _tc_name(tc)
+            decision = per_tool_decisions.get(tc_id, "approved")
+            if decision == "approved" and name and name not in grantable:
+                grantable.append(name)
+        # 兜底：决策 key 与 tool_call id 全部失配（异常前端/旧版本）时，
+        # 退回全量授权——宁可多授权同批已展示的工具，也不静默丢掉用户意图
+        if not grantable and id_to_name and not any(
+            k in id_to_name for k in per_tool_decisions
+        ):
+            return list(future.approval_needed or [])
+        return grantable
+
 
 tool_approval_service = ToolApprovalService()

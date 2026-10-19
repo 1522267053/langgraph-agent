@@ -229,13 +229,19 @@ class ExecutionApi(
             与 Agent 的 /tool_approval 同构；队列 key 为 execution_id（Flow 域）。
             批准并记住：写 scope=flow 的执行级免审授权（resolve 前取本批次工具名）。
             """
+            # 批准并记住：写 scope=flow 的执行级免审授权（resolve 前取本批次工具名）。
+            # 逐工具决策（tool_decisions）非空时过滤 rejected：被拒绝的工具
+            # 不得获得免审授权（get_grantable_tool_names 内处理）。
             from app.services.tool_approval_service import tool_approval_service
 
             if req.action not in ("approved", "rejected"):
                 return ApiResponse.error(msg="action 必须为 approved 或 rejected")
-            tool_names = tool_approval_service.get_approval_tool_names(
-                execution_id, req.approval_id
-            )
+            if req.action == "approved" and req.remember_session:
+                tool_names = tool_approval_service.get_grantable_tool_names(
+                    execution_id,
+                    req.approval_id,
+                    per_tool_decisions=req.tool_decisions,
+                )
             resolved = tool_approval_service.resolve(
                 execution_id,
                 req.approval_id,
@@ -244,7 +250,7 @@ class ExecutionApi(
             )
             if not resolved:
                 return ApiResponse.error(msg="没有待确认的工具")
-            if req.action == "approved" and req.remember_session:
+            if req.action == "approved" and req.remember_session and tool_names:
                 try:
                     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
