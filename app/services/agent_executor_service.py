@@ -137,6 +137,23 @@ class _AgentRun:
     def last_event_id(self) -> int:
         return self.next_event_id - 1
 
+    def prune_persisted_events(self) -> None:
+        """释放水位前已落库内容类事件的内存（置 None 占位，不物理移除）。
+
+        物理移除会破坏「事件 ID = 列表索引 + 1」的游标映射（subscribe_run
+        以 cursor 为列表索引遍历）；None 占位保持索引稳定。仅清内容类事件
+        （内存大头：chunk 字符串/工具结果）；todo_update/sub_agent_progress/
+        node_start/node_done 虽在水位前仍被回放（计划面板/子Agent预览恢复
+        依赖，过滤会导致刷新后空白），必须保留。
+        """
+        for i, event in enumerate(self.events):
+            if (
+                event is not None
+                and event["id"] <= self.content_watermark_event_id
+                and event["type"] in _PERSISTED_CONTENT_EVENT_TYPES
+            ):
+                self.events[i] = None
+
 
 class AgentExecutorService(BaseExecutorService):
     """
@@ -187,6 +204,7 @@ class AgentExecutorService(BaseExecutorService):
             # 该节点消息已随 handler 内 save_to_db 落库，水位推进到此处：
             # 更早的内容类事件由 DB 重建呈现，回放跳过；之后的属于进行中节点
             run.content_watermark_event_id = stored_event["id"]
+            run.prune_persisted_events()
         if stored_event["type"] == "tool_approval_required" and run.approval_callback:
             try:
                 run.approval_callback(stored_event)
@@ -605,6 +623,13 @@ class AgentExecutorService(BaseExecutorService):
                 # 事件 ID 从 1 连续递增，cursor 同时是下一事件的列表索引。
                 while cursor < run.last_event_id:
                     event = run.events[cursor]
+                    if event is None:
+                        # 已落库内容类事件的内存释放占位（prune_persisted_events）：
+                        # 必然被下方水位过滤跳过，直接推进游标。原推进逻辑
+                        # cursor = event["id"] 在此处恒等于 cursor + 1
+                        # （id = 列表索引 + 1 不变量），语义等价
+                        cursor += 1
+                        continue
                     cursor = event["id"]
                     # 水位（最后一个 node_done）之前的内容类事件已落库，由前端 DB 重建
                     # 呈现；回放会与其重复渲染，故跳过。水位之后的不跳过——那属于
@@ -669,6 +694,19 @@ class AgentExecutorService(BaseExecutorService):
             return
         event = FlowEventFactory.file_changed(change=change_dict)
         self._publish_agent_run_event(run, event)
+
+    def advance_content_watermark(self, session_id: int) -> None:
+        """ReAct 迭代中途推进内容回放水位（llm_tool_handler 落库成功后调用）。
+
+        落库成功时刻的 last_event_id 之前的所有内容类事件均已有对应 DB 行，
+        断线重连回放可安全跳过（subscribe_run 水位过滤自动生效），
+        并释放这部分事件的内存。run 不存在（Flow 模式）或已结束时 no-op。
+        """
+        self._prune_agent_runs()
+        run = self._agent_runs.get(session_id)
+        if run and not run.done:
+            run.content_watermark_event_id = run.last_event_id
+            run.prune_persisted_events()
 
     def get_run_status(self, session_id: int) -> dict[str, Any]:
         """返回会话运行状态及当前可订阅游标。"""
