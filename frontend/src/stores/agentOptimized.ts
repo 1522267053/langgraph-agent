@@ -828,11 +828,20 @@ export const useAgentStore = defineStore('agent', () => {
       ) {
         messages.value = res.data.data?.list || []
         messageTotal.value = res.data.data?.total || 0
-        // 重连对齐基线 = 加载时的最大 DB id：streamBaseMsgId 若保持 0，
-        // rebuildChatMessages 的占位行尾部对齐会把全部历史行当"本轮新增"，
-        // 重连占位行（仅持刷新后增量内容）会错误吸收最后一个 AI 组，
-        // 导致刷新前该轮内容（工具段+回复）从视图消失
-        streamBaseMsgId = messages.value.at(-1)?.id ?? 0
+        // 重连对齐基线 = 「本轮起点之前的最新 DB 行 id」，供 rebuildChatMessages
+        // 识别「本轮新增」行、把流式占位行与 DB 组对齐合并。
+        //
+        // 取本轮最后一条 human 行 id - 1（严格晚于它的行都属本轮）；
+        // 窗口内无 human 行时（长 ReAct 的几十条 tool/ai 行挤满 20 条首屏窗口，
+        // 本轮 human 行被挤出）退化为「窗口最小 id - 1」——该前提下 human 行
+        // 必然早于窗口，窗口内全部行都属本轮，必须整体视为新增。
+        // 若沿用「窗口最大 id」（本次修复前的写法）会把整轮判为旧行：
+        // 本轮所有行 id ≤ 该值 → freshRows 恒空 → 占位行无候选 → DB 气泡与
+        // SSE 占位气泡双份并存，且该值不随窗口内容变化，是结构性错误。
+        const lastHumanRow = [...messages.value].reverse().find(m => m.role === 'human')
+        streamBaseMsgId = lastHumanRow
+          ? lastHumanRow.id - 1
+          : Math.max((messages.value[0]?.id ?? 1) - 1, 0)
         rebuildChatMessages()
         // 预拉取文件变更列表，驱动右上角"文件"badge；SSE file_changed 后续增量维护
         void fetchFileChanges()
@@ -867,6 +876,16 @@ export const useAgentStore = defineStore('agent', () => {
       ) {
         // 新事件写入独立气泡；完成后仍以数据库消息为准重建。
         startStreaming(true)
+        // 立即与 DB 已重建的 ai 组做一次对齐合并。
+        //
+        // startStreaming(true) 会强制 push 一个空占位行；刷新时 DB 窗口内往往已含
+        // 本轮 ai 组（中途落库 / tool 行），于是渲染成 [ai组(DB)] [ai空占位] 两个
+        // 同级气泡——这正是「上方 DB、下方 SSE」双气泡的直因。
+        // 原实现只在 flow_done 才合并，整个流式期间保持双气泡；此处补一次即时对齐：
+        // rebuildChatMessages 的反向对齐按 role=ai 命中 DB 组，通过 reattach 把 DB 段
+        // 并入占位行（保留占位行 id/key，DOM 不重挂），后续 SSE 增量继续追加到同一行。
+        // preserveStreaming=true：保持流式态（否则 rebuild 会把 isStreaming 翻 false）。
+        rebuildChatMessages(true)
         const context: AgentStreamContext = {
           agentId,
           sessionId: session.id,
@@ -875,12 +894,22 @@ export const useAgentStore = defineStore('agent', () => {
         }
         const runId = runRes.data.data?.run_id
         if (runId && runRes.data.data?.managed_running) {
-          // 计时锚定本轮 human 行 created_at（轮次真实起点），流式中恢复跳动；
-          // 无 human 行（极端）时回退当前时刻
+          // 计时锚点优先级：后端权威墙钟（round_started_at_ms，跨进程可靠）
+          // → 本轮 human 行 created_at（窗口内可见时）
+          // → 窗口最早行 created_at（本轮 human 行被长 ReAct 挤出 20 条首屏窗口，
+          //   此时窗口内全属本轮，最早行时间即本轮可观测起点）
+          // → now（兜底）。早先只做前两级，长轮次刷新会落到 now → 计时归零重算。
           const lastHuman = [...messages.value].reverse().find(m => m.role === 'human')
-          const anchorTs = lastHuman?.created_at
-            ? new Date(lastHuman.created_at).getTime()
-            : undefined
+          const backendAnchor = Number(runRes.data.data?.round_started_at_ms) || 0
+          const firstRowTs = messages.value[0]?.created_at
+            ? new Date(messages.value[0].created_at).getTime()
+            : NaN
+          const anchorTs =
+            backendAnchor > 0
+              ? backendAnchor
+              : lastHuman?.created_at
+                ? new Date(lastHuman.created_at).getTime()
+                : firstRowTs
           if (Number.isFinite(anchorTs)) startElapsedTimer(anchorTs)
           else startElapsedTimer()
           // 全量回放（after=0）：内容类事件的水位切分已在后端完成

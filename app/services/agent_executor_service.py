@@ -132,6 +132,12 @@ class _AgentRun:
     # await msg_buf.save_to_db() 先于 handler 返回），因此水位之后的内容类事件
     # 必定属于尚未落库的进行中节点，重连回放时不得跳过。
     content_watermark_event_id: int = 0
+    # 本轮执行起点的墙钟时间（time.time() 秒级 float，供断线重连后前端恢复
+    # 「已运行 xx 秒」计时）。与内部计时的 time.monotonic() 刻意分离：
+    # monotonic 不受系统时钟回拨影响、只用于计算时长；跨进程/前端展示需要
+    # 绝对时间戳，故另存墙钟值。resume 场景每次新建 _AgentRun，自动刷新为
+    # 恢复时刻——等待用户输入的时间不计入本轮时长，与 round_started 语义一致。
+    round_started_at: float | None = None
 
     @property
     def last_event_id(self) -> int:
@@ -424,6 +430,8 @@ class AgentExecutorService(BaseExecutorService):
             approval_callback=approval_callback,
             event_callback=event_callback,
             question_callback=question_callback,
+            # 墙钟起点：断线重连后前端据此恢复「已运行 xx 秒」（monotonic 不可跨进程）
+            round_started_at=time.time(),
         )
         self._agent_runs[session_id] = run
         stream_generator = stream_factory()
@@ -723,6 +731,13 @@ class AgentExecutorService(BaseExecutorService):
             # subscribe_run 内完成后端化，此字段供前端诊断与断线重连日志使用
             "content_watermark_event_id": run.content_watermark_event_id if run else 0,
             "terminal_event_type": run.terminal_event_type if run else None,
+            # 本轮起点墙钟毫秒（前端「已运行 xx 秒」锚点）：内部存 time.time()
+            # 秒级 float，此处转毫秒下发，避免前端单位换算歧义
+            "round_started_at_ms": (
+                int(run.round_started_at * 1000)
+                if run and run.round_started_at is not None
+                else None
+            ),
             "waiting_event": self._waiting_events.get(session_id),
         }
 

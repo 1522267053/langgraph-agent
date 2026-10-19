@@ -33,6 +33,11 @@ interface AgentRunStatus {
   last_event_id: number
   /** 内容回放水位（最后一个 node_done 的事件 id）；内容类切分已在后端完成 */
   content_watermark_event_id: number
+  /**
+   * 本轮起点墙钟毫秒（后端权威值）：断线重连后据此恢复「已运行 xx 秒」，
+   * 避免依赖「首屏窗口内的 human 行」（长 ReAct 会把它挤出 20 条窗口 → 计时归零）
+   */
+  round_started_at_ms: number | null
   terminal_event_type: string | null
   waiting_event: SSEEvent | null
 }
