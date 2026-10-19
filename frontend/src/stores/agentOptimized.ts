@@ -1321,14 +1321,26 @@ export const useAgentStore = defineStore('agent', () => {
     // 占位级联失配；反向对齐只影响末尾对应关系，缺行位置的行保持独立成行。
     // streamBaseMsgId=0（首轮/空会话）时 dbMsgId > 0 恒真，全部 rebuilt 行参与匹配
     const matchedPlaceholders: StreamingMessage[] = []
+    /**
+     * 「本轮新增」判定：渲染行自身或其任意分段的 dbMsgId 晚于基准即为新增。
+     *
+     * 连续 ai 行的行级 dbMsgId 取「组首」行 id（buildChatMessagesFromDB 合并语义），
+     * 而 ReAct 每 N 轮中途落库会让落库边界切进 ai 组内：组首 id ≤ 基准、
+     * 组内后段行 id > 基准。只看行级会把整组误判为旧行 → freshRows 为空 →
+     * 流式占位行反向对齐游标立即出界（freshIdx = -1）→ 占位气泡不与 DB 组
+     * 合并，出现「上方 DB 气泡 + 下方 SSE 气泡」双份渲染。
+     * 段级 dbMsgId 在 content/thinking/tool/todo 段上均有（见 buildChatMessagesFromDB）。
+     */
+    const isFreshRow = (r: StreamingMessage): boolean =>
+      (r.dbMsgId != null && r.dbMsgId > streamBaseMsgId) ||
+      r.segments.some(s => s.dbMsgId != null && s.dbMsgId > streamBaseMsgId)
     // 排除 context-summary / execution-error：两者是内部标记消息（压缩摘要/错误卡片），
     // 参与对齐会被尾部流式占位行吸收（跳过内部行 + dbMsgId 过继给
     // 占位行），导致卡片卡在下次全量重建前不渲染；占位行只与真实对话行对齐
     // （提升到 if 外：未匹配占位行分流复用本轮新增行清单）
     const freshRows = rebuilt.filter(
       r =>
-        r.dbMsgId != null &&
-        r.dbMsgId > streamBaseMsgId &&
+        isFreshRow(r) &&
         r.displayType !== 'context-summary' &&
         r.displayType !== 'execution-error'
     )
@@ -1439,18 +1451,12 @@ export const useAgentStore = defineStore('agent', () => {
     const unmatchedPlaceholders = placeholders.filter(ph => !matchedSet.has(ph))
     const trailingAiPlaceholders: StreamingMessage[] = []
     if (unmatchedPlaceholders.length > 0) {
-      const firstFreshIdx = result.findIndex(
-        r => r.dbMsgId != null && r.dbMsgId > streamBaseMsgId
-      )
+      const firstFreshIdx = result.findIndex(r => isFreshRow(r))
       let insertAt = firstFreshIdx === -1 ? result.length : firstFreshIdx
       for (const ph of unmatchedPlaceholders) {
         if (ph.role === 'human') {
           const dupInFresh = freshRows.some(
-            r =>
-              r.role === 'human' &&
-              r.dbMsgId != null &&
-              r.dbMsgId > streamBaseMsgId &&
-              r.content === ph.content
+            r => r.role === 'human' && isFreshRow(r) && r.content === ph.content
           )
           if (!dupInFresh) {
             result.splice(insertAt, 0, ph)
@@ -1486,6 +1492,23 @@ export const useAgentStore = defineStore('agent', () => {
       currentAgent.value?.id === context.agentId &&
       currentSession.value?.id === context.sessionId
     )
+  }
+
+  /**
+   * 回合终态（flow_done / error）后的侧边栏标题对账：重拉会话列表。
+   *
+   * 后端在首轮开始时即把真实标题落库，而列表可能是「新建会话」时加载的
+   * （此时标题还是「新对话」）。仅凭 wasFirstMessage（发送时刻快照）判断
+   * 会漏掉重连场景：切会话回来/刷新页面后重连的流 wasFirstMessage 恒为
+   * false，flow_done 后不再重拉，侧边栏将无限期停留在「新对话」。
+   * 因此补充条件：列表条目缺失或仍是默认标题「新对话」时也重拉。
+   */
+  function reloadSidebarIfTitleStale(context: AgentStreamContext): void {
+    if (!isCurrentStream(context)) return
+    const listEntry = sessions.value.find(s => s.id === context.sessionId)
+    if (context.wasFirstMessage || listEntry?.title === '新对话') {
+      void loadSessions(context.agentId, sessionPage.value)
+    }
   }
 
   function applyLatestMessages(
@@ -1878,9 +1901,8 @@ export const useAgentStore = defineStore('agent', () => {
         setSessionRunningLocal(context.agentId, context.sessionId, false)
         // 用户正看着本会话：清除后端完成未读标记（否则刷新后红点误亮）
         clearFinishUnreadIfCurrent(context.agentId, context.sessionId)
-        if (context.wasFirstMessage && isCurrentStream(context)) {
-          void loadSessions(context.agentId, sessionPage.value)
-        }
+        // 终态标题对账：首轮发送或列表条目仍是「新对话」（重连场景）时重拉列表
+        reloadSidebarIfTitleStale(context)
       },
       onLlmRetry: createOnLlmRetryHandler(),
       onError: async (event: SSEEvent) => {
