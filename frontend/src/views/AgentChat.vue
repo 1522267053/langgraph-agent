@@ -56,7 +56,8 @@ import {
   loadWorkDirForAgent,
   saveWorkDirForAgent,
   loadWorkDirRecents,
-  recordWorkDirRecent
+  recordWorkDirRecent,
+  removeWorkDirRecent
 } from '@/utils/workdir'
 
 import 'highlight.js/styles/vs2015.css'
@@ -1180,6 +1181,11 @@ async function handleWorkDirConfirm(path: string): Promise<void> {
       }
     } catch {
       // error handled by interceptor
+      // 兜底：预检通过但确认时目录已失效（竞态删除等），同样从最近列表移除
+      if (path) {
+        removeWorkDirRecent(agentId.value, path)
+        workDirRecents.value = loadWorkDirRecents(agentId.value)
+      }
     }
     return
   }
@@ -1188,6 +1194,12 @@ async function handleWorkDirConfirm(path: string): Promise<void> {
   saveWorkDirForAgent(agentId.value, path)
   // 同步记入「最近使用」快捷区（空路径=清除选择，recordWorkDirRecent 内部已忽略）
   recordWorkDirRecent(agentId.value, path)
+}
+
+/** 最近使用目录点击后预检失败（目录已不存在）：从最近列表移除并刷新快捷区 */
+function handleRecentInvalid(path: string): void {
+  removeWorkDirRecent(agentId.value, path)
+  workDirRecents.value = loadWorkDirRecents(agentId.value)
 }
 
 onMounted(async () => {
@@ -2250,6 +2262,7 @@ const { barStyle: waitsDragStyle, onPointerDown: onWaitsPointerDown, isDragging:
       :initial-path="effectiveInitialPath"
       :recent-dirs="workDirRecents"
       @confirm="handleWorkDirConfirm"
+      @recent-invalid="handleRecentInvalid"
     />
 
     <el-dialog

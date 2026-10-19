@@ -80,3 +80,18 @@ export function recordWorkDirRecent(agentIdNum: number | null, path: string): vo
     // 配额满 / 隐私模式禁用：按浏览器原生行为降级
   }
 }
+
+/** 从最近列表移除失效目录（目录已不存在时调用）；写入异常静默降级 */
+export function removeWorkDirRecent(agentIdNum: number | null, path: string): void {
+  if (!path) return
+  const k = workDirRecentsKey(agentIdNum)
+  if (!k) return
+  try {
+    localStorage.setItem(
+      k,
+      JSON.stringify(loadWorkDirRecents(agentIdNum).filter(p => p !== path))
+    )
+  } catch {
+    // 配额满 / 隐私模式禁用：按浏览器原生行为降级
+  }
+}

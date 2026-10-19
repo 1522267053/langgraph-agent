@@ -25,10 +25,14 @@ const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
   /** path 为空串表示清除选择 */
   (e: 'confirm', path: string): void
+  /** 点击的最近使用目录已不存在（调用方应将其从最近列表移除） */
+  (e: 'recent-invalid', path: string): void
 }>()
 
 const visible = ref(false)
 const loading = ref(false)
+/** 最近项预检中（防重复点击） */
+const checkingRecent = ref(false)
 /** 当前目录（null 表示盘符列表视图） */
 const currentPath = ref<string | null>(null)
 const parentPath = ref<string | null>(null)
@@ -81,10 +85,20 @@ function enter(entry: DirectoryEntry): void {
   browse(entry.path)
 }
 
-/** 点击最近使用目录：直接跳转（目标可能已不存在，browse 失败由拦截器提示） */
-function enterRecent(path: string): void {
-  filterText.value = ''
-  browse(path)
+/** 点击最近使用目录：预检通过后直接确认选择；目录已不存在则通知父组件移除该条（错误提示由拦截器统一弹出），弹窗保持打开 */
+async function enterRecent(path: string): Promise<void> {
+  if (checkingRecent.value) return
+  checkingRecent.value = true
+  try {
+    await fsApi.listDirectories(path)
+    filterText.value = ''
+    emit('confirm', path)
+    visible.value = false
+  } catch {
+    emit('recent-invalid', path)
+  } finally {
+    checkingRecent.value = false
+  }
 }
 
 function goUp(): void {
@@ -155,8 +169,12 @@ function handleConfirm(): void {
       />
     </div>
 
-    <!-- 最近使用快捷区：仅在非过滤态且有记录时展示 -->
-    <div v-if="!filterText && recentDirs.length > 0" class="dir-picker-recents">
+    <!-- 最近使用快捷区：仅在非过滤态且有记录时展示；点击直接确认选择 -->
+    <div
+      v-if="!filterText && recentDirs.length > 0"
+      class="dir-picker-recents"
+      :class="{ 'is-checking': checkingRecent }"
+    >
       <div class="dir-picker-section-title">最近使用</div>
       <div
         v-for="path in recentDirs"
@@ -244,6 +262,11 @@ function handleConfirm(): void {
 .dir-picker-recent-icon {
   color: #94a3b8;
   flex-shrink: 0;
+}
+
+.dir-picker-recents.is-checking {
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .dir-picker-list {
