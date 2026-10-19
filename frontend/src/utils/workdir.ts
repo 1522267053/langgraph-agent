@@ -38,3 +38,45 @@ export function saveWorkDirForAgent(agentIdNum: number | null, path: string): vo
     // 配额满 / 隐私模式禁用：按浏览器原生行为降级
   }
 }
+
+// ---- 最近使用目录列表（弹窗快捷区，最多 8 条）----
+
+export const WORKDIR_RECENTS_PREFIX = 'agent_workdir_recents:'
+/** 快捷区最多展示的最近目录数 */
+export const WORKDIR_RECENTS_LIMIT = 8
+
+function workDirRecentsKey(agentIdNum: number | null): string | null {
+  return agentIdNum ? `${WORKDIR_RECENTS_PREFIX}${agentIdNum}` : null
+}
+
+/** 读取 Agent 维度最近使用的目录列表（仅弹窗快捷区用），最近在前；无记录/localStorage 不可用时返回空数组 */
+export function loadWorkDirRecents(agentIdNum: number | null): string[] {
+  if (typeof localStorage === 'undefined') return []
+  const k = workDirRecentsKey(agentIdNum)
+  if (!k) return []
+  try {
+    const raw = localStorage.getItem(k)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+/** 记录一次目录选择：去重置顶、截断到上限；空路径不记录；写入异常静默降级 */
+export function recordWorkDirRecent(agentIdNum: number | null, path: string): void {
+  const trimmed = path.trim()
+  if (!trimmed) return
+  const k = workDirRecentsKey(agentIdNum)
+  if (!k) return
+  try {
+    const next = [trimmed, ...loadWorkDirRecents(agentIdNum).filter(p => p !== trimmed)].slice(
+      0,
+      WORKDIR_RECENTS_LIMIT
+    )
+    localStorage.setItem(k, JSON.stringify(next))
+  } catch {
+    // 配额满 / 隐私模式禁用：按浏览器原生行为降级
+  }
+}

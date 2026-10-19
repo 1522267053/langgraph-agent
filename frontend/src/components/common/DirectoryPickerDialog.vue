@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ArrowUp, RefreshRight, Search, Folder } from '@element-plus/icons-vue'
+import { ArrowUp, RefreshRight, Search, Folder, Clock } from '@element-plus/icons-vue'
 import { fsApi, type DirectoryEntry } from '@/api/filesystem'
 
 const props = withDefaults(
@@ -11,10 +11,13 @@ const props = withDefaults(
     initialPath?: string
     /** 对话框标题 */
     title?: string
+    /** 最近使用的目录列表（最近在前，仅快捷跳转，不参与过滤） */
+    recentDirs?: string[]
   }>(),
   {
     initialPath: '',
-    title: '选择项目工作路径'
+    title: '选择项目工作路径',
+    recentDirs: () => []
   }
 )
 
@@ -76,6 +79,12 @@ async function browse(path: string): Promise<void> {
 function enter(entry: DirectoryEntry): void {
   filterText.value = ''
   browse(entry.path)
+}
+
+/** 点击最近使用目录：直接跳转（目标可能已不存在，browse 失败由拦截器提示） */
+function enterRecent(path: string): void {
+  filterText.value = ''
+  browse(path)
 }
 
 function goUp(): void {
@@ -146,6 +155,20 @@ function handleConfirm(): void {
       />
     </div>
 
+    <!-- 最近使用快捷区：仅在非过滤态且有记录时展示 -->
+    <div v-if="!filterText && recentDirs.length > 0" class="dir-picker-recents">
+      <div class="dir-picker-section-title">最近使用</div>
+      <div
+        v-for="path in recentDirs"
+        :key="path"
+        class="dir-picker-item dir-picker-recent-item"
+        @click="enterRecent(path)"
+      >
+        <el-icon :size="14" class="dir-picker-recent-icon"><Clock /></el-icon>
+        <span class="dir-picker-name" :title="path">{{ path }}</span>
+      </div>
+    </div>
+
     <div v-loading="loading" class="dir-picker-list">
       <template v-if="isDriveView">
         <div class="dir-picker-hint">选择磁盘</div>
@@ -197,6 +220,30 @@ function handleConfirm(): void {
 
 .dir-picker-filter {
   margin-bottom: 10px;
+}
+
+.dir-picker-recents {
+  margin-bottom: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.dir-picker-section-title {
+  padding: 6px 12px;
+  color: #94a3b8;
+  font-size: 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.dir-picker-recent-item {
+  padding: 7px 12px;
+}
+
+.dir-picker-recent-icon {
+  color: #94a3b8;
+  flex-shrink: 0;
 }
 
 .dir-picker-list {
