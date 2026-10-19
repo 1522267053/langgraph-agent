@@ -13,6 +13,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { QuestionFilled, Check, Minus, FullScreen } from '@element-plus/icons-vue'
 import { formatCountdown } from '@/utils/format'
 import { USER_RESPONSE_COUNTDOWN_SECONDS } from '@/constants/timing'
+import { useDraggableBar } from '@/composables/useDraggableBar'
 
 interface QuestionOption {
   label: string
@@ -60,6 +61,10 @@ function minimize(): void {
 function restore(): void {
   minimized.value = false
 }
+
+// 最小化悬浮条可拖动（位置记忆 localStorage；位移<4px 仍视为点击恢复）
+const { barStyle: barDragStyle, onPointerDown: onBarPointerDown, isDragging: barDragging } =
+  useDraggableBar('agent-question-bar')
 
 // ---- 回答倒计时 ----
 const remainingSeconds = ref(0)
@@ -284,8 +289,10 @@ const confirmDisabled = computed(() => {
     <button
       v-if="visible && minimized"
       class="question-minimized-bar"
+      :class="{ 'is-expired': expired, 'is-dragging': barDragging }"
       type="button"
-      :class="{ 'is-expired': expired }"
+      :style="barDragStyle"
+      @pointerdown="onBarPointerDown"
       @click="restore"
     >
       <el-icon :size="16" class="bar-icon"><QuestionFilled /></el-icon>
@@ -530,6 +537,13 @@ const confirmDisabled = computed(() => {
 .question-minimized-bar:hover {
   box-shadow: 0 6px 20px rgba(168, 85, 247, 0.35);
   transform: translateY(-1px);
+}
+
+/* 拖动中：grabbing 光标 + 禁 hover 位移（防抖动） */
+.question-minimized-bar.is-dragging {
+  cursor: grabbing;
+  transform: none;
+  transition: none;
 }
 
 .question-minimized-bar.is-expired {
