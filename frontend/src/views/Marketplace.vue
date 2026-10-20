@@ -4,6 +4,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Download, Refresh, Shop } from '@element-plus/icons-vue'
 import { marketplaceApi } from '@/api/marketplace'
 import { useMarketplaceStore } from '@/stores/marketplaceStore'
+import ImportConflictSelector from '@/components/FlowEditor/ImportConflictSelector.vue'
+import type { ImportConflictPolicy, ImportConflictResult } from '@/types/flow'
 
 const store = useMarketplaceStore()
 const statusLoaded = ref(false)
@@ -74,33 +76,81 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
+async function showImportResult(data: any) {
+  if (data?.success) {
+    if (data.warnings?.length) {
+      let msgHtml = `<div style="max-height:300px;overflow-y:auto"><p style="font-weight:600;margin:0 0 8px">${data.message}</p><ul style="margin:0;padding-left:16px">`
+      for (const w of data.warnings) {
+        msgHtml += `<li style="color:#e6a23c;margin-bottom:4px">${w}</li>`
+      }
+      msgHtml += '</ul></div>'
+      ElMessageBox.alert(msgHtml, '导入完成（有警告）', {
+        dangerouslyUseHTMLString: true,
+        confirmButtonText: '确定'
+      })
+    } else {
+      ElMessage.success({ message: data.message || '导入成功', duration: 5000 })
+    }
+  } else {
+    ElMessage.error({ message: data?.message || '导入失败', duration: 5000 })
+  }
+}
+
+function hasAnyConflict(c: ImportConflictResult): boolean {
+  return !!(c.skills?.length || c.knowledge_bases?.length || c.mcp_servers?.length)
+}
+
+async function doImport(id: number, conflictPolicy?: ImportConflictPolicy) {
+  const res = await marketplaceApi.importResource(id, conflictPolicy)
+  await showImportResult(res.data.data)
+}
+
 async function handleImport(resource: any) {
   await ElMessageBox.confirm(`确定要导入「${resource.name}」吗？`, '导入资源', { type: 'info' })
   importing.value = resource.id
   try {
-    const res = await marketplaceApi.importResource(resource.id)
-    const data = res.data.data
-    if (data?.success) {
-      if (data.warnings?.length) {
-        let msgHtml = `<div style="max-height:300px;overflow-y:auto"><p style="font-weight:600;margin:0 0 8px">${data.message}</p><ul style="margin:0;padding-left:16px">`
-        for (const w of data.warnings) {
-          msgHtml += `<li style="color:#e6a23c;margin-bottom:4px">${w}</li>`
-        }
-        msgHtml += '</ul></div>'
-        ElMessageBox.alert(msgHtml, '导入完成（有警告）', {
-          dangerouslyUseHTMLString: true,
-          confirmButtonText: '确定'
-        })
-      } else {
-        ElMessage.success({ message: data.message || '导入成功', duration: 5000 })
+    if (resource.resource_type === 'flow' || resource.resource_type === 'agent') {
+      // flow/agent：先预览依赖冲突，有冲突时弹对话框选择处理方式
+      let conflicts: ImportConflictResult | null = null
+      try {
+        const previewRes = await marketplaceApi.previewImportConflicts(resource.id)
+        if (previewRes.data.code === 1) conflicts = previewRes.data.data
+      } catch {
+        // 预览失败不阻断导入（后端按默认 copy 处理）
       }
-    } else {
-      ElMessage.error({ message: data?.message || '导入失败', duration: 5000 })
+      if (conflicts && hasAnyConflict(conflicts)) {
+        pendingImportResource.value = resource
+        pendingConflicts.value = conflicts
+        pendingPolicy.value = {}
+        conflictDialogVisible.value = true
+        return
+      }
     }
+    await doImport(resource.id)
   } catch {
     ElMessage.error({ message: '导入失败', duration: 5000 })
   } finally {
     importing.value = null
+  }
+}
+
+const conflictDialogVisible = ref(false)
+const pendingImportResource = ref<any>(null)
+const pendingConflicts = ref<ImportConflictResult | null>(null)
+const pendingPolicy = ref<ImportConflictPolicy>({})
+
+async function handleConflictConfirm() {
+  const resource = pendingImportResource.value
+  conflictDialogVisible.value = false
+  if (!resource) return
+  try {
+    await doImport(resource.id, pendingPolicy.value)
+  } catch {
+    ElMessage.error({ message: '导入失败', duration: 5000 })
+  } finally {
+    importing.value = null
+    pendingImportResource.value = null
+    pendingConflicts.value = null
   }
 }
 
@@ -211,10 +261,37 @@ const isImporting = (id: number) => importing.value === id
         </el-tab-pane>
       </el-tabs>
     </template>
+
+    <!-- 导入冲突选择对话框 -->
+    <el-dialog
+      v-model="conflictDialogVisible"
+      :title="`导入「${pendingImportResource?.name || ''}」- 检测到同名资源`"
+      width="640px"
+      :close-on-click-modal="false"
+      @close="importing = null"
+    >
+      <el-alert type="warning" :closable="false" show-icon class="conflict-dialog-tip">
+        以下资源与本地同名，请选择处理方式
+      </el-alert>
+      <ImportConflictSelector
+        v-if="pendingConflicts"
+        v-model="pendingPolicy"
+        :conflicts="pendingConflicts"
+      />
+      <template #footer>
+        <el-button @click="conflictDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleConflictConfirm">确认导入</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
+.conflict-dialog-tip {
+  margin-bottom: 12px;
+  border-radius: 8px;
+}
+
 .disconnected-state {
   flex: 1;
   display: flex;

@@ -21,3 +21,16 @@ class MarketplaceResourceListRequest(BaseModel):
     keyword: Optional[str] = Field(default=None, description="搜索关键词")
     page: Optional[int] = Field(default=None, description="页码")
     page_size: Optional[int] = Field(default=None, description="每页数量")
+
+
+class MarketplaceImportRequest(BaseModel):
+    """市场资源导入请求（body 可选）"""
+
+    conflict_policy: Optional[dict] = Field(
+        default=None,
+        description=(
+            "依赖资源冲突策略：块级 skills/knowledge_bases/mcp_servers "
+            "（copy=创建副本/reuse=使用本地现有）+ 逐项 items 覆盖 "
+            "（键格式 skill:<name> / knowledge_base:<name> / mcp_server:<name>）"
+        ),
+    )

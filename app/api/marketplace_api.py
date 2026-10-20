@@ -2,7 +2,9 @@
 市场 API 路由
 """
 
+import asyncio
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +13,7 @@ from app.config.database import get_db
 from app.schemas.base_schema import ApiResponse
 from app.schemas.marketplace_schema import (
     MarketplaceConfigRequest,
+    MarketplaceImportRequest,
     MarketplaceResourceListRequest,
 )
 from app.services.marketplace_service import marketplace_service
@@ -150,12 +153,52 @@ class MarketplaceApi:
             return ApiResponse.success(data=data, msg="查询成功")
 
         @self.router.post(
+            "/import/{resource_id}/preview",
+            response_model=ApiResponse,
+            summary="预览市场导入资源的依赖冲突",
+        )
+        async def preview_import(resource_id: int, db: AsyncSession = Depends(get_db)):
+            """下载市场资源并解析 manifest，返回技能/知识库/MCP 与本地同名（精确等于）冲突清单。
+
+            仅 flow/agent 资源支持预览；skill 资源前端按名称提示即可。
+            """
+            from app.services.flow_transfer_service import (
+                _read_package_manifest,
+                flow_transfer_service,
+            )
+
+            resource_info = await marketplace_service.get_resource_detail(
+                db, resource_id
+            )
+            if resource_info is None:
+                return ApiResponse.error(msg="获取资源信息失败")
+            resource_type = resource_info.get("resource_type", "")
+            if resource_type not in ("flow", "agent"):
+                return ApiResponse.success(
+                    data={"skills": [], "knowledge_bases": [], "mcp_servers": []},
+                    msg="该资源类型无需冲突预览",
+                )
+            file_bytes = await marketplace_service.download_resource(db, resource_id)
+            if file_bytes is None:
+                return ApiResponse.error(msg="下载资源文件失败")
+            try:
+                manifest = await asyncio.to_thread(_read_package_manifest, file_bytes)
+            except ValueError as e:
+                return ApiResponse.error(msg=str(e))
+            conflicts = await flow_transfer_service.detect_conflicts(db, manifest)
+            return ApiResponse.success(data=conflicts, msg="查询成功")
+
+        @self.router.post(
             "/import/{resource_id}",
             response_model=ApiResponse,
             summary="导入市场资源到本地",
         )
-        async def import_resource(resource_id: int, db: AsyncSession = Depends(get_db)):
-            """从市场下载资源并导入到本地"""
+        async def import_resource(
+            resource_id: int,
+            body: Optional[MarketplaceImportRequest] = None,
+            db: AsyncSession = Depends(get_db),
+        ):
+            """从市场下载资源并导入到本地（可携带依赖冲突策略）"""
             from app.services.marketplace_import_service import (
                 marketplace_import_service,
             )
@@ -169,7 +212,10 @@ class MarketplaceApi:
             if file_bytes is None:
                 return ApiResponse.error(msg="下载资源文件失败")
             result = await marketplace_import_service.import_resource(
-                db, resource_info, file_bytes
+                db,
+                resource_info,
+                file_bytes,
+                conflict_policy=body.conflict_policy if body else None,
             )
             return ApiResponse.success(data=result, msg="导入完成")
 

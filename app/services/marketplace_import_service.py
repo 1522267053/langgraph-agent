@@ -53,8 +53,9 @@ class MarketplaceImportService:
         db: AsyncSession,
         resource_info: dict,
         file_bytes: bytes,
+        conflict_policy: Optional[dict] = None,
     ) -> dict:
-        """根据资源类型分发导入"""
+        """根据资源类型分发导入（conflict_policy 仅对 flow/agent 生效）"""
         resource_type = resource_info.get("resource_type", "")
         name = resource_info.get("name", "unknown")
 
@@ -62,7 +63,9 @@ class MarketplaceImportService:
             if resource_type == "skill":
                 result = await self._import_skill(db, file_bytes, resource_info)
             elif resource_type in ("flow", "agent"):
-                result = await self._import_flow(db, file_bytes, resource_info)
+                result = await self._import_flow(
+                    db, file_bytes, resource_info, conflict_policy
+                )
             else:
                 return {
                     "success": False,
@@ -122,7 +125,11 @@ class MarketplaceImportService:
         }
 
     async def _import_flow(
-        self, db: AsyncSession, file_bytes: bytes, resource_info: dict
+        self,
+        db: AsyncSession,
+        file_bytes: bytes,
+        resource_info: dict,
+        conflict_policy: Optional[dict] = None,
     ) -> dict:
         """导入 Flow/Agent：.lga 打包文件（含知识库/技能文件）或旧版 .json"""
         from app.services.flow_transfer_service import flow_transfer_service
@@ -130,7 +137,7 @@ class MarketplaceImportService:
         if zipfile.is_zipfile(BytesIO(file_bytes)):
             # .lga 打包文件：含 manifest.json + 知识库文档 + 技能目录
             created, warnings = await flow_transfer_service.import_package(
-                db, file_bytes
+                db, file_bytes, conflict_policy=conflict_policy
             )
         else:
             # 旧版 .json
@@ -139,7 +146,7 @@ class MarketplaceImportService:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 raise ValueError("无效的文件格式（应为 .json 或 .lga）")
             created, warnings = await flow_transfer_service.import_flows(
-                db, import_data
+                db, import_data, conflict_policy=conflict_policy
             )
 
         message = f"导入 {len(created)} 个流程"

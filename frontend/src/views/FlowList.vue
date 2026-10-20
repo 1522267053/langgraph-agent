@@ -13,10 +13,11 @@ import {
 } from '@element-plus/icons-vue'
 import JSZip from 'jszip'
 import { flowApi } from '@/api/flow'
-import type { Flow, FlowStatus, FlowType, FlowExportData, FlowExportOptions } from '@/types/flow'
+import type { Flow, FlowStatus, FlowType, FlowExportData, FlowExportOptions, ImportConflictPolicy, ImportConflictResult } from '@/types/flow'
 import type { PaginatedResponse } from '@/types/common'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowQuickExecute from '@/components/FlowEditor/FlowQuickExecute.vue'
+import ImportConflictSelector from '@/components/FlowEditor/ImportConflictSelector.vue'
 import ActionColumn from '@/components/common/ActionColumn.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { collectMcpCommandWarnings } from '@/utils/mcpCommand'
@@ -78,7 +79,7 @@ function onRowAction(row: Flow, key: string) {
       handleDuplicate(row)
       break
     case 'export':
-      handleExport([row.id!], row.flow_type)
+      handleExport([row.id!], row.flow_type, row.name)
       break
     case 'edit':
       handleEdit(row)
@@ -196,6 +197,7 @@ const exportLoading = ref(false)
 const exportDialogVisible = ref(false)
 const exportTargetIds = ref<number[]>([])
 const exportTargetType = ref<FlowType>('flow')
+const exportTargetName = ref('')
 const exportOptions = reactive<FlowExportOptions>({
   include_mcp: true,
   include_knowledge: true,
@@ -206,9 +208,10 @@ const exportOptions = reactive<FlowExportOptions>({
 
 const isExportAgent = computed(() => exportTargetType.value === 'agent')
 
-function handleExport(ids: number[], flowType: FlowType = 'flow') {
+function handleExport(ids: number[], flowType: FlowType = 'flow', name: string = '') {
   exportTargetIds.value = ids
   exportTargetType.value = flowType
+  exportTargetName.value = name
   exportOptions.include_mcp = true
   exportOptions.include_knowledge = true
   exportOptions.include_skills = true
@@ -237,7 +240,11 @@ async function handleConfirmExport() {
     const a = document.createElement('a')
     a.href = url
     const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')
-    a.download = `flow_export_${timestamp}.lga`
+    // 文件名使用工作流/Agent 名称，清洗 Windows 非法字符与空白；名称为空时兜底旧前缀
+    const safeName = exportTargetName.value
+      .replace(/[\\/:*?"<>|\s]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+    a.download = safeName ? `${safeName}_${timestamp}.lga` : `flow_export_${timestamp}.lga`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -259,6 +266,16 @@ const importFileData = ref<FlowExportData | null>(null)
 const importFileName = ref('')
 const importFile = ref<File | null>(null)
 const importIsPackage = ref(false)
+const importConflicts = ref<ImportConflictResult | null>(null)
+const importConflictPolicy = ref<ImportConflictPolicy>({})
+const conflictChecking = ref(false)
+const hasConflicts = computed(
+  () =>
+    !!importConflicts.value &&
+    (importConflicts.value.skills.length > 0 ||
+      importConflicts.value.knowledge_bases.length > 0 ||
+      importConflicts.value.mcp_servers.length > 0)
+)
 const totalKbDocs = computed(() =>
   (importFileData.value?.knowledge_bases || []).reduce(
     (sum, kb) => sum + (kb.documents?.length || 0),
@@ -285,7 +302,25 @@ function handleOpenImport() {
   importFileName.value = ''
   importFile.value = null
   importIsPackage.value = false
+  importConflicts.value = null
+  importConflictPolicy.value = {}
   importDialogVisible.value = true
+}
+
+async function checkImportConflicts(file: File) {
+  conflictChecking.value = true
+  importConflicts.value = null
+  importConflictPolicy.value = {}
+  try {
+    const res = await flowApi.checkImportConflicts(file)
+    if (res.data.code === 1) {
+      importConflicts.value = res.data.data
+    }
+  } catch {
+    // 冲突检测失败不阻断导入（后端导入时按默认 copy 处理）
+  } finally {
+    conflictChecking.value = false
+  }
 }
 
 async function handleImportFileChange(file: File) {
@@ -313,6 +348,7 @@ async function handleImportFileChange(file: File) {
         return
       }
       importFileData.value = data
+      checkImportConflicts(file)
     } catch {
       ElMessage.error({ message: '.lga 文件解析失败，请检查文件格式', duration: 5000 })
       importFile.value = null
@@ -332,6 +368,7 @@ async function handleImportFileChange(file: File) {
         return
       }
       importFileData.value = data
+      checkImportConflicts(file)
     } catch {
       ElMessage.error({ message: '文件解析失败，请检查文件格式', duration: 5000 })
       importFile.value = null
@@ -369,7 +406,10 @@ async function handleConfirmImport() {
   }
   importLoading.value = true
   try {
-    const res = await flowApi.importFlowPackage(importFile.value)
+    const res = await flowApi.importFlowPackage(
+      importFile.value,
+      hasConflicts.value ? importConflictPolicy.value : undefined
+    )
     if (res.data.code === 1) {
       const result = res.data.data
       const warnings: string[] = result.warnings || []
@@ -586,8 +626,16 @@ onMounted(() => {
       <!-- 预览区域 -->
       <div v-else-if="importFileData" class="import-preview">
         <el-alert type="warning" :closable="false" show-icon class="import-tip">
-          导入时如果有相同名称的内容，会创建新副本
+          {{ hasConflicts ? '检测到与本地同名的技能/知识库/MCP 服务器，请在下方选择处理方式' : '导入时如果有相同名称的内容，会创建新副本' }}
         </el-alert>
+
+        <div v-if="conflictChecking" v-loading="true" class="conflict-checking" element-loading-text="正在检测本地同名资源..." />
+
+        <ImportConflictSelector
+          v-if="hasConflicts"
+          v-model="importConflictPolicy"
+          :conflicts="importConflicts!"
+        />
 
         <div class="preview-section">
           <h4>流程列表 ({{ importFileData.flows.length }} 个)</h4>
@@ -899,6 +947,10 @@ onMounted(() => {
 
 .import-tip {
   border-radius: 8px;
+}
+
+.conflict-checking {
+  height: 48px;
 }
 
 .preview-section h4 {

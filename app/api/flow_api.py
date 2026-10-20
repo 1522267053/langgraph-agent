@@ -3,11 +3,13 @@
 处理流程相关的路由定义
 """
 
+import asyncio
 import io
 import json
 from datetime import datetime
+from typing import Optional
 
-from fastapi import Depends, UploadFile
+from fastapi import Depends, Form, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,14 +65,24 @@ class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
 
         @self.router.get(
             "/browser-actions",
-            response_model=ApiResponse[list[dict]],
-            summary="获取浏览器节点 Flow 动作元数据",
+            response_model=ApiResponse[dict],
+            summary="获取浏览器节点 Flow 动作元数据 + Agent 工具清单",
         )
         async def get_browser_actions():
-            """浏览器 flow_action 列表 + 中文 label + 参数 schema（后端单源下发）"""
+            """浏览器 flow_action 列表 + 中文 label + 参数 schema + Agent 工具名清单（后端单源下发）
+
+            返回 {actions: [{action, label, params}], agent_tools: [name, ...]}；
+            agent_tools 供前端审批下拉渲染（BrowserToolKit.tool_info 单源派生，
+            勿在前端硬编码副本）。
+            """
             from app.agent_flow.node_handlers.browser_handler import BrowserNodeHandler
 
-            return ApiResponse.success(data=BrowserNodeHandler.get_action_meta())
+            return ApiResponse.success(
+                data={
+                    "actions": BrowserNodeHandler.get_action_meta(),
+                    "agent_tools": BrowserNodeHandler.get_agent_tool_names(),
+                }
+            )
 
         @self.router.get(
             "/get/{id}/vue-flow",
@@ -275,23 +287,59 @@ class FlowApi(BaseApi[Flow, FlowBase, FlowBase, FlowCreate, FlowUpdate]):
             )
 
         @self.router.post(
+            "/import/check-conflicts",
+            response_model=ApiResponse,
+            summary="检测导入包依赖与本地资源同名冲突",
+        )
+        async def check_import_conflicts(file: UploadFile, db: AsyncSession = Depends(get_db)):
+            """解析 .lga/.json 导入包，返回技能/知识库/MCP 服务器与本地同名（精确等于）冲突清单"""
+            content = await file.read()
+            try:
+                if (file.filename or "").lower().endswith(".lga"):
+                    from app.services.flow_transfer_service import _read_package_manifest
+
+                    manifest = await asyncio.to_thread(_read_package_manifest, content)
+                else:
+                    manifest = json.loads(content.decode("utf-8"))
+                conflicts = await flow_transfer_service.detect_conflicts(db, manifest)
+                return ApiResponse.success(data=conflicts, msg="查询成功")
+            except ValueError as e:
+                return ApiResponse.error(msg=str(e))
+            except Exception as e:
+                return ApiResponse.error(msg=f"冲突检测失败: {e}")
+
+        @self.router.post(
             "/import",
             response_model=ApiResponse,
             summary="导入流程/智能体（.lga/.json）",
         )
-        async def import_flows(file: UploadFile, db: AsyncSession = Depends(get_db)):
-            """导入流程及其所有依赖，支持 .lga 打包文件与旧版 .json"""
+        async def import_flows(
+            file: UploadFile,
+            conflict_policy: Optional[str] = Form(None),
+            db: AsyncSession = Depends(get_db),
+        ):
+            """导入流程及其所有依赖，支持 .lga 打包文件与旧版 .json
+
+            conflict_policy: 可选 JSON 字符串，依赖资源冲突策略
+            （块级 skills/knowledge_bases/mcp_servers + 逐项 items 覆盖，copy/reuse）
+            """
             filename = file.filename or ""
             content = await file.read()
+            policy = None
+            if conflict_policy:
+                try:
+                    policy = json.loads(conflict_policy)
+                except json.JSONDecodeError:
+                    return ApiResponse.error(msg="conflict_policy 格式错误（应为 JSON）")
             try:
                 if filename.lower().endswith(".lga"):
                     created, warnings = await flow_transfer_service.import_package(
-                        db, content
+                        db, content, conflict_policy=policy
                     )
                 else:
                     import_data = json.loads(content.decode("utf-8"))
                     created, warnings = await flow_transfer_service.import_flows(
-                        db, import_data
+                        db, import_data, conflict_policy=policy
                     )
                 return ApiResponse.success(
                     data={"created": created, "warnings": warnings},

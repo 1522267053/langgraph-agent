@@ -1,4 +1,5 @@
 import { get, post } from '@/api/index'
+import type { ImportConflictPolicy, ImportConflictResult } from '@/types/flow'
 
 export interface MarketplaceStatus {
   server_url: string
@@ -27,8 +28,11 @@ export const marketplaceApi = {
   getResourceDetail(id: number) {
     return get(`/marketplace/resources/${id}`)
   },
-  importResource(id: number) {
-    return post('/marketplace/import/' + id)
+  importResource(id: number, conflictPolicy?: ImportConflictPolicy) {
+    return post('/marketplace/import/' + id, conflictPolicy ? { conflict_policy: conflictPolicy } : {})
+  },
+  previewImportConflicts(id: number) {
+    return post<ImportConflictResult>('/marketplace/import/' + id + '/preview')
   },
   listCategories(resourceType: string = '') {
     return get('/marketplace/categories', { resource_type: resourceType })

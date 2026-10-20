@@ -12,7 +12,9 @@ import type {
   FlowEdgeUpdate,
   FlowExportOptions,
   FlowImportResult,
-  FlowSnapshot
+  FlowSnapshot,
+  ImportConflictPolicy,
+  ImportConflictResult
 } from '@/types/flow'
 
 export interface ConnectedToolInfo {
@@ -41,6 +43,12 @@ export interface BrowserActionMeta {
   action: string
   label: string
   params: BrowserActionParam[]
+}
+
+/** GET /flow/browser-actions 返回：Flow 动作元数据 + Agent 工具名清单（后端单源） */
+export interface BrowserActionsPayload {
+  actions: BrowserActionMeta[]
+  agent_tools: string[]
 }
 
 export const flowApi = {
@@ -92,10 +100,17 @@ export const flowApi = {
     return request.post('/flow/export', { ids, options }, { responseType: 'blob' })
   },
 
-  importFlowPackage(file: File) {
+  importFlowPackage(file: File, conflictPolicy?: ImportConflictPolicy) {
     const formData = new FormData()
     formData.append('file', file)
+    if (conflictPolicy) formData.append('conflict_policy', JSON.stringify(conflictPolicy))
     return request.post<ApiResponse<FlowImportResult>>('/flow/import', formData)
+  },
+
+  checkImportConflicts(file: File) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return request.post<ApiResponse<ImportConflictResult>>('/flow/import/check-conflicts', formData)
   },
 
   duplicate(id: number) {
@@ -116,7 +131,7 @@ export const flowApi = {
   },
 
   getBrowserActions() {
-    return request.get<ApiResponse<BrowserActionMeta[]>>('/flow/browser-actions')
+    return request.get<ApiResponse<BrowserActionsPayload>>('/flow/browser-actions')
   },
 
   // ---- 版本快照 ----

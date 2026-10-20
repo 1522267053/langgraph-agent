@@ -52,6 +52,34 @@ from app.utils.document_processor import document_processor
 
 logger = logging.getLogger(__name__)
 
+# 冲突策略：块级默认 + 逐项覆盖
+# 结构: {"skills": "copy"|"reuse", "knowledge_bases": ..., "mcp_servers": ...,
+#        "items": {"skill:<name>": "copy"|"reuse", ...}}
+# copy=创建副本（默认，保持旧行为）；reuse=使用本地现有资源
+CONFLICT_COPY = "copy"
+CONFLICT_REUSE = "reuse"
+_POLICY_BLOCKS = ("skills", "knowledge_bases", "mcp_servers")
+
+
+def _normalize_conflict_policy(policy: Optional[dict]) -> dict:
+    """规整冲突策略：只保留合法块名与取值，items 键限定 skill:/knowledge_base:/mcp_server: 前缀"""
+    if not isinstance(policy, dict):
+        return {}
+    normalized: dict = {}
+    for block in _POLICY_BLOCKS:
+        value = policy.get(block)
+        if value in (CONFLICT_COPY, CONFLICT_REUSE):
+            normalized[block] = value
+    items = policy.get("items")
+    if isinstance(items, dict):
+        valid_prefixes = ("skill:", "knowledge_base:", "mcp_server:")
+        normalized["items"] = {
+            k: v
+            for k, v in items.items()
+            if k.startswith(valid_prefixes) and v in (CONFLICT_COPY, CONFLICT_REUSE)
+        }
+    return normalized
+
 
 # ---- 同步文件原语（仅供 asyncio.to_thread 在工作线程调用，禁止触碰 DB/事件循环）----
 
@@ -929,6 +957,7 @@ class FlowTransferService:
         db: AsyncSession,
         import_data: dict,
         file_root: Optional[Path] = None,
+        conflict_policy: Optional[dict] = None,
     ) -> tuple[list[dict], list[str]]:
         """
         导入流程及所有依赖
@@ -938,6 +967,8 @@ class FlowTransferService:
             import_data: 导入数据（manifest）
             file_root: 打包文件解压目录；非空时按 2.0 还原知识库文档与技能目录，
                 为空时按 1.0 仅导入元数据（知识库为空壳、技能仅 SKILL.md）
+            conflict_policy: 依赖资源冲突策略（规整后结构见 _normalize_conflict_policy），
+                命中 reuse 且本地存在同名（精确等于）资源时复用本地实体、跳过创建
         """
         version = import_data.get("version")
         if version not in (EXPORT_VERSION, PACKAGE_VERSION):
@@ -947,6 +978,7 @@ class FlowTransferService:
 
         warnings: list[str] = []
         created: list[dict] = []
+        policy = _normalize_conflict_policy(conflict_policy)
 
         flows_data = import_data.get("flows", [])
         if not flows_data:
@@ -955,13 +987,13 @@ class FlowTransferService:
         self._check_circular_refs(flows_data)
 
         skill_name_map = await self._import_skills(
-            db, import_data.get("skills", []), warnings, file_root
+            db, import_data.get("skills", []), warnings, file_root, policy
         )
         kb_name_map = await self._import_knowledge_bases(
-            db, import_data.get("knowledge_bases", []), warnings, file_root
+            db, import_data.get("knowledge_bases", []), warnings, file_root, policy
         )
         mcp_name_map = await self._import_mcp_servers(
-            db, import_data.get("mcp_servers", []), warnings
+            db, import_data.get("mcp_servers", []), warnings, policy
         )
 
         flow_name_map: dict[str, int] = {}
@@ -990,7 +1022,7 @@ class FlowTransferService:
         return created, warnings
 
     async def import_package(
-        self, db: AsyncSession, zip_bytes: bytes
+        self, db: AsyncSession, zip_bytes: bytes, conflict_policy: Optional[dict] = None
     ) -> tuple[list[dict], list[str]]:
         """从 .lga 打包文件（zip）导入：解压后调用 import_flows 还原文件
 
@@ -1004,9 +1036,48 @@ class FlowTransferService:
         tmpdir = tempfile.mkdtemp(prefix="lga_import_")
         try:
             await asyncio.to_thread(_extract_package, zip_bytes, Path(tmpdir))
-            return await self.import_flows(db, manifest, file_root=Path(tmpdir))
+            return await self.import_flows(
+                db, manifest, file_root=Path(tmpdir), conflict_policy=conflict_policy
+            )
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+    async def detect_conflicts(self, db: AsyncSession, manifest: dict) -> dict:
+        """检测 manifest 中依赖资源与本地同名（精确等于）冲突
+
+        MCP 名称先经 sanitize_mcp_server_name 转写，与导入路径保持一致。
+        返回: {"skills": [{"name", "local_id"}], "knowledge_bases": [...],
+               "mcp_servers": [...]}，仅包含本地已存在的项。
+        """
+        result: dict[str, list[dict]] = {
+            "skills": [],
+            "knowledge_bases": [],
+            "mcp_servers": [],
+        }
+        for s in manifest.get("skills") or []:
+            name = s.get("name")
+            if not name:
+                continue
+            local_id = await self._find_local_by_name(db, Skill, name)
+            if local_id is not None:
+                result["skills"].append({"name": name, "local_id": local_id})
+        for kb in manifest.get("knowledge_bases") or []:
+            name = kb.get("name")
+            if not name:
+                continue
+            local_id = await self._find_local_by_name(db, KnowledgeBase, name)
+            if local_id is not None:
+                result["knowledge_bases"].append({"name": name, "local_id": local_id})
+        for mcp in manifest.get("mcp_servers") or []:
+            name = mcp.get("name") or ""
+            if not name:
+                continue
+            if not MCP_SERVER_NAME_PATTERN.match(name):
+                name = sanitize_mcp_server_name(name)
+            local_id = await self._find_local_by_name(db, McpServer, name)
+            if local_id is not None:
+                result["mcp_servers"].append({"name": name, "local_id": local_id})
+        return result
 
     async def import_knowledge_package(
         self, db: AsyncSession, zip_bytes: bytes
@@ -1042,12 +1113,31 @@ class FlowTransferService:
         skills_data: list[dict],
         warnings: list[str],
         file_root: Optional[Path] = None,
+        policy: Optional[dict] = None,
     ) -> dict[str, int]:
-        """导入技能，返回 {原始名称: new_id}。file_root 非空时还原整个技能目录"""
+        """导入技能，返回 {原始名称: new_id}。file_root 非空时还原整个技能目录
+
+        policy 命中 reuse 且本地存在同名（精确等于）技能时，复用本地 ID、跳过创建；
+        本地不存在时回退创建副本。
+        """
+        policy = policy or {}
         name_map: dict[str, int] = {}
         for s in skills_data:
             try:
                 original_name = s["name"]
+                item_policy = self._resolve_item_policy(policy, "skills", f"skill:{original_name}")
+                if item_policy == CONFLICT_REUSE:
+                    local_id = await self._find_local_by_name(db, Skill, original_name)
+                    if local_id is not None:
+                        name_map[original_name] = local_id
+                        warnings.append(
+                            f"技能「{original_name}」使用本地现有资源（ID: {local_id}）"
+                        )
+                        continue
+                    warnings.append(
+                        f"技能「{original_name}」本地不存在同名资源，已回退为创建副本"
+                    )
+
                 unique_name = await self._ensure_unique_name(db, Skill, original_name)
 
                 skill_dir = Path(
@@ -1107,17 +1197,38 @@ class FlowTransferService:
         kb_data: list[dict],
         warnings: list[str],
         file_root: Optional[Path] = None,
+        policy: Optional[dict] = None,
     ) -> dict[str, int]:
         """导入知识库，返回 {原始名称: new_id}
 
         file_root 非空时还原文档；文档带 segments 快照（新包）时同步重建
         解析产物（content/标题树/段落）并置为待向量化，否则回退重新解析。
         最后还原知识沉淀（含来源引用，通过 doc_index+segment_index 锚点映射）。
+        policy 命中 reuse 且本地存在同名（精确等于）知识库时，复用本地 ID、
+        跳过创建与文档还原；本地不存在时回退创建副本。
         """
+        policy = policy or {}
         name_map: dict[str, int] = {}
         for kb in kb_data:
             try:
                 original_name = kb["name"]
+                item_policy = self._resolve_item_policy(
+                    policy, "knowledge_bases", f"knowledge_base:{original_name}"
+                )
+                if item_policy == CONFLICT_REUSE:
+                    local_id = await self._find_local_by_name(
+                        db, KnowledgeBase, original_name
+                    )
+                    if local_id is not None:
+                        name_map[original_name] = local_id
+                        warnings.append(
+                            f"知识库「{original_name}」使用本地现有资源（ID: {local_id}）"
+                        )
+                        continue
+                    warnings.append(
+                        f"知识库「{original_name}」本地不存在同名资源，已回退为创建副本"
+                    )
+
                 unique_name = await self._ensure_unique_name(
                     db, KnowledgeBase, original_name
                 )
@@ -1318,9 +1429,15 @@ class FlowTransferService:
                 warnings.append(f"导入沉淀「{question[:30] or '?'}」失败: {e}")
 
     async def _import_mcp_servers(
-        self, db: AsyncSession, mcp_data: list[dict], warnings: list[str]
+        self, db: AsyncSession, mcp_data: list[dict], warnings: list[str],
+        policy: Optional[dict] = None,
     ) -> dict[str, int]:
-        """导入 MCP 服务器，返回 {原始名称: new_id}"""
+        """导入 MCP 服务器，返回 {原始名称: new_id}
+
+        policy 命中 reuse 且本地存在同名（精确等于，名称先经转写规整）服务器时，
+        复用本地 ID、跳过创建；本地不存在时回退创建副本。
+        """
+        policy = policy or {}
         name_map: dict[str, int] = {}
         for mcp in mcp_data:
             try:
@@ -1332,6 +1449,23 @@ class FlowTransferService:
                         f"MCP 服务器名称不合规，已自动转写为「{original_name}」"
                         "（工具名仅支持字母/数字/下划线/连字符）"
                     )
+                item_policy = self._resolve_item_policy(
+                    policy, "mcp_servers", f"mcp_server:{original_name}"
+                )
+                if item_policy == CONFLICT_REUSE:
+                    local_id = await self._find_local_by_name(
+                        db, McpServer, original_name
+                    )
+                    if local_id is not None:
+                        name_map[original_name] = local_id
+                        warnings.append(
+                            f"MCP 服务器「{original_name}」使用本地现有资源（ID: {local_id}）"
+                        )
+                        continue
+                    warnings.append(
+                        f"MCP 服务器「{original_name}」本地不存在同名资源，已回退为创建副本"
+                    )
+
                 unique_name = await self._ensure_unique_name(
                     db, McpServer, original_name
                 )
@@ -1648,6 +1782,28 @@ class FlowTransferService:
 
         for f in flows_data:
             dfs(f["name"])
+
+    async def _find_local_by_name(
+        self, db: AsyncSession, model_class: type, name: str
+    ) -> Optional[int]:
+        """按名称精确等于查找本地资源，命中多条时取 ID 最小（最早创建），未命中返回 None"""
+        stmt = (
+            select(model_class.id)
+            .where(model_class.name == name, model_class.is_delete == 0)
+            .order_by(model_class.id.asc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    def _resolve_item_policy(
+        self, policy: dict, block: str, item_key: str
+    ) -> str:
+        """逐项策略优先于块级策略，缺省为 copy（创建副本）"""
+        item_policy = (policy.get("items") or {}).get(item_key)
+        if item_policy in (CONFLICT_COPY, CONFLICT_REUSE):
+            return item_policy
+        return policy.get(block, CONFLICT_COPY)
 
     async def _ensure_unique_name(
         self, db: AsyncSession, model_class: type, name: str

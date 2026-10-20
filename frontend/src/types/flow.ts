@@ -433,6 +433,30 @@ export interface FlowImportResult {
   warnings: string[]
 }
 
+/** 依赖资源冲突策略：copy=创建副本（默认）/ reuse=使用本地现有 */
+export type ImportConflictAction = 'copy' | 'reuse'
+
+/** 冲突策略：块级默认 + 逐项 items 覆盖（键格式 skill:<name> 等） */
+export interface ImportConflictPolicy {
+  skills?: ImportConflictAction
+  knowledge_bases?: ImportConflictAction
+  mcp_servers?: ImportConflictAction
+  items?: Record<string, ImportConflictAction>
+}
+
+/** 单个同名冲突项（local_id 为本地现有资源 ID） */
+export interface ImportConflictItem {
+  name: string
+  local_id: number
+}
+
+/** 冲突检测结果（仅含本地已存在的项） */
+export interface ImportConflictResult {
+  skills: ImportConflictItem[]
+  knowledge_bases: ImportConflictItem[]
+  mcp_servers: ImportConflictItem[]
+}
+
 /** 流程版本快照 */
 export interface FlowSnapshot {
   id?: number
