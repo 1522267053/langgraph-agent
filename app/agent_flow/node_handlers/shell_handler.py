@@ -353,6 +353,11 @@ class ShellNodeHandler(BaseNodeHandler):
             system_info=f"当前系统: {platform.system()}",
             resolve_workdir=self._resolve_tool_working_dir,
             sandbox_policy=self._sandbox_policy,
+            writable_roots=get_writable_roots(
+                session_work_dir=self._session_work_dir,
+                node_work_dir=configured_dir,
+                agent_work_dir=base_working_dir,
+            ),
         )
         file_kit = FileToolsKit(
             approval_cb=_approval,

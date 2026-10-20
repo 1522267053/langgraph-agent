@@ -287,6 +287,7 @@ poetry run pytest tests/test_tool_approval_audit.py   # 只跑单个文件
   - 命令解析只在 `tools/shell_command_parser.py`（`scan_command`：cmd/sh 双方言尽力解析，9 类 opaque 分类对齐 opencode）
   - 命令三态检查只在 `tools/shell_toolkit.check_command`（valid/blocked/opaque；`validate_command` 为二态兼容包装，opaque 视为放行——旧调用方语义不变）
   - 写路径三态检查只在 `tools/common.check_writable_path`（allowed/blocked/outside；`validate_writable_path` 为二态兼容包装）
+  - 写路径**决策**（三态 + 策略分流 + 授权键选择）只在 `tools/common.decide_writable_path`（返回 WritePathDecision：allow/approve/reject + force_reason + grant_key）；file_toolkit `_check_write_path` 与 shell 重定向写共用，审批回调调用留在各 toolkit（回调不进 common，维持依赖方向）
 - **策略配置**：LLM 节点 `sandbox_opaque_policy`（auto/ask/deny/off，默认 auto），经 `setup_tool_handlers` 注入 `handler._sandbox_policy`（仿 `_media_caps` 模式），shell/ssh/file 三 toolkit 闭包消费；opaque 命令与白名单外写入按策略 ask（走现有审批回调）/deny（拒绝+引导文案）/off（不拦截）
 - **「不拦截」语义（重要）**：auto 在 Flow 域与显式 off 都只是**不弹审批直接执行** opaque 命令/白名单外写入，黑名单与硬拦截仍然生效——「放行」仅指跳过审批确认，不是跳过安全检查；Flow 定时/无人值守场景建议保持 auto，Flow 中 LLM 动态执行命令的建议显式改 ask
 - **可写白名单**：默认 = 会话工作目录 + Agent 工作目录 + temp 目录；追加项走 `.env` 的 `SANDBOX_WRITABLE_ROOTS`（逗号/分号分隔，相对路径基于项目根）
@@ -297,6 +298,7 @@ poetry run pytest tests/test_tool_approval_audit.py   # 只跑单个文件
 - **单测纪律（强制）**：涉及系统路径写入的测试，假审批回调一律返回 rejected——绝不能让审批通过后真写 C:\Windows（_atomic_write 的 mkstemp 在系统目录权限卡死，faulthandler 栈实锤 2026-10-20）；落盘行为由真机测试覆盖
 - **python 沙箱 open 收口**：`python_handler._sandbox_open` 替换裸 `open`——写模式（w/a/x/+）路径必须落在可写白名单内，读模式不限制；ALLOWED_MODULES 单一事实源不动
 - **黑名单始终生效**：DANGEROUS_PATTERNS 整串正则兜底扫描对 scanned 与 opaque 一视同仁，危险命令即使解析失败也先硬拦截（优先于 opaque 判定）
+- **shell 重定向写纳入沙箱（2026-10-20 补口）**：scanned 命令的重定向写目标（`> >> 2> &>`；`2>&1`/`nul`/`/dev/null` 豁免）经 `shell_command_parser` 提取（`ScanResult.redirect_targets`）、相对路径按 cwd 解析后走 `decide_writable_path` 同一决策——白名单外 ask 弹审批（Agent 域）/deny 拒绝/off 放行，系统路径走 `shell_executor#system_path` 独立授权键；堵住「file_write 弹审批、echo >> 静默落盘」的绕过通道。解析失败（opaque）不在此层拦，由 opaque 策略分流负责——两层各司其职
 - **Flow 直跑语义**：Flow 主图 shell 节点直跑路径默认不拦截（直跑命令是用户在画布上静态编写、可见可审，opaque 风险源是 LLM 动态生成的命令）；LLM 节点显式配置 ask/deny 可对 Flow 收紧
 
 ### 前端关键约定

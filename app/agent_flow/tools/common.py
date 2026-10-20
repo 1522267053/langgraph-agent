@@ -9,6 +9,7 @@
 import asyncio
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -206,6 +207,87 @@ def is_path_in_writable_roots(path: Path, writable_roots: list) -> bool:
         resolved == root or resolved.is_relative_to(Path(root))
         for root in writable_roots
     )
+
+
+@dataclass
+class WritePathDecision:
+    """写路径决策结果（decide_writable_path 的输出，审批回调由调用方执行）"""
+
+    action: str  # "allow" | "approve" | "reject"
+    # action=approve 时非空：审批原因（作为 force_reason 透传）
+    force_reason: Optional[str] = None
+    # action=approve 时非空：授权键（系统路径用 {tool}#system_path，普通用 tool 名）
+    grant_key: Optional[str] = None
+    # action=reject 时非空：拒绝错误消息
+    error: Optional[str] = None
+    # 原始三态判定结果（blocked/outside/allowed），供调用方日志/测试断言
+    verdict: str = ""
+
+
+def decide_writable_path(
+    tool_name: str,
+    file_path: str,
+    writable_roots: Optional[list],
+    sandbox_policy: str,
+) -> WritePathDecision:
+    """写路径决策唯一真源：check_writable_path 三态 + sandbox_policy 分流。
+
+    file_toolkit._check_write_path 与 shell 重定向写共用此决策，保证
+    「白名单外写入」在两条通道上审批语义完全一致（审批回调调用留在各
+    toolkit，本函数不持有回调，维持 tools 内依赖方向）。
+
+    流程（与 file_toolkit 原实现逐语义一致）：
+    1. blocked → reject（硬拦截，任何策略下拒绝）
+    2. outside + 系统路径 → approve（强制审批，独立授权键 {tool}#system_path，
+       off 策略也不静默放行）
+    3. outside + 普通路径 → ask: approve / deny: reject / off: allow
+    4. allowed → allow
+
+    Args:
+        tool_name: 发起写入的工具名（授权键前缀）
+        file_path: 待写入路径（相对路径由调用方先解析为绝对路径）
+        writable_roots: 可写白名单根列表；None 表示不做白名单判定（兼容旧行为）
+        sandbox_policy: 沙箱策略（ask/deny/off）
+    """
+    verdict, detail = check_writable_path(file_path, writable_roots)
+    if verdict == "allowed":
+        return WritePathDecision(action="allow", verdict=verdict)
+    if verdict == "blocked":
+        return WritePathDecision(action="reject", error=detail, verdict=verdict)
+
+    # outside 分流
+    is_system_path = detail.startswith("系统路径:")
+    if is_system_path or sandbox_policy == "ask":
+        if is_system_path:
+            force = (
+                f"写入系统路径需要确认（{detail}）："
+                "系统目录写入可能影响系统行为，请确认是合法运维操作"
+            )
+            # 独立授权键：普通 {tool} 的「批准并记住」授权不得覆盖系统路径
+            # 写入——否则用户曾对普通目录记住后，系统路径被静默放行，
+            # 强制审批形同虚设。独立键让系统路径单独问一次、单独记住
+            grant_key = f"{tool_name}#system_path"
+        else:
+            force = "沙箱策略要求审批：写入路径不在可写白名单内"
+            grant_key = tool_name
+        return WritePathDecision(
+            action="approve",
+            force_reason=force,
+            grant_key=grant_key,
+            verdict=verdict,
+        )
+    if sandbox_policy == "deny":
+        return WritePathDecision(
+            action="reject",
+            error=(
+                f"路径不在可写白名单内（{detail}），沙箱策略为 deny，已拒绝写入。"
+                "可写范围：会话工作目录、Agent 工作目录、临时目录，"
+                "或通过 SANDBOX_WRITABLE_ROOTS 追加；也可将节点策略改为 ask/off。"
+            ),
+            verdict=verdict,
+        )
+    # off：放行（系统路径已在上方强制审批分支处理，不会走到这里）
+    return WritePathDecision(action="allow", verdict=verdict)
 
 
 def has_utf16_bom(sample: bytes) -> bool:

@@ -27,12 +27,12 @@ from pydantic import BaseModel, Field
 from app.agent_flow.tools.common import (
     MAX_FILE_SIZE,
     analyze_line_endings as _analyze_line_endings,
+    decide_writable_path,
     detect_and_read as _detect_and_read,
     detect_dominant_line_ending as _detect_dominant_line_ending,
     get_file_write_lock,
     normalize_line_endings as _normalize_line_endings,
     validate_file_path as _validate_file_path,
-    check_writable_path as _check_writable_path,
 )
 from app.agent_flow.tools.shell_toolkit import SUBPROCESS_WINDOW_FLAGS
 from app.config.build_utils import BASE_DIR
@@ -278,61 +278,35 @@ class FileToolsKit(BaseToolKit):
         ) -> dict:
             """写路径安全检查 + 策略分流（含审批，三写工具统一入口）。
 
-            流程（审批只发生一次，避免入口审批与策略审批重复弹窗）：
-            1. check_writable_path 三态：blocked → 直接拒绝
-            2. outside + 系统路径 → 无视策略强制审批（独立授权键）
-            3. outside + 普通路径 → 按 sandbox_policy：ask 审批 / deny 拒绝 / off 放行
-            4. allowed → 放行
+            决策逻辑已抽到 common.decide_writable_path（唯一真源，shell 重定向
+            写共用同一套分流）；本闭包只负责执行审批回调（回调不进 common，
+            维持 tools 内依赖方向）。
 
             Returns: 放行时返回空 dict；否则返回错误 dict。
             """
-            verdict, detail = _check_writable_path(file_path, writable_roots)
-            if verdict == "blocked":
-                return {"error": detail, "success": False}
-            if verdict == "outside":
-                is_system_path = detail.startswith("系统路径:")
-                if is_system_path or sandbox_policy == "ask":
-                    if is_system_path:
-                        force = (
-                            f"写入系统路径需要确认（{detail}）："
-                            "系统目录写入可能影响系统行为，请确认是合法运维操作"
-                        )
-                        # 独立授权键：普通 file_write 的「批准并记住」授权
-                        # （session_tool_grant 按工具名存取）不得覆盖系统路径
-                        # 写入——否则用户曾对普通目录记住后，系统路径被静默放行，
-                        # 强制审批形同虚设。独立键让系统路径单独问一次、
-                        # 单独记住（装环境连写多个系统文件只问一次）
-                        grant_key = f"{tool_name}#system_path"
-                    else:
-                        force = "沙箱策略要求审批：写入路径不在可写白名单内"
-                        grant_key = tool_name
-                    approval_result = await _approval(
-                        grant_key,
-                        tool_args,
-                        f"[outside_writable_roots] {file_path}",
-                        force_reason=force,
-                    )
-                    if approval_result in (None, "approved"):
-                        return {}
-                    return {
-                        "error": (
-                            f"用户未批准写入{'系统路径' if is_system_path else '白名单外路径'}"
-                            f"（{approval_result}）"
-                        ),
-                        "success": False,
-                        "error_type": "approval_rejected",
-                    }
-                if sandbox_policy == "deny":
-                    return {
-                        "error": (
-                            f"路径不在可写白名单内（{detail}），沙箱策略为 deny，已拒绝写入。"
-                            "可写范围：会话工作目录、Agent 工作目录、临时目录，"
-                            "或通过 SANDBOX_WRITABLE_ROOTS 追加；也可将节点策略改为 ask/off。"
-                        ),
-                        "success": False,
-                        "error_type": "outside_writable_roots",
-                    }
-                # off：放行（系统路径已在上方强制审批分支处理，不会走到这里）
+            decision = decide_writable_path(
+                tool_name, file_path, writable_roots, sandbox_policy
+            )
+            if decision.action == "reject":
+                return {"error": decision.error, "success": False}
+            if decision.action == "approve":
+                approval_result = await _approval(
+                    decision.grant_key or tool_name,
+                    tool_args,
+                    f"[outside_writable_roots] {file_path}",
+                    force_reason=decision.force_reason,
+                )
+                if approval_result in (None, "approved"):
+                    return {}
+                is_system_path = decision.grant_key or "".endswith("#system_path")
+                return {
+                    "error": (
+                        f"用户未批准写入{'系统路径' if is_system_path else '白名单外路径'}"
+                        f"（{approval_result}）"
+                    ),
+                    "success": False,
+                    "error_type": "approval_rejected",
+                }
             return {}
 
         # ---- text_editor ----

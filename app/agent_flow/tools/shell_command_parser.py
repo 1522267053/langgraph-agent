@@ -159,7 +159,11 @@ _CMD_DYNAMIC_EXECUTION = frozenset({"call"})
 _RE_CMD_SUBSTITUTION = re.compile(r"\$\(|`")
 # cmd 变量展开 %VAR% / %VAR:~0,3%（子串展开可构造任意串 → 视为动态）
 _RE_CMD_VAR = re.compile(r"%[^%\n]+%")
-_RE_CMD_VAR_SUBSTR = re.compile(r"%[^%\n]*:[^%\n]*%")
+# 子串展开必须锚定在单个变量内部（变量名是标识符，不含 %/空白/路径字符）：
+# %VAR:~0,3% / %VAR:a=b%。旧版 %[^%\n]*:[^%\n]*% 允许跨段乱配对——
+# `echo EXIT:%ERRORLEVEL%` 与相邻 %TEMP% 的 % 跨过 ` & echo EXIT:` 误配成
+# "子串展开"，安全命令被误判 opaque（vue-tsc 实锤 2026-10-20）
+_RE_CMD_VAR_SUBSTR = re.compile(r"%(?!%)[A-Za-z0-9_#]+:[^%\n]*%(?!%)")
 # heredoc（sh）
 _RE_HEREDOC = re.compile(r"(<{2,})(?!<)")
 # 复合结构关键字（sh）
@@ -204,6 +208,10 @@ class ScanResult:
     commands: list[ParsedCommand] = field(default_factory=list)
     opaque_reason: str | None = None
     dialect: str = ""  # "cmd" | "sh" | ""（opaque 时可能未判定）
+    # scanned 时的重定向写目标（剥引号后的原始串，可能是相对路径）。
+    # 仅覆盖 > >> 2> &> 等写方向；2>&1 / < / nul / /dev/null 不入列。
+    # 尽力解析：解析失败的命令走 opaque 兜底，不承诺完备。
+    redirect_targets: list[str] = field(default_factory=list)
 
 
 def _looks_like_cmd(command: str) -> bool:
@@ -251,6 +259,71 @@ def _check_unterminated_quotes(command: str) -> bool:
     return in_single or in_double
 
 
+# 重定向写目标豁免：目标为空设备/FD 复制时不构成文件写入
+_REDIRECT_TARGET_EXEMPT = {"nul", "/dev/null", "1", "2"}
+
+
+# 写方向重定向符号：2>> / &>> / >> / 2> / &> / >（>> 优先于 >；\d*>(?![&\d])
+# 排除 2>&1 的 FD 复制形态——其 & 侧目标由豁免集兜住）
+_RE_WRITE_REDIRECT = re.compile(r"\d*&?>>|\d*>(?![&\d])")
+
+
+def _expand_cmd_vars(text: str) -> str:
+    """尽力展开 cmd 普通变量 %VAR%（仅用于重定向目标路径解析，不参与安全判定）。
+
+    - 环境变量按大小写不敏感匹配（cmd 语义）；展开不了的（%ERRORLEVEL%
+      等运行时变量、含子串语法的）保留字面量，由调用方按 outside 走策略。
+    - 安全判定（opaque 检测）仍基于原始命令串——展开只为把 %TEMP%\\x.txt
+      解析成真实路径以命中 temp 白名单，避免安全命令误弹审批。
+    """
+    import os as _os
+
+    def _repl(m: "re.Match[str]") -> str:
+        name = m.group(0)[1:-1]  # 剥首尾 %
+        val = _os.environ.get(name)
+        if val is None:
+            # 大小写不敏感兜底
+            val = _os.environ.get(name.upper())
+        return val if val is not None else m.group(0)
+
+    return _RE_CMD_VAR.sub(_repl, text)
+
+
+def _extract_redirect_targets(command: str) -> list[str]:
+    """提取命令中重定向**写方向**的目标（> >> 2> 2>> &> &>>），尽力解析。
+
+    规则：
+    - 符号右侧目标：带引号取到闭引号（支持含空格路径），无引号取到
+      空白/shell 分隔符；`>>file` 粘连与 `>> file` 分离都覆盖。
+    - `2>&1` 等 FD 复制（目标以 & 开头或落在豁免集）、nul、/dev/null 不入列。
+    - 读方向（<）不匹配；解析不出的形态跳过（不阻塞 scanned 判定，
+      opaque 兜底另有人管）。
+    """
+    targets: list[str] = []
+    for m in _RE_WRITE_REDIRECT.finditer(command):
+        rest = command[m.end():].lstrip()
+        if not rest:
+            continue
+        if rest[0] in ('"', "'"):
+            quote = rest[0]
+            end = rest.find(quote, 1)
+            if end == -1:
+                continue  # 引号未闭合由 opaque 检测负责，这里跳过
+            target = rest[1:end]
+        else:
+            mm = re.match(r"[^\s|;&]+", rest)
+            if not mm:
+                continue
+            target = mm.group(0)
+        target = target.strip()
+        if not target or target.startswith("&"):
+            continue
+        if target.lower() in _REDIRECT_TARGET_EXEMPT:
+            continue
+        targets.append(target)
+    return targets
+
+
 def _scan_cmd(command: str) -> ScanResult:
     """cmd 方言解析：拆子命令 → 逐条提取首词"""
     # 0) 复合结构关键字（for/if/do/...）：两方言共有，首词命中即 opaque
@@ -291,15 +364,19 @@ def _scan_cmd(command: str) -> ScanResult:
         )
 
     # 5) 拆子命令并提取首词（拆分前先检测尾随操作符：&& 后无内容属结构不完整）
-    if _RE_CMD_LIST_OPS.search(command[-3:] if len(command) >= 3 else command):
-        tail = command.rstrip()
+    # FD 复制保护：2>&1 / 1>&2 的 & 是重定向语法不是列表操作符，拆段前
+    # 换占位符防被 _RE_CMD_LIST_OPS 拆成 "… 2>" + "1"（vue-tsc 实锤）。
+    _FD_GUARD = "\x00FD"
+    guarded = re.sub(r"(\d*)&\s*(\d)", lambda m: f"{m.group(1) or ''}>{_FD_GUARD}{m.group(2)}", command)
+    if _RE_CMD_LIST_OPS.search(guarded[-3:] if len(guarded) >= 3 else guarded):
+        tail = guarded.rstrip()
         if _RE_CMD_LIST_OPS.fullmatch(tail.split()[-1]) if tail.split() else False:
             return ScanResult(
                 kind="opaque", opaque_reason=OPAQUE_INVALID_STRUCTURE, dialect="cmd"
             )
     commands: list[ParsedCommand] = []
-    for seg in _RE_CMD_LIST_OPS.split(command):
-        seg = seg.strip()
+    for seg in _RE_CMD_LIST_OPS.split(guarded):
+        seg = seg.replace(_FD_GUARD, "&").strip()
         if not seg:
             continue
         # 首词：先按空白切，剥引号与 .exe 后缀
@@ -325,7 +402,12 @@ def _scan_cmd(command: str) -> ScanResult:
         return ScanResult(
             kind="opaque", opaque_reason=OPAQUE_INVALID_STRUCTURE, dialect="cmd"
         )
-    return ScanResult(kind="scanned", commands=commands, dialect="cmd")
+    return ScanResult(
+        kind="scanned",
+        commands=commands,
+        dialect="cmd",
+        redirect_targets=_extract_redirect_targets(command),
+    )
 
 
 def _scan_sh(command: str) -> ScanResult:
@@ -455,7 +537,12 @@ def _scan_sh(command: str) -> ScanResult:
                 kind="opaque", opaque_reason=OPAQUE_INVALID_REDIRECT, dialect="sh"
             )
 
-    return ScanResult(kind="scanned", commands=commands, dialect="sh")
+    return ScanResult(
+        kind="scanned",
+        commands=commands,
+        dialect="sh",
+        redirect_targets=_extract_redirect_targets(command),
+    )
 
 
 def scan_command(command: str) -> ScanResult:

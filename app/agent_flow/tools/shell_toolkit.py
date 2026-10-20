@@ -354,6 +354,39 @@ def validate_command(command: str) -> tuple[bool, str]:
     return True, ""
 
 
+def scan_redirect_targets(command: str) -> list[str]:
+    """提取命令的重定向写目标（scanned 才有；opaque 返回空列表）。
+
+    shell_toolkit 重定向写校验入口：解析失败（opaque）不在此处拦截，
+    由 check_command 的 opaque 策略分流负责——两层各司其职。
+    """
+    from app.agent_flow.tools.shell_command_parser import scan_command
+
+    scan = scan_command(command)
+    if scan.kind != "scanned":
+        return []
+    return scan.redirect_targets
+
+
+def resolve_redirect_targets(command: str, cwd: Optional[Path]) -> list[str]:
+    """重定向写目标解析（scan + %VAR% 尽力展开 + 相对路径按 cwd 拼接）。
+
+    展开仅为路径判定：cmd 普通变量 %TEMP% 等替换为环境值使命中 temp
+    白名单；展开不了的（%ERRORLEVEL% 等运行时变量）保留字面量，
+    由 decide_writable_path 按 outside 走策略（ask 弹窗，保守合理）。
+    """
+    from app.agent_flow.tools.shell_command_parser import _expand_cmd_vars
+
+    targets = []
+    for raw in scan_redirect_targets(command):
+        expanded = _expand_cmd_vars(raw)
+        path = Path(expanded)
+        if not path.is_absolute():
+            path = (cwd or Path.cwd()) / path
+        targets.append(str(path))
+    return targets
+
+
 MAX_CONTENT_SIZE = 50 * 1024 * 1024
 MAX_SEARCH_RESULTS = 50
 MAX_SEARCH_FILE_SIZE = 5 * 1024 * 1024
@@ -1011,6 +1044,7 @@ class ShellToolKit(BaseToolKit):
         system_info: str,
         resolve_workdir: Optional[Callable] = None,
         sandbox_policy: str = "off",
+        writable_roots: Optional[list] = None,
     ):
         self._cfg = cfg
         self._node_key = node_key
@@ -1021,6 +1055,7 @@ class ShellToolKit(BaseToolKit):
         self._system_info = system_info
         self._resolve_workdir = resolve_workdir
         self._sandbox_policy = sandbox_policy
+        self._writable_roots = writable_roots
 
     async def build_tools(self) -> Sequence[StructuredTool]:
         """构造工具列表。resolve_workdir(workdir, default_dir) 由 handler 注入
@@ -1033,6 +1068,7 @@ class ShellToolKit(BaseToolKit):
         _approval = self._approval
         resolve_workdir = self._resolve_workdir
         sandbox_policy = self._sandbox_policy
+        writable_roots = self._writable_roots
 
         # ---- opaque 策略分流（check_command 三态 → ask/deny/off）----
 
@@ -1145,6 +1181,57 @@ class ShellToolKit(BaseToolKit):
                     "success": False,
                     "error_type": "working_dir_missing",
                 }
+
+            # 重定向写目标纳入沙箱（与 file_write 同一决策真源）：
+            # scanned 命令的重定向目标按可写白名单校验 + 策略分流，
+            # 堵住「file_write 弹审批、echo >> 静默落盘」的绕过通道。
+            # %VAR% 尽力展开使命中 temp 白名单的安全命令不误弹
+            if writable_roots is not None:
+                from app.agent_flow.tools.common import decide_writable_path
+
+                for abs_target in resolve_redirect_targets(
+                    command, command_working_dir
+                ):
+                    decision = decide_writable_path(
+                        "shell_executor",
+                        abs_target,
+                        writable_roots,
+                        sandbox_policy,
+                    )
+                    if decision.action == "reject":
+                        return {
+                            "error": (
+                                f"命令重定向写入目标被拒绝: {abs_target}。"
+                                f"{decision.error or ''}"
+                            ),
+                            "success": False,
+                            "error_type": "redirect_target_rejected",
+                        }
+                    if decision.action == "approve":
+                        if decision.force_reason.startswith("写入系统路径"):
+                            force = decision.force_reason
+                        else:
+                            force = (
+                                "沙箱策略要求审批：命令重定向写入路径"
+                                f"不在可写白名单内（{abs_target}）"
+                            )
+                        approval_result = await _approval(
+                            decision.grant_key or "shell_executor",
+                            {"command": command, "workdir": workdir},
+                            f"[redirect_target] {abs_target}",
+                            force_reason=force,
+                        )
+                        if approval_result not in (None, "approved"):
+                            return {
+                                "error": (
+                                    f"用户未批准命令重定向写入 "
+                                    f"{abs_target}（{approval_result}）。"
+                                    "如需继续，请征得用户同意后重新调用，"
+                                    "或改用 file_write 工具。"
+                                ),
+                                "success": False,
+                                "error_type": "approval_rejected",
+                            }
 
             _cleanup_expired_tasks()
 

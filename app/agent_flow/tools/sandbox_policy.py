@@ -17,6 +17,7 @@ shell_toolkit / ssh_toolkit / file_toolkit / python_handler（open 收口）。
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -105,6 +106,15 @@ def get_writable_roots(
         roots.append(Path(get_temp_dir()).resolve())
     except (OSError, RuntimeError):
         pass
+    # Windows 用户临时目录（%TEMP%）：LLM 写中间产物常用 `> %TEMP%\x.txt`，
+    # 不入列则每次弹审批（vue-tsc 实锤 2026-10-20）。展开后的真实路径
+    # 命中白名单即放行；与项目 temp 同盘同目录时去重逻辑自然合并。
+    user_temp = os.environ.get("TEMP") or os.environ.get("TMP")
+    if user_temp:
+        try:
+            roots.append(Path(user_temp).resolve())
+        except (OSError, RuntimeError):
+            pass
     global _ENV_ROOTS_CACHE
     if _ENV_ROOTS_CACHE is None:
         _ENV_ROOTS_CACHE = _parse_env_roots()
