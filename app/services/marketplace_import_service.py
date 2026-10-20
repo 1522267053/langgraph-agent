@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+from typing import Optional
 import zipfile
 from io import BytesIO
 from pathlib import Path
