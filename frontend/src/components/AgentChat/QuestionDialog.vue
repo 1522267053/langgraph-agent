@@ -14,6 +14,7 @@ import { QuestionFilled, Check, Minus, FullScreen } from '@element-plus/icons-vu
 import { formatCountdown } from '@/utils/format'
 import { USER_RESPONSE_COUNTDOWN_SECONDS } from '@/constants/timing'
 import { useDraggableBar } from '@/composables/useDraggableBar'
+import { useDialogExitSnapshot } from '@/composables/useDialogExitSnapshot'
 
 interface QuestionOption {
   label: string
@@ -40,6 +41,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'submit', answers: string[]): void
   (e: 'expire'): void
+  /** 关闭动画结束（父组件据此重置外部快照，如子Agent徽标） */
+  (e: 'closed'): void
 }>()
 
 // 多选模式下的当前选中 label 集合
@@ -97,6 +100,19 @@ function startCountdown(q: PendingQuestion): void {
 const visible = computed(() => props.question !== null)
 const isMultiple = computed(() => props.question?.multiple ?? false)
 
+// 退场快照：提交后 store 同步清空 question，关闭动画期间改渲染最近非空副本，
+// 避免内容先于动画消失（空框渐隐）；动画结束 @closed 时重置
+const {
+  display: displayQuestion,
+  reset: resetQuestionSnapshot
+} = useDialogExitSnapshot(() => props.question, q => !q)
+
+/** 关闭动画结束：重置自身快照 + 通知父组件重置其持有的外部快照 */
+function onDialogClosed(): void {
+  resetQuestionSnapshot()
+  emit('closed')
+}
+
 // Other 自填是否有内容：作为 Other 选项的勾选态（有内容即勾选）
 const otherSelected = computed(() => customText.value.trim().length > 0)
 
@@ -116,6 +132,7 @@ watch(
     showCustomInput.value = false
     submitted.value = false // 新问题到来时重置提交标志
     minimized.value = false // 新问题默认弹出（最小化只由用户主动触发）
+    resetQuestionSnapshot() // 快照重置（新问题直接渲染新数据，不残留旧内容）
     if (q) startCountdown(q)
     else stopCountdown()
   }
@@ -187,11 +204,12 @@ const confirmDisabled = computed(() => {
     :close-on-press-escape="false"
     :show-close="false"
     destroy-on-close
+    @closed="onDialogClosed"
   >
     <template #header>
       <div class="dialog-header">
         <el-icon :size="20" class="dialog-icon"><QuestionFilled /></el-icon>
-        <span class="dialog-title">{{ question?.header || '问题反问' }}</span>
+        <span class="dialog-title">{{ displayQuestion?.header || '问题反问' }}</span>
         <!-- 模式标识：单选点击替换选中，多选可勾选多项后统一提交 -->
         <span class="dialog-mode" :class="isMultiple ? 'is-multiple' : 'is-single'">
           {{ isMultiple ? '多选' : '单选' }}
@@ -213,12 +231,12 @@ const confirmDisabled = computed(() => {
       </div>
     </template>
 
-    <div v-if="question" class="question-body" :class="{ 'is-expired': expired }">
-      <div class="question-text">{{ question.question }}</div>
+    <div v-if="displayQuestion" class="question-body" :class="{ 'is-expired': expired }">
+      <div class="question-text">{{ displayQuestion.question }}</div>
 
       <div class="options-list">
         <button
-          v-for="opt in question.options"
+          v-for="opt in displayQuestion.options"
           :key="opt.label"
           class="option-item"
           :class="{
@@ -276,8 +294,9 @@ const confirmDisabled = computed(() => {
     </div>
 
     <!-- 底部统一确认：多选提交勾选集合；单选仅在其他输入有内容时可确定。
-         无取消按钮——用户必须从选项中选一个答案；超时由后端兜底 -->
-    <template v-if="visible" #footer>
+         无取消按钮——用户必须从选项中选一个答案；超时由后端兜底。
+         退场快照期间（关闭动画）footer 一并保留，避免按钮先消失 -->
+    <template v-if="displayQuestion" #footer>
       <div class="dialog-footer">
         <el-button type="primary" :disabled="confirmDisabled" @click="submitDialog">确定</el-button>
       </div>

@@ -52,6 +52,7 @@ import { clearBlockExpandOverrides } from '@/components/AgentChat/blockExpand'
 import { useToolOutputStore } from '@/stores/toolOutput'
 import { formatCountdown } from '@/utils/format'
 import { useDraggableBar } from '@/composables/useDraggableBar'
+import { useDialogExitSnapshot } from '@/composables/useDialogExitSnapshot'
 import {
   loadWorkDirForAgent,
   saveWorkDirForAgent,
@@ -1799,6 +1800,52 @@ function handleRejectTools() {
   store.rejectToolCalls()
 }
 
+// ===== 审批弹窗退场快照 =====
+// 批准/拒绝后 store 同步清空批次（advanceApprovalQueue），关闭动画期间
+// 内容会先消失（空框渐隐）。快照最近一次非空批次，动画期间继续渲染；
+// 动画结束（@closed）重置。队列有下一批时 model-value 保持 true 不触发
+// 关闭，内容直接切新批次，快照不干扰。
+interface ApprovalDialogBatch {
+  tools: typeof store.pendingToolCalls
+  needed: string[]
+  isSubAgent: boolean
+  agentName: string
+  countdown: number
+}
+
+const emptyApprovalBatch = (b: ApprovalDialogBatch | null): boolean => !b
+
+const {
+  display: displayApprovalBatch,
+  reset: resetApprovalSnapshot
+} = useDialogExitSnapshot<ApprovalDialogBatch | null>(
+  () => {
+    if (!store.isWaitingToolApproval) return null
+    return {
+      tools: store.pendingToolCalls,
+      needed: store.pendingApprovalNeeded,
+      isSubAgent: store.subAgentApproval?.isSubAgent ?? false,
+      agentName: store.subAgentApproval?.agentName ?? '',
+      countdown: store.approvalCountdown
+    }
+  },
+  emptyApprovalBatch
+)
+
+// 问题反问弹窗的子Agent徽标：subAgentQuestion 派生自 pendingQuestions，
+// 提交后同 tick 清空导致动画期间徽标消失——同样走退场快照
+const {
+  display: displayQuestionSubAgent,
+  reset: resetQuestionSubAgentSnapshot
+} = useDialogExitSnapshot<{ isSubAgent: boolean; agentName: string } | null>(
+  () =>
+    store.subAgentQuestion?.isSubAgent
+      ? { isSubAgent: true, agentName: store.subAgentQuestion.agentName }
+      : null,
+  v => !v
+)
+const questionSubAgentName = computed(() => displayQuestionSubAgent.value?.agentName ?? '')
+
 // ===== 等待弹层最小化（human-input / tool-approval 共用模式） =====
 // 最小化后隐藏遮罩与卡片，右下角悬浮条恢复；等待期间 SSE 流继续，回看不受影响
 const humanInputMinimized = ref(false)
@@ -2102,29 +2149,33 @@ const { barStyle: waitsDragStyle, onPointerDown: onWaitsPointerDown, isDragging:
       :close-on-press-escape="false"
       :show-close="false"
       destroy-on-close
+      @closed="resetApprovalSnapshot"
     >
       <template #header>
         <div class="approval-dialog-header">
           <el-icon :size="20" class="approval-dialog-icon"><Warning /></el-icon>
           <span class="approval-dialog-title">请求执行工具</span>
           <span
-            v-if="store.subAgentApproval?.isSubAgent"
+            v-if="displayApprovalBatch?.isSubAgent"
             class="approval-dialog-sub-agent"
           >
-            子Agent「{{ store.subAgentApproval.agentName }}」
+            子Agent「{{ displayApprovalBatch.agentName }}」
           </span>
           <!-- N/M 排队指示器：方案B 批次合并后已无排队概念，恒隐藏（保留结构兼容旧回放） -->
           <span
-            v-if="false && store.approvalProgress.total > 1"
+            v-if="false && displayApprovalBatch && displayApprovalBatch.tools.length > 1"
             class="approval-dialog-progress"
           >
-            {{ store.approvalProgress.current }}/{{ store.approvalProgress.total }}
+            1/{{ displayApprovalBatch.tools.length }}
           </span>
-          <span v-if="store.approvalCountdown <= 0" class="approval-dialog-expired">
+          <span
+            v-if="displayApprovalBatch && displayApprovalBatch.countdown <= 0"
+            class="approval-dialog-expired"
+          >
             已过期
           </span>
-          <span v-else class="approval-dialog-countdown">
-            {{ formatCountdown(store.approvalCountdown) }}
+          <span v-else-if="displayApprovalBatch" class="approval-dialog-countdown">
+            {{ formatCountdown(displayApprovalBatch.countdown) }}
           </span>
           <button
             class="approval-dialog-minimize"
@@ -2138,18 +2189,18 @@ const { barStyle: waitsDragStyle, onPointerDown: onWaitsPointerDown, isDragging:
       </template>
       <div class="approval-tools">
         <div
-          v-for="(tc, index) in store.pendingToolCalls"
+          v-for="(tc, index) in displayApprovalBatch?.tools ?? []"
           :key="tc.id || tc.name"
           class="approval-tool-item"
           :class="{ 'approval-tool-rejected': getDecision(tc, index) === 'rejected' }"
         >
           <div class="approval-tool-name">
             <el-tag
-              :type="store.pendingApprovalNeeded.includes(tc.name) ? 'danger' : 'info'"
+              :type="displayApprovalBatch?.needed.includes(tc.name) ? 'danger' : 'info'"
               size="small"
               style="margin-right: 6px"
             >
-              {{ store.pendingApprovalNeeded.includes(tc.name) ? '需确认' : '普通' }}
+              {{ displayApprovalBatch?.needed.includes(tc.name) ? '需确认' : '普通' }}
             </el-tag>
             {{ tc.name }}
             <el-switch
@@ -2253,9 +2304,10 @@ const { barStyle: waitsDragStyle, onPointerDown: onWaitsPointerDown, isDragging:
     </div>
     <QuestionDialog
       :question="store.pendingQuestion"
-      :sub-agent-name="store.subAgentQuestion?.isSubAgent ? store.subAgentQuestion.agentName : ''"
+      :sub-agent-name="questionSubAgentName"
       @submit="handleQuestionSubmit"
       @expire="store.dismissExpiredQuestion"
+      @closed="resetQuestionSubAgentSnapshot"
     />
     <DirectoryPickerDialog
       v-model="workDirPickerVisible"

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { QuestionFilled, Warning, Minus, FullScreen } from '@element-plus/icons-vue'
 import { formatToolArgs, formatCountdown } from '@/utils/format'
 import { useDraggableBar } from '@/composables/useDraggableBar'
+import { useDialogExitSnapshot } from '@/composables/useDialogExitSnapshot'
 
 interface ConversationMessage {
   role: string
@@ -40,6 +41,14 @@ const inputValue = ref('')
 const minimized = ref(false)
 
 const isApprovalMode = computed(() => !!props.approval)
+
+// 退场快照：审批决策提交后父组件清空 pendingApproval（await 响应后），
+// 关闭动画期间 approval 已空导致内容先消失——快照最近非空批次续渲染，
+// 动画结束 @closed 重置
+const {
+  display: displayApproval,
+  reset: resetApprovalSnapshot
+} = useDialogExitSnapshot(() => props.approval, a => !a)
 
 // ---- 逐工具决策（方案B：单窗口多卡片独立决策） ----
 // tool_call_id → 用户选择；默认全部 approved（卡片上可单独切为拒绝）。
@@ -309,6 +318,7 @@ function handleOpen(): void {
     :show-close="false"
     destroy-on-close
     @update:model-value="onDialogModelChange"
+    @closed="resetApprovalSnapshot"
   >
     <template #header>
       <div class="approval-dialog-header">
@@ -328,24 +338,24 @@ function handleOpen(): void {
         </button>
       </div>
     </template>
-    <div v-if="approval" class="approval-body">
-      <div v-if="approval.approvalReason" class="approval-reason">
-        审批原因：{{ approval.approvalReason }}
+    <div v-if="displayApproval" class="approval-body">
+      <div v-if="displayApproval.approvalReason" class="approval-reason">
+        审批原因：{{ displayApproval.approvalReason }}
       </div>
       <div class="approval-tools">
         <div
-          v-for="(tc, index) in approval.toolCalls"
+          v-for="(tc, index) in displayApproval.toolCalls"
           :key="index"
           class="approval-tool-item"
           :class="{ 'approval-tool-rejected': getDecision(tc, index) === 'rejected' }"
         >
           <div class="approval-tool-name">
             <el-tag
-              :type="approval.approvalNeeded.includes(tc.name) ? 'danger' : 'info'"
+              :type="displayApproval.approvalNeeded.includes(tc.name) ? 'danger' : 'info'"
               size="small"
               style="margin-right: 6px"
             >
-              {{ approval.approvalNeeded.includes(tc.name) ? '需确认' : '普通' }}
+              {{ displayApproval.approvalNeeded.includes(tc.name) ? '需确认' : '普通' }}
             </el-tag>
             {{ tc.name }}
             <el-switch

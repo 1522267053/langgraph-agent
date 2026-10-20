@@ -89,6 +89,29 @@ const modelBtnLabel = computed(() => {
   return ''
 })
 
+/** 模型按钮悬停提示：供应商 / 模型名（从分组数据反查显示名；未选=默认模型） */
+const modelTooltip = computed(() => {
+  if (selectedModel.value) {
+    const opt = (props.modelGroups ?? [])
+      .flatMap(g => g.options)
+      .find(o => o.value === selectedModel.value)
+    const modelName = opt?.label || modelBtnLabel.value
+    const providerLabel = opt ? findGroupLabel(opt.value) : ''
+    return providerLabel ? `${providerLabel} / ${modelName}` : modelName
+  }
+  return props.defaultModelLabel
+    ? `默认：${props.defaultModelLabel}`
+    : '默认：Agent 配置'
+})
+
+/** 按复合键反查选项所在分组的 label（供应商显示名） */
+function findGroupLabel(value: string): string {
+  for (const g of props.modelGroups ?? []) {
+    if (g.options.some(o => o.value === value)) return g.label
+  }
+  return ''
+}
+
 function selectModel(value: string) {
   selectedModel.value = value
   modelPopoverVisible.value = false
@@ -480,14 +503,24 @@ function handleStop() {
               trigger="click"
             >
               <template #reference>
-                <button
-                  class="toolbar-icon-btn model-btn"
-                  :class="{ active: !!selectedModel }"
-                  :disabled="isStreaming || isWaitingHuman"
-                >
-                  <el-icon :size="18"><Cpu /></el-icon>
-                  <span v-if="modelBtnLabel" class="model-btn-label">{{ modelBtnLabel }}</span>
-                </button>
+                <!-- popover 指令须挂原生元素：span 作 reference 载体，
+                     内部再包 el-tooltip 实现悬停显示供应商/模型名 -->
+                <span class="model-btn-anchor">
+                  <el-tooltip
+                    :content="modelTooltip"
+                    placement="top"
+                    :show-after="300"
+                  >
+                    <button
+                      class="toolbar-icon-btn model-btn"
+                      :class="{ active: !!selectedModel }"
+                      :disabled="isStreaming || isWaitingHuman"
+                    >
+                      <el-icon :size="18"><Cpu /></el-icon>
+                      <span v-if="modelBtnLabel" class="model-btn-label">{{ modelBtnLabel }}</span>
+                    </button>
+                  </el-tooltip>
+                </span>
               </template>
               <div class="model-menu">
                 <div class="model-menu-title">
@@ -913,6 +946,14 @@ export default {
 }
 
 /* 模型按钮：与推理深度按钮同形态，[图标+模型名] 徽标 */
+/* anchor span：popover reference 载体，透传布局不占额外空间 */
+.model-btn-anchor {
+  display: inline-flex;
+  flex-shrink: 1;
+  overflow: hidden;
+  min-width: 0;
+}
+
 .model-btn {
   width: auto;
   min-width: 32px;

@@ -21,6 +21,7 @@ import {
   MagicStick,
   Cpu,
   Monitor,
+  ChromeFilled,
   Notebook,
   List,
   Avatar,
@@ -663,9 +664,9 @@ const registry: Record<string, NodeRegistryEntry> = {
 
   browser: {
     label: '浏览器',
-    description: 'AI 通过 CDP 操作浏览器（导航/点击/输入/截图），每流程独立实例',
+    description: 'AI 通过 CDP 操作浏览器（导航/点击/输入/上传/截图），每流程独立实例',
     category: 'tool',
-    icon: Monitor,
+    icon: ChromeFilled,
     iconColor: '#0ea5e9',
     iconBgColor: '#f0f9ff',
     defaultConfig: () => ({
