@@ -100,9 +100,11 @@ def _sensitive_home_path_error(path: Path) -> Optional[str]:
 
 
 def validate_file_path(file_path: str) -> tuple[bool, str]:
-    """校验文件路径是否安全
+    r"""校验文件路径是否安全（读路径通用校验）
 
-    禁止访问系统关键路径，禁止路径穿越。
+    禁止路径穿越，禁止访问家目录敏感子目录（.ssh/.aws 等读私钥=泄漏风险）。
+    系统关键路径**读已放开**（诊断系统问题需要读 C:\Windows 下的日志/配置，
+    无破坏性）；写路径由 check_writable_path 另行强制审批。
 
     Returns:
         (是否安全, 错误消息)
@@ -113,11 +115,10 @@ def validate_file_path(file_path: str) -> tuple[bool, str]:
     if ".." in Path(file_path).parts:
         return False, "文件路径不允许包含 '..' 路径穿越"
 
-    # 系统关键路径检测
-    path_str = str(path)
-    for pattern in FORBIDDEN_PATH_PATTERNS:
-        if re.search(pattern, path_str):
-            return False, f"不允许访问系统路径: {path_str}"
+    # 家目录敏感子目录（读写都拦：读 .ssh 私钥等同泄漏）
+    sensitive_err = _sensitive_home_path_error(path)
+    if sensitive_err:
+        return False, sensitive_err
 
     return True, ""
 
@@ -129,30 +130,44 @@ def check_writable_path(
     """写入路径安全检查（三态，唯一真源；validate_writable_path 的超集）
 
     检查顺序（硬拦截优先于白名单判定）：
-    1. 通用路径校验（系统路径/穿越）→ blocked
-    2. data/ 数据目录 → blocked
-    3. 家目录敏感子目录（.ssh/.aws/...，不分域）→ blocked
-    4. writable_roots 提供时：白名单外 → outside（调用方按策略 ask/deny/off）
+    1. 路径穿越 → blocked
+    2. 家目录敏感子目录（.ssh/.aws/...，不分域）→ blocked
+    3. data/ 数据目录 → blocked
+    4. 系统关键路径（FORBIDDEN_PATH_PATTERNS）→ outside（强制审批：
+       用户可能需要 AI 写 hosts/装环境到 Program Files，静默拒绝会堵死
+       合法运维场景；由调用方 force_reason 走审批，off 策略也不静默放行）
+    5. writable_roots 提供时：白名单外 → outside（调用方按策略 ask/deny/off）
        writable_roots 为 None 时：不做白名单判定（兼容旧行为）→ allowed
 
     Returns:
         (verdict, detail)：verdict ∈ "allowed" | "blocked" | "outside"
         - blocked: 硬拦截，detail 为错误消息（任何策略下都拒绝）
-        - outside: 白名单外（仅 writable_roots 提供时出现），调用方按策略分流
+        - outside: 白名单外或系统路径（仅 writable_roots 提供时出现），
+          调用方按策略分流；系统路径场景必须走强制审批（force_reason），
+          不得因 off 静默放行
         - allowed: 通过
     """
-    is_valid, error_msg = validate_file_path(file_path)
-    if not is_valid:
-        return "blocked", error_msg
-
     path = Path(file_path).resolve()
+
+    # 路径穿越检测
+    if ".." in Path(file_path).parts:
+        return "blocked", "文件路径不允许包含 '..' 路径穿越"
+
+    # 家目录敏感子目录（读写都拦：写 .ssh = 覆盖私钥/known_hosts）
+    sensitive_err = _sensitive_home_path_error(path)
+    if sensitive_err:
+        return "blocked", sensitive_err
+
     data_dir = (BASE_DIR / "data").resolve()
     if path.is_relative_to(data_dir):
         return "blocked", f"不允许写入数据目录: {path}"
 
-    sensitive_err = _sensitive_home_path_error(path)
-    if sensitive_err:
-        return "blocked", sensitive_err
+    # 系统关键路径：不再硬拦，归入 outside 由调用方强制审批
+    # （写 hosts/装环境到 Program Files 是合法运维需求，静默拒绝堵死场景）
+    path_str = str(path)
+    for pattern in FORBIDDEN_PATH_PATTERNS:
+        if re.search(pattern, path_str):
+            return "outside", f"系统路径: {path_str}"
 
     if writable_roots is not None and not is_path_in_writable_roots(
         path, writable_roots

@@ -276,7 +276,13 @@ class FileToolsKit(BaseToolKit):
         async def _check_write_path(
             tool_name: str, tool_args: dict, file_path: str
         ) -> dict:
-            """check_writable_path 三态 → blocked 拒绝 / outside 按策略分流。
+            """写路径安全检查 + 策略分流（含审批，三写工具统一入口）。
+
+            流程（审批只发生一次，避免入口审批与策略审批重复弹窗）：
+            1. check_writable_path 三态：blocked → 直接拒绝
+            2. outside + 系统路径 → 无视策略强制审批（独立授权键）
+            3. outside + 普通路径 → 按 sandbox_policy：ask 审批 / deny 拒绝 / off 放行
+            4. allowed → 放行
 
             Returns: 放行时返回空 dict；否则返回错误 dict。
             """
@@ -284,19 +290,35 @@ class FileToolsKit(BaseToolKit):
             if verdict == "blocked":
                 return {"error": detail, "success": False}
             if verdict == "outside":
-                if sandbox_policy == "ask":
+                is_system_path = detail.startswith("系统路径:")
+                if is_system_path or sandbox_policy == "ask":
+                    if is_system_path:
+                        force = (
+                            f"写入系统路径需要确认（{detail}）："
+                            "系统目录写入可能影响系统行为，请确认是合法运维操作"
+                        )
+                        # 独立授权键：普通 file_write 的「批准并记住」授权
+                        # （session_tool_grant 按工具名存取）不得覆盖系统路径
+                        # 写入——否则用户曾对普通目录记住后，系统路径被静默放行，
+                        # 强制审批形同虚设。独立键让系统路径单独问一次、
+                        # 单独记住（装环境连写多个系统文件只问一次）
+                        grant_key = f"{tool_name}#system_path"
+                    else:
+                        force = "沙箱策略要求审批：写入路径不在可写白名单内"
+                        grant_key = tool_name
                     approval_result = await _approval(
-                        tool_name,
+                        grant_key,
                         tool_args,
                         f"[outside_writable_roots] {file_path}",
-                        force_reason=(
-                            "沙箱策略要求审批：写入路径不在可写白名单内"
-                        ),
+                        force_reason=force,
                     )
                     if approval_result in (None, "approved"):
                         return {}
                     return {
-                        "error": f"用户未批准写入白名单外路径（{approval_result}）",
+                        "error": (
+                            f"用户未批准写入{'系统路径' if is_system_path else '白名单外路径'}"
+                            f"（{approval_result}）"
+                        ),
                         "success": False,
                         "error_type": "approval_rejected",
                     }
@@ -310,7 +332,7 @@ class FileToolsKit(BaseToolKit):
                         "success": False,
                         "error_type": "outside_writable_roots",
                     }
-                # off：放行（硬拦截已在 check_writable_path 内完成）
+                # off：放行（系统路径已在上方强制审批分支处理，不会走到这里）
             return {}
 
         # ---- text_editor ----
@@ -322,34 +344,19 @@ class FileToolsKit(BaseToolKit):
             replace_all: bool = False,
             dry_run: bool = False,
         ) -> str | dict:
-            # 审批钩子：仅当节点配置了需审批工具/危险内容模式时才阻塞（未配置零开销）
-            approval_result = await _approval(
-                "text_editor",
-                {
-                    "file_path": file_path,
-                    "old_string": old_string,
-                    "new_string": new_string,
-                },
-                file_path,
-            )
-            if approval_result not in (None, "approved"):
-                return {
-                    "error": f"用户未批准编辑文件（{approval_result}）",
-                    "success": False,
-                    "error_type": "approval_rejected",
-                }
-
-            check_err = await _check_write_path(
-                "text_editor",
-                {
-                    "file_path": file_path,
-                    "old_string": old_string,
-                    "new_string": new_string,
-                },
-                file_path,
-            )
-            if check_err:
-                return check_err
+            # 写路径安全检查 + 审批（唯一审批点，同 file_write；dry_run 只读不审批）
+            if not dry_run:
+                check_err = await _check_write_path(
+                    "text_editor",
+                    {
+                        "file_path": file_path,
+                        "old_string": old_string,
+                        "new_string": new_string,
+                    },
+                    file_path,
+                )
+                if check_err:
+                    return check_err
 
             path = Path(file_path).resolve()
             if not path.exists():
@@ -562,13 +569,8 @@ class FileToolsKit(BaseToolKit):
             content: str,
             line_ending: Literal["auto", "lf", "crlf"] = "auto",
         ) -> str:
-            # 审批钩子：仅当节点配置了需审批工具/危险内容模式时才阻塞（未配置零开销）
-            approval_result = await _approval(
-                "file_write", {"file_path": file_path}, file_path
-            )
-            if approval_result not in (None, "approved"):
-                return f"用户未批准写入文件（{approval_result}）"
-
+            # 写路径安全检查 + 审批（唯一审批点：blocked 拒 / outside 按策略
+            # 审批或拒 / allowed 放行；系统路径用独立授权键 file_write#system_path）
             check_err = await _check_write_path(
                 "file_write", {"file_path": file_path}, file_path
             )
@@ -638,13 +640,7 @@ class FileToolsKit(BaseToolKit):
         # ---- file_delete ----
 
         async def file_delete(file_path: str) -> str:
-            # 审批钩子：仅当节点配置了需审批工具/危险内容模式时才阻塞（未配置零开销）
-            approval_result = await _approval(
-                "file_delete", {"file_path": file_path}, file_path
-            )
-            if approval_result not in (None, "approved"):
-                return f"用户未批准删除文件（{approval_result}）"
-
+            # 写路径安全检查 + 审批（唯一审批点，同 file_write）
             check_err = await _check_write_path(
                 "file_delete", {"file_path": file_path}, file_path
             )

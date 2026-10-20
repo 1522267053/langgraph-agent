@@ -251,9 +251,12 @@ def _build_restricted_globals():
 def _sandbox_open(file, mode="r", *args, **kwargs):
     """沙箱内 open 的写路径收口：写模式（w/a/x/+）路径必须落在可写白名单内。
 
-    读模式不限制（与 file_read 工具同语义：读放宽、写收紧）。
-    白名单 = 会话/Agent 工作目录 + temp + SANDBOX_WRITABLE_ROOTS（sandbox_policy）；
-    家目录敏感子目录与系统路径硬拦截（check_writable_path 内置，白名单不可覆盖）。
+    读模式不限制（与 file_read 工具同语义：读放宽、写收紧；系统路径读已放开）。
+    白名单 = 会话/Agent 工作目录 + 节点 default_workdir + temp +
+    SANDBOX_WRITABLE_ROOTS（sandbox_policy）；
+    家目录敏感子目录与 data/ 硬拦截（check_writable_path 内置，白名单不可覆盖）。
+    系统路径（C:\Windows 等）写模式拒绝——python 沙箱无审批交互通道，
+    系统路径写入请改用 file_write 工具（走强制审批）或 shell 命令。
     """
     if any(m in str(mode) for m in ("w", "a", "x", "+")):
         from app.agent_flow.tools.common import check_writable_path
@@ -263,6 +266,12 @@ def _sandbox_open(file, mode="r", *args, **kwargs):
         if verdict == "blocked":
             raise PermissionError(detail)
         if verdict == "outside":
+            if detail.startswith("系统路径:"):
+                raise PermissionError(
+                    f"不允许在 Python 沙箱内写入系统路径（{detail}）。"
+                    "沙箱内无审批交互通道：写 hosts/装环境等系统路径操作"
+                    "请改用 file_write 工具（走审批确认）或 shell 命令"
+                )
             raise PermissionError(
                 f"路径不在可写白名单内: {detail}（可写范围：会话工作目录、"
                 "Agent 工作目录、临时目录，或通过 SANDBOX_WRITABLE_ROOTS 追加）"

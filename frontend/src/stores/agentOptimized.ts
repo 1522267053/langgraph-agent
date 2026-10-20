@@ -1335,11 +1335,76 @@ export const useAgentStore = defineStore('agent', () => {
    */
   function rebuildChatMessages(preserveStreaming = false) {
     const rebuilt = buildChatMessagesFromDB(messages.value)
+
+    // [FIX] 前插历史跨基线并组拆分（流式中）：loadMore 前插的旧行与本轮流式行
+    // 同为连续 ai 行，buildChatMessagesFromDB 会合并成一组（组首=前插行 id），
+    // 使已回填 dbMsgId（原组首）的活跃占位行在 rebuilt 中失去对应组——随后被
+    // 「窗口外旧行」守卫静默丢弃（段级 id 命中 keptDbIds），底部被 DB 快照整体
+    // 重写（运行中工具/实时任务计划卡消失）。按基线拆分后：基线前的段留在历史
+    // 行正常渲染，基线后的段独立成行与占位行对齐，恢复「历史 + 活跃流式行」结构。
+    // token/耗时等轮级聚合无法按段拆分，经展开保留在新鲜行（活跃轮展示语义），
+    // 历史行清零（同轮中途切片，非完整轮次）。
+    // 拆分仅在流式中进行：连续 ai 行横跨基线只能由前插历史引入（窗口内有 human
+    // 行时 human 会切断 ai 连续性；无 human 的长 ReAct 窗口整窗同轮），终态重建
+    // 无此形态，保持 DB 全量快照语义。
+    if (preserveStreaming && streamBaseMsgId > 0) {
+      for (let i = rebuilt.length - 1; i >= 0; i--) {
+        const row = rebuilt[i]
+        if (row.role !== 'ai' || row.displayType) continue
+        const preSegs = row.segments.filter(
+          s => s.dbMsgId != null && s.dbMsgId <= streamBaseMsgId
+        )
+        const freshSegs = row.segments.filter(
+          s => s.dbMsgId == null || s.dbMsgId > streamBaseMsgId
+        )
+        if (preSegs.length === 0 || freshSegs.length === 0) continue
+        const freshHeadId = freshSegs.find(s => s.dbMsgId != null)?.dbMsgId
+        const freshRow: StreamingMessage = {
+          ...row,
+          id: `msg-${freshHeadId ?? row.dbMsgId}`,
+          dbMsgId: freshHeadId ?? row.dbMsgId,
+          segments: freshSegs
+        }
+        row.segments = preSegs
+        const rebase = (r: StreamingMessage) => {
+          r.content = ''
+          r.thinking = undefined
+          r.tools = undefined
+          for (const s of r.segments) {
+            if (s.type === 'content') r.content = s.content
+            else if (s.type === 'thinking') r.thinking = s.thinking
+            else if (s.type === 'tool') (r.tools ??= []).push(s.tool)
+          }
+        }
+        rebase(row)
+        rebase(freshRow)
+        // 轮级聚合经展开已在 freshRow，历史行清零
+        row.prompt_tokens = undefined
+        row.completion_tokens = undefined
+        row.total_tokens = undefined
+        row.latest_prompt_tokens = undefined
+        row.duration_ms = undefined
+        row.end_output = undefined
+        rebuilt.splice(i, 1, row, freshRow)
+      }
+    }
+
     const local = chatMessages.value
 
     // ---- 占位行识别：本地尾部连续的流式临时行 ----
+    // 占位行与 DB 组对齐（reattach）后会被回填 dbMsgId（组首 id）并保留
+    // streaming- 前缀 id。此时它仍是「活跃流式行」（SSE 增量持续写入），
+    // 必须继续按占位行参与后续对齐——否则 loadMore 前插历史触发重建时，
+    // 该行在 rebuilt 中无对应组（其 dbMsgId 组已与前插行合并、组首已变），
+    // 落入「窗口外旧行」守卫被静默丢弃 → 运行中工具/实时段整体消失。
+    // 仅流式中（preserveStreaming）放宽：终态重建（preserve=false）仍按
+    // dbMsgId==null 判定，结束路径的占位行必须被 DB 行替换（防快照滞留）。
+    const isActivePlaceholder = (m: StreamingMessage): boolean =>
+      (m.dbMsgId == null ||
+        (preserveStreaming && m.id.startsWith('streaming-') && m.dbMsgId != null)) &&
+      (m.id.startsWith('user-') || m.id.startsWith('streaming-'))
     const isPlaceholder = (m: StreamingMessage | undefined): boolean =>
-      !!m && m.dbMsgId == null && (m.id.startsWith('user-') || m.id.startsWith('streaming-'))
+      !!m && isActivePlaceholder(m)
     let placeholderStart = local.length
     while (placeholderStart > 0 && isPlaceholder(local[placeholderStart - 1])) placeholderStart--
     const placeholders = local.slice(placeholderStart)

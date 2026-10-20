@@ -48,9 +48,10 @@ def resolve_opaque_policy(
         "ask" / "deny" / "off"
     """
     value = (node_value or "").strip().lower()
-    if value in (POLICY_ASK, POLICY_DENY, POLICY_OFF):
+    # 显式档位直接生效；auto/非法值/空 → 按域分流（Agent=ask，Flow=off）。
+    # POLICY_AUTO 不在直接生效集合内：它本身不是返回值，只触发域分流
+    if value in _VALID_POLICIES and value != POLICY_AUTO:
         return value
-    # auto / 非法值 / 空 → 按域分流：Agent=ask，Flow=off
     if session_id > 0:
         return POLICY_ASK
     return POLICY_OFF
@@ -83,14 +84,18 @@ _ENV_ROOTS_CACHE: Optional[list[Path]] = None
 def get_writable_roots(
     session_work_dir: Optional[Path] = None,
     agent_work_dir: Optional[Path] = None,
+    node_work_dir: Optional[Path] = None,
 ) -> list[Path]:
     """返回当前运行域的可写目录白名单（绝对路径列表）。
 
-    组成：会话工作目录（聊天页配置）> Agent 工作目录 > temp 目录 > .env 追加项。
+    组成：会话工作目录（聊天页配置）+ 节点 default_workdir + Agent 工作目录
+    （会话 > 节点配置 > Agent 默认的最终生效目录）+ temp 目录 + .env 追加项。
+    节点 default_workdir 单独入列：会话目录存在时它不是最终生效目录，
+    但它是用户在节点配置里显式指定的目录，写入不应被审批拦截。
     目录可不存在（首次写入前），由调用方 mkdir 前置创建。
     """
     roots: list[Path] = []
-    for d in (session_work_dir, agent_work_dir):
+    for d in (session_work_dir, node_work_dir, agent_work_dir):
         if d:
             try:
                 roots.append(Path(d).resolve())

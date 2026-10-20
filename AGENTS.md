@@ -290,7 +290,11 @@ poetry run pytest tests/test_tool_approval_audit.py   # 只跑单个文件
 - **策略配置**：LLM 节点 `sandbox_opaque_policy`（auto/ask/deny/off，默认 auto），经 `setup_tool_handlers` 注入 `handler._sandbox_policy`（仿 `_media_caps` 模式），shell/ssh/file 三 toolkit 闭包消费；opaque 命令与白名单外写入按策略 ask（走现有审批回调）/deny（拒绝+引导文案）/off（不拦截）
 - **「不拦截」语义（重要）**：auto 在 Flow 域与显式 off 都只是**不弹审批直接执行** opaque 命令/白名单外写入，黑名单与硬拦截仍然生效——「放行」仅指跳过审批确认，不是跳过安全检查；Flow 定时/无人值守场景建议保持 auto，Flow 中 LLM 动态执行命令的建议显式改 ask
 - **可写白名单**：默认 = 会话工作目录 + Agent 工作目录 + temp 目录；追加项走 `.env` 的 `SANDBOX_WRITABLE_ROOTS`（逗号/分号分隔，相对路径基于项目根）
-- **硬拦截（不分域、不可配置，任何策略下都拒绝）**：系统关键路径（FORBIDDEN_PATH_PATTERNS）、data/ 数据目录、家目录敏感子目录（`.ssh/.aws/.docker/.gnupg/.netrc/.kube/.config/gcloud`，对齐 openclaw BLOCKED_HOME_SUBPATHS）
+- **硬拦截（不分域、不可配置，任何策略下都拒绝）**：路径穿越、data/ 数据目录、家目录敏感子目录（`.ssh/.aws/.docker/.gnupg/.netrc/.kube/.config/gcloud`，**读写都拦**——读私钥=泄漏）
+- **系统关键路径（FORBIDDEN_PATH_PATTERNS）读写分离**：**读放开**（诊断需要读 C:\Windows 日志/配置，无破坏性）；**写走强制审批**（check_writable_path 归 outside + detail 前缀「系统路径:」，file 工具无视策略 force_reason 审批，off 也不静默写入；python 沙箱 open 无审批通道仍拒绝并引导改用 file_write/shell）；shell 的 system32 正则维持整串硬拦（2026-10-20 决策）
+- **文件写工具审批唯一入口（强制）**：file_write/text_editor/file_delete 的审批只发生在 `_check_write_path` 内（按路径类型决定授权键），**禁止在闭包入口再放一次审批**——双重审批会导致入口 rejected 短路跳过策略审批、且重复弹窗（2026-10-20 实测重构）
+- **系统路径独立授权键**：系统路径写入的授权键为 `{tool_name}#system_path`（如 `file_write#system_path`），与普通工具名的「批准并记住」授权（session_tool_grant）**相互隔离**——普通记住不覆盖系统路径审批；对系统路径键记住后装环境连写多个系统文件只问一次
+- **单测纪律（强制）**：涉及系统路径写入的测试，假审批回调一律返回 rejected——绝不能让审批通过后真写 C:\Windows（_atomic_write 的 mkstemp 在系统目录权限卡死，faulthandler 栈实锤 2026-10-20）；落盘行为由真机测试覆盖
 - **python 沙箱 open 收口**：`python_handler._sandbox_open` 替换裸 `open`——写模式（w/a/x/+）路径必须落在可写白名单内，读模式不限制；ALLOWED_MODULES 单一事实源不动
 - **黑名单始终生效**：DANGEROUS_PATTERNS 整串正则兜底扫描对 scanned 与 opaque 一视同仁，危险命令即使解析失败也先硬拦截（优先于 opaque 判定）
 - **Flow 直跑语义**：Flow 主图 shell 节点直跑路径默认不拦截（直跑命令是用户在画布上静态编写、可见可审，opaque 风险源是 LLM 动态生成的命令）；LLM 节点显式配置 ask/deny 可对 Flow 收紧

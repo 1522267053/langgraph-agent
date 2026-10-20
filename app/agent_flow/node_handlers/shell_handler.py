@@ -360,6 +360,7 @@ class ShellNodeHandler(BaseNodeHandler):
             sandbox_policy=self._sandbox_policy,
             writable_roots=get_writable_roots(
                 session_work_dir=self._session_work_dir,
+                node_work_dir=configured_dir,
                 agent_work_dir=base_working_dir,
             ),
         )

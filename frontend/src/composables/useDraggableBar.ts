@@ -59,9 +59,18 @@ export function useDraggableBar(storageKey: string) {
   const position = ref<{ left: number; top: number } | null>(saved)
   const isDragging = ref(false)
 
-  // 无记录时空 style → CSS 默认 right/bottom；有记录时内联 left/top
+  // 无记录时空 style → CSS 默认 right/bottom；有记录时内联 left/top。
+  // 必须同时置 right/bottom: auto——CSS 里 bar 默认用 right/bottom 定位，
+  // 只注入 left/top 会形成四边偏移过约束，fixed 元素被拉伸成视口大小
   const barStyle = computed<CSSProperties>(() =>
-    position.value ? { left: `${position.value.left}px`, top: `${position.value.top}px` } : {}
+    position.value
+      ? {
+          left: `${position.value.left}px`,
+          top: `${position.value.top}px`,
+          right: 'auto',
+          bottom: 'auto'
+        }
+      : {}
   )
 
   let startX = 0

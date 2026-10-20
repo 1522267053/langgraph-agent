@@ -106,11 +106,33 @@ class TestCheckWritablePath:
         verdict, _ = check_writable_path(str(tmp_path / "a.txt"), [tmp_path])
         assert verdict == "allowed"
 
-    def test_blocked_system_path(self):
+    def test_system_path_now_outside_not_blocked(self):
+        """系统路径写不再硬拦，归 outside 由调用方强制审批（读已放开）"""
         from app.agent_flow.tools.common import check_writable_path
 
-        verdict, _ = check_writable_path("C:/Windows/x.txt", None)
-        assert verdict == "blocked"
+        verdict, detail = check_writable_path("C:/Windows/x.txt", None)
+        assert verdict == "outside"
+        assert detail.startswith("系统路径:")
+
+    def test_system_path_read_allowed(self):
+        """读系统路径放开（诊断需要读 C:\\Windows 日志/配置）"""
+        from app.agent_flow.tools.common import validate_file_path
+
+        is_valid, _ = validate_file_path("C:/Windows/win.ini")
+        assert is_valid
+
+    def test_sensitive_home_read_still_blocked(self):
+        """家目录敏感子目录读写都拦（读 .ssh 私钥=泄漏）"""
+        import os
+
+        from app.agent_flow.tools.common import validate_file_path
+
+        home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
+        if not home:
+            pytest.skip("无家目录环境变量")
+        is_valid, detail = validate_file_path(f"{home}/.ssh/id_rsa")
+        assert not is_valid
+        assert "敏感" in detail
 
     def test_blocked_data_dir(self):
         from app.agent_flow.tools.common import check_writable_path
@@ -154,6 +176,16 @@ class TestGetWritableRoots:
     def test_session_dir_included(self, tmp_path):
         roots = get_writable_roots(session_work_dir=tmp_path)
         assert tmp_path.resolve() in roots
+
+    def test_node_work_dir_included_alongside_session(self, tmp_path):
+        """会话目录存在时节点 default_workdir 仍单独入列（用户显式配置不拦截）"""
+        session_dir = tmp_path / "session"
+        node_dir = tmp_path / "nodecfg"
+        roots = get_writable_roots(
+            session_work_dir=session_dir, node_work_dir=node_dir
+        )
+        assert session_dir.resolve() in roots
+        assert node_dir.resolve() in roots
 
     def test_dedup(self, tmp_path):
         roots = get_writable_roots(session_work_dir=tmp_path, agent_work_dir=tmp_path)
