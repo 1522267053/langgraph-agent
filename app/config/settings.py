@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     # 登录密码配置（可选，为空则不启用登录保护）
     login_password: str = Field(default="", alias="LOGIN_PASSWORD")
 
+    # 沙箱可写白名单追加目录（逗号/分号分隔；相对路径基于项目根目录。
+    # 默认可写范围 = 会话工作目录 + Agent 工作目录 + temp 目录，此项用于追加；
+    # 家目录敏感子目录（.ssh/.aws/.docker/.gnupg/.netrc/.kube）始终硬拦截）
+    sandbox_writable_roots: str = Field(default="", alias="SANDBOX_WRITABLE_ROOTS")
+
     # 工具输出截断配置
     tool_output_max_lines: int = Field(
         default=500, alias="TOOL_OUTPUT_MAX_LINES"

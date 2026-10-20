@@ -373,6 +373,16 @@ class LlmNodeConfig(BaseNodeConfig):
         default="",
         description="上下文压缩时使用的额外提示词，可用于生成指定格式的上下文压缩格式",
     )
+    sandbox_opaque_policy: Optional[str] = Field(
+        default="auto",
+        description=(
+            "沙箱 opaque 策略：命令解析器无法判定安全性的命令（复杂引号/命令替换/"
+            "变量展开等）如何处理。auto=Agent 会话弹审批、Flow 放行；"
+            "ask=一律弹审批；deny=一律拒绝；off=放行。"
+            "危险命令黑名单拦截不受此配置影响，始终生效"
+        ),
+        json_schema_extra={"options": ["auto", "ask", "deny", "off"]},
+    )
 
 
 class LlmToolNodeHandler(BaseNodeHandler):

@@ -56,6 +56,9 @@ if (!localConfig.value.json_fields) {
 if (localConfig.value.compress_extra_prompt === undefined) {
   localConfig.value.compress_extra_prompt = ''
 }
+if (localConfig.value.sandbox_opaque_policy === undefined) {
+  localConfig.value.sandbox_opaque_policy = 'auto'
+}
 
 watch(
   () => props.config,
@@ -92,6 +95,9 @@ watch(
     }
     if (localConfig.value.compress_extra_prompt === undefined) {
       localConfig.value.compress_extra_prompt = ''
+    }
+    if (localConfig.value.sandbox_opaque_policy === undefined) {
+      localConfig.value.sandbox_opaque_policy = 'auto'
     }
   }
 )
@@ -422,6 +428,17 @@ watch(connectedToolNodes, fetchConnectedTools, { immediate: true, deep: true })
           </el-form-item>
         </template>
         <!-- 工具确认已下沉到 shell/ssh 节点各管各的，此处不再暴露 -->
+        <el-form-item label="沙箱策略">
+          <el-select
+            v-model="localConfig.sandbox_opaque_policy"
+            @change="updateConfig"
+          >
+            <el-option label="自动（Agent=审批 / Flow=放行）" value="auto" />
+            <el-option label="一律审批" value="ask" />
+            <el-option label="一律拒绝" value="deny" />
+            <el-option label="关闭（仅保留黑名单拦截）" value="off" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="自动压缩附加提示语">
           <el-input
             v-model="localConfig.compress_extra_prompt"

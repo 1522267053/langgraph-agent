@@ -29,6 +29,7 @@ from app.agent_flow.node_handlers.base_handler import (
     NodeVariable,
 )
 from app.agent_flow.tools.common import validate_file_path as _validate_file_path
+from app.agent_flow.tools.sandbox_policy import get_writable_roots
 from app.agent_flow.tools.file_read import FileReadService
 from app.agent_flow.tools.file_toolkit import FileToolsKit
 from app.agent_flow.tools.shell_toolkit import (
@@ -92,6 +93,9 @@ class ShellNodeHandler(BaseNodeHandler):
     _session_work_dir: Optional[Path] = None
     # file_read 可自动注入的媒体类型集合（由 llm_tool_executor 按模型能力×适配器注入；空则媒体文件按普通文件处理）
     _media_caps: set = set()
+    # 沙箱 opaque 策略（ask/deny/off，由 llm_tool_executor 按 LLM 节点配置+运行域注入；
+    # 默认 off=维持旧行为，仅 Agent 会话 auto 解析为 ask）
+    _sandbox_policy: str = "off"
 
     # 注：_writer / _session_id / _compiled_patterns / _resolve_context /
     # _ensure_patterns_compiled / _request_tool_approval 已下沉到 BaseNodeHandler，
@@ -318,8 +322,15 @@ class ShellNodeHandler(BaseNodeHandler):
             else self._resolve_working_dir()
         )
 
-        def _approval(tool_name: str, tool_args: dict, content: str = ""):
+        def _approval(
+            tool_name: str,
+            tool_args: dict,
+            content: str = "",
+            force_reason: Optional[str] = None,
+        ):
             """工具审批统一入口（闭包固定 cfg / node_key，对齐 browser/ssh 模式）。
+
+            force_reason 非空时强制走审批（沙箱 opaque/白名单外写入场景）。
 
             Returns: None（未命中审批条件，放行）/ "approved" / "rejected" / "timeout"。
             """
@@ -329,6 +340,7 @@ class ShellNodeHandler(BaseNodeHandler):
                 cfg=cfg,
                 content_for_pattern=content,
                 node_key=node.node_key,
+                force_reason=force_reason,
             )
 
         shell_kit = ShellToolKit(
@@ -340,10 +352,16 @@ class ShellNodeHandler(BaseNodeHandler):
             async_wait=cfg.async_wait,
             system_info=f"当前系统: {platform.system()}",
             resolve_workdir=self._resolve_tool_working_dir,
+            sandbox_policy=self._sandbox_policy,
         )
         file_kit = FileToolsKit(
             approval_cb=_approval,
             base_working_dir=base_working_dir,
+            sandbox_policy=self._sandbox_policy,
+            writable_roots=get_writable_roots(
+                session_work_dir=self._session_work_dir,
+                agent_work_dir=base_working_dir,
+            ),
         )
 
         tools: list[BaseTool] = []

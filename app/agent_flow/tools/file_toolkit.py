@@ -17,11 +17,9 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
-from platform import system as _platform_system
-from typing import Awaitable, Callable, Literal, Optional, Sequence, TypedDict
+from typing import Awaitable, Callable, Literal, Optional, Sequence
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
@@ -34,7 +32,7 @@ from app.agent_flow.tools.common import (
     get_file_write_lock,
     normalize_line_endings as _normalize_line_endings,
     validate_file_path as _validate_file_path,
-    validate_writable_path as _validate_writable_path,
+    check_writable_path as _check_writable_path,
 )
 from app.agent_flow.tools.shell_toolkit import SUBPROCESS_WINDOW_FLAGS
 from app.config.build_utils import BASE_DIR
@@ -50,7 +48,7 @@ from app.agent_flow.tools.base_abs_tool import BaseToolKit
 logger = logging.getLogger(__name__)
 
 # 审批回调签名：(tool_name, tool_args, content_for_pattern) -> None/"approved"/"rejected"/"timeout"
-ApprovalCallback = Callable[[str, dict, str], Awaitable[Optional[str]]]
+ApprovalCallback = Callable[[str, dict, str, Optional[str]], Awaitable[Optional[str]]]
 
 
 class TextEditInput(BaseModel):
@@ -198,6 +196,7 @@ def _collect_match_lines(raw: str, starts: list[int], max_lines: int = 10) -> li
     """将匹配起始偏移换算为 1-based 行号，最多返回 max_lines 个"""
     return sorted(raw.count("\n", 0, s) + 1 for s in starts[:max_lines])
 
+
 # ---- 描述单源（唯一维护点；tool_info 与 build_tools 共用）----
 FILE_TOOL_DESCRIPTIONS: dict[str, str] = {
     "text_editor": (
@@ -257,14 +256,62 @@ class FileToolsKit(BaseToolKit):
         self,
         approval_cb: ApprovalCallback,
         base_working_dir: Optional[Path],
+        sandbox_policy: str = "off",
+        writable_roots: Optional[list] = None,
     ):
         self._approval = approval_cb
         self._base_working_dir = base_working_dir
+        self._sandbox_policy = sandbox_policy
+        self._writable_roots = writable_roots
 
     async def build_tools(self) -> Sequence[StructuredTool]:
         """构造工具列表（协程仅为与 ShellToolKit.build_tools 签名对齐）"""
         base_working_dir = self._base_working_dir
         _approval = self._approval
+        sandbox_policy = self._sandbox_policy
+        writable_roots = self._writable_roots
+
+        # ---- 写路径三态校验 + 策略分流（三写工具共用）----
+
+        async def _check_write_path(
+            tool_name: str, tool_args: dict, file_path: str
+        ) -> dict:
+            """check_writable_path 三态 → blocked 拒绝 / outside 按策略分流。
+
+            Returns: 放行时返回空 dict；否则返回错误 dict。
+            """
+            verdict, detail = _check_writable_path(file_path, writable_roots)
+            if verdict == "blocked":
+                return {"error": detail, "success": False}
+            if verdict == "outside":
+                if sandbox_policy == "ask":
+                    approval_result = await _approval(
+                        tool_name,
+                        tool_args,
+                        f"[outside_writable_roots] {file_path}",
+                        force_reason=(
+                            "沙箱策略要求审批：写入路径不在可写白名单内"
+                        ),
+                    )
+                    if approval_result in (None, "approved"):
+                        return {}
+                    return {
+                        "error": f"用户未批准写入白名单外路径（{approval_result}）",
+                        "success": False,
+                        "error_type": "approval_rejected",
+                    }
+                if sandbox_policy == "deny":
+                    return {
+                        "error": (
+                            f"路径不在可写白名单内（{detail}），沙箱策略为 deny，已拒绝写入。"
+                            "可写范围：会话工作目录、Agent 工作目录、临时目录，"
+                            "或通过 SANDBOX_WRITABLE_ROOTS 追加；也可将节点策略改为 ask/off。"
+                        ),
+                        "success": False,
+                        "error_type": "outside_writable_roots",
+                    }
+                # off：放行（硬拦截已在 check_writable_path 内完成）
+            return {}
 
         # ---- text_editor ----
 
@@ -292,9 +339,17 @@ class FileToolsKit(BaseToolKit):
                     "error_type": "approval_rejected",
                 }
 
-            is_valid, error_msg = _validate_writable_path(file_path)
-            if not is_valid:
-                return {"error": error_msg, "success": False}
+            check_err = await _check_write_path(
+                "text_editor",
+                {
+                    "file_path": file_path,
+                    "old_string": old_string,
+                    "new_string": new_string,
+                },
+                file_path,
+            )
+            if check_err:
+                return check_err
 
             path = Path(file_path).resolve()
             if not path.exists():
@@ -514,9 +569,11 @@ class FileToolsKit(BaseToolKit):
             if approval_result not in (None, "approved"):
                 return f"用户未批准写入文件（{approval_result}）"
 
-            is_valid, error_msg = _validate_writable_path(file_path)
-            if not is_valid:
-                return f"路径校验失败: {error_msg}"
+            check_err = await _check_write_path(
+                "file_write", {"file_path": file_path}, file_path
+            )
+            if check_err:
+                return check_err.get("error", "路径校验失败")
 
             path = Path(file_path).resolve()
 
@@ -588,9 +645,11 @@ class FileToolsKit(BaseToolKit):
             if approval_result not in (None, "approved"):
                 return f"用户未批准删除文件（{approval_result}）"
 
-            is_valid, error_msg = _validate_writable_path(file_path)
-            if not is_valid:
-                return f"路径校验失败: {error_msg}"
+            check_err = await _check_write_path(
+                "file_delete", {"file_path": file_path}, file_path
+            )
+            if check_err:
+                return check_err.get("error", "路径校验失败")
 
             path = Path(file_path).resolve()
 

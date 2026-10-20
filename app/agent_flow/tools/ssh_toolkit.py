@@ -36,14 +36,14 @@ from paramiko import (
 from pydantic import BaseModel, Field
 
 from app.agent_flow.tool_output_truncate import smart_truncate_output
-from app.agent_flow.tools.shell_toolkit import validate_command
+from app.agent_flow.tools.shell_toolkit import check_command
 
 from app.agent_flow.tools.base_abs_tool import BaseToolKit
 
 logger = logging.getLogger(__name__)
 
 # 审批回调签名：(tool_name, tool_args, content_for_pattern) -> None/"approved"/"rejected"/"timeout"
-ApprovalCallback = Callable[[str, dict, str], Awaitable[Optional[str]]]
+ApprovalCallback = Callable[[str, dict, str, Optional[str]], Awaitable[Optional[str]]]
 
 # 单次列目录返回的最大条目数
 _MAX_LIST_ENTRIES = 500
@@ -394,6 +394,7 @@ class SshToolKit(BaseToolKit):
         transfer_limit_bytes: int,
         resolve_local_source_cb: Callable,
         resolve_local_target_cb: Callable,
+        sandbox_policy: str = "off",
     ):
         self._cfg = cfg
         self._node = node
@@ -401,12 +402,14 @@ class SshToolKit(BaseToolKit):
         self._transfer_limit_bytes = transfer_limit_bytes
         self._resolve_local_source = resolve_local_source_cb
         self._resolve_local_target = resolve_local_target_cb
+        self._sandbox_policy = sandbox_policy
 
     async def build_tools(self) -> Sequence[StructuredTool]:
         cfg = self._cfg
         node = self._node
         _approval = self._approval
         transfer_limit_bytes = self._transfer_limit_bytes
+        sandbox_policy = self._sandbox_policy
 
         # ---- ssh_executor ----
 
@@ -428,17 +431,46 @@ class SshToolKit(BaseToolKit):
                     "error_type": "approval_rejected",
                 }
 
-            # 远端命令同样套用 shell DANGEROUS_PATTERNS 审计：rm -rf /、format、
-            # Format-Volume、dd 写入设备、curl|sh 等危险操作即使在远端也会被直接拒绝。
-            # 2026-09-13 决定：单行校验（多行命令硬拒绝，与 shell_handler.execute_shell
-            # 策略对齐；Linux sh 原生支持多行但禁止放开，避免跨 handler 漂移）。
-            is_valid, error_msg = validate_command(command)
-            if not is_valid:
+            # 远端命令同样套用 shell check_command 三态审计：rm -rf /、format、
+            # Format-Volume、dd 写入设备、curl|sh 等危险操作即使在远端也会被直接拒绝；
+            # opaque 命令（解析器无法判定）按 sandbox_opaque_policy 分流
+            # （2026-09-13 决定：单行校验，多行命令硬拒绝，与 shell_executor 策略对齐）。
+            verdict, detail = check_command(command)
+            if verdict == "blocked":
                 return {
-                    "error": error_msg,
+                    "error": detail,
                     "success": False,
                     "error_type": "blocked_command",
                 }
+            if verdict == "opaque":
+                if sandbox_policy == "ask":
+                    approval_result = await _approval(
+                        "ssh_executor",
+                        {"command": command, "timeout": timeout},
+                        f"[opaque:{detail}] {command}",
+                        force_reason=(
+                            f"沙箱策略要求审批：命令解析器无法判定安全性（{detail}）"
+                        ),
+                    )
+                    if approval_result not in (None, "approved"):
+                        return {
+                            "error": (
+                                f"用户未批准执行远程命令（{approval_result}）。"
+                                "如需继续，请征得用户同意后重新调用。"
+                            ),
+                            "success": False,
+                            "error_type": "approval_rejected",
+                        }
+                elif sandbox_policy == "deny":
+                    return {
+                        "error": (
+                            f"命令解析器无法判定安全性（{detail}），沙箱策略为 deny，已拒绝执行。"
+                            "请改写为结构简单的单行命令，或在节点配置中将策略改为 ask/off。"
+                        ),
+                        "success": False,
+                        "error_type": "opaque_command_denied",
+                    }
+                # off：放行（黑名单正则已在 check_command 内整串兜底扫描）
 
             effective_timeout = timeout or cfg.command_timeout
 

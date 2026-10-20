@@ -88,6 +88,9 @@ class SshNodeHandler(BaseNodeHandler):
 
     # 由 llm_tool_executor 仅对 Agent 类型注入，用作下载默认目录
     _working_dir: Optional[Path] = None
+    # 沙箱 opaque 策略（ask/deny/off，由 llm_tool_executor 按 LLM 节点配置+运行域注入；
+    # 默认 off=维持旧行为，仅 Agent 会话 auto 解析为 ask）
+    _sandbox_policy: str = "off"
 
     # 注：_writer / _session_id / _compiled_patterns / _resolve_context /
     # _ensure_patterns_compiled / _request_tool_approval 已下沉到 BaseNodeHandler，
@@ -173,8 +176,15 @@ class SshNodeHandler(BaseNodeHandler):
         cfg: SshNodeConfig = self._get_config(node)
         transfer_limit_bytes = min(MAX_FILE_SIZE, cfg.max_transfer_mb * 1024 * 1024)
 
-        def _approval(tool_name: str, tool_args: dict, content: str = ""):
+        def _approval(
+            tool_name: str,
+            tool_args: dict,
+            content: str = "",
+            force_reason: Optional[str] = None,
+        ):
             """工具审批统一入口（闭包固定 cfg / node_key，对齐 shell/browser 模式）。
+
+            force_reason 非空时强制走审批（沙箱 opaque 场景）。
 
             Returns: None（未命中审批条件，放行）/ "approved" / "rejected" / "timeout"。
             """
@@ -184,6 +194,7 @@ class SshNodeHandler(BaseNodeHandler):
                 cfg=cfg,
                 content_for_pattern=content,
                 node_key=node.node_key,
+                force_reason=force_reason,
             )
 
         kit = SshToolKit(
@@ -193,6 +204,7 @@ class SshNodeHandler(BaseNodeHandler):
             transfer_limit_bytes=transfer_limit_bytes,
             resolve_local_source_cb=self._resolve_local_source,
             resolve_local_target_cb=self._resolve_local_target,
+            sandbox_policy=self._sandbox_policy,
         )
         return list(await kit.build_tools())
 

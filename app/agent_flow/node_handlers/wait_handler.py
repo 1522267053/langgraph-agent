@@ -15,7 +15,7 @@ from typing import Optional
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from app.agent_flow.flow_context import FlowState
 from app.agent_flow.handler_registry import NodeHandlerRegistry

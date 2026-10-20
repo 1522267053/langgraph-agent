@@ -7,8 +7,10 @@
 """
 
 import asyncio
+import os
 import re
 from pathlib import Path
+from typing import Optional
 
 from app.config.build_utils import BASE_DIR
 
@@ -57,6 +59,45 @@ FORBIDDEN_PATH_PATTERNS = [
     r"/lib64/",
 ]
 
+# 家目录敏感子目录（不分域硬拦截，对齐 openclaw BLOCKED_HOME_SUBPATHS：
+# 凭据/密钥/容器配置目录即使 writable_roots 白名单覆盖也不可写）
+SENSITIVE_HOME_SUBDIRS = [
+    ".ssh",
+    ".aws",
+    ".docker",
+    ".gnupg",
+    ".netrc",
+    ".kube",
+    ".config/gcloud",
+]
+
+
+def _sensitive_home_path_error(path: Path) -> Optional[str]:
+    """检测路径是否命中家目录敏感子目录（Windows 与 POSIX 家目录均覆盖）。
+
+    Returns: 命中返回错误消息，否则 None。
+    """
+    home_roots = []
+    for env_key in ("USERPROFILE", "HOME"):
+        val = os.environ.get(env_key)
+        if val:
+            try:
+                home_roots.append(Path(val).resolve())
+            except (OSError, RuntimeError):
+                continue
+    for home in home_roots:
+        try:
+            if path == home or path.is_relative_to(home):
+                rel = path.relative_to(home)
+                rel_posix = rel.as_posix().lower()
+                for sub in SENSITIVE_HOME_SUBDIRS:
+                    sub_norm = sub.lower()
+                    if rel_posix == sub_norm or rel_posix.startswith(sub_norm + "/"):
+                        return f"不允许访问家目录敏感路径: {path}"
+        except (OSError, ValueError):
+            continue
+    return None
+
 
 def validate_file_path(file_path: str) -> tuple[bool, str]:
     """校验文件路径是否安全
@@ -81,25 +122,75 @@ def validate_file_path(file_path: str) -> tuple[bool, str]:
     return True, ""
 
 
-def validate_writable_path(file_path: str) -> tuple[bool, str]:
-    """校验文件写入路径是否安全
+def check_writable_path(
+    file_path: str,
+    writable_roots: Optional[list] = None,
+) -> tuple[str, str]:
+    """写入路径安全检查（三态，唯一真源；validate_writable_path 的超集）
 
-    在通用路径校验基础上，额外禁止写入项目数据目录（data/ 下存放数据库、向量库等）。
-    读取操作不受此限制。
+    检查顺序（硬拦截优先于白名单判定）：
+    1. 通用路径校验（系统路径/穿越）→ blocked
+    2. data/ 数据目录 → blocked
+    3. 家目录敏感子目录（.ssh/.aws/...，不分域）→ blocked
+    4. writable_roots 提供时：白名单外 → outside（调用方按策略 ask/deny/off）
+       writable_roots 为 None 时：不做白名单判定（兼容旧行为）→ allowed
 
     Returns:
-        (是否安全, 错误消息)
+        (verdict, detail)：verdict ∈ "allowed" | "blocked" | "outside"
+        - blocked: 硬拦截，detail 为错误消息（任何策略下都拒绝）
+        - outside: 白名单外（仅 writable_roots 提供时出现），调用方按策略分流
+        - allowed: 通过
     """
     is_valid, error_msg = validate_file_path(file_path)
     if not is_valid:
-        return False, error_msg
+        return "blocked", error_msg
 
     path = Path(file_path).resolve()
     data_dir = (BASE_DIR / "data").resolve()
     if path.is_relative_to(data_dir):
-        return False, f"不允许写入数据目录: {path}"
+        return "blocked", f"不允许写入数据目录: {path}"
 
+    sensitive_err = _sensitive_home_path_error(path)
+    if sensitive_err:
+        return "blocked", sensitive_err
+
+    if writable_roots is not None and not is_path_in_writable_roots(
+        path, writable_roots
+    ):
+        return "outside", str(path)
+
+    return "allowed", ""
+
+
+def validate_writable_path(file_path: str) -> tuple[bool, str]:
+    """校验文件写入路径是否安全（二态兼容包装，旧调用方语义不变）
+
+    在通用路径校验基础上，额外禁止写入项目数据目录（data/ 下存放数据库、
+    向量库等）。读取操作不受此限制。新调用方应使用 check_writable_path。
+
+    Returns:
+        (是否安全, 错误消息)
+    """
+    verdict, error_msg = check_writable_path(file_path)
+    if verdict == "blocked":
+        return False, error_msg
     return True, ""
+
+
+def is_path_in_writable_roots(path: Path, writable_roots: list) -> bool:
+    """判断路径是否位于任一可写根内（含根自身）。
+
+    放在 common.py（而非 sandbox_policy.py）：file_toolkit/python_handler 等
+    多个 tools 模块都要用，tools 之间禁止互引，共享原语统一进 common.py。
+    """
+    try:
+        resolved = Path(path).resolve()
+    except (OSError, RuntimeError):
+        return False
+    return any(
+        resolved == root or resolved.is_relative_to(Path(root))
+        for root in writable_roots
+    )
 
 
 def has_utf16_bom(sample: bytes) -> bool:

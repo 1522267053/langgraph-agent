@@ -398,7 +398,7 @@ class KnowledgeToolKit(BaseToolKit):
                             item_score is not None and item_score > current_score
                         ):
                             insight_score_map[segment_id] = item_score
-                insight_method_map:dict[int, str | None] = {
+                insight_method_map: dict[int, str | None] = {
                     segment_id: "insight" for segment_id in insight_segment_ids
                 }
                 insight_references = (

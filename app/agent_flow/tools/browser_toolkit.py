@@ -32,6 +32,7 @@ from app.agent_flow.execution_context import get_execution_context
 from app.agent_flow.tools.base_abs_tool import BaseToolKit
 from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.config.build_utils import get_temp_dir
+
 if TYPE_CHECKING:
     from app.agent_flow.node_handlers.browser_handler import BrowserNodeConfig
 
@@ -134,7 +135,11 @@ def _cdp_wheel_scroll(tab, selector: str, delta: int) -> dict:
         remaining = abs(delta)
         step = _WHEEL_CHUNK if delta > 0 else -_WHEEL_CHUNK
         while remaining > 0:
-            d = step if remaining >= _WHEEL_CHUNK else (remaining if delta > 0 else -remaining)
+            d = (
+                step
+                if remaining >= _WHEEL_CHUNK
+                else (remaining if delta > 0 else -remaining)
+            )
             tab.run_cdp(
                 "Input.dispatchMouseEvent",
                 type="mouseWheel",
@@ -800,8 +805,7 @@ class UploadInput(BaseModel):
     files: str = Field(
         ...,
         description=(
-            "要上传的文件绝对路径（运行浏览器的主机本地路径），"
-            "多个文件用换行或逗号分隔"
+            "要上传的文件绝对路径（运行浏览器的主机本地路径），多个文件用换行或逗号分隔"
         ),
     )
     tab_id: Optional[str] = Field(
@@ -1068,7 +1072,9 @@ class BrowserSessionManager:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
 
-    def _create_session_sync(self, cfg:"BrowserNodeConfig", flow_id: int) -> BrowserSession:
+    def _create_session_sync(
+        self, cfg: "BrowserNodeConfig", flow_id: int
+    ) -> BrowserSession:
         from DrissionPage import Chromium, ChromiumOptions
 
         if cfg.connect_mode == "remote":
@@ -1240,7 +1246,7 @@ def _find_tab_by_ref(session: "BrowserSession", tab_id) -> Optional["MixTab"]:
     """
     if tab_id is None or tab_id == "":
         return None
-    browser:Chromium = session.browser
+    browser: Chromium = session.browser
     tabs = browser.get_tabs()
     for t in tabs:
         try:
@@ -1264,7 +1270,7 @@ def _resolve_tab(session: "BrowserSession", tab_id: Optional[str]) -> Optional[M
     （由调用方报错）。LLM 可直接传 snapshot/browser_tabs 返回的 tab_id
     操作指定标签页，无需先 browser_tabs(select)。
     """
-    browser:Chromium = session.browser
+    browser: Chromium = session.browser
     tabs = browser.get_tabs()
     if tab_id is None or tab_id == "":
         return session.active_tab or (tabs[-1] if tabs else None)
@@ -1493,7 +1499,7 @@ class BrowserToolKit(BaseToolKit):
                         )
                         if not ele:
                             return {"error": f"未找到元素: {raw}", "success": False}
-                        if isinstance(ele,ChromiumElement):
+                        if isinstance(ele, ChromiumElement):
                             ele.click()
 
                     result = {
@@ -1576,7 +1582,7 @@ class BrowserToolKit(BaseToolKit):
                         )
                         if not ele:
                             return {"error": f"未找到元素: {raw}", "success": False}
-                        if isinstance(ele,ChromiumElement):
+                        if isinstance(ele, ChromiumElement):
                             ele.clear() if clear else None
                             ele.input(text)
                     return {
@@ -1612,7 +1618,9 @@ class BrowserToolKit(BaseToolKit):
                             "success": False,
                         }
                     # 路径校验前置：任一不存在则整体拒绝（不部分提交）
-                    paths = [str(Path(p).absolute()) for p in _split_upload_paths(files)]
+                    paths = [
+                        str(Path(p).absolute()) for p in _split_upload_paths(files)
+                    ]
                     if not paths:
                         return {
                             "error": "files 为空：请传文件绝对路径（多个用换行或逗号分隔）",
@@ -1720,7 +1728,7 @@ class BrowserToolKit(BaseToolKit):
             try:
                 session = await _get_session()
 
-                def run() -> dict[str,Any] | str | bytes:
+                def run() -> dict[str, Any] | str | bytes:
                     tab = _resolve_tab(session, tab_id)
                     if tab is None:
                         return {
@@ -1775,7 +1783,7 @@ class BrowserToolKit(BaseToolKit):
                         "success": False,
                         "error_type": "screenshot_timeout",
                     }
-                if not isinstance(png,bytes):
+                if not isinstance(png, bytes):
                     raise RuntimeError("png不是bytes类型")
                 media = await save_media_bytes(
                     png,
@@ -1981,7 +1989,12 @@ class BrowserToolKit(BaseToolKit):
         ) -> str | dict:
             approval = await _approval(
                 "browser_scroll",
-                {"direction": direction, "amount": amount, "selector": selector, "tab_id": tab_id},
+                {
+                    "direction": direction,
+                    "amount": amount,
+                    "selector": selector,
+                    "tab_id": tab_id,
+                },
                 "",
             )
             if approval not in (None, "approved"):

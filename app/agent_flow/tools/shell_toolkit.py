@@ -30,7 +30,6 @@ from typing import Awaitable, Callable, Literal, Optional, Sequence, TypedDict
 from platform import system as _platform_system
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
-from sqlalchemy import Boolean
 
 from app.agent_flow.tool_output_truncate import smart_truncate_output
 from app.constants.timing import SHELL_TASK_EXPIRE_SECONDS
@@ -41,7 +40,7 @@ from app.agent_flow.tools.base_abs_tool import BaseToolKit
 logger = logging.getLogger(__name__)
 
 # 审批回调签名：(tool_name, tool_args, content_for_pattern) -> None/"approved"/"rejected"/"timeout"
-ApprovalCallback = Callable[[str, dict, str], Awaitable[Optional[str]]]
+ApprovalCallback = Callable[[str, dict, str, Optional[str]], Awaitable[Optional[str]]]
 
 
 class ShellToolInput(BaseModel):
@@ -291,9 +290,57 @@ def _command_targets_data(command: str) -> bool:
     return "langgraph_agent.db" in command
 
 
-def validate_command(command: str) -> tuple[bool, str]:
+def check_command(command: str) -> tuple[str, str]:
+    """命令安全检查（三态，唯一真源；validate_command 的超集）
+
+    流程：结构化解析（shell_command_parser）→ 按子命令匹配黑名单 →
+    整串正则兜底二次扫描 → DB 文件只读保护。
+
+    Returns:
+        (verdict, detail)：verdict ∈ "valid" | "blocked" | "opaque"
+        - valid: 通过全部检查，detail 为空
+        - blocked: 命中黑名单/危险模式/DB 写保护，detail 为错误消息
+        - opaque: 解析器无法判定安全性（命令替换/复合结构/动态执行等），
+          detail 为 opaque 原因——调用方按 sandbox_opaque_policy 分流
+          （ask/deny/off），**不得静默放行或静默拒绝**
     """
-    验证命令是否安全
+    from app.agent_flow.tools.shell_command_parser import scan_command
+
+    scan = scan_command(command)
+
+    # 整串正则兜底扫描（两态均做：黑名单对 scanned 与 opaque 一视同仁，
+    # 保证危险命令即使解析失败也先被硬拦截）
+    for pattern in DANGEROUS_PATTERNS:
+        if re.search(pattern, command, re.IGNORECASE):
+            return "blocked", f"命令包含危险操作: {pattern}"
+
+    if scan.kind == "opaque":
+        return "opaque", scan.opaque_reason or "unknown"
+
+    # scanned：按子命令粒度匹配禁止列表（首词精确比对，覆盖链式调用）
+    for parsed in scan.commands:
+        base_cmd = parsed.base_cmd
+        if base_cmd in BLOCKED_COMMANDS:
+            return "blocked", f"命令 '{base_cmd}' 在禁止列表中"
+
+    # DB 文件只读保护（保留原逻辑：命令引用数据库文件时仅允许只读命令）
+    if _command_targets_data(command):
+        allowed = all(
+            parsed.base_cmd in DATA_READONLY_COMMANDS for parsed in scan.commands
+        )
+        if not allowed:
+            return "blocked", (
+                f"不允许对数据目录执行写操作（仅支持查看），命令: {command}"
+            )
+
+    return "valid", ""
+
+
+def validate_command(command: str) -> tuple[bool, str]:
+    """验证命令是否安全（二态兼容包装，旧调用方语义不变）
+
+    旧语义：opaque 视为通过（正则黑名单仍整串生效）。
+    新调用方（shell/ssh 工具闭包）应使用 check_command 三态接口。
 
     Args:
         command: 要执行的命令
@@ -301,26 +348,9 @@ def validate_command(command: str) -> tuple[bool, str]:
     Returns:
         (是否安全, 错误消息)
     """
-    for pattern in DANGEROUS_PATTERNS:
-        if re.search(pattern, command, re.IGNORECASE):
-            return False, f"命令包含危险操作: {pattern}"
-
-    first_word = command.strip().split()[0] if command.strip() else ""
-    if first_word:
-        base_cmd = first_word.split("/")[-1].split("\\")[-1]
-        # 剥离 .exe 后缀后比对（如 powershell.exe），防止带后缀写法绕过禁止列表
-        if base_cmd.lower().endswith(".exe"):
-            base_cmd = base_cmd[:-4]
-        if base_cmd in BLOCKED_COMMANDS:
-            return False, f"命令 '{base_cmd}' 在禁止列表中"
-
-    if _command_targets_data(command):
-        base_cmd = first_word.split("/")[-1].split("\\")[-1]
-        if base_cmd.lower().endswith(".exe"):
-            base_cmd = base_cmd[:-4]
-        if base_cmd not in DATA_READONLY_COMMANDS:
-            return False, f"不允许对数据目录执行写操作（仅支持查看），命令: {command}"
-
+    verdict, detail = check_command(command)
+    if verdict == "blocked":
+        return False, detail
     return True, ""
 
 
@@ -398,16 +428,20 @@ def _decode_output(data: bytes) -> str:
 # 代价与对策：cmd 会把换行符当命令分隔符导致截断丢输出——已在 execute_shell
 # 入口硬性拒绝含换行的命令并提示改写为单行。
 
+
 # Windows 下禁止为控制台程序新建窗口（GUI/托盘宿主无控制台时子进程默认弹黑框）；
 # 仅影响控制台创建方式，stdout/stderr 管道捕获不受影响。POSIX 该参数必须缺省。
 class _WindowFlags(TypedDict, total=False):
     creationflags: int
+
+
 # Windows 下禁止为控制台程序新建窗口（ripgrep 子进程用）；POSIX 必须缺省
-SUBPROCESS_WINDOW_FLAGS:_WindowFlags = (
+SUBPROCESS_WINDOW_FLAGS: _WindowFlags = (
     {"creationflags": subprocess.CREATE_NO_WINDOW}
     if _platform_system() == "Windows"
     else {}
 )
+
 
 # POSIX 下为子进程创建独立会话（等价 setsid）：子进程成为独立进程组长，
 # 超时/取消时 os.killpg 只清杀命令树，不会误伤后端自身所在进程组。
@@ -415,7 +449,9 @@ SUBPROCESS_WINDOW_FLAGS:_WindowFlags = (
 # Windows 无此参数（POSIX-only），必须缺省。
 class _SessionFlags(TypedDict, total=False):
     start_new_session: bool
-SUBPROCESS_SESSION_FLAGS:_SessionFlags = (
+
+
+SUBPROCESS_SESSION_FLAGS: _SessionFlags = (
     {} if platform.system() == "Windows" else {"start_new_session": True}
 )
 
@@ -870,8 +906,8 @@ async def _force_kill_process_tree(process: asyncio.subprocess.Process) -> None:
 
             # 防御兜底：仅当子进程拥有独立进程组（start_new_session）时才整组清杀；
             # 若与后端自身同组，killpg 会连 uvicorn 一起 SIGKILL，必须退回单杀
-            pgid = os.getpgid(pid) # type: ignore
-            if pgid != os.getpgid(0): # type: ignore
+            pgid = os.getpgid(pid)  # type: ignore
+            if pgid != os.getpgid(0):  # type: ignore
                 os.killpg(pgid, signal.SIGKILL)  # type: ignore
             else:
                 process.kill()
@@ -974,6 +1010,7 @@ class ShellToolKit(BaseToolKit):
         async_wait: int,
         system_info: str,
         resolve_workdir: Optional[Callable] = None,
+        sandbox_policy: str = "off",
     ):
         self._cfg = cfg
         self._node_key = node_key
@@ -983,6 +1020,7 @@ class ShellToolKit(BaseToolKit):
         self._async_wait = async_wait
         self._system_info = system_info
         self._resolve_workdir = resolve_workdir
+        self._sandbox_policy = sandbox_policy
 
     async def build_tools(self) -> Sequence[StructuredTool]:
         """构造工具列表。resolve_workdir(workdir, default_dir) 由 handler 注入
@@ -994,6 +1032,47 @@ class ShellToolKit(BaseToolKit):
         cfg = self._cfg
         _approval = self._approval
         resolve_workdir = self._resolve_workdir
+        sandbox_policy = self._sandbox_policy
+
+        # ---- opaque 策略分流（check_command 三态 → ask/deny/off）----
+
+        async def _handle_opaque(
+            command: str, reason: str, tool_name: str, tool_args: dict
+        ) -> dict:
+            """opaque 命令按策略分流：ask 走审批回调，deny/off 返回错误。
+
+            Returns: 放行时返回空 dict（调用方继续执行）；否则返回错误 dict。
+            """
+            if sandbox_policy == "ask":
+                approval_result = await _approval(
+                    tool_name,
+                    tool_args,
+                    f"[opaque:{reason}] {command}",
+                    force_reason=(
+                        f"沙箱策略要求审批：命令解析器无法判定安全性（{reason}）"
+                    ),
+                )
+                if approval_result in (None, "approved"):
+                    return {}
+                return {
+                    "error": (
+                        f"用户未批准执行命令（{approval_result}）。"
+                        "如需继续，请征得用户同意后重新调用。"
+                    ),
+                    "success": False,
+                    "error_type": "approval_rejected",
+                }
+            # deny / off（off 仅出现在显式配置；默认 auto 在 Agent 已解析为 ask）
+            if sandbox_policy == "deny":
+                return {
+                    "error": (
+                        f"命令解析器无法判定安全性（{reason}），沙箱策略为 deny，已拒绝执行。"
+                        "请改写为结构简单的单行命令，或在节点配置中将策略改为 ask/off。"
+                    ),
+                    "success": False,
+                    "error_type": "opaque_command_denied",
+                }
+            return {}
 
         # ---- shell_executor ----
 
@@ -1028,13 +1107,22 @@ class ShellToolKit(BaseToolKit):
                     "error_type": "multiline_command",
                 }
 
-            is_valid, error_msg = validate_command(command)
-            if not is_valid:
+            verdict, detail = check_command(command)
+            if verdict == "blocked":
                 return {
-                    "error": error_msg,
+                    "error": detail,
                     "success": False,
                     "error_type": "blocked_command",
                 }
+            if verdict == "opaque":
+                opaque_result = await _handle_opaque(
+                    command,
+                    detail,
+                    "shell_executor",
+                    {"command": command, "workdir": workdir},
+                )
+                if opaque_result:
+                    return opaque_result
 
             try:
                 if resolve_workdir is None:

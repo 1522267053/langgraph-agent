@@ -158,7 +158,11 @@ async def _resolve_session_work_dir(
 
 
 def _build_providers_of_node(
-    tool_node, handler_registry: dict, writer=None, session_id: int = 0, execution_id: int = 0
+    tool_node,
+    handler_registry: dict,
+    writer=None,
+    session_id: int = 0,
+    execution_id: int = 0,
 ) -> list:
     """构建单个工具节点的延迟域 provider 列表（族内粒度由 handler 决定）
 
@@ -173,7 +177,10 @@ def _build_providers_of_node(
     try:
         return (
             node_handler.get_providers(
-                tool_node, writer=writer, session_id=session_id, execution_id=execution_id
+                tool_node,
+                writer=writer,
+                session_id=session_id,
+                execution_id=execution_id,
             )
             or []
         )
@@ -321,6 +328,18 @@ async def setup_tool_handlers(
             )
             capabilities = (node.base_config or {}).get("capabilities") or {}
             handler._media_caps = get_injectable_media_types(capabilities, adapter)
+
+        # 注入 _sandbox_policy（沙箱 opaque 策略，来自 LLM 节点配置，经
+        # sandbox_policy.resolve_opaque_policy 按运行域解析为 ask/deny/off；
+        # shell/ssh/file 工具闭包读取，opaque 命令与越界写入按策略分流）
+        if hasattr(handler, "_sandbox_policy"):
+            from app.agent_flow.tools.sandbox_policy import resolve_opaque_policy
+
+            handler._sandbox_policy = resolve_opaque_policy(
+                getattr(cfg, "sandbox_opaque_policy", None),
+                session_id,
+                execution_id,
+            )
 
         # 注入 writer、resolve_context、llm_config
         if hasattr(handler, "_writer"):

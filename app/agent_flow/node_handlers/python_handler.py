@@ -233,7 +233,7 @@ def _build_restricted_globals():
 
         if name in builtins.__dict__ and name not in custom_builtins:
             custom_builtins[name] = builtins.__dict__[name]
-    custom_builtins["open"] = open
+    custom_builtins["open"] = _sandbox_open
     custom_builtins["__import__"] = _safe_import
     return {
         "__builtins__": custom_builtins,
@@ -246,6 +246,28 @@ def _build_restricted_globals():
         "_unpack_sequence_": guarded_unpack_sequence,
         "__name__": "__main__",
     }
+
+
+def _sandbox_open(file, mode="r", *args, **kwargs):
+    """沙箱内 open 的写路径收口：写模式（w/a/x/+）路径必须落在可写白名单内。
+
+    读模式不限制（与 file_read 工具同语义：读放宽、写收紧）。
+    白名单 = 会话/Agent 工作目录 + temp + SANDBOX_WRITABLE_ROOTS（sandbox_policy）；
+    家目录敏感子目录与系统路径硬拦截（check_writable_path 内置，白名单不可覆盖）。
+    """
+    if any(m in str(mode) for m in ("w", "a", "x", "+")):
+        from app.agent_flow.tools.common import check_writable_path
+        from app.agent_flow.tools.sandbox_policy import get_writable_roots
+
+        verdict, detail = check_writable_path(str(file), get_writable_roots())
+        if verdict == "blocked":
+            raise PermissionError(detail)
+        if verdict == "outside":
+            raise PermissionError(
+                f"路径不在可写白名单内: {detail}（可写范围：会话工作目录、"
+                "Agent 工作目录、临时目录，或通过 SANDBOX_WRITABLE_ROOTS 追加）"
+            )
+    return open(file, mode, *args, **kwargs)
 
 
 _TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")

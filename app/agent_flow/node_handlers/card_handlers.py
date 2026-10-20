@@ -10,7 +10,6 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import StreamWriter

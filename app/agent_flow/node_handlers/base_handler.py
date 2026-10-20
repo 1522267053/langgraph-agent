@@ -425,6 +425,7 @@ class BaseNodeHandler(ABC):
         cfg: BaseNodeConfig,
         content_for_pattern: str,
         node_key: str,
+        force_reason: Optional[str] = None,
     ) -> Optional[str]:
         """工具审批统一钩子：白名单 + 正则 → request approval。
 
@@ -433,6 +434,12 @@ class BaseNodeHandler(ABC):
             approval_result = await self._check_and_request_approval(...)
             if approval_result not in (None, "approved"):
                 return {"error": "用户未批准...", "success": False}
+
+        Args:
+            force_reason: 非空时跳过白名单/正则命中判断，**强制走审批**
+                （沙箱 opaque 命令/白名单外写入场景：策略 ask 要求弹窗，
+                但节点未配置 approval_required_*，命中判断会直接放行——
+                命中语义与强制审批语义必须分开）。免审授权仍生效。
 
         Returns:
             None：未命中审批条件（继续执行工具）；
@@ -448,24 +455,39 @@ class BaseNodeHandler(ABC):
         if self._session_id <= 0 and self._execution_id <= 0:
             return None
 
-        approval_tools = list(getattr(cfg, "approval_required_tools", []) or [])
-        approval_patterns = list(getattr(cfg, "approval_required_patterns", []) or [])
+        if force_reason:
+            # 强制审批：跳过命中判断，reason 直接采用 force_reason
+            hit_tool = False
+            hit_pattern = False
+            matched_pattern: Optional[str] = None
+            approval_reason = force_reason
+        else:
+            approval_tools = list(getattr(cfg, "approval_required_tools", []) or [])
+            approval_patterns = list(getattr(cfg, "approval_required_patterns", []) or [])
 
-        # 1) 工具名白名单命中
-        hit_tool = tool_name in approval_tools
-        # 2) 命令/内容正则命中（content_for_pattern 为空时跳过正则，避免误命中）
-        hit_pattern = False
-        matched_pattern: Optional[str] = None
-        if content_for_pattern and approval_patterns:
-            compiled = self._ensure_patterns_compiled(approval_patterns)
-            for i, p in enumerate(compiled):
-                if p.search(content_for_pattern):
-                    hit_pattern = True
-                    matched_pattern = approval_patterns[i]
-                    break
+            # 1) 工具名白名单命中
+            hit_tool = tool_name in approval_tools
+            # 2) 命令/内容正则命中（content_for_pattern 为空时跳过正则，避免误命中）
+            hit_pattern = False
+            matched_pattern = None
+            if content_for_pattern and approval_patterns:
+                compiled = self._ensure_patterns_compiled(approval_patterns)
+                for i, p in enumerate(compiled):
+                    if p.search(content_for_pattern):
+                        hit_pattern = True
+                        matched_pattern = approval_patterns[i]
+                        break
 
-        if not (hit_tool or hit_pattern):
-            return None
+            if not (hit_tool or hit_pattern):
+                return None
+
+            # 拼装审批原因（reason），前端 ToolApprovalEvent 直接展示
+            reason_parts: list[str] = []
+            if hit_tool:
+                reason_parts.append("工具已配置为需审批")
+            if hit_pattern and matched_pattern is not None:
+                reason_parts.append(f"命令匹配危险模式: {matched_pattern}")
+            approval_reason = "; ".join(reason_parts) or None
 
         # 3) 免审授权命中：用户曾对该工具选「批准并记住」→ 直接放行。
         # 查询失败按未授权处理（fail-closed，不因授权表异常扩大放行面）
@@ -480,14 +502,6 @@ class BaseNodeHandler(ABC):
                 return "approved"
         except Exception as e:
             logger.warning("免审授权查询失败，按需审批处理: %s", e)
-
-        # 拼装审批原因（reason），前端 ToolApprovalEvent 直接展示
-        reason_parts: list[str] = []
-        if hit_tool:
-            reason_parts.append("工具已配置为需审批")
-        if hit_pattern and matched_pattern is not None:
-            reason_parts.append(f"命令匹配危险模式: {matched_pattern}")
-        approval_reason = "; ".join(reason_parts) or None
 
         # 4) 模式分流：Flow 与 Agent 统一走 tool_approval_service（future 等待）。
         # Flow 曾用 LangGraph interrupt 路线，但 interrupt 会暂停整张图并在
