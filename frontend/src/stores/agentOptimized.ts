@@ -1393,15 +1393,21 @@ export const useAgentStore = defineStore('agent', () => {
 
     // ---- 占位行识别：本地尾部连续的流式临时行 ----
     // 占位行与 DB 组对齐（reattach）后会被回填 dbMsgId（组首 id）并保留
-    // streaming- 前缀 id。此时它仍是「活跃流式行」（SSE 增量持续写入），
-    // 必须继续按占位行参与后续对齐——否则 loadMore 前插历史触发重建时，
+    // streaming- 前缀 id。本轮流式中（preserveStreaming）它仍是活跃行（SSE 增量
+    // 持续写入），必须继续按占位行参与后续对齐——否则 loadMore 前插历史触发重建时，
     // 该行在 rebuilt 中无对应组（其 dbMsgId 组已与前插行合并、组首已变），
     // 落入「窗口外旧行」守卫被静默丢弃 → 运行中工具/实时段整体消失。
-    // 仅流式中（preserveStreaming）放宽：终态重建（preserve=false）仍按
-    // dbMsgId==null 判定，结束路径的占位行必须被 DB 行替换（防快照滞留）。
+    // 放宽必须限定 dbMsgId > streamBaseMsgId（本轮起点）：此前轮次的 streaming-
+    // 行在其 flow_done 合并时同样回填了 dbMsgId 但 id ≤ 基线，若一并放宽会被
+    // 尾部扫描误认作占位行 → 对齐无候选 → 走 trailingAiPlaceholders 被推到列表
+    // 末尾（整条历史 AI 回复跳到最新消息之后，实测回归）。
+    // 终态重建（preserve=false）不放宽：结束路径的占位行必须被 DB 行替换。
     const isActivePlaceholder = (m: StreamingMessage): boolean =>
       (m.dbMsgId == null ||
-        (preserveStreaming && m.id.startsWith('streaming-') && m.dbMsgId != null)) &&
+        (preserveStreaming &&
+          m.id.startsWith('streaming-') &&
+          m.dbMsgId != null &&
+          m.dbMsgId > streamBaseMsgId)) &&
       (m.id.startsWith('user-') || m.id.startsWith('streaming-'))
     const isPlaceholder = (m: StreamingMessage | undefined): boolean =>
       !!m && isActivePlaceholder(m)
