@@ -35,6 +35,7 @@ description: 通过 API 创建、配置、调试和维护 Agent 或 Workflow。�
 | 让 Agent 在运行时修改自身 | [运行时自更新](references/runtime-self-update.md) |
 | Flow 作为 Agent 工具（含 interrupt/审批） | [Workflow as Tool](references/workflow-as-tool.md) |
 | 工具审批（shell/ssh/python/api/mcp/browser 危险操作） | [工具审批](references/tool-approval.md) |
+| Shell 软件层沙箱（策略配置/命令三态/写路径白名单/重定向校验） | [Shell 沙箱](references/shell-sandbox.md) |
 
 ## 选择类型
 
@@ -220,6 +221,10 @@ LLM 节点开启 `json_output_enabled: true` 后绑定 `structured_output` 虚�
 - `approval_required_patterns`：对"内容字符串"做正则匹配，命中即触发
 
 **Agent 与 Flow 两种模式均生效**（2026-10-18 起）：Agent 走 SSE 审批弹窗，Flow 走 interrupt 暂停（复用 waiting_human 机制，执行落库等待，前端 Flow 页审批弹窗恢复）。审批弹窗均提供「批准并记住」（同域同工具免审：Agent 会话级 / Flow 执行级）。python/api 作为 Flow 主干直执行时同样受审批约束（`_check_direct_execution_approval`）。
+
+除上述**节点显式配置**的审批外，shell/file 写入还受**软件层沙箱**策略约束（LLM 节点 `sandbox_opaque_policy` 字段：opaque 命令与白名单外写入按策略审批/拒绝/放行，默认 auto=Agent 弹窗 / Flow 不拦截但黑名单仍生效）：
+
+→ 沙箱详见 [Shell 沙箱](references/shell-sandbox.md)
 
 配置各节点的运行时工具名格式、内容匹配语义、正则匹配 4 层设计、前端方案 C 工具名下拉、双模式分流与免审授权、基类 `_check_and_request_approval` 实现：
 

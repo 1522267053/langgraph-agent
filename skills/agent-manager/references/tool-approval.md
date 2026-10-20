@@ -118,6 +118,16 @@ LLM 调用工具时使用的是 `name` 字段（不是节点的 `node_key`）。
 
 慢兄弟兜底：窗口关闭后才进锁的工具走 JOIN 分支重发全量事件（前端弹窗刷新）。
 
+## 沙箱策略层（独立于 approval_required_*）
+
+除节点显式配置的审批字段外，shell/file 写入还受**软件层沙箱**约束（2026-10-20 起）：
+LLM 节点 `sandbox_opaque_policy` 字段（auto/ask/deny/off，默认 auto=Agent 弹审批 /
+Flow 不拦截但黑名单仍生效）控制 opaque 命令与白名单外写入的分流；写路径决策唯一
+真源 `common.decide_writable_path`，file 工具与 shell 重定向共用；系统路径写入用
+独立授权键 `{tool}#system_path`，与本文的普通「批准并记住」授权相互隔离。
+
+→ 详见 [Shell 沙箱](shell-sandbox.md)
+
 ## 免审授权（「批准并记住」）
 
 审批弹窗提供三按钮：**拒绝 / 批准并记住 / 批准**。

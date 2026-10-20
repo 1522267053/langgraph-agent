@@ -146,6 +146,7 @@ API 节点的请求体里嵌入上游变量：
 | `max_tool_iterations` | 单轮最大工具调用轮次 |
 | `compress_extra_prompt` | 自动压缩上下文时追加的提示词；空则仅使用默认提示词（Agent 模式下对话占用超过 `context_length × 80%` 自动触发压缩） |
 | `approval_required_tools` | Agent 模式下执行前需要审批的完整工具名列表；空列表表示关闭审批 |
+| `sandbox_opaque_policy` | Shell 软件层沙箱策略：`auto`（默认，Agent=弹审批 / Flow=不拦截但黑名单仍生效）/ `ask` / `deny` / `off`，见 [Shell 沙箱](shell-sandbox.md) |
 | `json_output_enabled` | 开启后绑定 `structured_output` 虚拟工具，输出变量自动追加 `structured_output`（object） |
 | `json_fields` | 结构化输出字段树，规则见下节 |
 
@@ -294,6 +295,7 @@ Shell 节点通过工具边提供 `shell_executor`、后台任务控制和文件
 - 每次调用结果附带 `cwd` 字段，表示实际执行目录。
 - 每次调用都是独立进程，`cd` 不会改变后续调用的目录，切换目录必须传 `workdir`。
 - 命令受危险模式和路径边界校验，不要尝试绕过（`Format-Volume`、`Clear-Disk`、递归强删盘根等 PowerShell 写法同样被拦截）。
+- 命令同时受**软件层沙箱**约束：无法静态判定安全性的命令（命令替换/复合结构/子串展开等）按 LLM 节点 `sandbox_opaque_policy` 分流；重定向写目标（`> >>`）按可写白名单校验，白名单外弹审批/拒绝——写临时文件用 `%TEMP%`（已入白名单）或会话/Agent 工作目录内路径可免审批。详见 [Shell 沙箱](shell-sandbox.md)。
 - 超时按**空闲**判定：连续 `timeout` 秒（默认 300）无任何 stdout/stderr 输出才清杀进程（`timeout_reason=idle_timeout`）——服务器、dev server、watch 等持续输出的长驻任务不会被误杀；真正卡死的无输出命令照样杀。总时长硬上限 `max_duration` 默认 1800 秒（半小时），到点必杀防泄漏（`timeout_reason=max_duration`），与空闲超时先到先触发；设为 0 解除限制。flow 直跑模式（非工具边）仍是总时长语义，不使用 `max_duration`。
 - 长时间命令会转为后台任务并返回 `task_id`；后台任务支持并发，`shell_task_status` 可用 `wait_time`（8~120秒）长阻塞等待，多次查询不受限制；timeout 终态带 `timeout_reason` 供区分卡死与长任务到寿。
 
