@@ -101,6 +101,54 @@ def _normalize_locator(sel: str) -> str:
     return s
 
 
+# CDP 滚轮单次派发上限（像素）：分片贴近真实滚轮，避免部分站点吞大 delta
+_WHEEL_CHUNK = 400
+
+
+def _cdp_wheel_scroll(tab, selector: str, delta: int) -> dict:
+    """在 selector 命中元素的视口坐标处派发 CDP 可信滚轮事件（Input.dispatchMouseEvent）。
+
+    用于滚动跨域 iframe 内部：iframe 不是独立 CDP target、主文档 JS 又被
+    同源策略拦住，唯一可靠通路是可信输入——浏览器原生命中测试决定滚动谁，
+    滚轮落在 iframe 上就滚 iframe（与真人滚动语义一致）。
+
+    返回 {ok: bool, error?: str}。元素不在视口时先 scrollIntoView 居中。
+    """
+    sel = _normalize_locator(selector)
+    ele = tab.ele(sel, timeout=_ELE_FIND_TIMEOUT)
+    if not ele:
+        return {"ok": False, "error": f"未找到元素: {selector}"}
+    try:
+        # 不在视口内先滚到可视区（block:center 减少边缘遮挡误判）
+        pos = ele.rect.viewport_location
+        size = ele.rect.viewport_size
+        if not pos or not size:
+            ele.run_js("this.scrollIntoView({block: 'center'})")
+            pos = ele.rect.viewport_location
+            size = ele.rect.viewport_size
+        if not pos or not size:
+            return {"ok": False, "error": f"无法获取元素视口坐标: {selector}"}
+        cx = int(pos[0] + size[0] / 2)
+        cy = int(max(pos[1], 0) + min(size[1], 10) / 2)
+        # 分片派发（每片 ≤_WHEEL_CHUNK），方向由 delta 符号决定
+        remaining = abs(delta)
+        step = _WHEEL_CHUNK if delta > 0 else -_WHEEL_CHUNK
+        while remaining > 0:
+            d = step if remaining >= _WHEEL_CHUNK else (remaining if delta > 0 else -remaining)
+            tab.run_cdp(
+                "Input.dispatchMouseEvent",
+                type="mouseWheel",
+                x=cx,
+                y=cy,
+                deltaX=0,
+                deltaY=d,
+            )
+            remaining -= abs(d)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": f"CDP 滚轮派发失败: {e}"}
+
+
 def _packet_summary(p) -> dict:
     """DataPacket → 轻量摘要（不碰响应体，get 详情时按需取）。
 
@@ -485,7 +533,7 @@ BROWSER_TOOL_DESCRIPTIONS: dict[str, str] = {
         "标签页管理（action: list/select/new/close，tab_id 为 CDP targetId 字符串，"
         "生命周期内稳定；close/select 传 tab_id 指定目标）"
     ),
-    "browser_scroll": "滚动页面（direction: up/down，amount 像素）",
+    "browser_scroll": "滚动页面（direction: up/down，amount 像素；可选 selector 指定目标元素/iframe，穿透跨域 iframe 滚动）",
     "browser_wait_for": (
         "等待包含指定文本的元素出现并显示（包含匹配，无需全文本一致；"
         "超时返回 found=false）"
@@ -503,6 +551,15 @@ BROWSER_TOOL_DESCRIPTIONS: dict[str, str] = {
         "（简表，默认当前导航，含 reqid）/ get（reqid 查详情含响应体）/ "
         "start（覆盖过滤条件）/ stop（暂停）/ performance（资源时间线"
         "全量 URL+耗时兜底）。排查接口报错：list 找 reqid → get 看响应体"
+    ),
+    "browser_upload": (
+        "向页面文件上传控件（input[type=file]）填入服务器本地文件，"
+        "绕过原生文件选择对话框（CDP DOM.setFileInputFiles，原生触发"
+        "change 事件，组件库美化按钮可正常捕获）。ref 为 snapshot 编号"
+        "或定位符：指向美化按钮时自动在其后代/父元素后代查找关联的"
+        "隐藏 input；files 为文件绝对路径（换行或逗号分隔多个），"
+        "必须是运行浏览器的主机本地存在的文件。上传后建议 "
+        "browser_snapshot 确认结果"
     ),
 }
 
@@ -636,6 +693,14 @@ class ScrollInput(BaseModel):
 
     direction: str = Field("down", description="滚动方向: down（默认）/ up")
     amount: int = Field(600, description="滚动像素距离，默认 600")
+    selector: Optional[str] = Field(
+        None,
+        description=(
+            "目标元素/iframe 的 CSS 选择器（如 #rewid-f iframe）。"
+            "传入时在该元素视口坐标处派发 CDP 滚轮事件（可穿透跨域 iframe）；"
+            "不传=滚动主文档。命中多个元素时取第一个"
+        ),
+    )
     tab_id: Optional[str] = Field(
         None,
         description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
@@ -714,6 +779,31 @@ class NetworkInput(BaseModel):
     )
     page_size: int = Field(50, description="action=list 时每页条数（默认 50）")
     page_idx: int = Field(0, description="action=list 时页码（0 起）")
+    tab_id: Optional[str] = Field(
+        None,
+        description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
+    )
+
+
+class UploadInput(BaseModel):
+    """browser_upload 输入"""
+
+    ref: str = Field(
+        ...,
+        description=(
+            "上传控件引用：browser_snapshot 返回的元素编号（如 1 或 uid=1，"
+            "指向美化上传按钮即可）或定位符（CSS 选择器加 css: 前缀，"
+            "文本匹配用 text:xxx）。指向非 input 元素时自动查找关联的 "
+            "input[type=file]"
+        ),
+    )
+    files: str = Field(
+        ...,
+        description=(
+            "要上传的文件绝对路径（运行浏览器的主机本地路径），"
+            "多个文件用换行或逗号分隔"
+        ),
+    )
     tab_id: Optional[str] = Field(
         None,
         description="目标标签页 id（CDP targetId 字符串，browser_tabs/snapshot 返回的 tab_id，生命周期内稳定），不传=当前活动标签页",
@@ -1184,6 +1274,55 @@ def _resolve_tab(session: "BrowserSession", tab_id: Optional[str]) -> Optional[M
     return tab
 
 
+def _resolve_file_input(tab, ele) -> Optional[ChromiumElement]:
+    """从 ref/定位符命中的元素定位真正的 input[type=file]（三级查找）。
+
+    组件库（Element Plus/antd 等）普遍是「隐藏 input + 美化按钮」模式：
+    1. 元素自身是 input[type=file] → 直接用；
+    2. 在其后代找（覆盖按钮内嵌 input）；
+    3. 在父元素后代找（覆盖按钮与 input 平级的容器）。
+    都找不到返回 None（由调用方报错引导）。
+    """
+    if ele is None:
+        return None
+
+    def _is_file_input(e) -> bool:
+        try:
+            return e.tag == "input" and (e.attr("type") or "").lower() == "file"
+        except Exception:
+            return False
+
+    if _is_file_input(ele):
+        return ele
+    # 后代查找（含隐藏 input；DP ele() 默认不筛可见性）
+    try:
+        found = ele.ele('css:input[type="file"]', timeout=1)
+        if found:
+            return found
+    except Exception:
+        pass
+    # 父元素后代查找
+    try:
+        parent = ele.parent()
+        if parent is not None:
+            found = parent.ele('css:input[type="file"]', timeout=1)
+            if found:
+                return found
+    except Exception:
+        pass
+    return None
+
+
+def _split_upload_paths(files: str) -> list[str]:
+    """拆分上传文件路径参数（换行或逗号分隔），去空去引号，保序。"""
+    parts = []
+    for chunk in str(files).replace("\r\n", "\n").replace("\n", ",").split(","):
+        p = chunk.strip().strip('"').strip("'").strip()
+        if p:
+            parts.append(p)
+    return parts
+
+
 class BrowserToolKit(BaseToolKit):
     """浏览器 Agent 工具集（14 个工具，snapshot 范式）
 
@@ -1451,6 +1590,112 @@ class BrowserToolKit(BaseToolKit):
                     return await asyncio.to_thread(run)
             except Exception as e:
                 return {"error": f"输入失败: {e}", "success": False}
+
+        # ---- browser_upload ----
+
+        async def browser_upload(
+            ref: str, files: str, tab_id: Optional[str] = None
+        ) -> str | dict:
+            approval = await _approval(
+                "browser_upload", {"ref": ref, "files": files, "tab_id": tab_id}, files
+            )
+            if approval not in (None, "approved"):
+                return {"error": f"用户未批准（{approval}）", "success": False}
+            try:
+                session = await _get_session()
+
+                def run():
+                    tab = _resolve_tab(session, tab_id)
+                    if tab is None:
+                        return {
+                            "error": f"tab_id={tab_id} 不存在，请先 browser_tabs(action='list') 查看可用标签页",
+                            "success": False,
+                        }
+                    # 路径校验前置：任一不存在则整体拒绝（不部分提交）
+                    paths = [str(Path(p).absolute()) for p in _split_upload_paths(files)]
+                    if not paths:
+                        return {
+                            "error": "files 为空：请传文件绝对路径（多个用换行或逗号分隔）",
+                            "success": False,
+                        }
+                    missing = [p for p in paths if not Path(p).is_file()]
+                    if missing:
+                        return {
+                            "error": (
+                                f"文件不存在（共 {len(missing)} 个）: "
+                                + "; ".join(missing[:5])
+                                + "。注意：路径须是运行浏览器的主机本地路径"
+                            ),
+                            "success": False,
+                        }
+                    session.active_tab = tab
+                    # 定位上传控件：ref 编号（data-agent-ref 锚定，回退下标）
+                    # 或定位符，与 click/input 同策略；再三级查找 input[type=file]
+                    raw = ref.strip()
+                    ref_num = _parse_ref(raw)
+                    ele = None
+                    if ref_num is not None:
+                        idx = ref_num - 1
+                        hit = tab.run_js(
+                            "return (function(){"
+                            f"var el = document.querySelector('[data-agent-ref=\\\"{idx + 1}\\\"]');"
+                            "if (!el) {"
+                            'var els = document.querySelectorAll(\'a, button, input, select, textarea, [contenteditable="true"], [role="button"], [onclick]\');'
+                            "var vis = []; for (var i=0;i<els.length;i++) { var r=els[i].getBoundingClientRect(); if (r.width>0&&r.height>0) vis.push(els[i]); }"
+                            f"el = vis[{idx}];"
+                            "}"
+                            "if (!el) return null;"
+                            "el.setAttribute('data-upload-anchor','1'); return 'ok';})()"
+                        )
+                        if hit != "ok":
+                            return {
+                                "error": "ref 不存在，请重新 browser_snapshot",
+                                "success": False,
+                            }
+                        ele = tab.ele("css:[data-upload-anchor='1']", timeout=2)
+                        try:
+                            tab.run_js(
+                                "var el=document.querySelector('[data-upload-anchor]');"
+                                "if (el) el.removeAttribute('data-upload-anchor');"
+                                "return 'cleaned'"
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        ele = tab.ele(
+                            _normalize_locator(raw), timeout=_ELE_FIND_TIMEOUT
+                        )
+                    if not ele:
+                        return {"error": f"未找到元素: {raw}", "success": False}
+                    file_input = _resolve_file_input(tab, ele)
+                    if file_input is None:
+                        return {
+                            "error": (
+                                f"元素 {raw} 及其附近未找到 input[type=file]："
+                                "请 browser_snapshot 确认上传控件，或用 CSS 选择器"
+                                "直接指向 input[type=file]（组件库隐藏 input 可用 "
+                                "browser_evaluate 查 DOM 后取其 css_path）"
+                            ),
+                            "success": False,
+                        }
+                    # DP 原生：input[type=file] 走 CDP DOM.setFileInputFiles，
+                    # 原生触发 input/change 事件（组件库可捕获）
+                    file_input.input("\n".join(paths))
+                    return {
+                        "success": True,
+                        "files": paths,
+                        "note": (
+                            f"已向 {raw} 填入 {len(paths)} 个文件；"
+                            "建议 browser_snapshot 或 wait_for 确认上传结果"
+                        ),
+                        "tab_id": _current_tab_id(session),
+                    }
+
+                # 写操作：同流程内串行（写锁），跨流程并行
+                async with session.write_lock:
+                    return await asyncio.to_thread(run)
+            except Exception as e:
+                return {"error": f"上传文件失败: {e}", "success": False}
 
         # ---- browser_screenshot ----
 
@@ -1731,10 +1976,13 @@ class BrowserToolKit(BaseToolKit):
         async def browser_scroll(
             direction: str = "down",
             amount: int = 600,
+            selector: Optional[str] = None,
             tab_id: Optional[str] = None,
         ) -> str | dict:
             approval = await _approval(
-                "browser_scroll", {"direction": direction, "tab_id": tab_id}, ""
+                "browser_scroll",
+                {"direction": direction, "amount": amount, "selector": selector, "tab_id": tab_id},
+                "",
             )
             if approval not in (None, "approved"):
                 return {"error": f"用户未批准（{approval}）", "success": False}
@@ -1750,6 +1998,24 @@ class BrowserToolKit(BaseToolKit):
                         }
                     session.active_tab = tab
                     delta = amount if direction == "down" else -amount
+                    if selector:
+                        # 指定元素/iframe：在其视口坐标派发 CDP 可信滚轮事件，
+                        # 浏览器原生命中测试决定滚动目标 → 可穿透跨域 iframe
+                        # （主文档 run_js window.scrollBy 触不到 iframe 内部文档）
+                        info = _cdp_wheel_scroll(tab, selector, delta)
+                        if not info.get("ok"):
+                            return {
+                                "success": False,
+                                "error": f"滚动失败: {info.get('error')}",
+                                "selector": selector,
+                                "tab_id": _current_tab_id(session),
+                            }
+                        return {
+                            "success": True,
+                            "note": f"已向{direction}滚动 {amount}px（selector={selector}）",
+                            "selector": selector,
+                            "tab_id": _current_tab_id(session),
+                        }
                     tab.run_js(f"return window.scrollBy(0, {delta}); 'scrolled'")
                     return {
                         "success": True,
@@ -2205,6 +2471,13 @@ class BrowserToolKit(BaseToolKit):
                 args_schema=NetworkInput,
                 func=None,
                 coroutine=browser_network,
+            ),
+            StructuredTool(
+                name="browser_upload",
+                description=BROWSER_TOOL_DESCRIPTIONS["browser_upload"],
+                args_schema=UploadInput,
+                func=None,
+                coroutine=browser_upload,
             ),
         ]
 

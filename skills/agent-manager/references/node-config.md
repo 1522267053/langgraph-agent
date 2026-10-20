@@ -330,7 +330,15 @@ SSH 节点（`ssh`）是 Agent 专用工具提供者，仅支持工具边 `tools
 
 ## 浏览器工具
 
-浏览器节点（`browser`）基于 DrissionPage（CDP）实现浏览器自动化，双形态：Flow 模式作主链执行节点（`default -> default`，一个节点一个动作：start/navigate/click/input/get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/console_logs/network/close，参数经 `flow_args` 绑定）；Agent 模式经工具边提供 14 个工具（`browser_start` / `browser_snapshot` / `browser_navigate` / `browser_click` / `browser_input` / `browser_screenshot` / `browser_get_content` / `browser_evaluate` / `browser_tabs` / `browser_scroll` / `browser_wait_for` / `browser_console_logs` / `browser_network` / `browser_close`）。同一 LLM 只能连接一个浏览器节点。
+浏览器节点（`browser`）基于 DrissionPage（CDP）实现浏览器自动化，双形态：Flow 模式作主链执行节点（`default -> default`，一个节点一个动作：start/navigate/click/input/upload/get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/console_logs/network/close，参数经 `flow_args` 绑定）；Agent 模式经工具边提供 15 个工具（`browser_start` / `browser_snapshot` / `browser_navigate` / `browser_click` / `browser_input` / `browser_upload` / `browser_screenshot` / `browser_get_content` / `browser_evaluate` / `browser_tabs` / `browser_scroll` / `browser_wait_for` / `browser_console_logs` / `browser_network` / `browser_close`）。同一 LLM 只能连接一个浏览器节点。
+
+### browser_upload / upload 动作（文件上传）
+
+向页面文件上传控件（`input[type=file]`）填入**运行浏览器的主机本地文件**，绕过原生文件选择对话框（DrissionPage 对 `input[type=file]` 调 `input()` 自动走 CDP `DOM.setFileInputFiles`，原生触发 `input`/`change` 事件，Element Plus/antd 等组件库可正常捕获）。
+
+- ref/selector 指向美化上传按钮即可：自动三级查找关联的 file input（自身 → 后代 → 父元素后代）；找不到时报错引导改用 CSS 直指 input
+- files 为文件**绝对路径**，多个用换行或逗号分隔；任一路径不存在则整体拒绝（不部分提交）
+- **remote 连接模式限制**：路径按远端主机视角解析（CDP 协议语义），本机路径仅对 launch 模式有效；不做跨主机文件传输
 
 ### 返回值形态：Flow 模式返回 JSON 对象，Agent 模式返回文字（重要）
 

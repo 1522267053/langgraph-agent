@@ -42,20 +42,9 @@ function ensureApprovalArrays(): void {
 }
 ensureApprovalArrays()
 
-const browserAvailableTools = [
-  { label: 'browser_start', value: 'browser_start' },
-  { label: 'browser_snapshot', value: 'browser_snapshot' },
-  { label: 'browser_navigate', value: 'browser_navigate' },
-  { label: 'browser_click', value: 'browser_click' },
-  { label: 'browser_input', value: 'browser_input' },
-  { label: 'browser_screenshot', value: 'browser_screenshot' },
-  { label: 'browser_get_content', value: 'browser_get_content' },
-  { label: 'browser_evaluate', value: 'browser_evaluate' },
-  { label: 'browser_tabs', value: 'browser_tabs' },
-  { label: 'browser_scroll', value: 'browser_scroll' },
-  { label: 'browser_wait_for', value: 'browser_wait_for' },
-  { label: 'browser_close', value: 'browser_close' }
-]
+// Agent 工具审批下拉选项：后端 browser-actions 接口单源下发
+// （BrowserToolKit.tool_info 派生），勿在此硬编码副本
+const browserAvailableTools = ref<{ label: string; value: string }[]>([])
 
 function onApprovalUpdate(val: ApprovalConfig): void {
   localConfig.value.approval_required_tools = [...val.approval_required_tools]
@@ -71,13 +60,23 @@ const browserActions = ref<BrowserActionMeta[]>([])
 async function fetchBrowserActions(): Promise<void> {
   try {
     const res = await flowApi.getBrowserActions()
-    if (res.data.code === 1 && Array.isArray(res.data.data)) {
-      browserActions.value = res.data.data
+    if (res.data.code === 1 && res.data.data) {
+      browserActions.value = Array.isArray(res.data.data.actions)
+        ? res.data.data.actions
+        : []
+      browserAvailableTools.value = Array.isArray(res.data.data.agent_tools)
+        ? res.data.data.agent_tools.map((name: string) => ({
+            label: name,
+            value: name
+          }))
+        : []
     } else {
       browserActions.value = []
+      browserAvailableTools.value = []
     }
   } catch {
     browserActions.value = []
+    browserAvailableTools.value = []
   }
 }
 
@@ -304,11 +303,11 @@ function onActionChange(): void {
       <div class="section-title">工具能力</div>
       <div class="config-hint">
         <el-text size="small" type="info">
-          连接到 LLM 后，AI 可自主调用 12
-          个工具：browser_start（开启浏览器）、browser_snapshot（页面快照，枢纽）、navigate / click
-          / input / screenshot / get_content / evaluate / tabs / scroll / wait_for /
-          close；典型流程为「start 开浏览器 → navigate 访问页面 → snapshot 查元素 → click/input 操作
-          → snapshot 确认 → close 关闭」
+          连接到 LLM 后，AI 可自主调用浏览器工具集（browser_start 开启浏览器、
+          browser_snapshot 页面快照（枢纽）、navigate / click / input / upload（上传文件）/
+          screenshot / get_content / evaluate / tabs / scroll / wait_for / console_logs /
+          network / close，完整清单见上方审批配置下拉）；典型流程为「start 开浏览器 →
+          navigate 访问页面 → snapshot 查元素 → click/input 操作 → snapshot 确认 → close 关闭」
         </el-text>
       </div>
     </div>

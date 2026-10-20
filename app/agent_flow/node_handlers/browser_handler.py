@@ -40,6 +40,7 @@ from app.agent_flow.tools.browser_toolkit import (
     SNAPSHOT_JSON_JS,
     BrowserToolKit,
     _ELE_FIND_TIMEOUT,
+    _cdp_wheel_scroll,
     _normalize_locator,
     browser_session_manager,
     get_flow_id,
@@ -114,7 +115,7 @@ class BrowserNodeConfig(BaseNodeConfig):
         "navigate",
         description=(
             "Flow 模式动作: start（开启浏览器）/ navigate（访问页面）/ click（点击元素）/ "
-            "input（输入文本）/ get_content（取页面文本）/ snapshot（元素快照 JSON）/ screenshot（截图）/ "
+            "input（输入文本）/ upload（上传文件）/ get_content（取页面文本）/ snapshot（元素快照 JSON）/ screenshot（截图）/ "
             "scroll（滚动）/ wait_for（等待文本）/ evaluate（执行 JS）/ close（关闭浏览器）"
         ),
     )
@@ -184,6 +185,26 @@ class BrowserNodeHandler(BaseNodeHandler):
                 "required": False,
             },
         ],
+        "upload": [
+            {
+                "name": "selector",
+                "type": "string",
+                "description": (
+                    "上传控件定位符：CSS 选择器或文本定位符（指向美化上传按钮即可，"
+                    "自动查找关联的 input[type=file]）"
+                ),
+                "required": True,
+            },
+            {
+                "name": "files",
+                "type": "string",
+                "description": (
+                    "要上传的文件绝对路径（运行浏览器的主机本地路径），"
+                    "多个文件用换行或逗号分隔"
+                ),
+                "required": True,
+            },
+        ],
         "get_content": [
             {
                 "name": "selector",
@@ -224,6 +245,12 @@ class BrowserNodeHandler(BaseNodeHandler):
                 "name": "amount",
                 "type": "number",
                 "description": "滚动像素（默认 600）",
+                "required": False,
+            },
+            {
+                "name": "selector",
+                "type": "string",
+                "description": "目标元素/iframe 的 CSS 选择器（如 #rewid-f iframe）。传入时在该元素视口坐标派发 CDP 滚轮事件（可穿透跨域 iframe）；不传=滚动主文档。命中多个元素时取第一个",
                 "required": False,
             },
         ],
@@ -335,6 +362,7 @@ class BrowserNodeHandler(BaseNodeHandler):
         "navigate": "访问页面 (navigate)",
         "click": "点击元素 (click)",
         "input": "输入文本 (input)",
+        "upload": "上传文件 (upload)",
         "get_content": "获取页面文本 (get_content)",
         "snapshot": "元素快照 (snapshot)",
         "screenshot": "页面截图 (screenshot)",
@@ -353,6 +381,7 @@ class BrowserNodeHandler(BaseNodeHandler):
 
         Flow 模式前端配置面板的单一事实源：GET /flow/browser-actions 下发，
         前端渲染动作下拉 + 逐参数表单，与 MCP 节点 parameters 同构。
+        Agent 工具清单经 get_agent_tool_names 单源派生（同接口下发）。
         """
         return [
             {
@@ -362,6 +391,13 @@ class BrowserNodeHandler(BaseNodeHandler):
             }
             for action in cls.FLOW_ACTION_PARAMS
         ]
+
+    @classmethod
+    def get_agent_tool_names(cls) -> list[str]:
+        """Agent 模式工具名单源派生（审批下拉等前端展示用，勿在前端硬编码）"""
+        from app.agent_flow.tools.browser_toolkit import BrowserToolKit
+
+        return [t["name"] for t in BrowserToolKit.tool_info()]
 
     async def execute(
         self,
@@ -386,7 +422,7 @@ class BrowserNodeHandler(BaseNodeHandler):
             state.add_error(
                 node.node_key,
                 f"未知 flow_action: {action}（支持 start/navigate/click/input/"
-                "get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/"
+                "upload/get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/"
                 "console_logs/network/close）",
             )
             return state
@@ -508,6 +544,46 @@ class BrowserNodeHandler(BaseNodeHandler):
                 if isinstance(ele,ChromiumElement):
                     ele.input(text)
                 result["note"] = f"已向 {sel} 输入文本"
+            elif action == "upload":
+                from app.agent_flow.tools.browser_toolkit import (
+                    _resolve_file_input,
+                    _split_upload_paths,
+                )
+
+                sel = str(arg("selector", "")).strip()
+                if not sel:
+                    raise ValueError("upload 需要配置 selector 参数")
+                # 路径校验前置：任一不存在则整体拒绝（不部分提交）
+                paths = [
+                    str(Path(p).absolute())
+                    for p in _split_upload_paths(str(arg("files", "")))
+                ]
+                if not paths:
+                    raise ValueError(
+                        "upload 需要配置 files 参数（文件绝对路径，多个用换行或逗号分隔）"
+                    )
+                missing = [p for p in paths if not Path(p).is_file()]
+                if missing:
+                    raise ValueError(
+                        f"文件不存在（共 {len(missing)} 个）: {'; '.join(missing[:5])}"
+                        "。注意：路径须是运行浏览器的主机本地路径"
+                    )
+                ele = tab.ele(_normalize_locator(sel), timeout=_ELE_FIND_TIMEOUT)
+                if not ele:
+                    raise ValueError(f"未找到元素: {sel}")
+                file_input = _resolve_file_input(tab, ele)
+                if file_input is None:
+                    raise ValueError(
+                        f"元素 {sel} 及其附近未找到 input[type=file]："
+                        "请确认上传控件，或用 CSS 选择器直接指向 input[type=file]"
+                    )
+                if isinstance(file_input, ChromiumElement):
+                    # DP 原生：走 CDP DOM.setFileInputFiles，原生触发 change 事件
+                    file_input.input("\n".join(paths))
+                result.update(
+                    files=paths,
+                    note=f"已向 {sel} 填入 {len(paths)} 个文件，建议后续节点确认上传结果",
+                )
             elif action == "get_content":
                 sel = _normalize_locator(str(arg("selector", "")))
                 content = (
@@ -554,8 +630,22 @@ class BrowserNodeHandler(BaseNodeHandler):
                 direction = str(arg("direction", "down"))
                 amount = int(arg("amount", 600))
                 delta = amount if direction == "down" else -amount
-                tab.run_js(f"window.scrollBy(0, {delta}); return 'scrolled'")
-                result["note"] = f"已向{direction}滚动 {amount}px"
+                selector = str(arg("selector", "") or "").strip()
+                if selector:
+                    # 指定元素/iframe：CDP 可信滚轮事件，可穿透跨域 iframe
+                    # （与 toolkit.browser_scroll 的 selector 分支同语义）
+                    info = _cdp_wheel_scroll(tab, selector, delta)
+                    if not info.get("ok"):
+                        state.add_error(
+                            node.node_key, f"滚动失败: {info.get('error')}"
+                        )
+                        return state
+                    result["note"] = (
+                        f"已向{direction}滚动 {amount}px（selector={selector}）"
+                    )
+                else:
+                    tab.run_js(f"window.scrollBy(0, {delta}); return 'scrolled'")
+                    result["note"] = f"已向{direction}滚动 {amount}px"
             elif action == "wait_for":
                 text = str(arg("text", "")).strip()
                 if not text:
@@ -798,7 +888,7 @@ class BrowserNodeHandler(BaseNodeHandler):
             else:
                 raise ValueError(
                     f"未知 flow_action: {action}（支持 start/navigate/click/input/"
-                    "get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/"
+                    "upload/get_content/snapshot/screenshot/scroll/wait_for/evaluate/tabs/"
                     "console_logs/network/close）"
                 )
             return result
