@@ -58,4 +58,4 @@ DOOM_LOOP_HARD_THRESHOLD = 8
 # ==== llm_stream.py ====
 
 # 重试间隔（秒），最多重试 len(RETRY_DELAYS_SECONDS) 次
-RETRY_DELAYS_SECONDS = [1, 2, 4]
+RETRY_DELAYS_SECONDS = [2, 4, 8]

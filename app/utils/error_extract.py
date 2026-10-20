@@ -5,15 +5,17 @@ LLM 服务商（OpenAI 兼容接口）出错时，openai SDK 异常消息往往�
 或完整 JSON 响应体，直接透出给用户是一大串无法阅读的文本。本模块负责从中
 提取 error.message（附错误码）直接输出——只做提取，不做文案映射。
 
-兼容三种形态：
+兼容四种形态：
 1. SSE 帧:  data: {"error": {"code": "...", "message": "...", ...}}
 2. SDK 格式: Error code: 400 - {"error": {...}}
-3. 纯 JSON: {"error": {...}} 或 {"message": "..."}
+3. SDK 格式 + Python dict repr（单引号）: Error code: 429 - {'error': {...}}
+4. 纯 JSON: {"error": {...}} 或 {"message": "..."}
 
 降级策略：提取不到 error.message 时，原样输出错误体 JSON 本身
 （剥掉 data:/Error code 等外壳噪声）；连 JSON 都没有时返回原文。
 """
 
+import ast
 import json
 import re
 from typing import Optional
@@ -26,12 +28,19 @@ def _extract_json_objects(text: str) -> list[dict]:
     """从文本中提取所有可解析的 JSON 对象（按出现顺序）"""
     results: list[dict] = []
     for match in _JSON_OBJ_RE.finditer(text):
+        raw = match.group(0)
+        obj = None
         try:
-            obj = json.loads(match.group(0))
-            if isinstance(obj, dict):
-                results.append(obj)
+            obj = json.loads(raw)
         except (json.JSONDecodeError, ValueError):
-            continue
+            # 兜底：部分网关返回 Python dict repr 形态（单引号），
+            # 如 Error code: 429 - {'error': {'code': '...', 'message': '...'}}
+            try:
+                obj = ast.literal_eval(raw)
+            except (ValueError, SyntaxError):
+                continue
+        if isinstance(obj, dict):
+            results.append(obj)
     return results
 
 

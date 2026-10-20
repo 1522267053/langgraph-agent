@@ -433,11 +433,21 @@ watch(connectedToolNodes, fetchConnectedTools, { immediate: true, deep: true })
             v-model="localConfig.sandbox_opaque_policy"
             @change="updateConfig"
           >
-            <el-option label="自动（Agent=审批 / Flow=放行）" value="auto" />
+            <el-option
+              label="自动（Agent=审批 / Flow=不拦截）"
+              value="auto"
+            />
             <el-option label="一律审批" value="ask" />
             <el-option label="一律拒绝" value="deny" />
-            <el-option label="关闭（仅保留黑名单拦截）" value="off" />
+            <el-option label="不拦截" value="off" />
           </el-select>
+        </el-form-item>
+        <el-form-item>
+          <el-text size="small" type="info">
+            仅约束「解析器无法判定安全性」的命令和白名单外写入；黑名单命令
+            （format、rm -rf / 等）与系统/敏感路径写入始终拦截，不受此配置影响。
+            Flow 定时/无人值守场景建议保持自动；Flow 中 LLM 动态执行命令的建议改为一律审批
+          </el-text>
         </el-form-item>
         <el-form-item label="自动压缩附加提示语">
           <el-input

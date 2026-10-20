@@ -195,7 +195,7 @@ def _schema_from_pydantic(model_cls: type[BaseModel]) -> list[dict]:
         elif "default" not in field_desc and name in model_cls.model_fields:
             fi = model_cls.model_fields[name]
             if fi.default_factory is not None:
-                field_desc["default"] = fi.default_factory() # type: ignore
+                field_desc["default"] = fi.default_factory()  # type: ignore
         if "enum" in prop:
             field_desc["options"] = prop["enum"]
         # 透传 json_schema_extra 中的自定义键
@@ -463,7 +463,9 @@ class BaseNodeHandler(ABC):
             approval_reason = force_reason
         else:
             approval_tools = list(getattr(cfg, "approval_required_tools", []) or [])
-            approval_patterns = list(getattr(cfg, "approval_required_patterns", []) or [])
+            approval_patterns = list(
+                getattr(cfg, "approval_required_patterns", []) or []
+            )
 
             # 1) 工具名白名单命中
             hit_tool = tool_name in approval_tools
@@ -527,7 +529,12 @@ class BaseNodeHandler(ABC):
                 except Exception as e:
                     logger.warning("免审授权查询失败，按需审批处理: %s", e)
                 # 锁内快速段：加入/创建批次（创建者先不发事件），拿到 (future, approval_id)
-                future, approval_id, is_creator, call_id = await self._join_or_create_batch(
+                (
+                    future,
+                    approval_id,
+                    is_creator,
+                    call_id,
+                ) = await self._join_or_create_batch(
                     tool_name=tool_name,
                     tool_args=tool_args,
                     node_key=node_key,
@@ -563,7 +570,12 @@ class BaseNodeHandler(ABC):
                         return "approved"
                 except Exception as e:
                     logger.warning("免审授权查询失败，按需审批处理: %s", e)
-                future, approval_id, is_creator, call_id = await self._join_or_create_batch(
+                (
+                    future,
+                    approval_id,
+                    is_creator,
+                    call_id,
+                ) = await self._join_or_create_batch(
                     tool_name=tool_name,
                     tool_args=tool_args,
                     node_key=node_key,
@@ -741,11 +753,8 @@ class BaseNodeHandler(ABC):
         approval_key = self._approval_queue_key()
         call_id = f"call_{uuid.uuid4().hex[:24]}"
 
-        if (
-            self._active_flow_batch is not None
-            and tool_approval_service.is_pending(
-                approval_key, self._active_flow_batch["approval_id"]
-            )
+        if self._active_flow_batch is not None and tool_approval_service.is_pending(
+            approval_key, self._active_flow_batch["approval_id"]
         ):
             # 加入现有批次（慢兄弟兜底：创建者已发事件后才进锁的场景）
             batch = self._active_flow_batch
@@ -760,9 +769,7 @@ class BaseNodeHandler(ABC):
         future = tool_approval_service.register(
             approval_key,
             approval_id,
-            tool_calls=[
-                {"id": call_id, "name": tool_name, "args": tool_args}
-            ],
+            tool_calls=[{"id": call_id, "name": tool_name, "args": tool_args}],
             approval_needed=[tool_name],
             approval_reason=approval_reason,
         )
@@ -1046,7 +1053,7 @@ class BaseNodeHandler(ABC):
             names = [n for n in names if n]
             if names:
                 return names
-        cfg:BaseNodeConfig = cls.ConfigClass.model_construct()
+        cfg: BaseNodeConfig = cls.ConfigClass.model_construct()
         return [v.name for v in cfg.output_variables if v.name]
 
     def _variable_exists(self, source: str, state: FlowState) -> bool:
@@ -1260,6 +1267,15 @@ class BaseNodeHandler(ABC):
         provider = self.get_provider(node)
         return [provider] if provider is not None else []
 
+    def get_provider_description(self, node: "FlowNode") -> str:
+        """返回延迟域 reminder 的族描述（空串=降级只显示族名）
+
+        内置族可选重写：浏览器（固定能力清单）/知识库（节点名相关）等族
+        重写后经 ToolProviderCompat.description → snapshot.provider_desc
+        进入 reminder 展示。默认空串，不影响未重写族。
+        """
+        return ""
+
     def get_provider(self, node: "FlowNode") -> Optional["ToolProvider"]:
         """返回按需加载延迟域的 ToolProvider（None=不参与延迟域）
 
@@ -1336,6 +1352,7 @@ class BaseNodeHandler(ABC):
             ],
             search_fn=_search,
             materialize_fn=_materialize,
+            description=self.get_provider_description(node),
         )
 
     @classmethod

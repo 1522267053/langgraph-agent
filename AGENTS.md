@@ -287,12 +287,13 @@ poetry run pytest tests/test_tool_approval_audit.py   # 只跑单个文件
   - 命令解析只在 `tools/shell_command_parser.py`（`scan_command`：cmd/sh 双方言尽力解析，9 类 opaque 分类对齐 opencode）
   - 命令三态检查只在 `tools/shell_toolkit.check_command`（valid/blocked/opaque；`validate_command` 为二态兼容包装，opaque 视为放行——旧调用方语义不变）
   - 写路径三态检查只在 `tools/common.check_writable_path`（allowed/blocked/outside；`validate_writable_path` 为二态兼容包装）
-- **策略配置**：LLM 节点 `sandbox_opaque_policy`（auto/ask/deny/off，默认 auto），经 `setup_tool_handlers` 注入 `handler._sandbox_policy`（仿 `_media_caps` 模式），shell/ssh/file 三 toolkit 闭包消费；opaque 命令与白名单外写入按策略 ask（走现有审批回调）/deny（拒绝+引导文案）/off（放行）
+- **策略配置**：LLM 节点 `sandbox_opaque_policy`（auto/ask/deny/off，默认 auto），经 `setup_tool_handlers` 注入 `handler._sandbox_policy`（仿 `_media_caps` 模式），shell/ssh/file 三 toolkit 闭包消费；opaque 命令与白名单外写入按策略 ask（走现有审批回调）/deny（拒绝+引导文案）/off（不拦截）
+- **「不拦截」语义（重要）**：auto 在 Flow 域与显式 off 都只是**不弹审批直接执行** opaque 命令/白名单外写入，黑名单与硬拦截仍然生效——「放行」仅指跳过审批确认，不是跳过安全检查；Flow 定时/无人值守场景建议保持 auto，Flow 中 LLM 动态执行命令的建议显式改 ask
 - **可写白名单**：默认 = 会话工作目录 + Agent 工作目录 + temp 目录；追加项走 `.env` 的 `SANDBOX_WRITABLE_ROOTS`（逗号/分号分隔，相对路径基于项目根）
 - **硬拦截（不分域、不可配置，任何策略下都拒绝）**：系统关键路径（FORBIDDEN_PATH_PATTERNS）、data/ 数据目录、家目录敏感子目录（`.ssh/.aws/.docker/.gnupg/.netrc/.kube/.config/gcloud`，对齐 openclaw BLOCKED_HOME_SUBPATHS）
 - **python 沙箱 open 收口**：`python_handler._sandbox_open` 替换裸 `open`——写模式（w/a/x/+）路径必须落在可写白名单内，读模式不限制；ALLOWED_MODULES 单一事实源不动
 - **黑名单始终生效**：DANGEROUS_PATTERNS 整串正则兜底扫描对 scanned 与 opaque 一视同仁，危险命令即使解析失败也先硬拦截（优先于 opaque 判定）
-- **Flow 直跑语义**：Flow 主图 shell 节点直跑路径默认 off（直跑命令是用户在画布上静态编写、可见可审，opaque 风险源是 LLM 动态生成的命令）；LLM 节点显式配置 ask/deny 可对 Flow 收紧
+- **Flow 直跑语义**：Flow 主图 shell 节点直跑路径默认不拦截（直跑命令是用户在画布上静态编写、可见可审，opaque 风险源是 LLM 动态生成的命令）；LLM 节点显式配置 ask/deny 可对 Flow 收紧
 
 ### 前端关键约定
 - **路径别名**: `@/` → `src/`

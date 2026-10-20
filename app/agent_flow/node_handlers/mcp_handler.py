@@ -296,12 +296,15 @@ class McpNodeHandler(BaseNodeHandler):
         server_ids = [int(i) for i in cfg.get("mcp_server_ids", [])]
         if not server_ids:
             return []
-        names = self._server_names(server_ids)
+        name_desc = self._server_names(server_ids)
+        names = {sid: nd[0] for sid, nd in name_desc.items()}
+        descs = {sid: nd[1] for sid, nd in name_desc.items()}
         key_of = self._provider_key_resolver(server_ids, names)
         return [
             McpToolProvider(
                 server_id=sid,
                 server_name=names.get(sid, ""),
+                server_description=descs.get(sid, ""),
                 provider_key=key_of(sid),
                 sources=[(node, cfg)],
                 writer=writer,
@@ -312,8 +315,12 @@ class McpNodeHandler(BaseNodeHandler):
         ]
 
     @classmethod
-    def _server_names(cls, server_ids: list[int]) -> dict[int, str]:
-        """读服务器名（provider_key 与工具名前缀同源；单次 DB 查询，无建连）"""
+    def _server_names(cls, server_ids: list[int]) -> dict[int, tuple[str, str]]:
+        """读服务器名+描述（provider_key 与工具名前缀同源；单次 DB 查询，无建连）
+
+        返回 {id: (name, description)}：name 供 provider_key/工具名前缀，
+        description 供延迟域 reminder 族描述展示（空描述降级为只显示族名）。
+        """
         import asyncio
 
         try:
@@ -322,14 +329,17 @@ class McpNodeHandler(BaseNodeHandler):
             from app.config.database import AsyncSessionLocal
             from app.models.mcp_server import McpServer
 
-            async def _read() -> dict[int, str]:
+            async def _read() -> dict[int, tuple[str, str]]:
                 async with AsyncSessionLocal() as db:
                     rows = await db.execute(
-                        select(McpServer.id, McpServer.name).where(
-                            McpServer.id.in_(server_ids), McpServer.is_delete == 0
-                        )
+                        select(
+                            McpServer.id, McpServer.name, McpServer.description
+                        ).where(McpServer.id.in_(server_ids), McpServer.is_delete == 0)
                     )
-                    return {rid: (rname or "") for rid, rname in rows.all()}
+                    return {
+                        rid: (rname or "", rdesc or "")
+                        for rid, rname, rdesc in rows.all()
+                    }
 
             try:
                 loop = asyncio.get_running_loop()
@@ -587,6 +597,7 @@ class McpToolProvider:
         writer=None,
         session_id: int = 0,
         execution_id: int = 0,
+        server_description: str = "",
     ):
         """
         Args:
@@ -597,9 +608,11 @@ class McpToolProvider:
             writer: StreamWriter（审批事件通道；None=审批不生效，非 Agent 模式）
             session_id: 会话 ID（>0 时 Agent 模式审批生效）
             execution_id: 执行记录 ID（>0 时 Flow 模式审批走 interrupt 路径）
+            server_description: 服务器描述（延迟域 reminder 族描述展示，空=降级只显示族名）
         """
         self._server_id = server_id
         self._server_name = server_name
+        self._server_description = server_description
         self._key = provider_key
         self._sources: list[tuple[str, McpNodeConfig]] = [
             (node.node_key, McpNodeConfig.model_validate(cfg or {}))
@@ -628,6 +641,11 @@ class McpToolProvider:
     @property
     def provider_key(self) -> str:
         return self._key
+
+    @property
+    def description(self) -> str:
+        """族描述（延迟域 reminder 展示；空=降级只显示族名）"""
+        return self._server_description
 
     async def _read_cache_index(self) -> list[dict]:
         """读 DB 持久缓存（零建连）：[{name, description, input_schema}]

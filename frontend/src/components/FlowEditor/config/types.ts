@@ -109,9 +109,9 @@ export interface LlmConfig {
   /** 自动压缩上下文时追加的提示词（空 = 仅使用默认提示词） */
   compress_extra_prompt?: string
   /**
-   * 沙箱 opaque 策略：命令解析器无法判定安全性的命令如何处理。
-   * auto=Agent 会话弹审批、Flow 放行；ask=一律审批；deny=一律拒绝；off=放行。
-   * 危险命令黑名单拦截不受此配置影响，始终生效
+   * 沙箱策略：仅约束「解析器无法判定安全性」的命令和白名单外写入。
+   * auto=Agent 会话弹审批、Flow 不拦截；ask=一律审批；deny=一律拒绝；off=不拦截。
+   * 黑名单命令与系统/敏感路径写入始终拦截，不受此配置影响
    */
   sandbox_opaque_policy?: 'auto' | 'ask' | 'deny' | 'off'
 }

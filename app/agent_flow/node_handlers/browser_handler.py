@@ -528,7 +528,7 @@ class BrowserNodeHandler(BaseNodeHandler):
                 ele = tab.ele(_normalize_locator(sel), timeout=_ELE_FIND_TIMEOUT)
                 if not ele:
                     raise ValueError(f"未找到元素: {sel}")
-                if isinstance(ele,ChromiumElement):
+                if isinstance(ele, ChromiumElement):
                     ele.click()
                 result["note"] = f"已点击 {sel}"
             elif action == "input":
@@ -539,9 +539,9 @@ class BrowserNodeHandler(BaseNodeHandler):
                 if not ele:
                     raise ValueError(f"未找到元素: {sel}")
                 text = str(arg("text", ""))
-                if bool(arg("clear", True)) and isinstance(ele,ChromiumElement):
+                if bool(arg("clear", True)) and isinstance(ele, ChromiumElement):
                     ele.clear()
-                if isinstance(ele,ChromiumElement):
+                if isinstance(ele, ChromiumElement):
                     ele.input(text)
                 result["note"] = f"已向 {sel} 输入文本"
             elif action == "upload":
@@ -636,9 +636,7 @@ class BrowserNodeHandler(BaseNodeHandler):
                     # （与 toolkit.browser_scroll 的 selector 分支同语义）
                     info = _cdp_wheel_scroll(tab, selector, delta)
                     if not info.get("ok"):
-                        state.add_error(
-                            node.node_key, f"滚动失败: {info.get('error')}"
-                        )
+                        state.add_error(node.node_key, f"滚动失败: {info.get('error')}")
                         return state
                     result["note"] = (
                         f"已向{direction}滚动 {amount}px（selector={selector}）"
@@ -955,6 +953,10 @@ class BrowserNodeHandler(BaseNodeHandler):
     # 是稳定膨胀源；索引名与 get_tool 工具名同源（BROWSER_TOOL_DESCRIPTIONS），
     # 物化走基类默认实现（get_tool 组装 toolkit）
     defer_policy = "auto"
+
+    def get_provider_description(self, node: "FlowNode") -> str:
+        """延迟域 reminder 族描述（工具集固定，静态描述即可）"""
+        return "网页自动化：页面导航、元素点击/输入、截图、JS 执行、调试收集"
 
     @classmethod
     def get_tool_info(cls, node: FlowNode) -> list[dict]:

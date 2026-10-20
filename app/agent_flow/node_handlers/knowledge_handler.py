@@ -295,5 +295,10 @@ class KnowledgeNodeHandler(BaseNodeHandler):
         """委托 toolkit 单源派生（含幽灵索引守卫，描述与 get_tool 逐字节一致）"""
         return KnowledgeToolKit.tool_info(node)
 
+    def get_provider_description(self, node: "FlowNode") -> str:
+        """延迟域 reminder 族描述（含节点名，多知识库节点可区分）"""
+        name = node.node_name or "知识库"
+        return f"知识库「{name}」：语义搜索、文档标题树浏览与内容阅读"
+
     # get_provider：继承基类默认实现（get_tool_info 索引 + get_tool 物化），
     # auto 族由 setup_tool_handlers 按阈值判定登记进延迟域

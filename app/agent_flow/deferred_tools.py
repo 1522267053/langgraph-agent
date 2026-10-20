@@ -70,8 +70,29 @@ def serialize_tool_schema(args_schema: Any) -> str:
         logger.warning("工具 schema 序列化失败: %s", e)
         return "{}"
     if len(schema_str) > SCHEMA_MAX_CHARS:
-        schema_str = schema_str[:SCHEMA_MAX_CHARS] + "…<truncated>"
+        schema_str = (
+            schema_str[:SCHEMA_MAX_CHARS]
+            + "…<truncated>（schema 已截断，完整参数以执行报错为准）"
+        )
     return schema_str
+
+
+def _extract_required(schema: Any) -> List[str]:
+    """从 input_schema 提取必填参数名（畸形 schema 防御：一律容错为 []）
+
+    与 properties 取交集：required 引用不存在的键是常见的手写 schema 畸形，
+    透传出去会误导模型拼一个不存在的参数。
+    """
+    try:
+        if not isinstance(schema, dict):
+            return []
+        required = schema.get("required") or []
+        properties = schema.get("properties") or {}
+        if not isinstance(required, list) or not isinstance(properties, dict):
+            return []
+        return [k for k in required if isinstance(k, str) and k in properties]
+    except Exception:
+        return []
 
 
 @runtime_checkable
@@ -92,6 +113,15 @@ class ToolProvider(Protocol):
     def provider_key(self) -> str:
         """provider 唯一标识（如 mcp__lark、knowledge:kb_5），用于展示与去重"""
         ...
+
+    @property
+    def description(self) -> str:
+        """族描述（reminder 展示用，如「企业 IM eLink 的消息收发、会话管理」）
+
+        可选能力：未实现时 registry 用 getattr 兜底空串（reminder 降级为
+        只显示族名）。内置族经 ToolProviderCompat 可选参数接入，无需逐族实现。
+        """
+        return ""
 
     async def list_meta(self) -> List[Dict[str, str]]:
         """全量工具索引：[{name, description}]（description 供总览截断）"""
@@ -119,15 +149,21 @@ class ToolProviderCompat:
         list_meta_fn: Callable[[], List[Dict[str, str]]],
         search_fn: Callable[[str, int], Any],
         materialize_fn: Callable[[str], Any],
+        description: str = "",
     ):
         self._key = provider_key
         self._list_meta_fn = list_meta_fn
         self._search_fn = search_fn
         self._materialize_fn = materialize_fn
+        self._description = description
 
     @property
     def provider_key(self) -> str:
         return self._key
+
+    @property
+    def description(self) -> str:
+        return self._description
 
     async def list_meta(self) -> List[Dict[str, str]]:
         result = self._list_meta_fn()
@@ -162,8 +198,10 @@ class DeferredSnapshot:
 
     # provider_key -> 工具总数
     provider_counts: Dict[str, int] = field(default_factory=dict)
-    # 全量索引（provider_key -> [{name, description}]），list_info 数据源
-    index: Dict[str, List[Dict[str, str]]] = field(default_factory=dict)
+    # provider_key -> 族描述（空串=未提供，reminder 降级为只显示族名）
+    provider_desc: Dict[str, str] = field(default_factory=dict)
+    # 全量索引（provider_key -> [{name, description, required}]），list_info 数据源
+    index: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     # 已知工具名 -> provider_key（execute 定位用）
     name_to_provider: Dict[str, str] = field(default_factory=dict)
 
@@ -208,6 +246,13 @@ class DeferredToolRegistry:
                 logger.warning("延迟域 provider %s 索引失败，跳过: %s", key, e)
                 metas = []
             snapshot.provider_counts[key] = len(metas)
+            snapshot.provider_desc[key] = (
+                getattr(provider, "description", "") or ""
+            ).strip()
+            # required 提取（发现层即可判断「无参→直接 execute / 有参→先 search」）：
+            # meta 无 input_schema（内置族 list_meta 形态）时容错为 []
+            for meta in metas:
+                meta["required"] = _extract_required(meta.get("input_schema"))
             snapshot.index[key] = metas
             for meta in metas:
                 name = meta["name"]
@@ -259,7 +304,12 @@ class DeferredToolRegistry:
                 if len(desc) > DESC_ONE_LINE_MAX:
                     desc = desc[:DESC_ONE_LINE_MAX] + "…"
                 entries.append(
-                    {"provider": key, "name": meta["name"], "description": desc}
+                    {
+                        "provider": key,
+                        "name": meta["name"],
+                        "description": desc,
+                        "required": meta.get("required") or [],
+                    }
                 )
         ps = max(1, int(page_size))
         pi = max(0, int(page_idx))
@@ -291,10 +341,9 @@ class DeferredToolRegistry:
 
         results: List[Dict[str, Any]] = []
         for key, provider in self._providers.items():
-            if len(results) >= limit:
-                break
             try:
-                matched = await provider.search(pattern, limit=limit - len(results))
+                # 单族仍传 limit 上限（防大族全量拉回），聚合后统一截断
+                matched = await provider.search(pattern, limit=limit)
             except Exception as e:
                 logger.warning("延迟域 provider %s 搜索失败: %s", key, e)
                 continue
@@ -307,11 +356,18 @@ class DeferredToolRegistry:
                         "input_schema": serialize_tool_schema(item.get("input_schema")),
                     }
                 )
+        # 统一截断（原逐 provider 消耗额度是先到先得，后族永远搜不到）
+        truncated = len(results) > limit
+        results = results[:limit]
+        note = "用 tool_execute(tool_name=..., arguments='JSON') 执行查到的工具"
+        if not results:
+            note = "零结果：换更宽泛的关键词重试，或用 tool_info_list 浏览全部工具族"
         return {
             "success": True,
             "tools": results,
             "total": len(results),
-            "note": "用 tool_execute(tool_name=..., arguments='JSON') 执行查到的工具",
+            "truncated": truncated,
+            "note": note,
         }
 
     # ---- 物化（首次建连/取对象，缓存复用） ----
@@ -459,12 +515,22 @@ def create_deferred_meta_tools(
                 }
 
         # 参数校验：走工具自身 args_schema（错误详情回传，模型自修正）
+        warnings: List[str] = []
         try:
             schema = getattr(tool, "args_schema", None)
             if schema is not None:
                 if isinstance(schema, type) and issubclass(schema, BaseModel):
-                    # pydantic 模型类：完整校验（内置族工具）
+                    # pydantic 模型类：完整校验（内置族工具）。未知参数基于原始
+                    # 入参 keys 比对——model_dump(exclude_none=True) 会丢显式
+                    # None，dump 后比对会漏报；pydantic v2 默认 extra=ignore，
+                    # 未知参数静默丢弃，此处显式警告让模型知道参数没生效
+                    unknown = [k for k in args if k not in schema.model_fields]
                     args = schema(**args).model_dump(exclude_none=True)
+                    if unknown:
+                        warnings.append(
+                            f"未知参数 {unknown} 已被忽略（不在该工具的参数定义中）；"
+                            f"用 tool_search(pattern='{tool_name}') 查看 input_schema"
+                        )
                 elif isinstance(schema, dict):
                     # 原始 JSON schema dict（langchain_mcp_adapters 的 MCP
                     # 工具形态）：只做 required 必填轻量校验后透传——
@@ -479,6 +545,16 @@ def create_deferred_meta_tools(
                                 "input_schema 后补齐"
                             ),
                         }
+                    properties = schema.get("properties") or {}
+                    unknown = [k for k in args if k not in properties]
+                    if unknown:
+                        # dict schema 是透传语义：真实校验在 MCP 服务器端，
+                        # 未知参数可能被忽略也可能报错，文案不能断言「已忽略」
+                        warnings.append(
+                            f"未知参数 {unknown} 不在该工具的参数定义中"
+                            "（可能被服务器忽略）；"
+                            f"用 tool_search(pattern='{tool_name}') 查看 input_schema"
+                        )
         except Exception as e:
             return {
                 "success": False,
@@ -501,7 +577,11 @@ def create_deferred_meta_tools(
         # 成功时直接透传工具原始输出（不包 success/tool/result 壳）：
         # 模型少剥一层、少耗 token；失败路径仍为 {"success": False, "error"}
         if result is None:
-            return {"note": f"工具 {tool_name} 执行成功，无返回内容"}
+            result = {"note": f"工具 {tool_name} 执行成功，无返回内容"}
+        if warnings:
+            # 两种成功形态之一：参数有疑问时包壳，warnings 键 = 参数被忽略，
+            # 原始输出整体嵌在 result 键下（无歧义）
+            return {"result": result, "warnings": warnings}
         return result
 
     return [
@@ -532,8 +612,10 @@ def create_deferred_meta_tools(
             description=(
                 "执行延迟域工具（tool_info_list/tool_search 查到的）。"
                 "arguments 直接传该工具 input_schema 约定的 JSON 对象"
-                "（推荐，免转义错误）；返回值为工具的原始输出（不再包装）；"
-                '失败时返回 {"success": false, "error": 原因}，修正后重试即可'
+                "（推荐，免转义错误）。返回两种形态：① 正常 = 工具原始输出"
+                "（不包装）；② 返回含 warnings 键 = 传入了未知参数被忽略，"
+                "真实结果在 result 键下，需修正参数重调；"
+                '失败时返回 {"success": false, "error": 原因}'
             ),
             args_schema=ExecuteInput,
             func=None,
@@ -546,15 +628,22 @@ def build_deferred_reminder(snapshot: DeferredSnapshot) -> str:
     """构建延迟域 system-reminder 片段（纯静态快照，会话内不变）"""
     if snapshot.total_tools == 0:
         return ""
+    # 族描述截断 ~60 字符；空描述族保持现状只显示族名（不输出空冒号）
     providers_desc = ", ".join(
-        f"{key}({count}个)" for key, count in snapshot.provider_counts.items()
+        f"{key}({count}个)：{desc[:60]}…"
+        if len(desc := snapshot.provider_desc.get(key, "")) > 60
+        else f"{key}({count}个)：{desc}"
+        if desc
+        else f"{key}({count}个)"
+        for key, count in snapshot.provider_counts.items()
     )
     return (
         f"<deferred_tools>\n"
         f"以下工具族按需加载（共 {snapshot.total_tools} 个工具，未直接绑定）：\n"
         f"{providers_desc}\n"
         f"使用流程：tool_info_list 看总览 → tool_search_tool_regex 查参数 schema "
-        f"→ tool_execute 执行。这些工具不在你的直接工具列表中，"
+        f"→ tool_execute 执行。已知工具名可跳过 info_list；无参工具查到名字后"
+        f"可直接 tool_execute。这些工具不在你的直接工具列表中，"
         f"必须通过上述三个元工具访问。\n"
         f"</deferred_tools>"
     )

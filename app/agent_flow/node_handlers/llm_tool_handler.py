@@ -376,10 +376,12 @@ class LlmNodeConfig(BaseNodeConfig):
     sandbox_opaque_policy: Optional[str] = Field(
         default="auto",
         description=(
-            "沙箱 opaque 策略：命令解析器无法判定安全性的命令（复杂引号/命令替换/"
-            "变量展开等）如何处理。auto=Agent 会话弹审批、Flow 放行；"
-            "ask=一律弹审批；deny=一律拒绝；off=放行。"
-            "危险命令黑名单拦截不受此配置影响，始终生效"
+            "沙箱策略：仅约束「解析器无法判定安全性」的命令（复杂引号/命令替换/"
+            "变量展开等）和白名单外写入。auto=Agent 会话弹审批、Flow 不拦截；"
+            "ask=一律弹审批；deny=一律拒绝；off=不拦截。"
+            "黑名单命令（format、rm -rf / 等）与系统/敏感路径写入始终拦截，"
+            "不受此配置影响。Flow 定时/无人值守场景建议保持 auto；"
+            "Flow 中 LLM 动态执行命令的建议改为 ask"
         ),
         json_schema_extra={"options": ["auto", "ask", "deny", "off"]},
     )
