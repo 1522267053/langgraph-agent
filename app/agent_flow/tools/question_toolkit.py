@@ -16,6 +16,7 @@ LLM 在需要澄清歧义时调用，向用户抛出结构化选项（1-4 个 + 
 
 import asyncio
 import json
+import logging
 import uuid
 from typing import TYPE_CHECKING, Callable, Optional, Sequence
 
@@ -30,6 +31,8 @@ from langgraph.types import StreamWriter
 
 if TYPE_CHECKING:
     from app.models.flow_node import FlowNode
+
+logger = logging.getLogger(__name__)
 
 # ---- 描述单源（唯一维护点；tool_info 与 build_tools 共用）----
 QUESTION_TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -143,6 +146,18 @@ class QuestionToolKit(BaseToolKit):
                 )
             )
 
+            # 3.5 统一通知中心：切到其他页面的用户也需要知道有提问在等（失败静默）
+            try:
+                from app.services.notification_service import notification_service
+
+                await notification_service.notify_agent_input_needed(
+                    session_id=session_id,
+                    title="「{session_title}」向您提问",
+                    content=question,
+                )
+            except Exception as notify_err:
+                logger.warning(f"Question 反问通知失败: {notify_err}")
+
             # 4. 等待前端响应（USER_RESPONSE_TIMEOUT_SECONDS 超时，与 tool_approval 一致）
             try:
                 await asyncio.wait_for(
@@ -152,6 +167,18 @@ class QuestionToolKit(BaseToolKit):
                 question_service.remove(session_id, question_id)
                 # 审计补写：超时终态（与用户回答竞争时先到先得，幂等）
                 question_service.mark_timeout(session_id, question_id)
+                # 超时通知（改动3）：让用户回来知道错过了什么；失败静默
+                try:
+                    from app.services.notification_service import notification_service
+
+                    await notification_service.notify_agent_input_needed(
+                        session_id=session_id,
+                        title="「{session_title}」的提问已超时",
+                        content=f"{question}（已因超时过期，AI 将继续执行）",
+                        kind="timeout",
+                    )
+                except Exception as notify_err:
+                    logger.warning(f"Question 超时通知失败: {notify_err}")
                 return json.dumps(
                     {
                         "error": (

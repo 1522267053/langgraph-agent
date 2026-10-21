@@ -1076,6 +1076,20 @@ class LlmToolNodeHandler(BaseNodeHandler):
             return True
 
         while True:
+            # 审批通知聚合边界（逐 ReAct 迭代，用户 2026-10-21 拍板口径）：
+            # 聚合 = 单次迭代内的连环审批批次；新迭代开始即失效上一迭代的注册
+            # （显式失效不赌「用户已决策/已读」等下游守卫）。迭代顶部此时不可能
+            # 有进行中的审批等待（上一迭代 handle_tool_calls 已同步返回），零竞态；
+            # 最后一次迭代的残留由 flow_done finally 兜底清理
+            if self.session_id:
+                try:
+                    from app.services.notification_service import notification_service
+
+                    await notification_service.invalidate_agent_approval_notification(
+                        self.session_id, silent=True
+                    )
+                except Exception as agg_err:
+                    logger.warning(f"迭代边界失效审批通知聚合失败: {agg_err}")
             active_tail_start = len(msg_buf.messages)
             needs_context_compression = False
             messages = msg_buf.messages

@@ -658,6 +658,48 @@ class BaseNodeHandler(ABC):
             await db.execute(stmt)
             await db.commit()
 
+    async def _notify_approval(
+        self, tool_names: list[str], approval_reason: Optional[str], kind: str = "input"
+    ) -> None:
+        """审批等待通知（统一通知中心，Agent 模式专用；失败静默不阻断）。
+
+        同 session 连环批次经 notification_service 聚合为一条（原位更新），
+        超时通知独立成条并失效聚合注册表。
+
+        Args:
+            tool_names: 待审批工具名列表（批次为全量工具；超时通知可为空）
+            approval_reason: 审批原因（前端弹窗同文案）
+            kind: input=待响应 / timeout=超时未响应
+        """
+        if self._session_id <= 0:
+            return
+        from app.services.notification_service import notification_service
+
+        try:
+            if kind == "timeout":
+                reason_suffix = f"（{approval_reason}）" if approval_reason else ""
+                await notification_service.notify_agent_input_needed(
+                    session_id=self._session_id,
+                    title="「{session_title}」工具审批已超时",
+                    content=(
+                        f"工具 {', '.join(tool_names) if tool_names else ''}"
+                        f"的审批{reason_suffix}已因超时被跳过，AI 将继续执行"
+                    ),
+                    kind="timeout",
+                )
+                await notification_service.invalidate_agent_approval_notification(
+                    self._session_id
+                )
+            elif tool_names:
+                await notification_service.notify_agent_input_needed(
+                    session_id=self._session_id,
+                    title="「{session_title}」等待工具审批",
+                    content="等待您的批准或拒绝",
+                    tool_name=tool_names[0],
+                )
+        except Exception as e:
+            logger.warning("审批通知发送失败 session_id=%s: %s", self._session_id, e)
+
     async def _request_tool_approval(
         self,
         tool_name: str,
@@ -713,6 +755,9 @@ class BaseNodeHandler(ABC):
                     approval_reason=approval_reason,
                 )
             )
+            # 统一通知中心：切到其他页面的用户也需要知道有审批在等（失败静默）
+            if self._session_id > 0:
+                await self._notify_approval([tool_name], approval_reason)
         except Exception as e:  # 事件发送失败按拒绝处理，避免继续执行未知命令
             logger.warning("审批事件发送失败，按拒绝处理: %s", e)
             tool_approval_service.remove(approval_key, approval_id)
@@ -730,6 +775,11 @@ class BaseNodeHandler(ABC):
             tool_approval_service.remove(approval_key, approval_id)
             # 审计补写：超时终态（与用户决策竞争时先到先得，幂等）
             tool_approval_service.mark_timeout(approval_key, approval_id)
+            # 超时通知（改动3）：让用户回来知道错过了什么；失败静默
+            if self._session_id > 0:
+                await self._notify_approval(
+                    [tool_name], approval_reason, kind="timeout"
+                )
             return "timeout"
 
         tool_approval_service.remove(approval_key, approval_id)
@@ -835,6 +885,12 @@ class BaseNodeHandler(ABC):
                     total=len(tool_calls),
                 )
             )
+            # 统一通知中心（仅 creator 发，加入者不重复；Agent 模式限定，失败静默）
+            if self._session_id > 0 and tool_calls:
+                await self._notify_approval(
+                    [tc["name"] for tc in tool_calls],
+                    "; ".join(reasons) or approval_reason,
+                )
         except Exception as e:
             logger.warning("审批事件发送失败，按拒绝处理: %s", e)
             tool_approval_service.remove(approval_key, approval_id)
@@ -875,6 +931,9 @@ class BaseNodeHandler(ABC):
                 tool_approval_service.remove(approval_key, approval_id)
                 self._active_flow_batch = None
                 tool_approval_service.mark_timeout(approval_key, approval_id)
+                # 超时通知（改动3）：仅 creator 发一次（加入者共享同批终态）；失败静默
+                if self._session_id > 0:
+                    await self._notify_approval([], "批次审批超时", kind="timeout")
             return "timeout"
 
         if is_creator:

@@ -54,7 +54,7 @@ function cloneConfig(c: McpConfig): McpConfig {
   }
 }
 
-/** 按需加载三态（lazy_load）：缺省=auto（工具数>20 自动启用）；true=强制延迟域；false=强制全量 */
+/** 按需加载三态（lazy_load）：缺省=auto（本 LLM 节点连接的 auto 族工具总数>20 自动启用）；true=强制延迟域；false=强制全量 */
 function onLazyLoadChange(val: string): void {
   // '' = auto（删除字段）；'true'/'false' 写入布尔
   if (val === '') {
@@ -297,14 +297,17 @@ function onArgChange(): void {
             style="width: 100%"
             @change="onLazyLoadChange"
           >
-            <el-option label="自动（工具数 > 20 时启用，推荐）" value="" />
+            <el-option label="自动（参与判定的工具总数 > 20 时启用，推荐）" value="" />
             <el-option label="强制开启（工具始终按需加载）" value="true" />
             <el-option label="强制关闭（工具始终直接注册）" value="false" />
           </el-select>
           <el-text size="small" type="info" style="margin-top: 4px; display: block">
-            开启后工具不直接注册给 AI，改由 tool_info_list / tool_search /
-            tool_execute 三个元工具按需发现与执行（省 tools 参数 token；
-            需服务器在管理页连接过一次以预热工具缓存）
+            「自动」按当前 LLM 节点实际连接的工具判定：本节点连接的所有 MCP 服务器
+            （及知识库/浏览器节点）的工具数量跨服务器加总去重后与 20 比较，每个
+            LLM 节点各自判定互不影响；内置工具（shell/file 等）不计入，配置了
+            「强制开启/关闭」的节点不参与计数。开启后工具不直接注册给 AI，改由
+            tool_info_list / tool_search / tool_execute 三个元工具按需发现与执行
+            （省 tools 参数 token；需服务器在管理页连接过一次以预热工具缓存）
           </el-text>
         </el-form-item>
       </el-form>

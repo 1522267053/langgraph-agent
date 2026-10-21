@@ -73,6 +73,27 @@ const reasoningBtnLabel = computed(() => {
   return selectedReasoning.value === 'off' ? '关闭' : selectedReasoning.value
 })
 
+/** 推理深度按钮悬停提示：当前档位 + 各档位含义（low=快而省 / high=深而慢） */
+const reasoningTooltip = computed(() => {
+  const values = props.reasoningOptions?.values ?? []
+  const current = selectedReasoning.value
+  const state = current
+    ? `当前：${current === 'off' ? '关闭思考' : current}`
+    : '当前：跟随节点配置'
+  const LEVEL_DESC: Record<string, string> = {
+    none: 'none=不思考',
+    low: 'low=快而省',
+    medium: 'medium=均衡',
+    high: 'high=深而慢',
+    max: 'max=最深最慢',
+    xhigh: 'xhigh=最深最慢',
+    off: 'off=关闭思考'
+  }
+  const parts = values.map(v => LEVEL_DESC[v] || v)
+  const levelText = parts.length > 0 ? `；档位：${parts.join(' / ')}` : ''
+  return `${state}${levelText}；点击选择`
+})
+
 function selectReasoning(value: string) {
   selectedReasoning.value = value
   reasoningPopoverVisible.value = false
@@ -562,16 +583,24 @@ function handleStop() {
               trigger="click"
             >
               <template #reference>
-                <button
-                  class="toolbar-icon-btn reasoning-btn"
-                  :class="{ active: !!selectedReasoning }"
-                  :disabled="isStreaming || isWaitingHuman"
-                >
-                  <el-icon :size="18"><Lightning /></el-icon>
-                  <span v-if="reasoningBtnLabel" class="reasoning-btn-label">{{
-                    reasoningBtnLabel
-                  }}</span>
-                </button>
+                <span class="model-btn-anchor">
+                  <el-tooltip
+                    :content="reasoningTooltip"
+                    placement="top"
+                    :show-after="300"
+                  >
+                    <button
+                      class="toolbar-icon-btn reasoning-btn"
+                      :class="{ active: !!selectedReasoning }"
+                      :disabled="isStreaming || isWaitingHuman"
+                    >
+                      <el-icon :size="18"><Lightning /></el-icon>
+                      <span v-if="reasoningBtnLabel" class="reasoning-btn-label">{{
+                        reasoningBtnLabel
+                      }}</span>
+                    </button>
+                  </el-tooltip>
+                </span>
               </template>
               <div class="reasoning-menu">
                 <div class="reasoning-menu-title">

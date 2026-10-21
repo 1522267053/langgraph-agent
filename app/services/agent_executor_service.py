@@ -2179,6 +2179,22 @@ class AgentExecutorService(BaseExecutorService):
                         tool_approval_service.cancel(session_id)
                     except Exception as approval_err:
                         logger.warning(f"清理工具确认状态失败: {approval_err}")
+                    # 本轮收尾失效审批通知聚合注册表（聚合口径=同一轮执行，
+                    # 跨轮不合并：静默失效，不打扰用户）
+                    try:
+                        from app.services.notification_service import (
+                            notification_service,
+                        )
+
+                        await (
+                            notification_service.invalidate_agent_approval_notification(
+                                session_id, silent=True
+                            )
+                        )
+                    except Exception as invalid_err:
+                        logger.warning(
+                            f"失效审批通知聚合失败 session_id={session_id}: {invalid_err}"
+                        )
                     if not preserve_checkpoint:
                         cleanup_error = await self._await_cancellation_safe(
                             self._cleanup_thread_checkpoint(session_id)
@@ -2630,6 +2646,22 @@ class AgentExecutorService(BaseExecutorService):
                         tool_approval_service.cancel(session_id)
                     except Exception as approval_err:
                         logger.warning(f"清理工具确认状态失败: {approval_err}")
+                    # 本轮收尾失效审批通知聚合注册表（聚合口径=同一轮执行，
+                    # 跨轮不合并：静默失效，不打扰用户）
+                    try:
+                        from app.services.notification_service import (
+                            notification_service,
+                        )
+
+                        await (
+                            notification_service.invalidate_agent_approval_notification(
+                                session_id, silent=True
+                            )
+                        )
+                    except Exception as invalid_err:
+                        logger.warning(
+                            f"失效审批通知聚合失败 session_id={session_id}: {invalid_err}"
+                        )
                     if not preserve_checkpoint:
                         cleanup_error = await self._await_cancellation_safe(
                             self._cleanup_thread_checkpoint(session_id)
