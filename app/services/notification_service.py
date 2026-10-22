@@ -26,10 +26,22 @@ from app.services.base_service import BaseService
 
 logger = logging.getLogger(__name__)
 
-# 通知正文截断上限：通知是提示性入口，正文只承担「是什么事」的概览职责，
-# 全文（如 LLM 完整输出、审批工具参数快照）应到关联页面（ref_type/ref_id）查看。
-# 落库与 WS 推送共用同一截断，避免前端弹窗被超长内容撑爆。
-NOTIFICATION_CONTENT_MAX_CHARS = 200
+# 通知正文截断上限（60 字符）：通知是提示性入口，正文只承担「是什么事」的
+# 概览职责，全文（如 LLM 完整输出、审批工具参数快照）应到关联页面
+# （ref_type/ref_id）查看。落库与 WS 推送共用同一截断，避免前端弹窗被
+# 超长内容撑爆。所有通知正文写入路径（notify / 聚合原位更新）统一经
+# _compact_content 收口，禁止绕过。
+NOTIFICATION_CONTENT_MAX_CHARS = 60
+
+
+def _compact_content(content: Optional[str]) -> Optional[str]:
+    """通知正文统一压缩截断：单行压缩（换行变空格）+ 限长（超长加省略号）。"""
+    if not content:
+        return content
+    compact = " ".join(content.split())
+    if len(compact) > NOTIFICATION_CONTENT_MAX_CHARS:
+        return compact[:NOTIFICATION_CONTENT_MAX_CHARS] + "…"
+    return compact
 
 
 class NotificationService(
@@ -74,13 +86,7 @@ class NotificationService(
             通知记录（落库失败返回 None，不抛异常）
         """
         notification: Optional[Notification] = None
-        # 正文截断：单行压缩（换行变空格）+ 限长，超长全文到关联页面查看
-        if content:
-            compact = " ".join(content.split())
-            if len(compact) > NOTIFICATION_CONTENT_MAX_CHARS:
-                compact = compact[:NOTIFICATION_CONTENT_MAX_CHARS] + "…"
-        else:
-            compact = content
+        compact = _compact_content(content)
         try:
             create = NotificationCreate(
                 type=type,
@@ -197,7 +203,7 @@ class NotificationService(
                                     db, session_id
                                 )
                             )
-                            notification.content = content
+                            notification.content = _compact_content(content)
                             await db.commit()
                             aggregated = True
                             await self._push_silent(session_id)

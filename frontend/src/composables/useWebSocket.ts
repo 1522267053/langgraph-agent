@@ -3,6 +3,7 @@ import { ElNotification, ElButton, ElMessage } from 'element-plus'
 import { agendaApi } from '@/api/agenda'
 import { notifyOnce, isDenied } from '@/composables/useBrowserNotification'
 import { useNotificationStore } from '@/stores/notification'
+import router from '@/router'
 
 interface ExecutionDoneData {
   execution_id: number | null
@@ -37,6 +38,31 @@ interface NotificationData {
   browser_notify?: boolean
   /** 静默标记：ws_manager 落库后补发，只更新角标+刷新列表，不弹窗（弹窗由原消息类型负责） */
   silent?: boolean
+}
+
+/**
+ * 按 ref 跳转通知关联页面（与 NotificationList.jumpToRef 同一口径）。
+ * session 通知：ref_id=会话ID，ref_sub_id=Agent flow ID → /chat/{agentId}?sessionId={sessionId}
+ * 返回 true 表示已发起跳转。
+ */
+function jumpByRef(refType?: string | null, refId?: number | null, refSubId?: number | null): boolean {
+  if (refType === 'session') {
+    if (refSubId && refId) {
+      router.push(`/chat/${refSubId}?sessionId=${refId}`)
+    } else {
+      router.push('/chat')
+    }
+    return true
+  }
+  if (refType === 'execution') {
+    router.push('/execution')
+    return true
+  }
+  if (refType === 'agenda') {
+    router.push('/agenda')
+    return true
+  }
+  return false
 }
 
 interface ToolOutputStartData {
@@ -124,17 +150,46 @@ function handleNotification(msg: WSMessage) {
     if (data.silent) return
 
     const isHumanInput = data.type === 'human_input'
-    ElNotification({
+    const canJump = !!(data.ref_type && data.ref_id)
+    const instance = ElNotification({
       type: isHumanInput ? 'warning' : 'info',
       title: data.title,
-      message: data.content || '点击铃铛查看通知中心',
+      message: h('div', { style: 'display:flex;flex-direction:column;gap:4px' }, [
+        h('p', { style: 'margin:0', innerText: data.content || '点击铃铛查看通知中心' }),
+        ...(canJump
+          ? [
+              h(
+                'a',
+                {
+                  style: 'font-size:12px;color:var(--el-color-primary);cursor:pointer',
+                  onClick: (e: MouseEvent) => {
+                    e.stopPropagation()
+                    instance.close()
+                    jumpByRef(data.ref_type, data.ref_id, data.ref_sub_id)
+                  }
+                },
+                '点击前往处理 →'
+              )
+            ]
+          : [])
+      ]),
       duration: isHumanInput ? 0 : 5000,
-      position: 'top-right'
+      position: 'top-right',
+      onClick: () => {
+        // 点击弹窗主体：按 ref 跳转关联页面（session → 对应 Agent 会话）
+        if (jumpByRef(data.ref_type, data.ref_id, data.ref_sub_id)) {
+          instance.close()
+        }
+      }
     })
     if (data.browser_notify !== false) {
       notifyOnce(`notification-${data.notification_id}`, data.title, {
         body: data.content || '点击查看通知中心',
-        icon: '/logo.ico'
+        icon: '/logo.ico',
+        onclick: () => {
+          window.focus()
+          jumpByRef(data.ref_type, data.ref_id, data.ref_sub_id)
+        }
       })
     }
     return

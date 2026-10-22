@@ -42,9 +42,12 @@ export function notify(title: string, options?: NotificationOptions): void {
   if (Notification.permission !== 'granted') return
   try {
     const n = new Notification(title, options)
+    // 调用方自定义 onclick（如点击跳转会话）优先；未提供时退化为仅聚焦窗口
+    const customOnClick = (options as { onclick?: () => void } | undefined)?.onclick
     n.onclick = () => {
       window.focus()
       n.close()
+      customOnClick?.()
     }
   } catch {
     // 静默失败

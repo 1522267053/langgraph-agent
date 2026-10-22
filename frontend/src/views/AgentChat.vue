@@ -826,6 +826,21 @@ watch(
   }
 )
 
+// 已在本页时 ?sessionId= 变化（如点击审批/提问通知弹窗跳转）：切换到目标会话。
+// 首次进入页面的场景由 onMounted 处理，这里只覆盖「同页 query 变化」。
+watch(
+  () => route.query.sessionId,
+  async newSessionId => {
+    const sid = newSessionId ? parseInt(newSessionId as string) : null
+    if (!sid || !agentId.value || Number.isNaN(sid)) return
+    if (store.currentSession?.id === sid) return
+    await store.loadSessions(agentId.value)
+    const target =
+      store.sessions.find(s => s.id === sid) || ({ id: sid } as (typeof store.sessions)[0])
+    await store.selectSession(agentId.value, target)
+  }
+)
+
 const isLoadingMore = ref(false)
 
 const dynamicFields = computed<FlowIOField[]>(() => {

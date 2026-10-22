@@ -565,6 +565,7 @@ function handleStop() {
                     :key="opt.value"
                     class="model-menu-item"
                     :class="{ selected: selectedModel === opt.value }"
+                    :title="opt.label"
                     @click="selectModel(opt.value)"
                   >
                     <span class="model-menu-name">{{ opt.label }}</span>
