@@ -646,8 +646,22 @@ watch(
 }
 
 .thinking-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: #fbbf24;
   font-size: 12px;
+}
+
+/* 思考中前缀转圈：形状/动画与 status-spinner 同源，颜色按琥珀色系配套 */
+.thinking-loading::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(251, 191, 36, 0.25);
+  border-top-color: #fbbf24;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 .status-spinner {
