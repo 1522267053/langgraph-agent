@@ -166,10 +166,8 @@ _RE_CMD_VAR = re.compile(r"%[^%\n]+%")
 _RE_CMD_VAR_SUBSTR = re.compile(r"%(?!%)[A-Za-z0-9_#]+:[^%\n]*%(?!%)")
 # heredoc（sh）
 _RE_HEREDOC = re.compile(r"(<{2,})(?!<)")
-# 复合结构关键字（sh）
-_RE_SH_COMPOUND = re.compile(
-    r"(?<![\w-])(if|then|elif|else|fi|for|while|until|do|done|case|esac|select|function|coproc|time)(?![\w-])"
-)
+# 复合结构：由 _has_sh_compound_structure 按**成对关键字**判定（引号遮蔽后），
+# 不再用单词正则——单看 for/if/done 会把 `echo done`、python -c 内代码误判 opaque
 # cmd 复合结构（for / if 带括号形态）
 _RE_CMD_COMPOUND = re.compile(
     r"(?i)(?<![\w-])(for|if)(\s+/[a-z]+)*\s*%[^%\n]*%\s+(?:in|exist|defined|errorlevel|not)\b"
@@ -189,6 +187,9 @@ _RE_SH_LIST_OPS = re.compile(r"&&|\|\||&|\||;")
 
 # cmd /c 或 /k 链式包装（cmd /c "..." 内层再解析）
 _RE_CMD_WRAPPER = re.compile(r"(?i)^\s*cmd(?:\.exe)?\s+/[ck]\s+(.*)$")
+# sh 系解释器 -c 包装（sh -c "..." / bash -c "...")：内层须按 sh 语义再解析，
+# 否则引号遮蔽会掩盖内层结构（`sh -c "for …; done"` 漏检，2026-10-21 实锤）
+_RE_SH_C_WRAPPER = re.compile(r"(?i)^\s*(?:sh|bash|zsh|dash)(?:\.exe)?\s+-c\s+(.+)$")
 
 
 @dataclass
@@ -240,6 +241,52 @@ def _strip_cmd_wrapper(command: str) -> str:
             inner = inner[1:-1]
         return inner
     return command
+
+
+def _mask_quoted(command: str) -> str:
+    r"""遮蔽引号内容（保留引号本身，内容替换为等长空格）。
+
+    用于**结构类**检测（复合关键字 for/if/do...、heredoc `<<`）：
+    `python -c "…for i in range(3)…"` 里的 for 是 Python 语法，不是 sh
+    复合结构；`x << 2` 里的 << 是位移不是 heredoc——结构检测只看引号外
+    才不误报（2026-10-21 curl+python -c 实锤）。
+
+    **命令替换 $(…) 与反引号不适用本遮蔽**：sh 双引号内仍会执行，必须
+    保持整串检测（_scan_sh 里单独处理）。
+
+    单引号内无转义；双引号内 `\` 转义下一个字符（与 _check_unterminated_quotes 一致）。
+    引号未闭合时返回原文（由 opaque 未闭合分支先行拦截）。
+    """
+    out: list[str] = []
+    in_single = in_double = False
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if in_single:
+            out.append(ch if ch == "'" else " ")
+            if ch == "'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if ch == "\\" and i + 1 < len(command):
+                out.append("  ")  # 转义对整体遮蔽
+                i += 2
+                continue
+            out.append(ch if ch == '"' else " ")
+            if ch == '"':
+                in_double = False
+            i += 1
+            continue
+        if ch == "'":
+            in_single = True
+        elif ch == '"':
+            in_double = True
+        out.append(ch)
+        i += 1
+    if in_single or in_double:
+        return command
+    return "".join(out)
 
 
 def _check_unterminated_quotes(command: str) -> bool:
@@ -351,8 +398,8 @@ def _scan_cmd(command: str) -> ScanResult:
             kind="opaque", opaque_reason=OPAQUE_DYNAMIC_EXECUTION, dialect="cmd"
         )
 
-    # 3) cmd for/if 复合结构
-    if _RE_CMD_COMPOUND.search(command):
+    # 3) cmd for/if 复合结构（只看引号外：python -c "…for…" 不是 cmd 结构）
+    if _RE_CMD_COMPOUND.search(_mask_quoted(command)):
         return ScanResult(
             kind="opaque", opaque_reason=OPAQUE_COMPOUND_COMMAND, dialect="cmd"
         )
@@ -412,21 +459,39 @@ def _scan_cmd(command: str) -> ScanResult:
 
 def _scan_sh(command: str) -> ScanResult:
     """sh 方言解析：opaque 检测 → shlex 拆词 → 子命令列表"""
-    # 1) 命令替换
+    # 1) 命令替换（整串检测：双引号内仍会执行，不可遮蔽）
     if _RE_CMD_SUBSTITUTION.search(command):
         return ScanResult(
             kind="opaque", opaque_reason=OPAQUE_COMMAND_SUBSTITUTION, dialect="sh"
         )
 
-    # 2) heredoc
-    if _RE_HEREDOC.search(command):
+    # 结构类检测（复合关键字 / heredoc / 行尾续行）只看**引号外**：
+    # python -c "…for i in…" 的 for、SQL/正则里的 << 不是 sh 结构（2026-10-21 实锤）
+    structural = _mask_quoted(command)
+
+    # 2) heredoc（sh）
+    if _RE_HEREDOC.search(structural):
         return ScanResult(kind="opaque", opaque_reason=OPAQUE_HEREDOC, dialect="sh")
 
-    # 3) 复合结构
-    if _RE_SH_COMPOUND.search(command):
+    # 3) 复合结构（**成对**判定，只看引号外）：单个 `done`/`then` 是普通参数
+    # （`dir /b && echo done`），不能单词命中；python -c "…for i in…" 的 for
+    # 在引号内也不算（2026-10-21 实锤）
+    if _has_sh_compound_structure(structural):
         return ScanResult(
             kind="opaque", opaque_reason=OPAQUE_COMPOUND_COMMAND, dialect="sh"
         )
+
+    # 3.5) sh -c "…" 包装：内层引号内容是要执行的脚本，必须剥引号后按 sh
+    # 再解析一次——否则遮蔽会把内层结构掩盖成 scanned（安全回退）。
+    # 递归一层足够（本项目单行命令，深嵌套内层会因其它特征继续 opaque）
+    wrapper = _RE_SH_C_WRAPPER.match(command.strip())
+    if wrapper:
+        inner = wrapper.group(1).strip()
+        if len(inner) >= 2 and inner[0] == inner[-1] and inner[0] in ('"', "'"):
+            inner = inner[1:-1]
+        inner_scan = _scan_sh(inner)
+        if inner_scan.kind == "opaque":
+            return inner_scan
 
     # 4) 动态执行命令（eval/exec/source/.）
     first_word = command.strip().split()[0].lower() if command.strip() else ""
@@ -436,7 +501,7 @@ def _scan_sh(command: str) -> ScanResult:
         )
 
     # 5) 行尾续行符（多行已被上层硬拒，行尾 \ / ^ 属未终止转义）
-    if _RE_SH_LINE_CONT.search(command) or _RE_CMD_LINE_CONT.search(command):
+    if _RE_SH_LINE_CONT.search(structural) or _RE_CMD_LINE_CONT.search(structural):
         return ScanResult(
             kind="opaque", opaque_reason=OPAQUE_UNTERMINATED_ESCAPE, dialect="sh"
         )
@@ -545,6 +610,31 @@ def _scan_sh(command: str) -> ScanResult:
     )
 
 
+def _has_sh_compound_structure(masked: str) -> bool:
+    """判定是否存在**成对**的 sh 复合结构（已遮蔽引号内容）。
+
+    必须成对判定：单个 `done`/`then` 常是普通参数（`dir /b && echo done`），
+    只看单词会把安全命令误判 opaque（vue-tsc 命令里就有 `& echo DONE`）。
+    成对形态：for…do…done / while…do…done / if…then…fi / case…esac。
+    """
+    low = masked.lower()
+
+    def has(word: str) -> bool:
+        return re.search(rf"(?<![\w-]){word}(?![\w-])", low) is not None
+
+    if has("for") and has("do") and has("done"):
+        return True
+    if has("while") and has("do") and has("done"):
+        return True
+    if has("until") and has("do") and has("done"):
+        return True
+    if has("if") and has("then") and has("fi"):
+        return True
+    if has("case") and has("esac"):
+        return True
+    return False
+
+
 def scan_command(command: str) -> ScanResult:
     """解析单行 shell 命令（唯一入口）。
 
@@ -567,6 +657,14 @@ def scan_command(command: str) -> ScanResult:
     if _looks_like_cmd(cmd_candidate):
         result = _scan_cmd(cmd_candidate)
         if result.kind == "scanned":
+            # cmd 解析通过，但命令可能含 sh 复合结构（`python -c '…' && for
+            # …; do …; done`：python 在 _CMD_BUILTINS 被判 cmd，裸 for 只有
+            # sh 侧成对判定能识别）——命中即 opaque，防方言误判漏检
+            # （2026-10-21 实锤）。cmd 原生 for /f 形态由 _RE_CMD_COMPOUND 先拦。
+            if _has_sh_compound_structure(_mask_quoted(cmd_candidate)):
+                return ScanResult(
+                    kind="opaque", opaque_reason=OPAQUE_COMPOUND_COMMAND, dialect="sh"
+                )
             return result
         # cmd 解析 opaque 但命令不含 cmd 特征 → 回退 sh 再试
         if not (_RE_CMD_VAR.search(cmd_candidate) or re.search(r"\^", cmd_candidate)):
