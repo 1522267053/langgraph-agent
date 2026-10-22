@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 from app.models.memory import MemoryCategory
 from app.models.flow_node import FlowNode
 from app.agent_flow.flow_context import FlowState
-from app.agent_flow.node_handlers.base_handler import BaseNodeHandler
+from app.agent_flow.node_handlers.base_handler import BaseNodeConfig, BaseNodeHandler
 from app.agent_flow.handler_registry import NodeHandlerRegistry
 from app.agent_flow.tools.memory_toolkit import MemoryToolKit
 from app.config.database import AsyncSessionLocal
@@ -44,7 +44,7 @@ from app.services.memory_service import memory_service
 logger = logging.getLogger(__name__)
 
 
-class MemoryNodeConfig(BaseModel):
+class MemoryNodeConfig(BaseNodeConfig):
     model_config = {"extra": "ignore"}
     max_results: int = 5
     default_importance: int = 3
@@ -155,8 +155,10 @@ class MemoryNodeHandler(BaseNodeHandler):
             static_prefix = (
                 "\n\n## 记忆系统\n"
                 f"工具: get(ID)查详情|search(关键词)搜记忆(默认warm/cold,可指定tier=hot)|"
-                f"save(保存,category:{valid_cats},importance=5→hot,3-4→warm,1-2→cold)|"
+                f"save(保存,category:{valid_cats},importance=5→hot,2-4→warm,1→cold)|"
                 f"consolidate(整理热记忆)\n"
+                f"做任何实质性任务前，先 memory_search 检索相关记忆"
+                f"（历史决策/教训/口径），避免重复踩坑。\n"
                 f"主动保存用户偏好、重要决策、关键信息。\n"
                 f"单条content硬上限600字符，内容多时拆成多条保存，不要反复微调字数重试。\n"
                 f"热记忆上限{self._get_config(node).consolidate_threshold}条：接近上限会预警、"

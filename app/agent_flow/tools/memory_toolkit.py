@@ -151,7 +151,7 @@ class MemoryGetInput(BaseModel):
 
 def _build_save_description(cfg) -> str:
     return (
-        f"保存记忆。importance=5→hot,3-4→warm,1-2→cold，也可指定tier。"
+        f"保存记忆。importance=5→hot,2-4→warm,1→cold，也可指定tier。"
         f"category: {','.join(cfg.VALID_CATEGORIES)}，"
         f"默认category={cfg.default_category},importance={cfg.default_importance}。"
         f"单条content硬上限600字符，超限报错；内容多时拆成多条（memories数组），"

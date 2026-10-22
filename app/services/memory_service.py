@@ -499,7 +499,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
             {"before", "after", "actions": {各action计数}, "results": merge新建明细}
         """
         # ---- 校验：全部 id 必须是本 agent 的热记忆（任一无效整批拒绝） ----
-        raw_ids:list[int] = [int(it.get("id","0")) for it in items]
+        raw_ids: list[int] = [int(it.get("id", "0")) for it in items]
         if any(not isinstance(i, int) or isinstance(i, bool) for i in raw_ids):
             raise ValueError("所有条目必须包含整数 id")
         ids: List[int] = raw_ids
@@ -634,10 +634,10 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
 
     @staticmethod
     def infer_tier(importance: int) -> str:
-        """根据 importance 推断记忆层级"""
+        """根据 importance 推断记忆层级（5→hot，2-4→warm，1→cold）"""
         if importance >= 5:
             return MemoryType.HOT.value
-        elif importance >= 3:
+        elif importance >= 2:
             return MemoryType.WARM.value
         else:
             return MemoryType.COLD.value
