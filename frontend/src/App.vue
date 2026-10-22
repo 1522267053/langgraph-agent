@@ -1334,7 +1334,7 @@ function handleSessionPageChange(page: number): void {
 
 /* 对话中会话：旋转加载图标（桌面侧栏 + 移动抽屉列表共用） */
 .session-icon-running {
-  color: var(--vermilion);
+  color: var(--vermilion) !important;
 }
 
 /* 审批/反问等待用户响应：停旋转改呼吸灯（透明度+缩放渐变），琥珀色区分执行中 */

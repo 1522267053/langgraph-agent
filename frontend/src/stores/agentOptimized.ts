@@ -1620,10 +1620,17 @@ export const useAgentStore = defineStore('agent', () => {
     result.push(...trailingAiPlaceholders, ...terminalRows)
     chatMessages.value = result
 
-    thinkingContent.value = ''
-    textContent.value = ''
-    currentSegmentType.value = null
-    if (!preserveStreaming) isStreaming.value = false
+    // 流式上下文只在终态清空：流式中（preserveStreaming=true）的 rebuild 来自
+    // loadMore 前插/重连即时合并，直播仍在继续——此处清 currentSegmentType 会让
+    // 下一个 thinking/content chunk 被误判「新块」另建分段（实测每次上翻多一个
+    // 空思考块：loadMore 前正文在 thinking 块中，rebuild 清态后 chunkLen 只剩
+    // 尾巴的碎片块紧随其后）。终态（preserve=false）走 DB 全量重建，缓冲必须清。
+    if (!preserveStreaming) {
+      thinkingContent.value = ''
+      textContent.value = ''
+      currentSegmentType.value = null
+      isStreaming.value = false
+    }
 
     for (let i = messages.value.length - 1; i >= 0; i--) {
       const m = messages.value[i]

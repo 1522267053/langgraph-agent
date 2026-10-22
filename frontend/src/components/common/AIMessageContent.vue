@@ -76,10 +76,14 @@ function isLastSegment(idx: number): boolean {
 
 function isThinkingInProgress(idx: number): boolean {
   if (!props.isStreaming) return false
-  for (let i = idx + 1; i < visibleSegments.value.length; i++) {
-    if (visibleSegments.value[i]?.type === 'content') return false
-  }
-  return true
+  // 仅「最后一个段」且它是 thinking 才算思考中：ReAct 是 thinking→tool→thinking
+  // 交替，历史思考块右侧往往只有 tool 段（该轮无正文产出）——旧判定「右侧无
+  // content 即思考中」会让全部历史块常亮转圈（实测一轮 4 个思考块全部 思考中...）。
+  // tool/content 段出现在思考块之后，即该块已完成的标志。
+  return (
+    idx === visibleSegments.value.length - 1 &&
+    visibleSegments.value[idx]?.type === 'thinking'
+  )
 }
 
 function segmentKey(segment: Segment, idx: number): string {
