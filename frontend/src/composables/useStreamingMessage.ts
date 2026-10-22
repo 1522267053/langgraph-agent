@@ -11,7 +11,6 @@ import {
   updateContent,
   addTool as addToolToSegments,
   updateTool as updateToolInSegments,
-  addTodo as addTodoToSegments,
   attachKnowledgeCitations,
   genSegmentId
 } from '@/composables/useSegmentBuilder'
@@ -69,6 +68,12 @@ export function useStreamingMessage() {
   const textContent = ref('')
   const isStreaming = ref(false)
   const todos = ref<TodoItem[]>([])
+  /**
+   * 内容回放水位（SSE 事件 id）：≤ 水位的段来源事件必已落库（DB 行渲染）。
+   * 数据源优先级：content_watermark 事件（实时）→ running_status 权威值
+   * （重连初始化）→ undefined（旧 run 兜底，不启用回声拦截）。
+   */
+  const contentWatermarkEventId = ref<number | undefined>(undefined)
 
   const messages = ref<StreamingMessage[]>([])
   const latestPromptTokens = ref(0)
@@ -76,6 +81,9 @@ export function useStreamingMessage() {
   /** 待 flush 的 content/thinking 缓冲（非响应式，同一时刻至多一种非空） */
   let pendingContent: string | null = null
   let pendingThinking: string | null = null
+  /** 缓冲对应的首个 SSE 事件 id（水位互斥判定：段 srcEventId ≤ 水位 = 已落库） */
+  let pendingContentEventId: number | null = null
+  let pendingThinkingEventId: number | null = null
   let flushTimer: ReturnType<typeof setTimeout> | null = null
 
   const lastMessage = computed(() => {
@@ -85,7 +93,7 @@ export function useStreamingMessage() {
   /**
    * 将缓冲的 thinking/content 应用到当前流式消息（重建 segments，与原逐 chunk 逻辑一致）
    */
-  function applyThinking(chunk: string): void {
+  function applyThinking(chunk: string, eventId?: number): void {
     if (!chunk) return
     // 空白 chunk（网关空占位/纯换行）不新开思考块，避免渲染出空「思考过程」框；
     // 已在 thinking 块中则照常累积，保留模型思考里的换行排版
@@ -101,10 +109,20 @@ export function useStreamingMessage() {
     if (isNewBlock) {
       msg.segments = [
         ...msg.segments,
-        { type: 'thinking', thinking: thinkingContent.value, id: genSegmentId() }
+        {
+          type: 'thinking',
+          thinking: thinkingContent.value,
+          srcEventId: eventId,
+          id: genSegmentId()
+        }
       ]
     } else {
       msg.segments = updateThinking(msg.segments, thinkingContent.value)
+      // 原地更新的段补标来源事件 id（块首段已在创建时打标，此处兜底续传 chunk）
+      const last = msg.segments[msg.segments.length - 1]
+      if (last?.type === 'thinking' && last.srcEventId == null && eventId != null) {
+        last.srcEventId = eventId
+      }
     }
     msg.thinking = thinkingContent.value
   }
@@ -112,7 +130,7 @@ export function useStreamingMessage() {
   /**
    * 将缓冲的 content 应用到当前流式消息
    */
-  function applyContent(chunk: string): void {
+  function applyContent(chunk: string, eventId?: number): void {
     const isNewBlock = currentSegmentType.value !== 'content'
     if (isNewBlock) {
       currentSegmentType.value = 'content'
@@ -124,10 +142,19 @@ export function useStreamingMessage() {
     if (isNewBlock) {
       msg.segments = [
         ...msg.segments,
-        { type: 'content', content: textContent.value, id: genSegmentId() }
+        {
+          type: 'content',
+          content: textContent.value,
+          srcEventId: eventId,
+          id: genSegmentId()
+        }
       ]
     } else {
       msg.segments = updateContent(msg.segments, textContent.value)
+      const last = msg.segments[msg.segments.length - 1]
+      if (last?.type === 'content' && last.srcEventId == null && eventId != null) {
+        last.srcEventId = eventId
+      }
     }
     msg.content = textContent.value
   }
@@ -142,13 +169,17 @@ export function useStreamingMessage() {
     }
     if (pendingThinking !== null) {
       const chunk = pendingThinking
+      const eventId = pendingThinkingEventId
       pendingThinking = null
-      applyThinking(chunk)
+      pendingThinkingEventId = null
+      applyThinking(chunk, eventId ?? undefined)
     }
     if (pendingContent !== null) {
       const chunk = pendingContent
+      const eventId = pendingContentEventId
       pendingContent = null
-      applyContent(chunk)
+      pendingContentEventId = null
+      applyContent(chunk, eventId ?? undefined)
     }
   }
 
@@ -158,6 +189,8 @@ export function useStreamingMessage() {
   function discardPending(): void {
     pendingContent = null
     pendingThinking = null
+    pendingContentEventId = null
+    pendingThinkingEventId = null
     if (flushTimer) {
       clearTimeout(flushTimer)
       flushTimer = null
@@ -232,10 +265,11 @@ export function useStreamingMessage() {
    * 续传 chunk（同一 thinking 块的后续增量）走 updateThinking 原地更新。
    * 切换分段类型时（如 content → thinking）先 flush 保证分段顺序。
    */
-  function appendThinking(chunk: string): void {
+  function appendThinking(chunk: string, eventId?: number): void {
     if (pendingContent !== null) flushPending()
     if (pendingThinking === null) {
       pendingThinking = chunk
+      pendingThinkingEventId = eventId ?? null
       scheduleFlush()
     } else {
       pendingThinking += chunk
@@ -249,10 +283,11 @@ export function useStreamingMessage() {
    * 避免 updateContent 的前缀匹配命中上一轮的旧 content 分段（位于 tool 之前）。
    * 切换分段类型时（如 thinking → content）先 flush 保证分段顺序。
    */
-  function appendContent(chunk: string): void {
+  function appendContent(chunk: string, eventId?: number): void {
     if (pendingThinking !== null) flushPending()
     if (pendingContent === null) {
       pendingContent = chunk
+      pendingContentEventId = eventId ?? null
       scheduleFlush()
     } else {
       pendingContent += chunk
@@ -266,13 +301,18 @@ export function useStreamingMessage() {
     name: string,
     args?: Record<string, unknown>,
     status: 'running' | 'success' | 'error' = 'running',
-    toolCallId?: string
+    toolCallId?: string,
+    eventId?: number
   ): void {
     // 工具分段必须排在已缓冲的 thinking/content 之后
     flushPending()
     currentSegmentType.value = 'tool'
     const msg = getOrCreateStreamingMessage()
-    msg.segments = addToolToSegments(msg.segments, name, args, status, undefined, toolCallId)
+    const segments = addToolToSegments(msg.segments, name, args, status, undefined, toolCallId)
+    // 新增段打标来源事件 id（addTool 恒为追加，末段即新段）
+    const last = segments[segments.length - 1]
+    if (last && eventId != null) last.srcEventId = eventId
+    msg.segments = segments
 
     if (!msg.tools) {
       msg.tools = []
@@ -390,13 +430,47 @@ export function useStreamingMessage() {
 
   /**
    * 添加任务计划分段到当前消息
+   *
+   * 建卡条件与 DB 重建路径（buildChatMessagesFromDB）对齐：**仅当最后一个工具段
+   * 是 todowrite/todoread 时**在紧随其后的位置建卡，否则只更新面板（todos ref 由
+   * 调用方先行同步）。此前「收到事件无条件在行尾独立建卡」导致：重连回放时水位
+   * 过滤拦掉了中间的工具事件、历史 todo 事件却照发，卡片悬空挂在 browser 等无关
+   * 工具后面，且与 DB 已渲染的同内容卡成对重复（实测同轮 13 项计划卡 ×2 相邻）。
+   *
+   * 回声拦截：段来源事件 id ≤ 内容水位（已落库，DB 行会渲染同内容卡）时跳过建卡
+   * ——水位由 content_watermark 事件/running_status 权威值维护，无水位信息时
+   * （旧 run 兜底）不拦截，宁多勿丢。
    */
-  function addTodoSegment(newTodos: TodoItem[]): void {
+  function addTodoSegment(
+    newTodos: TodoItem[],
+    eventId?: number,
+    contentWatermarkEventId?: number
+  ): void {
     // todo 分段必须排在已缓冲的 thinking/content 之后
     flushPending()
     currentSegmentType.value = 'todo'
+    // 回声拦截：来源事件已落库（≤ 水位）→ DB 行负责渲染，此处只同步面板
+    if (
+      eventId != null &&
+      contentWatermarkEventId != null &&
+      eventId <= contentWatermarkEventId
+    ) {
+      return
+    }
     const msg = getOrCreateStreamingMessage()
-    msg.segments = addTodoToSegments(msg.segments, newTodos)
+    // 相邻建卡：找最后一个 tool 段，仅 todowrite/todoread 时紧随其后插入
+    let insertAt = -1
+    for (let i = msg.segments.length - 1; i >= 0; i--) {
+      if (msg.segments[i].type === 'tool') {
+        const name = msg.segments[i].tool?.name || ''
+        if (name === 'todowrite' || name === 'todoread') insertAt = i + 1
+        break
+      }
+    }
+    if (insertAt === -1) return
+    const seg: Segment = { type: 'todo', todo: [...newTodos], id: genSegmentId() }
+    if (eventId != null) seg.srcEventId = eventId
+    msg.segments = [...msg.segments.slice(0, insertAt), seg, ...msg.segments.slice(insertAt)]
   }
 
   /** Attach validated citations after all buffered answer text is visible. */
@@ -454,6 +528,7 @@ export function useStreamingMessage() {
     textContent,
     isStreaming,
     todos,
+    contentWatermarkEventId,
     messages,
     lastMessage,
     latestPromptTokens,

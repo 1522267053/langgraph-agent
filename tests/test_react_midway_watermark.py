@@ -40,7 +40,8 @@ async def test_advance_watermark_no_run_noop():
 
 
 async def test_advance_watermark_active_run():
-    """活跃 run：水位推进到 last_event_id，且内容类事件被 prune 置 None"""
+    """活跃 run：水位推进到落库时刻 last_event_id，内容类事件 prune 置 None，
+    并发布 content_watermark 面板事件（实时订阅者同步前端本地水位）"""
     service = AgentExecutorService()
     run = _make_run(
         [
@@ -55,13 +56,20 @@ async def test_advance_watermark_active_run():
 
     service.advance_content_watermark(run.session_id)
 
-    assert run.content_watermark_event_id == run.last_event_id == 4
+    # 水位 = 推进时刻的 last_event_id；发布的水位事件自身 id 更大（5）
+    assert run.content_watermark_event_id == 4
+    assert run.last_event_id == 5
     # 水位前内容类事件已释放（置 None 占位）
     assert run.events[0] is None  # node_content
     assert run.events[1] is None  # node_thinking
     # 水位前轻量事件保留（计划面板恢复依赖）
     assert run.events[2] is not None  # todo_update
     assert run.events[3] is not None  # node_done
+    # 水位事件已发布，携带推进后的水位值
+    watermark_event = run.events[4]
+    assert watermark_event is not None
+    assert watermark_event["type"] == "content_watermark"
+    assert watermark_event["data"]["watermark_event_id"] == 4
 
 
 async def test_advance_watermark_done_run_noop():
@@ -75,6 +83,40 @@ async def test_advance_watermark_done_run_noop():
 
     assert run.content_watermark_event_id == 0
     assert run.events[0] is not None
+
+
+async def test_node_done_publishes_watermark_event():
+    """node_done 经真实发布路径推进水位时同步发布 content_watermark 事件。
+
+    无工具轮次（LLM 单节点直出）没有中途落库推进、全程直播也不走 running_status
+    初始化——若 node_done 不发水位事件，前端水位恒 undefined，flow_done 终态拼接
+    时「宁多勿丢」兜底保留全部 live 段，与 DB 全量段成对重复（实测无工具长文本
+    轮内容渲染两份）。
+    """
+    service = AgentExecutorService()
+    run = _make_run(
+        [
+            (1, "node_thinking"),
+            (2, "node_content"),
+        ],
+        watermark=0,
+    )
+    service._agent_runs[run.session_id] = run
+
+    # 经真实发布路径发 node_done（与生产一致：id 分配/水位/事件流/唤醒全走统一入口）
+    service._publish_agent_run_event(run, {"type": "node_done", "data": {}})
+
+    # 发布路径分配 id=3；水位推进到 node_done 自身 id，随后紧邻发布水位事件（id=4）
+    assert run.content_watermark_event_id == 3
+    assert run.events[2] is not None
+    assert run.events[2]["type"] == "node_done"
+    assert run.events[3] is not None
+    assert run.events[3]["type"] == "content_watermark"
+    assert run.events[3]["data"]["watermark_event_id"] == 3
+    assert run.last_event_id == 4
+    # 水位前的内容类事件已被 prune 置 None；node_done/水位事件保留
+    assert run.events[0] is None
+    assert run.events[1] is None
 
 
 # ---- prune_persisted_events ----
@@ -137,12 +179,13 @@ def test_prune_covers_all_persisted_types():
 
 
 async def test_subscribe_run_skips_none_placeholders():
-    """回放循环遇 None 占位：不死循环、占位跳过、后续事件正常送达"""
+    """回放循环遇 None 占位：不死循环、占位跳过、后续事件正常送达；
+    面板类事件（todo_update）按最新快照语义在追赶结束后统一回放"""
     service = AgentExecutorService()
     run = _make_run(
         [
             (1, "node_content"),  # 将被 prune 置 None
-            (2, "todo_update"),  # 保留，应回放
+            (2, "todo_update"),  # 保留，面板类 → 缓冲后统一回放
             (3, "node_content"),  # 水位后，应回放
         ],
         watermark=1,
@@ -156,10 +199,12 @@ async def test_subscribe_run_skips_none_placeholders():
     async for event in service.subscribe_run(run.session_id, run.run_id):
         received.append(event)
 
-    # None 占位被跳过，未死循环；保留事件正常送达
-    assert [e["id"] for e in received] == [2, 3]
-    assert received[0]["type"] == "todo_update"
-    assert received[1]["type"] == "node_content"
+    # None 占位被跳过；内容类实时事件直发（id=3 先出），面板类缓冲在
+    # 追赶结束后统一回放（id=2 后出）——仅面板类重排，无丢失
+    assert [(e["id"], e["type"]) for e in received] == [
+        (3, "node_content"),
+        (2, "todo_update"),
+    ]
 
 
 async def test_subscribe_run_none_placeholder_before_watermark_filtered():
@@ -181,6 +226,66 @@ async def test_subscribe_run_none_placeholder_before_watermark_filtered():
     async for event in service.subscribe_run(run.session_id, run.run_id):
         received.append(event)
     assert received == []
+
+
+async def test_subscribe_run_panel_snapshots_latest_only():
+    """面板类事件回放快照化：同类型多条只回放最新一条（回放回声消除——
+    历史 todo_update 全量重发会与 DB 落库行渲染的卡片成对重复）"""
+    service = AgentExecutorService()
+    run = _make_run(
+        [
+            (1, "todo_update"),
+            (2, "node_content"),
+            (3, "todo_update"),
+            (4, "sub_agent_progress"),
+            (5, "sub_agent_progress"),
+        ],
+        watermark=2,  # node_content(id=2) 被水位过滤
+    )
+    run.done = True
+    service._agent_runs[run.session_id] = run
+
+    received = []
+    async for event in service.subscribe_run(run.session_id, run.run_id):
+        received.append(event)
+
+    # todo_update 只留 id=3；sub_agent_progress 只留 id=5；按 id 序回放
+    assert [(e["id"], e["type"]) for e in received] == [
+        (3, "todo_update"),
+        (5, "sub_agent_progress"),
+    ]
+
+
+async def test_subscribe_run_live_panel_events_direct():
+    """面板类事件实时直发不受快照缓冲影响：追赶结束（panel_flushed）后到达的
+    todo_update 照常立即送达（实时流式建卡依赖此路径）"""
+    service = AgentExecutorService()
+    run = _make_run([(1, "todo_update")], watermark=1)
+    service._agent_runs[run.session_id] = run
+
+    async def publish_soon():
+        # 订阅建立后经真实发布路径追加事件：_publish_agent_run_event 维护
+        # next_event_id/events/订阅者唤醒，生成器从 wait() 醒来后走实时直发
+        await asyncio.sleep(0.05)
+        service._publish_agent_run_event(run, {"type": "todo_update", "data": {}})
+
+    publisher = asyncio.ensure_future(publish_soon())
+    received = []
+    # 生成器消费到实时事件后即断开（生产语义：客户端收到所需数据主动关闭），
+    # 显式关闭触发 finally 清理订阅者；不依赖 run.done（该路径与被测行为无关）
+    gen = service.subscribe_run(run.session_id, run.run_id)
+    async for event in gen:
+        received.append(event)
+        if event["id"] == 2:
+            break
+    await publisher
+    await gen.aclose()
+
+    # 追赶期缓冲的 id=1 快照先统一回放，实时到达的 id=2 直发
+    assert [(e["id"], e["type"]) for e in received] == [
+        (1, "todo_update"),
+        (2, "todo_update"),
+    ]
 
 
 async def test_subscribe_run_live_wait_after_replay():

@@ -694,6 +694,13 @@ class LlmToolNodeHandler(BaseNodeHandler):
             )
         # 先保存一下user_prompt的消息到数据库中（先于工具加载，缩短 MCP 慢加载场景的首字延迟）
         await msg_buf.save_to_db()
+        if self.session_id:
+            # 回填本轮起始 human 行 id（幂等）：断线重连时前端据此划定「本轮新增」
+            # 基线。必须紧随 save_to_db（human 行此时才可查）；首个 LLM 节点写入后
+            # 同轮后续节点/迭代重复调用被 first-write-wins 排除
+            from app.services.agent_executor_service import agent_executor_service
+
+            await agent_executor_service.mark_round_start_message(self.session_id)
 
         # 单次遍历：收集工具 + 注入处理器依赖 + 收集 prompt 提示
         # runtime_reminders: 各工具 handler 的动态提醒片段（如工作目录），

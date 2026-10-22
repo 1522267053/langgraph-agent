@@ -38,6 +38,8 @@ export interface Segment {
   /** 流式分段稳定标识，供列表渲染使用 */
   id?: string
   dbMsgId?: number
+  /** 来源 SSE 事件 id：水位互斥判定依据（≤ 水位 = 已落库，由 DB 行渲染） */
+  srcEventId?: number
   thinking?: string
   content?: string
   tool?: ToolCall

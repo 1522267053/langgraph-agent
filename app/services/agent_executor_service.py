@@ -103,6 +103,15 @@ _PERSISTED_CONTENT_EVENT_TYPES = frozenset(
     }
 )
 
+# 面板类事件（快照语义，不落消息表）：回放时每类只发游标区间内最新一条。
+# 全量回放的历史快照会与 DB 落库行渲染的卡片重复（实测任务计划卡成对翻倍 +
+# 悬空错位），且对恢复「面板当前状态」而言只有最新一条有意义——与前端
+# updateTodos/updateToolLiveOutput 的快照替换语义天然匹配。
+# content_watermark 属幂等推进（重复收到大者生效），同样按最新一条回放即可。
+_PANEL_SNAPSHOT_EVENT_TYPES = frozenset(
+    {"todo_update", "sub_agent_progress", "content_watermark"}
+)
+
 
 @dataclass
 class _AgentRun:
@@ -138,6 +147,12 @@ class _AgentRun:
     # 绝对时间戳，故另存墙钟值。resume 场景每次新建 _AgentRun，自动刷新为
     # 恢复时刻——等待用户输入的时间不计入本轮时长，与 round_started 语义一致。
     round_started_at: float | None = None
+    # 本轮起始 human 行 id（权威轮次基线）：user_prompt 首次落库后由 handler 回填，
+    # 经 get_run_status 下发。前端断线重连时以此为「本轮新增」判定基准——
+    # 首屏窗口只有 20 条，长 ReAct 会把本轮 human 行挤出窗口，靠窗口内找
+    # human 推断基线在轮中间会被切断（实测：同轮内容拆成两个气泡且交叉乱序）。
+    # 0 = 未回填（resume 路径暂未覆盖，前端回退窗口推断）。
+    round_start_message_id: int = 0
 
     @property
     def last_event_id(self) -> int:
@@ -211,6 +226,15 @@ class AgentExecutorService(BaseExecutorService):
             # 更早的内容类事件由 DB 重建呈现，回放跳过；之后的属于进行中节点
             run.content_watermark_event_id = stored_event["id"]
             run.prune_persisted_events()
+            # 同步发布水位事件：前端 contentWatermarkEventId 只认 content_watermark
+            # 事件/running_status 初始化两个来源。无工具轮次（LLM 单节点直出）
+            # 没有中途落库推进、全程直播也不走重连初始化——此前水位事件缺位导致
+            # 前端水位恒 undefined，flow_done 终态拼接时「宁多勿丢」兜底保留全部
+            # live 段，与 DB 全量段成对重复（实测无工具长文本轮内容渲染两份）。
+            # 面板类回放通道（每类只发最新一条），回放负担恒定。
+            self._publish_agent_run_event(
+                run, FlowEventFactory.content_watermark(run.content_watermark_event_id)
+            )
         if stored_event["type"] == "tool_approval_required" and run.approval_callback:
             try:
                 run.approval_callback(stored_event)
@@ -626,6 +650,11 @@ class AgentExecutorService(BaseExecutorService):
         wake_event = asyncio.Event()
         run.subscribers.add(wake_event)
         try:
+            # 面板类事件回放缓冲：首轮追赶期间每类只保留最新一条（发布顺序遍历，
+            # 后到覆盖先到），追赶结束后按 id 序统一回放，其后到达的实时事件照常
+            # 直发。asyncio 单线程保证内层追赶循环期间无新事件写入，缓冲无竞态。
+            panel_pending: dict[str, dict] = {}
+            panel_flushed = False
             while True:
                 wake_event.clear()
                 # 事件 ID 从 1 连续递增，cursor 同时是下一事件的列表索引。
@@ -646,6 +675,13 @@ class AgentExecutorService(BaseExecutorService):
                         event["type"] in _PERSISTED_CONTENT_EVENT_TYPES
                         and event["id"] <= run.content_watermark_event_id
                     ):
+                        continue
+                    if (
+                        event["type"] in _PANEL_SNAPSHOT_EVENT_TYPES
+                        and not panel_flushed
+                    ):
+                        # 回放区间内的面板类事件：只留每类最新一条，统一回放
+                        panel_pending[event["type"]] = event
                         continue
                     if event["type"] in (
                         "tool_approval_required",
@@ -684,6 +720,14 @@ class AgentExecutorService(BaseExecutorService):
                             "data": {**data, "expires_in": remaining},
                         }
                     yield event
+                # 首轮追赶结束：按 id 序回放每类最新面板快照，此后实时事件直发
+                if not panel_flushed:
+                    panel_flushed = True
+                    for buffered in sorted(
+                        panel_pending.values(), key=lambda e: e["id"]
+                    ):
+                        yield buffered
+                    panel_pending.clear()
                 if run.done:
                     return
                 await wake_event.wait()
@@ -709,12 +753,53 @@ class AgentExecutorService(BaseExecutorService):
         落库成功时刻的 last_event_id 之前的所有内容类事件均已有对应 DB 行，
         断线重连回放可安全跳过（subscribe_run 水位过滤自动生效），
         并释放这部分事件的内存。run 不存在（Flow 模式）或已结束时 no-op。
+
+        推进后发布 content_watermark 面板事件：实时订阅者即时同步前端本地水位
+        （段级 srcEventId ≤ 水位 → 已落库，由 DB 行渲染）；断线重连回放按面板类
+        语义只发最新一条。先定水位值再发布——新事件自身 id 必大于水位值，
+        不会被自己的水位过滤误伤。
         """
         self._prune_agent_runs()
         run = self._agent_runs.get(session_id)
         if run and not run.done:
             run.content_watermark_event_id = run.last_event_id
             run.prune_persisted_events()
+            self._publish_agent_run_event(
+                run, FlowEventFactory.content_watermark(run.content_watermark_event_id)
+            )
+
+    async def mark_round_start_message(self, session_id: int) -> None:
+        """回填本轮起始 human 行 id（幂等，仅首次生效）。
+
+        由 llm_tool_handler 在 user_prompt 落库后 await 调用：查该会话最新一条
+        human 行写入 round_start_message_id。幂等性依赖「仅未回填时写入」——
+        ReAct 后续迭代/多 LLM 节点重复调用不会覆盖首个值（多节点轮内中途
+        回填晚于首个节点的场景被 first-write-wins 排除）。
+        run 不存在或已结束时静默忽略（无回放下发主体，无需回填）。
+        """
+        self._prune_agent_runs()
+        run = self._agent_runs.get(session_id)
+        if not run or run.done or run.round_start_message_id:
+            return
+        from sqlalchemy import select
+
+        from app.config.database import AsyncSessionLocal
+        from app.models.agent_message import AgentMessage
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(AgentMessage.id)
+                .where(
+                    AgentMessage.session_id == session_id,
+                    AgentMessage.role == "human",
+                    AgentMessage.is_delete == 0,
+                )
+                .order_by(AgentMessage.id.desc())
+                .limit(1)
+            )
+            # first-write-wins：查询期间若已被并发回填（理论不可达，防御性保留）
+            if not run.round_start_message_id:
+                run.round_start_message_id = int(result.scalar() or 0)
 
     def get_run_status(self, session_id: int) -> dict[str, Any]:
         """返回会话运行状态及当前可订阅游标。"""
@@ -738,6 +823,9 @@ class AgentExecutorService(BaseExecutorService):
                 if run and run.round_started_at is not None
                 else None
             ),
+            # 本轮起始 human 行 id（权威轮次基线）：前端断线重连时优先用它做
+            # 「本轮新增」判定，避免首屏窗口截断导致基线落在轮中间
+            "round_start_message_id": (run.round_start_message_id if run else 0),
             "waiting_event": self._waiting_events.get(session_id),
         }
 

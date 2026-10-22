@@ -35,6 +35,7 @@ class FlowEventType(str, Enum):
     KNOWLEDGE_CITATIONS = "knowledge_citations"
     QUESTION_REQUEST = "question_request"
     FILE_CHANGED = "file_changed"
+    CONTENT_WATERMARK = "content_watermark"
 
 
 class FlowEvent(BaseModel):
@@ -286,6 +287,21 @@ class TodoUpdateEvent(FlowEvent):
 
     def _get_event_type(self) -> FlowEventType:
         return FlowEventType.TODO_UPDATE
+
+
+class ContentWatermarkEvent(FlowEvent):
+    """内容回放水位推进事件（ReAct 中途落库后发布）
+
+    前端据 data.watermark_event_id 更新本地水位：SSE 段的 srcEventId ≤ 水位
+    视为「已落库、由 DB 行渲染」，合并/建卡时跳过——DB 区与事件区自此按事件
+    id 互斥，无需内容匹配。断线重连回放时该事件与其他面板类事件一致，仅回放
+    游标区间内最新一条。
+    """
+
+    watermark_event_id: int = Field(..., description="推进后的内容回放水位事件 id")
+
+    def _get_event_type(self) -> FlowEventType:
+        return FlowEventType.CONTENT_WATERMARK
 
 
 class ErrorEvent(FlowEvent):
@@ -555,6 +571,11 @@ class FlowEventFactory:
     def todo_update(todos: list) -> dict:
         """创建任务计划更新事件"""
         return TodoUpdateEvent(todos=todos).to_dict()
+
+    @staticmethod
+    def content_watermark(watermark_event_id: int) -> dict:
+        """创建内容回放水位推进事件"""
+        return ContentWatermarkEvent(watermark_event_id=watermark_event_id).to_dict()
 
     @staticmethod
     def tool_approval(

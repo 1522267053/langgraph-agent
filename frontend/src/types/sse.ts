@@ -164,6 +164,8 @@ export interface FlowSSEHandlers {
   onFlowDone?: SSEEventHandler
   /** 任务计划更新 */
   onTodoUpdate?: SSEEventHandler
+  /** 内容回放水位推进（ReAct 中途落库后发布；≤ 水位的段来源事件已落库） */
+  onContentWatermark?: SSEEventHandler
   /** 错误处理 */
   onError?: SSEEventHandler
   /** LLM重试 */
@@ -205,6 +207,7 @@ export const EVENT_HANDLER_MAP = {
   tool_approval_required: 'onToolApproval',
   sub_agent_progress: 'onSubAgentProgress',
   todo_update: 'onTodoUpdate',
+  content_watermark: 'onContentWatermark',
   flow_done: 'onFlowDone',
   llm_retry: 'onLlmRetry',
   context_compressing: 'onContextCompressing',

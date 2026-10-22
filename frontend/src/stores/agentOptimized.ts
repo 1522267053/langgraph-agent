@@ -60,6 +60,9 @@ export const useAgentStore = defineStore('agent', () => {
     for (const m of messages.value) {
       if (m.id > streamBaseMsgId) streamBaseMsgId = m.id
     }
+    // 新轮次事件 id 重新从 1 计数：上一轮水位对新轮事件是过期约束（会把新轮
+    // 事件误判为已落库回声），必须清零，等新 run 的 content_watermark 重同步
+    contentWatermarkEventId.value = undefined
   }
 
   /**
@@ -104,6 +107,7 @@ export const useAgentStore = defineStore('agent', () => {
     textContent,
     currentSegmentType,
     todos,
+    contentWatermarkEventId,
     addUserMessage,
     startStreaming,
     appendThinking,
@@ -875,6 +879,22 @@ export const useAgentStore = defineStore('agent', () => {
         runRes.data.data?.running
       ) {
         // 新事件写入独立气泡；完成后仍以数据库消息为准重建。
+        // ---- 权威轮次基线：后端回填的本轮 human 行 id 优先 ----
+        // 首屏窗口仅 20 条，长 ReAct 会把本轮 human 行挤出窗口，此前「窗口内找
+        // human → 找不到退化为窗口最小 id-1」会把基线落在轮中间——后续 loadMore
+        // 拉入同轮旧行时，跨基线拆分把同一轮拦腰切成两个气泡（实测交叉乱序）。
+        // 后端在 user_prompt 落库后回填 round_start_message_id，此处用
+        // 「权威值 - 1」覆盖窗口推断值，再进行下面的即时合并。
+        const backendRoundStartId = Number(runRes.data.data?.round_start_message_id) || 0
+        if (backendRoundStartId > 0) {
+          streamBaseMsgId = backendRoundStartId - 1
+        }
+        // 内容回放水位初始化：重连回放前以 running_status 权威值为准，使回放区间
+        // 内 ≤ 水位的段来源事件在前端即被回声拦截（后端回放水位过滤的双保险）
+        const backendWatermark = Number(runRes.data.data?.content_watermark_event_id) || 0
+        if (backendWatermark > (contentWatermarkEventId.value ?? 0)) {
+          contentWatermarkEventId.value = backendWatermark
+        }
         startStreaming(true)
         // 立即与 DB 已重建的 ai 组做一次对齐合并。
         //
@@ -995,6 +1015,18 @@ export const useAgentStore = defineStore('agent', () => {
           messageTotal.value = res.data.data?.total || messageTotal.value
           messages.value = [...olderMessages, ...messages.value]
           // 流式中前插：保留流式状态（rebuildChatMessages 默认会翻 isStreaming=false）
+          // 基线重推：退化基线（窗口最小id-1）只在「窗口=本轮全部行」前提下自洽；
+          // loadMore 拉入同轮更早的已落库行后该前提被打破——若沿用旧基线，
+          // rebuild 的「跨基线并组拆分」会把同一轮内容在基线处拦腰切成
+          // [历史气泡(基线前段)] + [活跃气泡(基线后段)] 两个 ai 气泡。
+          // 重推 = 用扩展后的全量本地行重找本轮 human 行（流式中 human 行
+          // id 必然 ≤ 旧基线前插行之外的所有新增行，重找结果只会更准）。
+          if (isStreaming.value) {
+            const lastHuman = [...messages.value].reverse().find(m => m.role === 'human')
+            if (lastHuman && lastHuman.id - 1 < streamBaseMsgId) {
+              streamBaseMsgId = lastHuman.id - 1
+            }
+          }
           rebuildChatMessages(isStreaming.value)
           await nextTick()
           return olderMessages.length
@@ -1461,16 +1493,32 @@ export const useAgentStore = defineStore('agent', () => {
         ph.completion_tokens = candidate.completion_tokens
         ph.total_tokens = candidate.total_tokens
         if (candidate.latest_prompt_tokens) ph.latest_prompt_tokens = candidate.latest_prompt_tokens
-        // reattach 补段：页面刷新重连只回放尾部事件，占位行缺刷新前的 thinking/
-        // tool 段。候选组（DB 重建）持有占位行完全缺失的段类型时，以候选组段
-        // 整体替换（保留占位行 id/key）。live 流式场景占位行段类型为候选组超集
-        // 不触发，DB 缺段场景候选组不会多出类型也不触发，均保持防回退语义
-        const phSegTypes = new Set(ph.segments.map(s => s.type))
-        if (candidate.segments.some(s => !phSegTypes.has(s.type))) {
-          ph.segments = candidate.segments
-          ph.content = candidate.content
-          ph.thinking = candidate.thinking
-        }
+        // ---- 区块拼接（事件 id 互斥，无任何段级匹配） ----
+        //
+        // 不变量：candidate 组的段全部带 dbMsgId（DB 权威，落库时序）；ph（占位行）
+        // 的 live 段带 srcEventId（SSE 来源事件 id）。后端保证「事件 id ≤ 水位的内容
+        // 必已落库」，故 ph 中 srcEventId ≤ 水位的段与 candidate 的 DB 段必然重叠
+        // （回放回声），直接丢弃；> 水位或无 srcEventId 的是「进行中、未落库」增量，
+        // 全部保留。两区自此互斥，拼接 = 一次数组连接，无配对/前缀匹配/签名判重
+        // （此前四版段级匹配补丁——键判重、序数游标、身份制、前缀 fuzzy——全部删除，
+        // 它们的连环缺陷：键永不命中整批复制、序数错位重复 key、顺序漂移乱序，
+        // 根因都是试图在「两源重叠」上做内容级仲裁，而正确解是让两源不重叠）。
+        //
+        // 水位来源（useStreamingMessage.contentWatermarkEventId）：content_watermark
+        // 事件实时同步 → running_status 权威值重连初始化 → undefined（旧 run 兜底，
+        // 不丢弃任何段，宁多勿丢——最坏回到「多一张卡」，不会丢内容）。
+        const watermark = contentWatermarkEventId.value
+        const liveKept = ph.segments.filter(seg => {
+          // 上次拼接进来的 DB 段（带 dbMsgId、无 srcEventId）：candidate 已包含
+          // 全部 DB 段（同确定性段 id），不排除会双份 → Vue 重复 key
+          // （实测流式中 loadMore：row-s-1863-t 等确定性段 id 重复告警）
+          if (seg.dbMsgId != null) return false
+          if (watermark == null) return true
+          if (seg.srcEventId == null) return true
+          return seg.srcEventId > watermark
+        })
+        // DB 段（落库时序）在前，live 增量段在后；空占位行拼完即纯 DB 快照
+        ph.segments = [...candidate.segments, ...liveKept]
         matchedPlaceholders.push(ph)
       }
     }
@@ -1750,11 +1798,11 @@ export const useAgentStore = defineStore('agent', () => {
       },
       onNodeThinking: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
-        appendThinking(event.data.content || '')
+        appendThinking(event.data.content || '', Number(event.id) || undefined)
       },
       onNodeContent: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
-        appendContent(event.data.content || '')
+        appendContent(event.data.content || '', Number(event.id) || undefined)
       },
       onNodeDone: () => {
         // 节点完成处理
@@ -1765,7 +1813,8 @@ export const useAgentStore = defineStore('agent', () => {
           event.data.tool_name || '',
           event.data.tool_args || {},
           'running',
-          event.data.tool_call_id
+          event.data.tool_call_id,
+          Number(event.id) || undefined
         )
       },
       onToolCallEnd: (event: SSEEvent) => {
@@ -1791,8 +1840,17 @@ export const useAgentStore = defineStore('agent', () => {
       onTodoUpdate: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return
         const newTodos = (event.data.todos || []) as TodoItem[]
+        const eventId = Number(event.id) || undefined
         updateTodos(newTodos)
-        addTodoSegment(newTodos)
+        addTodoSegment(newTodos, eventId, contentWatermarkEventId.value)
+      },
+      onContentWatermark: (event: SSEEvent) => {
+        if (!isCurrentStream(context)) return
+        // 内容回放水位实时同步：≤ 水位的段来源事件必已落库（DB 行渲染）
+        const watermark = Number(event.data.watermark_event_id) || 0
+        if (watermark > (contentWatermarkEventId.value ?? 0)) {
+          contentWatermarkEventId.value = watermark
+        }
       },
       onKnowledgeCitations: (event: SSEEvent) => {
         if (!isCurrentStream(context)) return

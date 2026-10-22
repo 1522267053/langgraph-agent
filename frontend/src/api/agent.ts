@@ -38,6 +38,11 @@ interface AgentRunStatus {
    * 避免依赖「首屏窗口内的 human 行」（长 ReAct 会把它挤出 20 条窗口 → 计时归零）
    */
   round_started_at_ms: number | null
+  /**
+   * 本轮起始 human 行 id（后端权威轮次基线）：断线重连时优先用它划定「本轮新增」
+   * （基线 = 该 id - 1）。0 = 未回填，前端回退窗口推断
+   */
+  round_start_message_id: number
   terminal_event_type: string | null
   waiting_event: SSEEvent | null
 }
