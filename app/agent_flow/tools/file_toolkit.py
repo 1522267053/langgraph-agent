@@ -100,7 +100,10 @@ class FileSearchInput(BaseModel):
     )
     include: Optional[str] = Field(
         None,
-        description="文件类型过滤（如 *.py, *.{ts,tsx}），仅搜索匹配的文件",
+        description=(
+            "文件类型过滤，逗号分隔多模式或 {a,b} 花括号（如 *.py, *.{ts,tsx}），"
+            "按文件名匹配；两条搜索路径（ripgrep/Python 回退）行为一致"
+        ),
     )
     literal_text: bool = Field(
         False,
@@ -113,7 +116,11 @@ class ListFilesInput(BaseModel):
 
     pattern: str = Field(
         "**/*",
-        description="glob 文件名匹配模式，如 **/*.py、src/**/*.ts、*.json",
+        description=(
+            "glob 文件名匹配模式，如 **/*.py、src/**/*.ts、*.json；"
+            "支持 {a,b} 花括号展开（bash 语义，如 {README.md,AGENTS.md}）；"
+            "不支持正则语法（如 ^ $ | ( )）"
+        ),
     )
     path: Optional[str] = Field(
         None, description="搜索目录路径，不传则使用当前工作目录"
@@ -197,6 +204,107 @@ def _collect_match_lines(raw: str, starts: list[int], max_lines: int = 10) -> li
     return sorted(raw.count("\n", 0, s) + 1 for s in starts[:max_lines])
 
 
+# ---- 花括号展开（bash 语义；list_files pattern 与 file_search include 共用）----
+
+# 展开分支数上限：防 {a,b}×{1..9999} 类模式把展开炸成巨量 glob 调用
+MAX_BRACE_EXPANSIONS = 64
+
+
+def _expand_brace_pattern(pattern: str) -> list[str]:
+    """对 glob 模式做 {a,b,...} 花括号展开（bash 语义，支持嵌套）。
+
+    Python 的 pathlib.Path.glob 不支持花括号（bash 专属语法），字面匹配
+    导致 `{README.md,AGENTS.md}` 永远零命中；本函数在 glob 前手动展开。
+    无花括号时原样返回单元素列表，行为与直接 glob 完全一致。
+
+    展开结果超过 MAX_BRACE_EXPANSIONS 时抛 ValueError（防展开爆炸），
+    调用方转为用户可读错误。
+    """
+    # glob 语法无转义机制，'{' 按字面定位
+    open_idx = pattern.find("{")
+    if open_idx == -1:
+        return [pattern]
+
+    # 匹配配对的 '}'（深度计数，支持嵌套）
+    depth = 0
+    close_idx = -1
+    for i in range(open_idx, len(pattern)):
+        if pattern[i] == "{":
+            depth += 1
+        elif pattern[i] == "}":
+            depth -= 1
+            if depth == 0:
+                close_idx = i
+                break
+    if close_idx == -1:
+        # 不配对（如 "{a,b"）：按字面处理，与 glob 字面语义一致
+        return [pattern]
+
+    prefix, body, suffix = (
+        pattern[:open_idx],
+        pattern[open_idx + 1 : close_idx],
+        pattern[close_idx + 1 :],
+    )
+
+    # 递归展开：先按顶层逗号切分 body（嵌套花括号整体保留给子层处理）
+    parts: list[str] = []
+    buf: list[str] = []
+    sub_depth = 0
+    has_top_comma = False
+    for ch in body:
+        if ch == "{":
+            sub_depth += 1
+        elif ch == "}":
+            sub_depth -= 1
+        if ch == "," and sub_depth == 0:
+            has_top_comma = True
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    parts.append("".join(buf))
+
+    # bash 语义：无顶层逗号（如 "{a}"、"{.ssh}"、"{}"）不展开，保持字面，
+    # 避免误剥文件名里真实存在的花括号
+    if not has_top_comma:
+        return [pattern]
+
+    expanded: list[str] = []
+    for part in parts:
+        # 嵌套花括号在子层继续展开（suffix 中还可能有花括号）
+        for sub in _expand_brace_pattern(part + suffix):
+            expanded.append(prefix + sub)
+            if len(expanded) > MAX_BRACE_EXPANSIONS:
+                raise ValueError(
+                    f"花括号展开超过 {MAX_BRACE_EXPANSIONS} 个分支，"
+                    "请拆分模式或减少分支"
+                )
+    return expanded
+
+
+def _split_include_globs(include: str) -> list[str]:
+    """将 file_search 的 include 过滤串拆为叶子 glob 列表。
+
+    处理顺序必须是「先花括号展开、再切逗号」：直接按逗号切分会把
+    `*.{ts,tsx}` 拦腰截成 `*.{ts` / `tsx}` 两段坏模式。先展开后，
+    花括号内的逗号已被展开消化，剩余顶层逗号才是模式分隔符
+    （`*.py, *.{ts,tsx}` → `*.py, *.ts` / `*.py, *.tsx` → 三叶子）。
+    展开（含上限）与 ripgrep/Python 回退两条路径共用，保证 include
+    过滤行为逐字节一致（此前回退路径 fnmatch 不认花括号，与 ripgrep
+    主路径行为分裂）。
+    """
+    globs: list[str] = []
+    seen: set[str] = set()
+    for expanded in _expand_brace_pattern(include):
+        for piece in expanded.split(","):
+            piece = piece.strip()
+            # 保序去重：*.{ts,tsx} 展开含隐式 *.py，与显式 *.py 重复
+            if piece and piece not in seen:
+                seen.add(piece)
+                globs.append(piece)
+    return globs
+
+
 # ---- 描述单源（唯一维护点；tool_info 与 build_tools 共用）----
 FILE_TOOL_DESCRIPTIONS: dict[str, str] = {
     "text_editor": (
@@ -235,7 +343,8 @@ FILE_TOOL_DESCRIPTIONS: dict[str, str] = {
         "按文件名 glob 模式递归匹配文件（而非内容搜索）。"
         "适用于查找特定类型文件（如 **/*.py）、了解目录结构、定位配置文件等。"
         "返回相对路径列表，自动跳过 .git/node_modules 等目录。"
-        "按文件内容搜索请改用 file_search。"
+        "pattern 支持 {a,b} 花括号展开（如 {README.md,AGENTS.md}，bash 语义）；"
+        "多模式命中同一文件时只报一次。按文件内容搜索请改用 file_search。"
     ),
     "upload_to_file_manager": (
         "将当前工作目录下已生成的文件导入文件管理系统，返回 download_url 供用户下载。"
@@ -670,10 +779,13 @@ class FileToolsKit(BaseToolKit):
                 return True
 
         def _build_include_args(include: str) -> list[str]:
-            """将 include 字符串拆分为 ripgrep --glob 参数列表"""
-            patterns = [p.strip() for p in include.split(",")]
+            """将 include 字符串拆为叶子 glob 的 ripgrep --glob 参数列表。
+
+            逗号拆分 + 花括号展开与 Python 回退路径共用 _split_include_globs，
+            保证两条路径的过滤行为一致（rg 自身虽支持花括号，展开后逐字节对齐）。
+            """
             args: list[str] = []
-            for pat in patterns:
+            for pat in _split_include_globs(include):
                 args.extend(["--glob", pat])
             return args
 
@@ -762,7 +874,7 @@ class FileToolsKit(BaseToolKit):
 
             include_patterns: list[str] = []
             if include:
-                include_patterns = [p.strip() for p in include.split(",")]
+                include_patterns = _split_include_globs(include)
 
             results: list[dict] = []
             total_matches = 0
@@ -858,6 +970,14 @@ class FileToolsKit(BaseToolKit):
             except re.error as e:
                 return f"正则表达式无效: {e}"
 
+            # include 展开（逗号拆分 + 花括号）前置校验，超上限时明确报错，
+            # 避免异常穿透 rg→fallback 链路
+            if include:
+                try:
+                    _split_include_globs(include)
+                except ValueError as e:
+                    return f"include 过滤串无效: {e}"
+
             # 优先使用 ripgrep，失败时 fallback 到纯 Python
             results = []
             total_matches = 0
@@ -927,17 +1047,34 @@ class FileToolsKit(BaseToolKit):
                 return f"路径不是目录: {search_root}"
 
             matched: list[Path] = []
+            current_pat = pattern  # 坏模式报错定位用：展开前即原模式
             try:
-                for p in search_root.glob(pattern):
-                    if any(part in SKIP_DIR_NAMES for part in p.parts):
-                        continue
-                    if _is_hidden_path(p):
-                        continue
-                    if not include_dirs and p.is_dir():
-                        continue
-                    matched.append(p)
+                try:
+                    # bash 语义花括号展开：{README.md,AGENTS.md} → 两模式
+                    # 逐一 glob；无花括号时单元素，行为与原实现一致
+                    expanded_patterns = _expand_brace_pattern(pattern)
+                except ValueError as e:
+                    return f"模式展开失败: {e}"
+
+                seen: set[str] = set()
+                for pat in expanded_patterns:
+                    current_pat = pat
+                    for p in search_root.glob(pat):
+                        key = str(p)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        if any(part in SKIP_DIR_NAMES for part in p.parts):
+                            continue
+                        if _is_hidden_path(p):
+                            continue
+                        if not include_dirs and p.is_dir():
+                            continue
+                        matched.append(p)
             except Exception as e:
-                return f"匹配失败: {e}"
+                # 宽捕获兜底（实测坏模式如 "[" 零命中不抛，但 OSError 等
+                # 运行环境异常仍需转为可读错误而非工具崩溃）
+                return f"匹配失败（模式: {current_pat}）: {e}"
 
             if not matched:
                 return f"No files matched pattern: {pattern}"

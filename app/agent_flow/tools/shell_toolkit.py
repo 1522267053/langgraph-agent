@@ -132,39 +132,6 @@ class ShellWaitInput(BaseModel):
     )
 
 
-class FileSearchInput(BaseModel):
-    """文件内容搜索工具输入参数"""
-
-    pattern: str = Field(..., description="正则表达式搜索模式")
-    path: Optional[str] = Field(
-        None, description="搜索路径（目录或单个文件），不传则搜索当前工作目录"
-    )
-    include: Optional[str] = Field(
-        None,
-        description="文件类型过滤（如 *.py, *.{ts,tsx}），仅搜索匹配的文件",
-    )
-    literal_text: bool = Field(
-        False,
-        description="是否将 pattern 作为纯文本搜索（自动转义正则特殊字符），默认 False",
-    )
-
-
-class ListFilesInput(BaseModel):
-    """文件名匹配工具输入参数（glob 语义）"""
-
-    pattern: str = Field(
-        "**/*",
-        description="glob 文件名匹配模式，如 **/*.py、src/**/*.ts、*.json",
-    )
-    path: Optional[str] = Field(
-        None, description="搜索目录路径，不传则使用当前工作目录"
-    )
-    include_dirs: bool = Field(
-        False,
-        description="是否包含目录，默认仅列出文件",
-    )
-
-
 class UploadToFileManagerInput(BaseModel):
     """上传文件到文件管理系统工具输入参数"""
 
