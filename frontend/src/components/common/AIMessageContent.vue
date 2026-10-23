@@ -481,11 +481,15 @@ watch(
 }
 
 /* 思考块头部（tool 块已改纯文本行，仅 thinking 仍使用此头部）。
-   与正文同底色，仅一条浅内线分隔 */
+   与正文同底色，仅一条浅内线分隔。
+   行高钉死 height: 31px：右侧「思考中...」标签（12px 文本默认行高 ~16.8）
+   会让头部在 26.8/30.8px 间跳动，钉死后两种状态恒等；纵向间距由 height
+   承载（padding 只留左右），内容垂直居中 */
 .code-block-header {
   background: transparent;
   border-bottom: 1px solid rgba(60, 50, 35, 0.08);
-  padding: 7px 12px;
+  height: 31px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
   gap: 8px;
