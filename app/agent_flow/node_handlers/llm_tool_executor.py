@@ -711,11 +711,11 @@ async def handle_tool_calls(
     # ---- doom loop 检测（三级策略）----
     # 无参工具（args 为空）不检测：browser_snapshot 等页面轮询是合法重复；
     # 有参工具：重复 ≤ soft 放行（从第 soft 次起执行后注入警告），> hard 跳过。
+    # 本轮需要注入重复警告的调用（tool_call_id → 重复次数），执行后拼进 ToolMessage
+    warn_repeat_counts: dict[str, int] = {}
     if tool_fp_count is not None and doom_loop_threshold > 0:
         soft_threshold = ctx.doom_loop_soft_threshold
-        safe_calls: list[ToolCall] = []
-        # 本轮需要注入重复警告的调用（tool_call_id → 重复次数），执行后拼进 ToolMessage
-        warn_repeat_counts: dict[str, int] = {}
+        safe_calls: list[ToolCall] = []    
         for tc in tool_calls:
             tc_name = tc.get("name", "")
             tc_id = tc.get("id", "")
@@ -747,7 +747,7 @@ async def handle_tool_calls(
                     )
             else:
                 safe_calls.append(tc)
-                if soft_threshold > 0 and count >= soft_threshold:
+                if soft_threshold > 0 and count >= soft_threshold and tc_id:
                     warn_repeat_counts[tc_id] = count
         tool_calls = safe_calls
         if not tool_calls:
@@ -910,6 +910,8 @@ async def handle_tool_calls(
         tool_call = tool_calls[index]
         tool_name = tool_call.get("name", "")
         tool_id = tool_call.get("id", "")
+        if tool_id is None:
+            raise Exception("工具调用缺少 id")
         if isinstance(item, BaseException) and not isinstance(
             item, asyncio.CancelledError
         ):
