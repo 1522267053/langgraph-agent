@@ -88,7 +88,11 @@ class KnowledgeDocumentService(
                 document.word_count = len(document.content)
         else:
             document = await self.get_by_id(db, obj_in.id)
-            if "title" in obj_in.model_fields_set and obj_in.title is not None and document:
+            if (
+                "title" in obj_in.model_fields_set
+                and obj_in.title is not None
+                and document
+            ):
                 document.title = obj_in.title
         if document is None:
             raise RuntimeError("document为空")
@@ -205,7 +209,7 @@ class KnowledgeDocumentService(
         try:
             from app.services.vector_store_service import get_vector_store_service
 
-            vector_store = get_vector_store_service()
+            vector_store = await get_vector_store_service()
             await vector_store.delete_by_document_id(document.id)
         except Exception as e:
             logger.warning(
@@ -610,7 +614,7 @@ class KnowledgeDocumentService(
         try:
             from app.services.vector_store_service import get_vector_store_service
 
-            vector_store = get_vector_store_service()
+            vector_store = await get_vector_store_service()
             await vector_store.delete_by_document_id(document_id)
         except Exception as e:
             logger.warning(f"删除文档向量失败: document_id={document_id}, error={e}")
@@ -672,7 +676,7 @@ class KnowledgeDocumentService(
                         get_vector_store_service,
                     )
 
-                    vector_store = get_vector_store_service()
+                    vector_store = await get_vector_store_service()
                     await vector_store.delete(vector_ids)
                 except Exception:
                     pass
@@ -697,7 +701,7 @@ class KnowledgeDocumentService(
                 "向量模型未配置，无法向量化；请在系统设置中配置 Embedding "
                 "API（api_key/base_url/model）后重试"
             )
-        vector_store = get_vector_store_service()
+        vector_store = await get_vector_store_service()
 
         texts = [s.content for s in unvectorized]
 

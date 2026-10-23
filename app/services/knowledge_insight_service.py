@@ -5,8 +5,8 @@
 搜索时优先查询沉淀层，未命中再检索原始文档。
 """
 
+import asyncio
 import logging
-import threading
 from typing import List, Optional
 
 from sqlalchemy import Select, and_, func, or_, select, update
@@ -28,18 +28,22 @@ logger = logging.getLogger(__name__)
 
 INSIGHT_COLLECTION_NAME = "knowledge_insights"
 _vector_store: Optional[ChromaVectorStoreService] = None
-_vector_store_lock = threading.Lock()
+_vector_store_lock = asyncio.Lock()
 
 
-def _get_vector_store() -> ChromaVectorStoreService:
-    """获取知识沉淀向量存储单例"""
+def _create_vector_store() -> ChromaVectorStoreService:
+    """同步构造 Chroma 向量库（磁盘 IO + HNSW 索引初始化），
+    由 _get_vector_store 经 asyncio.to_thread 卸载执行"""
+    return ChromaVectorStoreService(collection_name=INSIGHT_COLLECTION_NAME)
+
+
+async def _get_vector_store() -> ChromaVectorStoreService:
+    """获取知识沉淀向量存储单例（首次构造卸载到线程池，避免阻塞事件循环）"""
     global _vector_store
     if _vector_store is None:
-        with _vector_store_lock:
+        async with _vector_store_lock:
             if _vector_store is None:
-                _vector_store = ChromaVectorStoreService(
-                    collection_name=INSIGHT_COLLECTION_NAME
-                )
+                _vector_store = await asyncio.to_thread(_create_vector_store)
     return _vector_store
 
 
@@ -165,7 +169,7 @@ class KnowledgeInsightService(
         """将沉淀内容向量化并存入 ChromaDB"""
         try:
             embedding_service = await get_embedding_service_async()
-            vector_store = _get_vector_store()
+            vector_store = await _get_vector_store()
 
             text = f"{insight.question}。{insight.answer}"
             embedding = await embedding_service.embed_query(text)
@@ -216,7 +220,7 @@ class KnowledgeInsightService(
             min_score = settings.knowledge_search_min_score
 
             embedding_service = await get_embedding_service_async()
-            vector_store = _get_vector_store()
+            vector_store = await _get_vector_store()
 
             query_embedding = await embedding_service.embed_query(query)
 
@@ -481,7 +485,7 @@ class KnowledgeInsightService(
         # 删除 ChromaDB 向量
         if db_obj.vector_id:
             try:
-                vector_store = _get_vector_store()
+                vector_store = await _get_vector_store()
                 await vector_store.delete(ids=[db_obj.vector_id])
             except Exception as e:
                 logger.warning(f"删除知识沉淀向量失败: insight_id={id}, error={e}")

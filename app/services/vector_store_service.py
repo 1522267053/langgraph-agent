@@ -7,7 +7,6 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, cast
 import asyncio
-import threading
 
 from app.config.settings import settings
 
@@ -272,26 +271,32 @@ class ChromaVectorStoreService(VectorStoreService):
 
 
 vector_store_service: Optional[VectorStoreService] = None
-_init_lock = threading.Lock()
+_init_lock = asyncio.Lock()
 
 
-def get_vector_store_service() -> VectorStoreService:
+def _create_vector_store_service() -> VectorStoreService:
+    """同步构造向量存储（Chroma PersistentClient 磁盘 IO + HNSW 初始化），
+    由 get_vector_store_service 经 asyncio.to_thread 卸载执行"""
+    if settings.vector_store_type == "chroma":
+        return ChromaVectorStoreService()
+    raise ValueError(f"不支持的向量存储类型: {settings.vector_store_type}")
+
+
+async def get_vector_store_service() -> VectorStoreService:
     """
-    获取向量存储服务单例
+    获取向量存储服务单例（异步）
 
-    根据配置返回对应的向量存储实现
+    首次构造含 Chroma PersistentClient 打开 SQLite/HNSW 初始化，属同步磁盘 IO：
+    卸载到线程池执行，避免冷启动时阻塞事件循环（影响所有并发请求）。
 
     Returns:
         VectorStoreService 实例
     """
     global vector_store_service
     if vector_store_service is None:
-        with _init_lock:
+        async with _init_lock:
             if vector_store_service is None:
-                if settings.vector_store_type == "chroma":
-                    vector_store_service = ChromaVectorStoreService()
-                else:
-                    raise ValueError(
-                        f"不支持的向量存储类型: {settings.vector_store_type}"
-                    )
+                vector_store_service = await asyncio.to_thread(
+                    _create_vector_store_service
+                )
     return vector_store_service

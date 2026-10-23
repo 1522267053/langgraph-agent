@@ -12,9 +12,9 @@
 自动降温：久未访问的记忆按时间衰减（hot→warm→cold），importance 越高衰减越慢。
 """
 
+import asyncio
 import logging
 import re
-import threading
 import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
@@ -33,21 +33,29 @@ logger = logging.getLogger(__name__)
 
 MEMORY_COLLECTION_NAME = "memory_vectors"
 _vector_store: Optional[ChromaVectorStoreService] = None
-_vector_store_lock = threading.Lock()
+_vector_store_lock = asyncio.Lock()
 
 
 DECAY_DEDUP_INTERVAL = 30.0
 _last_decay_times: dict[int, float] = {}
 
 
-def _get_vector_store() -> ChromaVectorStoreService:
+def _create_vector_store() -> ChromaVectorStoreService:
+    """同步构造 Chroma 向量库（磁盘 IO + HNSW 索引初始化，必须在 to_thread 内执行，
+    避免冷启动时阻塞事件循环——调用方 _get_vector_store 已用 asyncio.to_thread 卸载）"""
+    return ChromaVectorStoreService(collection_name=MEMORY_COLLECTION_NAME)
+
+
+async def _get_vector_store() -> ChromaVectorStoreService:
     global _vector_store
     if _vector_store is None:
-        with _vector_store_lock:
+        # asyncio.Lock（非 threading.Lock）：锁内含 await（to_thread），
+        # 同步锁会阻塞事件循环线程；单事件循环下 asyncio.Lock 即可保证单例安全
+        async with _vector_store_lock:
             if _vector_store is None:
-                _vector_store = ChromaVectorStoreService(
-                    collection_name=MEMORY_COLLECTION_NAME
-                )
+                # Chroma 首次构造含 PersistentClient 打开 SQLite/HNSW 初始化，
+                # 属同步磁盘 IO：卸载到线程池，防止卡住事件循环（影响所有并发请求）
+                _vector_store = await asyncio.to_thread(_create_vector_store)
     return _vector_store
 
 
@@ -610,7 +618,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         # 删除被 merge/delete 条目的旧向量（best-effort）
         if to_delete_vector_ids:
             try:
-                vector_store = _get_vector_store()
+                vector_store = await _get_vector_store()
                 await vector_store.delete(to_delete_vector_ids)
             except Exception:
                 logger.warning(f"整理删除旧记忆向量失败: agent_id={agent_id}")
@@ -982,7 +990,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         """向量相似度搜索"""
         try:
             embedding_service = await get_embedding_service_async()
-            vector_store = _get_vector_store()
+            vector_store = await _get_vector_store()
 
             query_embedding = await embedding_service.embed_query(query)
 
@@ -1054,7 +1062,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
 
         if db_obj.vector_id:
             try:
-                vector_store = _get_vector_store()
+                vector_store = await _get_vector_store()
                 await vector_store.delete([db_obj.vector_id])
             except Exception:
                 logger.warning(
@@ -1083,7 +1091,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         if not memories:
             return {"total": 0, "success": 0, "failed": 0, "failed_ids": []}
 
-        vector_store = _get_vector_store()
+        vector_store = await _get_vector_store()
 
         old_vector_ids = [m.vector_id for m in memories if m.vector_id]
         if old_vector_ids:
@@ -1119,7 +1127,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
         if not emb_svc.is_available() or not memories:
             return (0, [m.id for m in memories]) if memories else (0, [])
 
-        vector_store = _get_vector_store()
+        vector_store = await _get_vector_store()
 
         texts = []
         valid_memories: List[Memory] = []
@@ -1189,7 +1197,7 @@ class MemoryService(BaseService[Memory, MemoryCreate, MemoryUpdate]):
             return
 
         try:
-            vector_store = _get_vector_store()
+            vector_store = await _get_vector_store()
 
             text = f"{memory.title}。{memory.content}"
             embeddings = await emb_svc.embed_texts([text])

@@ -415,7 +415,7 @@ class KnowledgeTitleService:
 
         try:
             embedding_service = await get_embedding_service_async()
-            vector_store = get_vector_store_service()
+            vector_store = await get_vector_store_service()
 
             query_embedding = await embedding_service.embed_query(query)
             if not query_embedding:
@@ -495,8 +495,8 @@ class KnowledgeTitleService:
         self,
         db: AsyncSession,
         knowledge_base_id: int,
-        vector_results: List[Dict[str,Any]],
-    ) -> List[Dict[str,Any]]:
+        vector_results: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
         """使用活动数据库记录补全向量结果。"""
         segment_ids = []
         for item in vector_results:
