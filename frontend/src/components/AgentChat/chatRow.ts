@@ -159,7 +159,7 @@ export function buildChatRows(
 /** 展示开关状态：影响行高估算（关闭时思考段只剩头部） */
 export interface RowSizePrefs {
   showThinking?: boolean
-  /** 结束节点输出开关：开启时 last/single 行渲染 footer-row（结束输出按钮） */
+  /** 结束节点输出开关：开启时 last/single 行耗时行内追加结束输出按钮 */
   showEndOutput?: boolean
   /** 消息滚动容器宽度（px）：按实际宽度动态计算折行单位数，窄屏防低估；
    * 缺省回落桌面校准常数 */
@@ -218,13 +218,19 @@ const ERROR_BODY_PADDING = 20
 /** 消息行 first chrome：header 行高（头像 36 与文本行高取大者）+ margin-bottom 8 = 44 */
 const FIRST_CHROME = 44
 /**
- * 消息行 footer chrome：token 统计与流式三点已移除，footer-row 现仅承载
- * 「结束输出」按钮（showEndOutput 开启且消息携带 end_output 时渲染）。
- * 按钮行实测 offsetHeight ≈ 41px（padding-top 12 + min-height 28 + border-top ~1；
- * margin-top 16 不计入，virtualizer 量的是 offsetHeight 不含 margin）。
- * 默认（开关关闭）footer 不渲染，chrome = 0。
+ * 底部计时/元信息行 chrome：last/single 行流式中显示「已运行」、结束后显示
+ * 「耗时 + 结束输出按钮」。行高在 CSS 钉死 height: 24px（= el-button small
+ * 高度），两种形态高度一致；margin-top 8 不计入（virtualizer 量 offsetHeight）。
+ * 该行在两种形态下都渲染（此前估值从未计入，「已运行」行长期低估 ~24px，
+ * 每行差一点点累计造成底部锚定偏差），此处无条件计入。
  */
-const FOOTER_CHROME = 42
+const ELAPSED_ROW_CHROME = 24
+
+/**
+ * 结束输出按钮增量：已并入计时行（同一行右侧），行高被 height: 24px 钉死
+ * 无增量，仅按 showEndOutput 开关条件保留语义分支（未来按钮换大尺寸时在此上调）。
+ */
+const END_OUTPUT_INLINE_CHROME = 0
 
 /** 流式指示器行（typing）高度：头像 36 + 上下 padding 8×2 = 52，高估取 52 */
 const TYPING_ROW_HEIGHT = 52
@@ -438,19 +444,18 @@ export function estimateRowSize(row: ChatRow | undefined, prefs?: RowSizePrefs):
           // 三点行 ~24px + 缓冲，命中后实测立即校正
           size = 40
       }
-      // 消息级 chrome：first 行带 header（行高 ~36 + margin-bottom 8）。footer-row
-      // 仅在 showEndOutput 开启时渲染（token 统计与流式三点已移除，token 统计改在
-      // 输入区工具栏展示）；按开关条件加成，默认 0，避免每条消息虚高 42px。
+      // 消息级 chrome：first 行带 header（行高 ~36 + margin-bottom 8）。
+      // last/single 行：底部计时/元信息行恒渲染（行高钉死 24，见 ELAPSED_ROW_CHROME）；
+      // 结束输出按钮并入该行，行高被 height 钉死无增量（token 统计与流式三点
+      // 已移除，token 统计改在输入区工具栏展示）。
       // 消息间距 margin-bottom 40 不被 virtualizer 测量，折进 last/single 行估值
       const MESSAGE_GAP = 40
       if (row.part === 'first') size += FIRST_CHROME
-      if (row.part === 'last' || row.part === 'single') size += MESSAGE_GAP
-      if (
-        (row.part === 'last' || row.part === 'single') &&
-        prefs?.showEndOutput &&
-        row.msg?.end_output
-      ) {
-        size += FOOTER_CHROME
+      if (row.part === 'last' || row.part === 'single') {
+        size += MESSAGE_GAP + ELAPSED_ROW_CHROME
+        if (prefs?.showEndOutput && row.msg?.end_output) {
+          size += END_OUTPUT_INLINE_CHROME
+        }
       }
       return size
     }

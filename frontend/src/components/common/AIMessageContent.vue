@@ -170,6 +170,21 @@ function isArgsExpanded(segment: Segment, idx: number): boolean {
 }
 
 /**
+ * 工具行显示名：tool_execute 元工具追加实际调用的目标工具名（args.tool_name），
+ * 折叠行即可读「调用了什么工具」；其余工具原样返回。
+ * 目标名过长由 .tool-line-name 的 nowrap+ellipsis 截断，行高恒定单行。
+ */
+function toolDisplayName(segment: Segment): string {
+  const tool = segment.tool
+  if (!tool) return ''
+  if (tool.name === 'tool_execute') {
+    const target = tool.args?.tool_name
+    if (typeof target === 'string' && target) return `tool_execute → ${target}`
+  }
+  return tool.name
+}
+
+/**
  * file_ 类工具（file_read/file_write/text_editor）的折叠行统计：
  * 工具名右侧展示结果 pill（读取/写入行数、diff 增删）。
  * 仅折叠态展示（展开后结果区自带完整 meta，避免重复）；成功且有有效数据才显示。
@@ -311,7 +326,7 @@ watch(
           <div class="tool-line-row">
             <span v-if="segment.tool.status === 'running'" class="status-spinner"></span>
             <span v-else :class="['tool-line-dot', segment.tool.status]"></span>
-            <span class="tool-line-name">{{ segment.tool.name }}</span>
+            <span class="tool-line-name">{{ toolDisplayName(segment) }}</span>
             <!-- file_ 类工具统计 pill：名称右侧（读取/写入行数、diff 增删），仅折叠态 -->
             <span v-if="toolInlineStat(segment, idx)" class="tool-inline-stats">
               <template v-if="toolInlineStat(segment, idx)!.kind === 'read'">

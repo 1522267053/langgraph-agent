@@ -446,10 +446,10 @@ export function useStreamingMessage() {
     eventId?: number,
     contentWatermarkEventId?: number
   ): void {
-    // todo 分段必须排在已缓冲的 thinking/content 之后
-    flushPending()
-    currentSegmentType.value = 'todo'
     // 回声拦截：来源事件已落库（≤ 水位）→ DB 行负责渲染，此处只同步面板
+    // （判定必须先于 flushPending/currentSegmentType 变更：不建卡就绝不能动
+    // 流式上下文，否则把进行中的 thinking 块截断——下一 chunk 会因
+    // currentSegmentType 已是 'todo' 被误判新块，实测相邻双思考块）
     if (
       eventId != null &&
       contentWatermarkEventId != null &&
@@ -458,7 +458,8 @@ export function useStreamingMessage() {
       return
     }
     const msg = getOrCreateStreamingMessage()
-    // 相邻建卡：找最后一个 tool 段，仅 todowrite/todoread 时紧随其后插入
+    // 相邻建卡：找最后一个 tool 段，仅 todowrite/todoread 时紧随其后插入。
+    // 不命中同样在动流式上下文之前返回
     let insertAt = -1
     for (let i = msg.segments.length - 1; i >= 0; i--) {
       if (msg.segments[i].type === 'tool') {
@@ -468,6 +469,10 @@ export function useStreamingMessage() {
       }
     }
     if (insertAt === -1) return
+    // 判定全部通过、确认建卡：此刻才 flush（缓冲的 thinking/content 先落段）
+    // 并切换段类型
+    flushPending()
+    currentSegmentType.value = 'todo'
     const seg: Segment = { type: 'todo', todo: [...newTodos], id: genSegmentId() }
     if (eventId != null) seg.srcEventId = eventId
     msg.segments = [...msg.segments.slice(0, insertAt), seg, ...msg.segments.slice(insertAt)]

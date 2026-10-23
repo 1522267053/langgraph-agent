@@ -64,10 +64,13 @@ const isMsgLastSegment = computed(() => {
 const isMsgThinkingInProgress = computed(() => {
   if (!props.isStreaming || !props.isLast) return false
   const segs = props.msg.segments
-  for (let i = (props.segmentIndex ?? 0) + 1; i < segs.length; i++) {
-    if (segs[i]?.type === 'content') return false
-  }
-  return true
+  // 仅「最后一个段」且它是 thinking 才算思考中：ReAct 是 thinking→tool→thinking
+  // 交替，历史思考段右侧往往只有 tool 段（该轮无正文产出）——旧判定「右侧无
+  // content 即思考中」会让全部历史段常亮转圈（实测多块同时 思考中...）。
+  // tool/content 段出现在思考段之后，即该段已完成的标志。
+  // （与 AIMessageContent.isThinkingInProgress 列表模式判定同口径，两处需同步改）
+  const idx = props.segmentIndex ?? 0
+  return idx === segs.length - 1 && segs[idx]?.type === 'thinking'
 })
 
 const streamingActive = computed(() => props.isStreaming && props.isLast)
@@ -166,30 +169,34 @@ const finalDurationText = computed(() => {
           <span class="dot"></span>
           <span class="dot"></span>
         </div>
-        <!-- 底部计时常驻：流式中实时「已运行」（1s 跳动）；结束后/历史显示定格「耗时」 -->
-        <div v-if="showFooter && streamingActive && liveElapsedText" class="elapsed-row">
-          <span class="elapsed-text">已运行 {{ liveElapsedText }}</span>
-        </div>
+        <!-- 底部计时常驻：流式中实时「已运行」（1s 跳动）；结束后/历史显示定格「耗时」，
+             「结束输出」按钮并入同一行（不再独占 footer 行） -->
         <div
-          v-else-if="showFooter && finalDurationText"
+          v-if="
+            showFooter &&
+            (streamingActive
+              ? !!liveElapsedText
+              : !!finalDurationText || (showEndOutput && !!msg.end_output))
+          "
           class="elapsed-row"
         >
-          <span class="elapsed-text">耗时 {{ finalDurationText }}</span>
-        </div>
-        <!-- 结束节点输出：右上角"展示"下拉勾选后显示（该轮 AI 消息携带） -->
-        <div
-          v-if="showFooter && showEndOutput && msg.end_output && !streamingActive"
-          class="footer-row end-output-row"
-        >
-          <el-button
-            link
-            size="small"
-            type="primary"
-            :icon="Tickets"
-            @click="endOutputVisible = true"
-          >
-            结束输出
-          </el-button>
+          <span v-if="streamingActive && liveElapsedText" class="elapsed-text">
+            已运行 {{ liveElapsedText }}
+          </span>
+          <template v-else>
+            <span v-if="finalDurationText" class="elapsed-text">耗时 {{ finalDurationText }}</span>
+            <el-button
+              v-if="showEndOutput && msg.end_output"
+              class="end-output-btn"
+              link
+              size="small"
+              type="primary"
+              :icon="Tickets"
+              @click="endOutputVisible = true"
+            >
+              结束输出
+            </el-button>
+          </template>
         </div>
         <el-dialog
           v-model="endOutputVisible"
@@ -343,17 +350,26 @@ export default {
   font-variant-numeric: tabular-nums;
 }
 
-/* 流式中底部实时计时行（1s 跳动，flow_done 后由头部定格值接替） */
+/* 底部计时/元信息行：流式实时计时、结束后「耗时 + 结束输出按钮」共用同一行。
+   行高钉死 height: 24px（= el-button small 高度）：流式「已运行」纯文本行与
+   结束「耗时+按钮」行高度一致，不随内容切换跳动；虚拟滚动估高按常量精确计算 */
 .elapsed-row {
   margin-top: 8px;
+  height: 24px;
   display: flex;
   align-items: center;
+  gap: 14px;
 }
 
 .elapsed-text {
   font-size: 11px;
   color: var(--paper-ink-4);
   font-variant-numeric: tabular-nums;
+}
+
+/* 结束输出按钮：并入耗时行，压低默认 margin 让两个元素垂直居中对齐 */
+.end-output-btn {
+  margin-left: -4px;
 }
 
 .delete-msg-btn {
@@ -380,21 +396,6 @@ export default {
   line-height: 1.65;
   word-break: break-word;
   overflow-wrap: break-word;
-}
-
-/* footer 区统一容器：结束输出按钮等共享（token 统计与流式三点已按需求移除） */
-.footer-row {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--paper-line-soft);
-  min-height: 28px;
-  display: flex;
-  align-items: center;
-  font-size: 11px;
-}
-
-.end-output-row {
-  /* chrome 全部由 .footer-row 承载，此处仅作语义标记 */
 }
 
 .end-output-pre {
