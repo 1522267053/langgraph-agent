@@ -812,7 +812,7 @@ function handleSessionPageChange(page: number): void {
                     <el-badge
                       :value="unreadCount"
                       :hidden="unreadCount <= 0"
-                      :max="9"
+                      :max="99"
                       class="notification-badge"
                       :offset="[5,-5]"
                     >
@@ -1027,6 +1027,7 @@ function handleSessionPageChange(page: number): void {
                       :hidden="unreadCount <= 0"
                       :max="99"
                       class="notification-badge"
+                      :offset="[5,-5]"
                     >
                       <el-icon :size="14"><Bell /></el-icon>
                     </el-badge>
@@ -1934,7 +1935,7 @@ function handleSessionPageChange(page: number): void {
 .sidebar-user-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   flex-shrink: 0;
 }
 

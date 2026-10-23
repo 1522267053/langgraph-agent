@@ -149,6 +149,17 @@ function handleNotification(msg: WSMessage) {
     // silent 通知（ws_manager 落库后补发）：只更新角标+刷新列表，弹窗由原消息类型负责
     if (data.silent) return
 
+    // 用户正在查看该通知关联的会话页（agent + session 同时命中）：不弹右上角
+    // 浮层与桌面通知——内容已在当前会话可见，弹窗属重复打扰（角标/列表照常更新）。
+    // 与 execution_done 的 isWatchingAgent 同一口径，仅 ref 匹配改为 ref_id/ref_sub_id
+    const isWatchingRefSession =
+      data.ref_type === 'session' &&
+      watchingSessionId !== null &&
+      data.ref_id === watchingSessionId &&
+      watchingAgentId !== null &&
+      data.ref_sub_id === watchingAgentId
+    if (isWatchingRefSession) return
+
     const isHumanInput = data.type === 'human_input'
     const canJump = !!(data.ref_type && data.ref_id)
     const instance = ElNotification({
