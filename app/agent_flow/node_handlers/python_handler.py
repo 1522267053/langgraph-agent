@@ -249,7 +249,7 @@ def _build_restricted_globals():
 
 
 def _sandbox_open(file, mode="r", *args, **kwargs):
-    """沙箱内 open 的写路径收口：写模式（w/a/x/+）路径必须落在可写白名单内。
+    r"""沙箱内 open 的写路径收口：写模式（w/a/x/+）路径必须落在可写白名单内。
 
     读模式不限制（与 file_read 工具同语义：读放宽、写收紧；系统路径读已放开）。
     白名单 = 会话/Agent 工作目录 + 节点 default_workdir + temp +
