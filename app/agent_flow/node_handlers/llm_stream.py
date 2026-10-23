@@ -133,6 +133,31 @@ async def stream_llm_response(
                 current_content += hint
                 if writer:
                     writer(NodeContentEvent(node_key=node_key, content=hint))
+            elif response and not finish_reason:
+                # [提前断流显性化] 正常结束的流末尾 chunk 必带 finish_reason
+                # （stop/tool_calls/length）。网关/代理提前关闭连接（未发 finish
+                # 与 [DONE]）时 openai SDK 不报错、静默结束迭代，半截正文会被
+                # 上层当完整回答落库（status=success），用户只看到话说一半。
+                # 实测：模型每次都在即将发起工具调用的同一位置被掐断（确定性
+                # 复现），日志却零报错——此处把静默断流变成可见提示 + 日志留痕。
+                usage_md = (response.usage_metadata or {}) if response else {}
+                logger.warning(
+                    "LLM 流提前终止(无finish_reason): node_key=%s model=%s "
+                    "completion_tokens=%s content_len=%s tail=%r",
+                    node_key,
+                    getattr(llm, "model_name", "") or type(llm).__name__,
+                    (usage_md.get("output_tokens") if usage_md else None),
+                    len(current_content),
+                    current_content[-80:],
+                )
+                hint = (
+                    "\n\n---\n⚠️ 模型输出流被服务端提前中断（未收到结束标志，"
+                    "半截回答不完整）。通常为模型网关/代理侧问题，请重试或"
+                    "检查该模型通道。"
+                )
+                current_content += hint
+                if writer:
+                    writer(NodeContentEvent(node_key=node_key, content=hint))
 
             break
         except _RETRYABLE_ERRORS as e:

@@ -239,6 +239,9 @@ poetry run pytest tests/test_tool_approval_audit.py   # 只跑单个文件
 - `llm_tool_executor.py`: 工具执行（并行、人工交互、审批、截断）
 - **thinking 空白防御（强制）**（2026-10-16 实测修复）：网关会下发空白占位 chunk（`reasoning_content=""`/`"\n\n"`），原「键存在」判断原样转发 → 前端流式建空思考块、空白 thinking 落库、历史回注污染 LLM 上下文。修复口径：转发（llm_stream）/落库（extract_thinking）/回注（get_history）/前端建段四层一律真值+trim 判断，块内空白保留（换行排版）。**通用纪律：凡流式 chunk 展示与落库一律真值+trim 判断，禁止键存在判断；SQLite 判空白必须 `TRIM(x, char(9)||char(10)||char(13)||' ')`——默认 TRIM 只剥空格，纯换行统计会假阴性**
 
+- **网关静默断流必须显性化（无 finish_reason ≠ 正常结束）**（2026-10-23 实测修复）：
+  原实现是 `astream` 迭代结束后只判 `finish_reason=length`，无 finish_reason 的流静默当正常完成 → 真实现象是模型网关提前关流（未发 finish_reason/[DONE]），openai SDK 不报错，半截正文以 status=success 正常落库（耗时显示正常），两轮精确断在同一文本位置（即将发起工具调用处），用户误以为「后端断网、刷新也没用」 → 根因是网关（token-plan 通道）对「长上下文 + 即将输出 tool_call」场景提前终止流（上游行为，客户端不可根治）→ 修复口径是 llm_stream 对「有正文但无 finish_reason」追加可见 ⚠️ 提示 + `logger.warning`（node/model/用量/尾部 80 字留痕）。**通用纪律：凡 LLM 流结束判定一律要求 finish_reason 显式存在（stop/tool_calls/length 任一），缺失即视为异常断流并显性化，禁止把「迭代自然结束」当「回答完整」**
+
 ### 工具按需加载（deferred_tools.py，工具膨胀场景）
 - **机制/策略分离**: `ToolProvider` 协议（list_meta/search/materialize）对所有工具族通用；策略由三层优先级决定：节点 base_config.lazy_load > **handler.defer_policy** > 默认 "bind"
 - **族策略（defer_policy）**: 内置族默认 `"bind"`（shell/ssh/memory/todo/agenda/api/skill/sub_agent/question 等——高频核心能力，bind 的 token 成本低、调用零往返）；**mcp/knowledge/browser 为 `"auto"`**（外部服务器与多节点弹性膨胀源，参与阈值判定）。auto 族想强制全量配 lazy_load=false；bind 族想延迟配 lazy_load=true
