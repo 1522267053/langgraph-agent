@@ -774,7 +774,10 @@ function handleSessionPageChange(page: number): void {
                 </button>
                 <button class="batch-btn" @click="toggleMultiSelectMode">取消</button>
               </div>
-              <div v-else-if="store.sessionTotal > store.sessionPageSize" class="session-pagination">
+              <div
+                v-else-if="!isSearchMode && store.sessionTotal > store.sessionPageSize"
+                class="session-pagination"
+              >
                 <el-pagination
                   v-model:current-page="store.sessionPage"
                   :page-size="store.sessionPageSize"

@@ -12,6 +12,8 @@ const drawerSize = computed(() => (isMobile.value ? '100%' : '340px'))
 
 const props = defineProps<{
   agentId: number | null
+  /** Agent 名称：导出文件命名用（{agent名}的记忆_日期.json） */
+  agentName?: string
   visible: boolean
 }>()
 
@@ -281,8 +283,14 @@ async function handleExport(): Promise<void> {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      const date = new Date().toISOString().slice(0, 10)
-      a.download = `memory_agent_${props.agentId}_${date}.json`
+      // 本地日期（toISOString 是 UTC，晚 8 小时会错日期）；文件名非法字符兜底替换
+      const now = new Date()
+      const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+      const safeName = (props.agentName || `agent_${props.agentId}`).replace(
+        /[\\/:*?"<>|]/g,
+        '_'
+      )
+      a.download = `${safeName}的记忆_${date}.json`
       a.click()
       URL.revokeObjectURL(url)
       ElMessage.success({ message: `已导出 ${total} 条记忆`, duration: 5000 })

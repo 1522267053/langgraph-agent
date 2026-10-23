@@ -2286,7 +2286,11 @@ const { barStyle: waitsDragStyle, onPointerDown: onWaitsPointerDown, isDragging:
       />
     </div>
 
-    <MemoryPanel v-model:visible="showMemory" :agent-id="agentId" />
+    <MemoryPanel
+      v-model:visible="showMemory"
+      :agent-id="agentId"
+      :agent-name="store.currentAgent?.name"
+    />
     <FileChangePanel v-model:visible="showFileChanges" />
     <ToolOutputDrawer />
     <!-- 最小化等待悬浮条：human-input / tool-approval 最小化期间显示，点击恢复。
