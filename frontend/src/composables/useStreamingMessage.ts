@@ -431,11 +431,12 @@ export function useStreamingMessage() {
   /**
    * 添加任务计划分段到当前消息
    *
-   * 建卡条件与 DB 重建路径（buildChatMessagesFromDB）对齐：**仅当最后一个工具段
-   * 是 todowrite/todoread 时**在紧随其后的位置建卡，否则只更新面板（todos ref 由
-   * 调用方先行同步）。此前「收到事件无条件在行尾独立建卡」导致：重连回放时水位
-   * 过滤拦掉了中间的工具事件、历史 todo 事件却照发，卡片悬空挂在 browser 等无关
-   * 工具后面，且与 DB 已渲染的同内容卡成对重复（实测同轮 13 项计划卡 ×2 相邻）。
+   * 建卡条件与 DB 重建路径（buildChatMessagesFromDB）对齐：**仅当尾部工具段
+   * 连续区（允许跳过并行组的其他工具段）内存在 todowrite/todoread 时**紧随其
+   * 后建卡，否则只更新面板（todos ref 由调用方先行同步）。此前「收到事件无条件
+   * 在行尾独立建卡」导致：重连回放时水位过滤拦掉了中间的工具事件、历史 todo
+   * 事件却照发，卡片悬空挂在 browser 等无关工具后面，且与 DB 已渲染的同内容卡
+   * 成对重复（实测同轮 13 项计划卡 ×2 相邻）。
    *
    * 回声拦截：段来源事件 id ≤ 内容水位（已落库，DB 行会渲染同内容卡）时跳过建卡
    * ——水位由 content_watermark 事件/running_status 权威值维护，无水位信息时
@@ -458,13 +459,18 @@ export function useStreamingMessage() {
       return
     }
     const msg = getOrCreateStreamingMessage()
-    // 相邻建卡：找最后一个 tool 段，仅 todowrite/todoread 时紧随其后插入。
-    // 不命中同样在动流式上下文之前返回
+    // 建卡锚点：从尾向前找最近的 todowrite/todoread 工具段，仅跳过其间的其他
+    // 工具段——并行工具组里 todowrite 先完成、其余工具后发起 tool_call_start
+    // 时最后段不是 todowrite，旧「仅认最后一个 tool 段」失配直接丢卡（实测
+    // todowrite 调用成功但任务计划卡不出现）。遇 content/thinking/todo 段停止：
+    // 它们属于 todowrite 之后的输出，说明本轮已无待建卡锚点。
     let insertAt = -1
     for (let i = msg.segments.length - 1; i >= 0; i--) {
-      if (msg.segments[i].type === 'tool') {
-        const name = msg.segments[i].tool?.name || ''
-        if (name === 'todowrite' || name === 'todoread') insertAt = i + 1
+      const seg = msg.segments[i]
+      if (seg.type !== 'tool') break
+      const name = seg.tool?.name || ''
+      if (name === 'todowrite' || name === 'todoread') {
+        insertAt = i + 1
         break
       }
     }

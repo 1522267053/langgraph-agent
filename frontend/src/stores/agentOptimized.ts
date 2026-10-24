@@ -1189,7 +1189,18 @@ export const useAgentStore = defineStore('agent', () => {
             })
 
             const toolName = tc.name as string
-            if (toolName === 'todowrite' && toolResult?.status === 'success') {
+            // 中断补写识别：后端取消路径对未完成工具统一补写唯一结构
+            // {"success":false,"error":"执行被中断"}（llm_tool_executor 三处补写
+            // 同源，smart_truncate_output 小 dict 不截断，逐字节稳定）。todowrite
+            // 先写 todo 表、后返回结果——补写中断 ≠ 计划未写入，此处按已成功
+            // 建卡，否则中断轮次任务计划卡在 DB 重建路径永久缺失（实测停止后
+            // todo 卡消失）。其余 error（审批拒绝等）不补偿，避免虚报卡片。
+            const interruptedMarker =
+              typeof resultData === 'object' &&
+              resultData !== null &&
+              (resultData as { success?: unknown; error?: unknown }).success === false &&
+              (resultData as { success?: unknown; error?: unknown }).error === '执行被中断'
+            if (toolName === 'todowrite' && (toolResult?.status === 'success' || interruptedMarker)) {
               try {
                 // args.todos 当前为数组（TodoWriteInput: list[TodoItem]）；
                 // 兼容旧数据中的 JSON 字符串形态
@@ -2504,6 +2515,17 @@ export const useAgentStore = defineStore('agent', () => {
     // 取消后 tool_call_end SSE 不会再来，终止仍在转圈的 running 工具分段，
     // 文案与后端补写的 ToolMessage 保持一致
     failRunningToolSegments('执行被中断')
+    // [取消终态水位推进] 中断场景：后端取消路径（llm_tool_handler 的 except
+    // CancelledError）会把已产出内容全部落库，但不经过 node_done——水位停在
+    // 最后一次中途落库点，断开前已渲染的尾部 live 段（srcEventId > 水位）与
+    // 随后 save polling 收尾 rebuild 拉回的 DB 段必然重叠 → 区块拼接出双份
+    // 内容（实测停止后 AI 正文/工具行/todo 卡成对，刷新按 DB 重建才恢复）。
+    // 取消终态 = DB 唯一权威：把水位推进到 +∞，收尾 rebuild 的 liveKept 过滤
+    // 丢弃全部 live 段（宁少勿重——这些内容 DB 行已全部承接）。下一轮
+    // markStreamBaseMsgId 会将水位清零重同步，无跨轮污染。
+    if (waitForSave) {
+      contentWatermarkEventId.value = Number.MAX_SAFE_INTEGER
+    }
     // 停止计时（手动中断轮次，时长以后端取消路径落库值为准）
     stopElapsedTimer()
     if (!waitForSave) {
