@@ -46,6 +46,7 @@ import {
   buildChatRows,
   estimateRowSize,
   clearRowSizeCache,
+  clearThinkingRowSizeCache,
   type ChatRow
 } from '@/components/AgentChat/chatRow'
 import { clearBlockExpandOverrides } from '@/components/AgentChat/blockExpand'
@@ -677,11 +678,13 @@ watch(
 )
 
 // 展示开关改变行内内容高度：整体失效 virtualizer 尺寸缓存（行 key 不变，未挂载行
-// 的旧实测尺寸会残留导致滚动错位）；已挂载行由 ResizeObserver 重测，未挂载行回落
-// 到行高实测缓存（开关切换前的上次实测，非固定粗估），重测 delta 即为开关切换
-// 的真实增量，滚动补偿量微小不跳变
-watch([showThinking, showEndOutput], async () => {
+// 的旧实测尺寸会残留导致滚动错位）；已挂载行由 ResizeObserver 重测。思考行额外
+// 清掉实测缓存：开关切换后思考行高度口径翻转（关=头部 ~90px / 开=动态测高），
+// 保留旧开关状态下的实测值会让未挂载思考行按过期高度入账（滚动挂载才收敛，
+// 产生可感知扰动）——清掉后统一回落到当前开关口径的估值分支
+watch([showThinking, showEndOutput], async ([newThinking], [prevThinking]) => {
   await nextTick()
+  if (newThinking !== prevThinking) clearThinkingRowSizeCache()
   rowVirtualizer.value.measure()
 })
 

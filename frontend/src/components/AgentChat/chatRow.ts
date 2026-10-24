@@ -48,6 +48,22 @@ export function rememberRowSize(key: string, size: number): void {
   measuredSizes.set(key, size)
 }
 
+/**
+ * 清空思考段行的实测缓存
+ *
+ * @description 思考行高度随 showThinking 开关变化（关=头部 ~90px，开=动态测高
+ * 封顶 ~346px）。开关切换时若保留旧开关状态下的实测值，未挂载的思考行会按
+ * 过期高度入账（如开启时滚过缓存 300px，关闭后仍按 300px 估值，滚动挂载才
+ * 塌缩到 90px），产生可感知的滚动扰动。调用时机：showThinking watch 内、
+ * virtualizer.measure() 之前——清掉后 estimateRowSize 对全部思考行回落到
+ * 当前开关口径的估值分支（关→90 / 开→动态测高），与挂载行 RO 重测同口径收敛。
+ */
+export function clearThinkingRowSizeCache(): void {
+  for (const key of measuredSizes.keys()) {
+    if (key.includes('-t')) measuredSizes.delete(key)
+  }
+}
+
 /** 清空实测缓存（会话切换时调用，避免跨会话残留） */
 export function clearRowSizeCache(): void {
   measuredSizes.clear()
